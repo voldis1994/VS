@@ -165,6 +165,11 @@ export class FilePersist implements PersistClient, JournalMirror {
           naked_recovery_level: p.naked_recovery_level ?? null,
           playbook_at_entry: (p as ManagedPosition).playbook_at_entry ?? null,
           entry_setup: (p as ManagedPosition).entry_setup ?? null,
+          bars_open:
+            (p as ManagedPosition).bars_open != null &&
+            Number.isFinite(Number((p as ManagedPosition).bars_open))
+              ? Math.max(0, Math.floor(Number((p as ManagedPosition).bars_open)))
+              : 0,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -752,6 +757,12 @@ export class FilePersist implements PersistClient, JournalMirror {
         entry_setup: (() => {
           const v = p.entry_setup ?? p.payload?.entry_setup;
           return typeof v === 'string' && v.trim() ? String(v) : undefined;
+        })(),
+        bars_open: (() => {
+          const v = p.bars_open ?? p.payload?.bars_open;
+          return v != null && Number.isFinite(Number(v))
+            ? Math.max(0, Math.floor(Number(v)))
+            : 0;
         })(),
       })),
       intents: [...this.mem.intents],

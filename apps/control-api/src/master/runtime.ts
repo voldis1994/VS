@@ -4854,6 +4854,7 @@ class MasterRuntime {
         quote,
         instrument_point_value: instrument.value_per_point_per_lot,
         max_hold_ms: this.cfg.max_hold_ms,
+        time_stop_max_bars: this.cfg.time_stop_max_bars,
         breakeven_progress: this.cfg.breakeven_progress,
         breakeven_offset: this.cfg.breakeven_offset,
         be_start: this.cfg.be_start,

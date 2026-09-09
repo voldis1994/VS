@@ -891,6 +891,11 @@ async function main() {
       );
     const decisionBody = readFileSync(join(root, 'src/master/decision.ts'), 'utf8');
     const pipelineBody = readFileSync(join(root, 'src/master/pipeline.ts'), 'utf8');
+    const typesBody = readFileSync(join(root, 'src/master/types.ts'), 'utf8');
+    const liveFeedTestBody = readFileSync(
+      join(root, 'src/master/__tests__/liveFeed.test.ts'),
+      'utf8'
+    );
     const setupDeriveExists = existsSync(join(root, 'src/master/setupDerive.ts'));
     const setupArmedApi =
       decisionBody.includes('gatePreferredBySetup') &&
@@ -1193,6 +1198,21 @@ async function main() {
       join(root, 'src/master/positionManager.ts'),
       'utf8'
     );
+    const barsOpenTimeStopApi =
+      positionManagerBody.includes('export function resolveTimeStop') &&
+      positionManagerBody.includes('time_stop_max_bars') &&
+      positionManagerBody.includes('bars_open') &&
+      positionManagerBody.includes(
+        'Count this manage cycle (Reader bars_open)'
+      ) &&
+      typesBody.includes('time_stop_max_bars: number') &&
+      pipelineBody.includes('time_stop_max_bars: 12') &&
+      runtimeBody.includes('time_stop_max_bars: this.cfg.time_stop_max_bars') &&
+      persistBody.includes('bars_open:') &&
+      liveFeedTestBody.includes(
+        'bars_open TIME_STOP ignores overnight wall clock'
+      ) &&
+      liveFeedTestBody.includes('resolveTimeStop prefers bars mode');
     const multiEpicManageApi =
       positionManagerBody.includes('quoteMatchesPosition') &&
       positionManagerBody.includes('skipped_wrong_epic') &&
@@ -1318,6 +1338,7 @@ async function main() {
       paperEquityReseedApi &&
       dualPersistNewerMirrorApi &&
       filePersistSingletonSeedApi &&
+      barsOpenTimeStopApi &&
       livePaperDeskConfirm &&
       setupArmedApi &&
       setupArmedUi &&
@@ -1365,7 +1386,7 @@ async function main() {
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; desk_feed_divergent=${deskFeedDivergent}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; kpi_hydrate ui=${kpiHydrateUi} embed=${kpiHydrateEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; hour_bars_cache ui=${hourBarsCacheUi} embed=${hourBarsCacheEmbed} api=${hourBarsCacheApi}; closed_10s_cache ui=${closed10sCacheUi} embed=${closed10sCacheEmbed} api=${closed10sCacheApi}; market_cache_pg_heal=${marketCachePgHealApi}; epic_stash_pg_heal=${epicCycleStashPgHealApi}; runtime_gates_pg_heal=${runtimeGatesPgHealApi}; manage_config_pg_heal=${manageConfigPgHealApi}; owns_pipeline_pg_heal=${ownsPipelinePgHealApi}; monitoring_snapshot_pg_heal=${monitoringSnapshotPgHealApi}; spread_history_pg_heal=${spreadHistoryPgHealApi}; trade_ack_journal_pg_heal=${tradeAckJournalPgHealApi}; error_journal_pg_heal=${errorJournalPgHealApi}; news_window_pg_heal=${newsWindowPgHealApi}; client_fanout_pg_heal=${clientFanoutPgHealApi}; news_calendar_pg_heal=${newsCalendarPgHealApi}; operator_meta_sidecar_parity=${operatorMetaSidecarParityApi}; tick_sticky_desk_arms=${tickStickyDeskArmsApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; live_paper_desk_confirm=${livePaperDeskConfirm}; paper_equity_reseed=${paperEquityReseedApi}; dualpersist_newer_mirror=${dualPersistNewerMirrorApi}; filepersist_singleton_seed=${filePersistSingletonSeedApi}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; live_exp_default api=${liveExpectancyDefaultApi} ui=${liveExpectancyDefaultUi} embed=${liveExpectancyDefaultEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; live_feed_closed_10s=${liveFeedClosed10s}; live_feed_hour_bars=${liveFeedHourBars}; desk_entry_dash=${deskEntryDash}; desk_entry_journal=${deskEntryJournal}; desk_entry_pg=${deskEntryPgHydrate}; desk_entry_perf=${deskEntryPerfJoin}; desk_source_expectancy=${deskSourceExpectancyDash}; confirm_desk_hydrate=${confirmDeskHydrateWarn}; trade_desk_restart=${tradeDeskRestartHydrate}; desk_entry_open_hydrate=${deskEntryOpenHydrate}; desk_entry_status_hydrate=${deskEntryStatusHydrate}; open_pos_confirm=${openPosConfirmDash}; closed_trade_confirm=${closedTradeConfirmDash}; trade_event_desk_confirm=${tradeEventDeskConfirm}; desk_confirm_card_hydrate=${deskConfirmCardHydrate}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle api=${multiEpicCycleApi} ui=${multiEpicCycleUi} embed=${multiEpicCycleEmbed}; multi_epic_manage api=${multiEpicManageApi} ui=${multiEpicManageUi} embed=${multiEpicManageEmbed}; epic_stash=${epicCycleStashPersist}; epic_setup_key=${epicScopedSetupKey}; desk_source_setup_key=${deskSourceSetupKey}; replay_desk_confirm=${replayDeskConfirm}; system_audit_desk_confirm=${systemAuditDeskConfirm}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; desk_feed_divergent=${deskFeedDivergent}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; kpi_hydrate ui=${kpiHydrateUi} embed=${kpiHydrateEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; hour_bars_cache ui=${hourBarsCacheUi} embed=${hourBarsCacheEmbed} api=${hourBarsCacheApi}; closed_10s_cache ui=${closed10sCacheUi} embed=${closed10sCacheEmbed} api=${closed10sCacheApi}; market_cache_pg_heal=${marketCachePgHealApi}; epic_stash_pg_heal=${epicCycleStashPgHealApi}; runtime_gates_pg_heal=${runtimeGatesPgHealApi}; manage_config_pg_heal=${manageConfigPgHealApi}; owns_pipeline_pg_heal=${ownsPipelinePgHealApi}; monitoring_snapshot_pg_heal=${monitoringSnapshotPgHealApi}; spread_history_pg_heal=${spreadHistoryPgHealApi}; trade_ack_journal_pg_heal=${tradeAckJournalPgHealApi}; error_journal_pg_heal=${errorJournalPgHealApi}; news_window_pg_heal=${newsWindowPgHealApi}; client_fanout_pg_heal=${clientFanoutPgHealApi}; news_calendar_pg_heal=${newsCalendarPgHealApi}; operator_meta_sidecar_parity=${operatorMetaSidecarParityApi}; tick_sticky_desk_arms=${tickStickyDeskArmsApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; live_paper_desk_confirm=${livePaperDeskConfirm}; paper_equity_reseed=${paperEquityReseedApi}; dualpersist_newer_mirror=${dualPersistNewerMirrorApi}; filepersist_singleton_seed=${filePersistSingletonSeedApi}; bars_open_time_stop=${barsOpenTimeStopApi}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; live_exp_default api=${liveExpectancyDefaultApi} ui=${liveExpectancyDefaultUi} embed=${liveExpectancyDefaultEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; live_feed_closed_10s=${liveFeedClosed10s}; live_feed_hour_bars=${liveFeedHourBars}; desk_entry_dash=${deskEntryDash}; desk_entry_journal=${deskEntryJournal}; desk_entry_pg=${deskEntryPgHydrate}; desk_entry_perf=${deskEntryPerfJoin}; desk_source_expectancy=${deskSourceExpectancyDash}; confirm_desk_hydrate=${confirmDeskHydrateWarn}; trade_desk_restart=${tradeDeskRestartHydrate}; desk_entry_open_hydrate=${deskEntryOpenHydrate}; desk_entry_status_hydrate=${deskEntryStatusHydrate}; open_pos_confirm=${openPosConfirmDash}; closed_trade_confirm=${closedTradeConfirmDash}; trade_event_desk_confirm=${tradeEventDeskConfirm}; desk_confirm_card_hydrate=${deskConfirmCardHydrate}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle api=${multiEpicCycleApi} ui=${multiEpicCycleUi} embed=${multiEpicCycleEmbed}; multi_epic_manage api=${multiEpicManageApi} ui=${multiEpicManageUi} embed=${multiEpicManageEmbed}; epic_stash=${epicCycleStashPersist}; epic_setup_key=${epicScopedSetupKey}; desk_source_setup_key=${deskSourceSetupKey}; replay_desk_confirm=${replayDeskConfirm}; system_audit_desk_confirm=${systemAuditDeskConfirm}`,
     });
   }
 

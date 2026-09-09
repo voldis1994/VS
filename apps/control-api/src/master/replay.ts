@@ -283,6 +283,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       hard_only: optsManage.hard_only,
       instrument_point_value: pv,
       max_hold_ms: optsManage.hard_only ? 0 : cfg.max_hold_ms,
+      time_stop_max_bars: optsManage.hard_only ? 0 : cfg.time_stop_max_bars,
       breakeven_progress: cfg.breakeven_progress,
       breakeven_offset: cfg.breakeven_offset,
       be_start: cfg.be_start,

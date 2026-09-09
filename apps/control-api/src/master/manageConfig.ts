@@ -39,6 +39,7 @@ export type ManageConfigPatch = Partial<
     | 'daily_loss_limit'
     | 'equity_floor'
     | 'max_hold_ms'
+    | 'time_stop_max_bars'
     | 'min_score'
     | 'block_high_impact_news'
     | 'block_off_hours'
@@ -72,6 +73,7 @@ const KEYS: (keyof ManageConfigPatch)[] = [
   'daily_loss_limit',
   'equity_floor',
   'max_hold_ms',
+  'time_stop_max_bars',
   'min_score',
   'block_high_impact_news',
   'block_off_hours',

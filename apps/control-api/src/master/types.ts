@@ -222,8 +222,14 @@ export type MasterConfig = {
   sl_buffer_atr_mult: number;
   kill_switch: boolean;
   cooldown_ms_after_loss: number;
-  /** Hard max hold (Reader time_stop) — close regardless of UPL */
+  /** Hard max hold wall-clock — used only when time_stop_max_bars is 0 */
   max_hold_ms: number;
+  /**
+   * Reader time_stop_max_bars — manage cycles since entry before TIME_STOP.
+   * When >0, bars_open wins (restart/overnight must not instant-exit via wall clock).
+   * 0 falls back to max_hold_ms.
+   */
+  time_stop_max_bars: number;
   /** Progress toward TP (0..1) before moving SL to breakeven */
   breakeven_progress: number;
   /** AI layer: off | advisory | required (Reader contract) */

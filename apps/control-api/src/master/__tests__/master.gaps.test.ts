@@ -4319,6 +4319,7 @@ describe('partial_close persist + Check be_start', () => {
         max_drawdown_pct: 0.99,
         post_exit_cooldown_ms: 60_000,
         max_hold_ms: 1, // force TIME_STOP on existing position
+        time_stop_max_bars: 0, // wall-clock mode for this restart/cooldown test
       };
       const broker = masterRuntime.ensurePaperBroker();
       masterRuntime.running = true;
@@ -5558,6 +5559,7 @@ describe('replay exit order vs live manageTick', () => {
         block_high_impact_news: false,
         min_score: 0.25,
         max_hold_ms: 1, // would TIME_STOP immediately if soft allowed
+        time_stop_max_bars: 0,
         soft_trail_money_arm: 0,
         scalp_pct_chase: false,
         require_positive_expectancy: false,
@@ -5689,6 +5691,7 @@ describe('replay exit order vs live manageTick', () => {
         block_high_impact_news: false,
         min_score: 0.2,
         max_hold_ms: 60_000,
+        time_stop_max_bars: 0,
         soft_trail_money_arm: 0,
         scalp_pct_chase: false,
         require_positive_expectancy: false,

@@ -8,7 +8,7 @@ import {
 } from '../liveFeed.js';
 import { PaperBroker } from '../broker.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
-import { PositionManager } from '../positionManager.js';
+import { PositionManager, resolveTimeStop } from '../positionManager.js';
 
 describe('VS MASTER live bar builder', () => {
   it('seeds history and closes bars on interval', () => {
@@ -287,6 +287,137 @@ describe('MASTER TIME_STOP + breakeven', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
+  });
+
+  it('bars_open TIME_STOP ignores overnight wall clock and fires after N manage ticks', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const quote = {
+      bid: entry + 0.2,
+      ask: entry + 0.6,
+      mid: entry + 0.4,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    broker.setQuote(quote);
+    const placed = await broker.placeOrder({
+      intent_id: 'bars-timestop-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: entry + 4,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-bars-ts',
+      intent_id: 'bars-ts-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: entry + 4,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    // Overnight wall clock — must NOT instant TIME_STOP when bars mode is on
+    const pos = pm.get(placed.position_id!)!;
+    pos.entry_at = new Date(Date.now() - 48 * 3600_000).toISOString();
+    pos.bars_open = 5; // mid-hold restart hydrate
+
+    const stillHeld = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      max_hold_ms: 1, // would fire instantly if wall-clock won
+      time_stop_max_bars: 8,
+    });
+    expect(stillHeld.closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
+    expect(pm.get(placed.position_id!)!.bars_open).toBe(6);
+
+    // Advance to threshold (need 2 more ticks: 7 then 8)
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      max_hold_ms: 1,
+      time_stop_max_bars: 8,
+    });
+    const closed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      max_hold_ms: 1,
+      time_stop_max_bars: 8,
+    });
+    expect(closed.closed.length).toBe(1);
+    expect(closed.closed[0]!.reason).toMatch(/TIME_STOP · bars 8 ≥ 8/);
+    expect(pm.count()).toBe(0);
+  });
+
+  it('resolveTimeStop prefers bars mode over max_hold_ms', () => {
+    expect(
+      resolveTimeStop({
+        bars_open: 3,
+        time_stop_max_bars: 12,
+        held_ms: 99_999_999,
+        max_hold_ms: 1,
+      })
+    ).toBeNull();
+    expect(
+      resolveTimeStop({
+        bars_open: 12,
+        time_stop_max_bars: 12,
+        held_ms: 0,
+        max_hold_ms: 0,
+      })?.reason
+    ).toMatch(/bars 12/);
+    expect(
+      resolveTimeStop({
+        bars_open: 0,
+        time_stop_max_bars: 0,
+        held_ms: 60_000,
+        max_hold_ms: 30_000,
+      })?.reason
+    ).toMatch(/held/);
   });
 
   it('moves SL to breakeven once TP progress clears threshold', async () => {
