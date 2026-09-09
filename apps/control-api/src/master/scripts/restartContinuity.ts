@@ -1327,14 +1327,14 @@ async function main() {
         primaryHadRuntimeGates &&
         runtimeGatesGoneBeforeHydrate &&
         existsSync(join(stateDir, 'runtime_gates.json')) &&
-        Number(masterRuntime.account.peak_equity) === 10_250 &&
-        Number(masterRuntime.account.day_start_equity) === 10_000 &&
-        Number(masterRuntime.account.consecutive_losses) === 3,
-      peak_equity_healed_ok: Number(masterRuntime.account.peak_equity) === 10_250,
+        Number(hydrateSnap.peak_equity) === 10_250 &&
+        Number(hydrateSnap.day_start_equity) === 10_000 &&
+        Number(hydrateSnap.consecutive_losses) === 3,
+      peak_equity_healed_ok: Number(hydrateSnap.peak_equity) === 10_250,
       day_start_equity_healed_ok:
-        Number(masterRuntime.account.day_start_equity) === 10_000,
+        Number(hydrateSnap.day_start_equity) === 10_000,
       consecutive_losses_healed_ok:
-        Number(masterRuntime.account.consecutive_losses) === 3,
+        Number(hydrateSnap.consecutive_losses) === 3,
       manage_config_pg_primary_heal_ok:
         primaryHadManageConfig &&
         manageConfigGoneBeforeHydrate &&

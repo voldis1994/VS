@@ -571,7 +571,10 @@ async function main() {
       persistBody.includes('master_runtime_gates') &&
       existsSync(join(root, 'src/db/migrations/019_master_runtime_gates.sql')) &&
       restartBody.includes('runtime_gates_pg_primary_heal_ok') &&
-      restartBody.includes('Do NOT re-seed runtime_gates');
+      restartBody.includes('Do NOT re-seed runtime_gates') &&
+      restartBody.includes('peak_equity_healed_ok') &&
+      restartBody.includes('consecutive_losses_healed_ok') &&
+      restartBody.includes('day_start_equity_healed_ok');
     const manageConfigBody = readFileSync(
       join(root, 'src/master/manageConfig.ts'),
       'utf8'
