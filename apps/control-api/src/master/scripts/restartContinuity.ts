@@ -12,19 +12,28 @@ import {
   installFilePersist,
   ensureOperatorMetaFromStateDir,
   ensureJournalSidecarsFromStateDir,
+  FilePersist,
 } from '../filePersist.js';
 import {
   persistOpportunity,
   persistOutcome,
+  persistDecisionEvent,
+  persistTradeEvent,
   saveOpenPositions,
   setPersistClient,
+  MemoryPersist,
+  loadOpenPositions,
+  loadJournalHistory,
 } from '../persist.js';
+import { DualPersist } from '../dualPersist.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { masterRuntime } from '../runtime.js';
 import { saveMarketCache } from '../marketCache.js';
 import { saveRuntimeGates } from '../runtimeGates.js';
 import { setJournalMirror } from '../journalMirror.js';
+import { loadDecisionEvents } from '../decisionJournal.js';
+import { loadTradeEvents } from '../tradeEventJournal.js';
 
 async function main() {
   const artifactDir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
@@ -197,7 +206,59 @@ async function main() {
     existsSync(decPath) &&
     existsSync(tradePath);
 
-  // Simulate process restart — empty in-memory book, durable state on disk
+  // Phase K: DualPersist MemoryPersist primary survives FULL file wipe
+  // (jsonl + master_state) — boot hydrate must heal journals from primary.
+  const primary = new MemoryPersist();
+  setJournalMirror(null);
+  setPersistClient(null);
+  const mirrorBeforeWipe = new FilePersist(stateDir);
+  setPersistClient(new DualPersist(primary, mirrorBeforeWipe));
+  // Copy durable rows into primary via DualPersist dual-write
+  const opensForPrimary = await loadOpenPositions();
+  await saveOpenPositions(opensForPrimary);
+  const histForPrimary = await loadJournalHistory(50);
+  for (const o of histForPrimary.opportunities) {
+    if (o?.decision && o?.risk) await persistOpportunity(o);
+  }
+  for (const row of histForPrimary.outcomes) {
+    if (row?.outcome) {
+      await persistOutcome(row.opportunity_id, row.outcome, row.setup_key);
+    }
+  }
+  for (const e of [...loadDecisionEvents(100)].reverse()) {
+    await persistDecisionEvent(e);
+  }
+  for (const e of [...loadTradeEvents(100)].reverse()) {
+    await persistTradeEvent(e);
+  }
+  const primaryHadDecisions = primary.decisionEvents.length >= 1;
+  const primaryHadTrades = primary.tradeEvents.length >= 1;
+  const primaryHadOpens = primary.positions.length >= 1;
+  // Wipe ALL file state — only MemoryPersist primary remains
+  setJournalMirror(null);
+  setPersistClient(null);
+  rmSync(stateDir, { recursive: true, force: true });
+  mkdirSync(stateDir, { recursive: true });
+  const mirrorAfterWipe = new FilePersist(stateDir);
+  setPersistClient(new DualPersist(primary, mirrorAfterWipe));
+  const journalsGoneBeforeHydrate =
+    !existsSync(decPath) && !existsSync(tradePath);
+  // Re-seed market cache sidecar (not SQL-mirrored) so later manage has bars
+  saveMarketCache({
+    epic: 'GOLD',
+    bars,
+    quote: {
+      bid: 4415,
+      ask: 4415.4,
+      mid: 4415.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    },
+    structure_seed_source: 'restart_check',
+  });
+
+  // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
   masterRuntime.positions = new PositionManager();
   masterRuntime.broker = null;
@@ -206,6 +267,11 @@ async function main() {
   masterRuntime.desired_running = false;
   masterRuntime.recovered = false;
   (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
+  (
+    masterRuntime as unknown as {
+      lastAuditJournalHydrate: null;
+    }
+  ).lastAuditJournalHydrate = null;
   masterRuntime.last_exit_reason = null;
   masterRuntime.last_decision = null;
   masterRuntime.account.daily_pnl = 0;
@@ -225,6 +291,17 @@ async function main() {
 
   const hydrated = await masterRuntime.hydrateBookFromDisk();
   const stHydrate = masterRuntime.status();
+  const pgPrimaryHealOk =
+    primaryHadDecisions &&
+    primaryHadTrades &&
+    primaryHadOpens &&
+    journalsGoneBeforeHydrate &&
+    stHydrate.persist_backend === 'dual' &&
+    stHydrate.journal_audit?.healed_from_persist === true &&
+    stHydrate.journal_audit?.decision_sidecar === true &&
+    stHydrate.journal_audit?.trade_sidecar === true &&
+    existsSync(decPath) &&
+    existsSync(tradePath);
   const hydrateSnap = {
     recovered_flag: masterRuntime.recovered,
     positions: masterRuntime.positions.count(),
@@ -241,6 +318,9 @@ async function main() {
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
     journal_heal_ok: journalHealOk,
+    pg_primary_heal_ok: pgPrimaryHealOk,
+    persist_backend: stHydrate.persist_backend ?? null,
+    healed_from_persist: stHydrate.journal_audit?.healed_from_persist === true,
   };
   const hydrateOk =
     hydrated === true &&
@@ -255,7 +335,8 @@ async function main() {
     hydrateSnap.recent_trades >= 2 &&
     hydrateSnap.journal_stage_ok === true &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
-    journalHealOk;
+    journalHealOk &&
+    pgPrimaryHealOk;
 
   // Phase A: desired_running=false → manage leftover opens only
   masterRuntime.desired_running = false;
@@ -367,6 +448,9 @@ async function main() {
       heal_via_install: healViaInstall,
       heal_helper: healHelper,
       heal_op_meta_called: healOpMeta,
+      pg_primary_heal_ok: pgPrimaryHealOk,
+      persist_backend: hydrateSnap.persist_backend,
+      healed_from_persist: hydrateSnap.healed_from_persist,
     },
     recover: {
       ok: recoverOk,
