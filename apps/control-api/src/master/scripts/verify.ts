@@ -1559,9 +1559,12 @@ async function main() {
       );
     const utcDayRollDeferredStatusApi =
       runtimeBody.includes('utc_day_roll_deferred') &&
-      runtimeBody.includes(
+      (runtimeBody.includes(
         'Operator honesty: sealed prior-day gates while mark/Capital unproven'
-      ) &&
+      ) ||
+        runtimeBody.includes(
+          'Roll-exec defer OR sealed-day lag (flat paper can lag without open-mark defer)'
+        )) &&
       masterRouteBody.includes("card('UTC day roll'") &&
       masterRouteBody.includes('deferred · ') &&
       masterPageBody.includes("'UTC day roll'") &&
