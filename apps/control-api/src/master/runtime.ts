@@ -599,6 +599,11 @@ class MasterRuntime {
     try {
       const { ensureOperatorMetaFromStateDir } = await import('./filePersist.js');
       ensureOperatorMetaFromStateDir();
+      // PG DualPersist primary → restore wiped decision/trade jsonl before status reads
+      const { hydrateAuditJournalsFromPersist } = await import(
+        './auditJournalHydrate.js'
+      );
+      await hydrateAuditJournalsFromPersist();
       this.hydrateMarketCacheFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();

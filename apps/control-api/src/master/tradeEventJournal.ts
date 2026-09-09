@@ -18,6 +18,7 @@ import {
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { loadMirroredTrades, mirrorTradeEvent } from './journalMirror.js';
+import { persistTradeEvent } from './persist.js';
 
 export type TradeEventKind = 'OPEN' | 'MODIFY' | 'CLOSE';
 
@@ -146,6 +147,8 @@ export function logTradeEvent(input: {
     /* never break the cycle */
   }
   mirrorTradeEvent(entry);
+  // DualPersist / MemoryPersist / FilePersist SQL primary (fire-and-forget)
+  void persistTradeEvent(entry).catch(() => {});
   return entry;
 }
 

@@ -20,6 +20,7 @@ import {
   loadMirroredDecisions,
   mirrorDecisionEvent,
 } from './journalMirror.js';
+import { persistDecisionEvent } from './persist.js';
 
 export type DecisionEvent = {
   event_id: string;
@@ -130,6 +131,8 @@ export function logDecisionEvent(input: {
     /* never break the cycle */
   }
   mirrorDecisionEvent(entry);
+  // DualPersist / MemoryPersist / FilePersist SQL primary (fire-and-forget)
+  void persistDecisionEvent(entry).catch(() => {});
   return entry;
 }
 
