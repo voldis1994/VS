@@ -359,8 +359,23 @@ export class PositionManager {
     stale_quote_ms?: number;
     /** Live analysis regime for ThesisFailure (desk RegimeName when available) */
     live_regime?: string | null;
+    /**
+     * Simulated clock for backtest/replay TIME_STOP + stale (default wall clock).
+     * Live callers omit — Date.now() remains authoritative.
+     */
+    now_ms?: number;
+    /**
+     * hard_only: only STOP_HIT/TP_HIT (no soft trail/BE/BestOutcome/TIME_STOP).
+     * Replay uses this on adverse/favorable bar extremes so soft path stays on close.
+     */
+    hard_only?: boolean;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
+    const nowMs =
+      input.now_ms != null && Number.isFinite(input.now_ms)
+        ? Number(input.now_ms)
+        : Date.now();
+    const hardOnly = input.hard_only === true;
     const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
     const pv = input.instrument_point_value ?? 1;
     const maxHold = input.max_hold_ms ?? 0;
@@ -421,7 +436,7 @@ export class PositionManager {
     const quoteStale =
       staleMs > 0 &&
       Number.isFinite(quote.ts_ms) &&
-      Date.now() - quote.ts_ms > staleMs;
+      nowMs - quote.ts_ms > staleMs;
     if (quoteStale) {
       for (const pos of this.list()) {
         if (pos.stop_loss == null) {
@@ -429,7 +444,7 @@ export class PositionManager {
         }
       }
       for (const pos of [...this.open.values()]) {
-        const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        const heldMs = nowMs - new Date(pos.entry_at).getTime();
         const protective = protectiveExit(pos, quote);
         const timeStop =
           !protective && maxHold > 0 && heldMs >= maxHold
@@ -518,6 +533,72 @@ export class PositionManager {
       return { held: this.list(), closed, close_failed };
     }
 
+    // hard_only (replay adverse/favorable extremes): STOP/TP only — no soft/portfolio
+    if (hardOnly) {
+      for (const pos of [...this.open.values()]) {
+        const protective = protectiveExit(pos, quote);
+        if (!protective) continue;
+        const closeRes = await broker.closePosition(pos.position_id);
+        if (!closeRes.ok) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: protective.reason,
+            detail: closeRes.detail || 'close_failed',
+          });
+          continue;
+        }
+        const mark = protectiveMark(pos.side, quote);
+        const heldMs = nowMs - new Date(pos.entry_at).getTime();
+        const { exit: fill, fill_proven } = resolveCloseExitFill({
+          fill_price: closeRes.fill_price,
+          mark,
+          entry: pos.entry,
+          capitalLive,
+          hard_reason: protective.reason,
+          stop_loss: pos.stop_loss,
+          take_profit: pos.take_profit,
+        });
+        const priced = priceResolvedCloseMoney({
+          ...resolveCloseMoneyPnl({
+            side: pos.side,
+            entry: pos.entry,
+            fill,
+            size: pos.size,
+            value_per_point_per_lot: pv,
+            fill_pnl: preferCloseFillPnl({
+              fill_pnl: closeRes.fill_pnl,
+              broker_upl: pos.broker_upl,
+            }),
+            capitalLive,
+          }),
+          volume: pos.size,
+        });
+        const outcome: TradeOutcome = {
+          position_id: pos.position_id,
+          side: pos.side,
+          entry: pos.entry,
+          exit: fill,
+          volume: pos.size,
+          pnl: priced.pnl,
+          fees: priced.fees,
+          pnl_proven: priced.pnl_proven,
+          slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
+          mae: pos.mae,
+          mfe: pos.mfe,
+          r_multiple: 0,
+          hold_ms: heldMs,
+          exit_reason: capitalCloseExitReason(protective.reason, priced.pnl_proven),
+        };
+        pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+          epic: pos.epic,
+        });
+        this.clearModifyReject(pos);
+        this.open.delete(pos.position_id);
+        closed.push({ position: pos, outcome, reason: outcome.exit_reason });
+      }
+      return { held: this.list(), closed, close_failed };
+    }
+
     // Check- portfolio close-all on floating PnL (before per-position manage)
     // Capital LIVE: refuse portfolio money exits while any open lacks usable venue UPL
     const capitalFloatReady =
@@ -537,7 +618,7 @@ export class PositionManager {
     if (portfolioReason) {
       for (const pos of [...this.open.values()]) {
         const mark = protectiveMark(pos.side, quote);
-        const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        const heldMs = nowMs - new Date(pos.entry_at).getTime();
         if (!allowClose) {
           close_failed.push({
             position_id: pos.position_id,
@@ -628,7 +709,7 @@ export class PositionManager {
       }
       const peak_retention =
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
-      const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+      const heldMs = nowMs - new Date(pos.entry_at).getTime();
 
       const moneyPnl = resolveFloatingMoneyPnl({
         side: pos.side,
