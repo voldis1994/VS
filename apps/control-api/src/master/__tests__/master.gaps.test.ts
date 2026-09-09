@@ -3466,7 +3466,10 @@ describe('partial_close persist + Check be_start', () => {
       masterRuntime.pipeline = new MasterPipeline('PAPER');
       masterRuntime.positions = new PositionManager();
       masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER' };
-      masterRuntime.ensurePaperBroker();
+      const paper0 = masterRuntime.ensurePaperBroker();
+      // Shared singleton may carry opens/MTM equity from prior tests — reset flat book
+      paper0.seedOpens([]);
+      paper0.hydrateAccount({ equity: 10_000, balance: 10_000 });
       // Simulate journal-rebuilt account after closed trades (flat book)
       masterRuntime.account.balance = 10_000;
       masterRuntime.account.equity = 10_250;

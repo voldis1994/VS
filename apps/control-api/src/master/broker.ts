@@ -410,11 +410,24 @@ export class PaperBroker implements MasterBroker {
     const gross = pts * closeSize * pv;
     const fees = estimateTradeFees(closeSize);
     const net = gross - fees;
-    this.equity += net;
-    this.balance = this.equity;
+    // Realize into cash balance (not MTM equity which already includes floating UPL)
+    const cash =
+      this.balance != null && Number.isFinite(this.balance) && this.balance > 0
+        ? this.balance
+        : this.equity;
+    this.balance = cash + net;
     const remaining = Math.max(0, p.size - closeSize);
     if (remaining > 1e-9) {
       p.size = remaining;
+      // Refresh protective UPL on remainder at fill mark
+      p.upl = pts * remaining * pv;
+      let floating = 0;
+      for (const row of this.positions.values()) {
+        if (row.upl != null && Number.isFinite(Number(row.upl))) {
+          floating += Number(row.upl);
+        }
+      }
+      this.equity = this.balance + floating;
       return {
         ok: true,
         detail: `${detail} rem=${remaining}`,
@@ -424,6 +437,13 @@ export class PaperBroker implements MasterBroker {
       };
     }
     this.positions.delete(p.position_id);
+    let floating = 0;
+    for (const row of this.positions.values()) {
+      if (row.upl != null && Number.isFinite(Number(row.upl))) {
+        floating += Number(row.upl);
+      }
+    }
+    this.equity = this.balance + floating;
     if (reason) {
       this.recentAutoFills.set(p.position_id, {
         fill_price,
@@ -458,9 +478,30 @@ export class PaperBroker implements MasterBroker {
   }
 
   async getAccount() {
+    // Capital-style: balance = realized cash; equity = cash + Σ open UPL
+    let floating = 0;
+    for (const p of this.positions.values()) {
+      if (p.upl != null && Number.isFinite(Number(p.upl))) {
+        floating += Number(p.upl);
+      }
+    }
+    const cash =
+      this.balance != null && Number.isFinite(this.balance) && this.balance > 0
+        ? this.balance
+        : this.equity;
+    // With opens: always recompute from cash+UPL. When flat: keep hydrate/recover
+    // this.equity (journal may restore equity before seedOpens / markToMarket).
+    const equity =
+      this.positions.size > 0
+        ? cash + floating
+        : Number.isFinite(this.equity) && this.equity > 0
+          ? Number(this.equity)
+          : cash;
+    // Mirror MTM equity on the field so tests / callers reading .equity stay honest
+    this.equity = equity;
     return {
-      equity: this.equity,
-      balance: this.balance,
+      equity,
+      balance: cash,
       currency: 'GBP',
       trade_allowed: true,
     };
@@ -645,21 +686,35 @@ export class PaperBroker implements MasterBroker {
   /**
    * Mark-to-market open positions (instrument money units).
    * Prefer protective mark (bid/ask) per epic; optional quote scopes one epic.
+   * Updates position.upl and mirrors Capital-style equity = cash + ΣUPL.
    */
   markToMarket(quote?: BrokerQuote) {
+    let floating = 0;
     for (const p of this.positions.values()) {
       const q = quote
         ? epicsMatch(p.epic, quote.epic)
           ? quote
           : null
         : this.quoteForEpic(p.epic);
-      if (!q) continue;
+      if (!q) {
+        if (p.upl != null && Number.isFinite(Number(p.upl))) {
+          floating += Number(p.upl);
+        }
+        continue;
+      }
       const mark = p.side === 'BUY' ? q.bid : q.ask;
       if (!Number.isFinite(mark)) continue;
       const pv = specForEpic(p.epic).value_per_point_per_lot;
       const pts = p.side === 'BUY' ? mark - p.open_level : p.open_level - mark;
       p.upl = pts * p.size * pv;
+      floating += p.upl;
     }
+    const cash =
+      this.balance != null && Number.isFinite(this.balance) && this.balance > 0
+        ? this.balance
+        : this.equity;
+    this.balance = cash;
+    this.equity = cash + floating;
   }
 }
 
