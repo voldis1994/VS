@@ -323,6 +323,8 @@ type ManagedPos = {
   native_trail_armed?: boolean;
   partial_close_applied?: boolean;
   multi_tp_levels?: unknown[];
+  /** Desk confirm path this open will close into for EV (setup|move|none). */
+  desk_entry_source?: 'setup' | 'move' | 'none' | null;
 };
 
 type JournalOpp = {
@@ -2096,6 +2098,9 @@ export function MasterPage() {
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                   {[
+                    p.desk_entry_source
+                      ? `confirm ${p.desk_entry_source}`
+                      : null,
                     p.native_trail_armed ? 'nativeTrail' : null,
                     p.soft_trail_armed_at ? 'softTrail' : null,
                     p.partial_close_applied ? 'partial' : null,
