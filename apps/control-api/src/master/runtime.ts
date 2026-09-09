@@ -3891,9 +3891,15 @@ class MasterRuntime {
         this.account.peak_equity = this.account.equity;
       }
     }
-    // PAPER: reseed broker cash/opens before optional MTM + UTC day-roll
+    // PAPER: reseed broker cash/opens before optional MTM + UTC day-roll.
+    // Only MTM when opens exist — flat journal equity is already cash truth;
+    // markToMarket prefers balance as cash and would wipe balance+pnlAll rebuild.
     this.seedPaperBrokerFromPositions();
-    if (this.broker instanceof PaperBroker && this.last_quote) {
+    if (
+      this.broker instanceof PaperBroker &&
+      this.last_quote &&
+      this.positions.count() > 0
+    ) {
       const q = this.last_quote;
       this.broker.setQuote({
         bid: q.bid,

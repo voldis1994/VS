@@ -427,11 +427,15 @@ describe('MASTER daily pnl day boundary', () => {
     });
     installFilePersist(dir);
 
-    masterRuntime.stop();
+    // Reset account BEFORE stop() — stop persistRuntimeGates must not rewrite
+    // temp gates with prior-test day_start / daily_pnl_day leftovers.
     masterRuntime.pipeline = new MasterPipeline('PAPER');
     masterRuntime.positions = new PositionManager();
     masterRuntime.broker = null;
+    masterRuntime.last_quote = null;
+    masterRuntime.last_bars = [];
     masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
     masterRuntime.account.equity = 10_000;
     masterRuntime.account.balance = 10_000;
     masterRuntime.account.peak_equity = 10_000;
@@ -439,6 +443,29 @@ describe('MASTER daily pnl day boundary', () => {
     masterRuntime.account.daily_pnl_day = '2000-01-01';
     masterRuntime.account.day_start_equity = 10_000;
     masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', ai_mode: 'off' };
+    masterRuntime.stop();
+    // Re-assert gates after stop() persist
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
 
     await masterRuntime.recover();
 
