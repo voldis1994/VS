@@ -5,10 +5,14 @@
  *
  *   npm run master:restart-check
  */
-import { mkdirSync, writeFileSync, rmSync, unlinkSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { PaperBroker } from '../broker.js';
-import { installFilePersist } from '../filePersist.js';
+import {
+  installFilePersist,
+  ensureOperatorMetaFromStateDir,
+  ensureJournalSidecarsFromStateDir,
+} from '../filePersist.js';
 import {
   persistOpportunity,
   persistOutcome,
@@ -20,6 +24,7 @@ import { PositionManager } from '../positionManager.js';
 import { masterRuntime } from '../runtime.js';
 import { saveMarketCache } from '../marketCache.js';
 import { saveRuntimeGates } from '../runtimeGates.js';
+import { setJournalMirror } from '../journalMirror.js';
 
 async function main() {
   const artifactDir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
@@ -151,6 +156,47 @@ async function main() {
     structure_seed_source: 'restart_check',
   });
 
+  // Phase J: wipe decision/trade jsonl — DualPersist mirror must heal on boot
+  const decPath = join(stateDir, 'decision_journal.jsonl');
+  const tradePath = join(stateDir, 'trade_event_journal.jsonl');
+  const hadDecBeforeWipe = existsSync(decPath);
+  const hadTradeBeforeWipe = existsSync(tradePath);
+  try {
+    unlinkSync(decPath);
+  } catch {
+    /* ignore */
+  }
+  try {
+    unlinkSync(tradePath);
+  } catch {
+    /* ignore */
+  }
+  // Simulate cold process: drop in-memory mirror, reinstall from master_state.json
+  setJournalMirror(null);
+  setPersistClient(null);
+  installFilePersist(stateDir);
+  const healViaInstall =
+    existsSync(decPath) && existsSync(tradePath);
+  // Also prove standalone heal helper (operator_meta path calls this too)
+  try {
+    unlinkSync(decPath);
+    unlinkSync(tradePath);
+  } catch {
+    /* ignore */
+  }
+  setJournalMirror(null);
+  setPersistClient(null);
+  const healHelper = ensureJournalSidecarsFromStateDir(stateDir);
+  const healOpMeta = ensureOperatorMetaFromStateDir(stateDir);
+  installFilePersist(stateDir);
+  const journalHealOk =
+    hadDecBeforeWipe &&
+    hadTradeBeforeWipe &&
+    healViaInstall &&
+    healHelper === true &&
+    existsSync(decPath) &&
+    existsSync(tradePath);
+
   // Simulate process restart — empty in-memory book, durable state on disk
   masterRuntime.pipeline = new MasterPipeline('PAPER');
   masterRuntime.positions = new PositionManager();
@@ -194,6 +240,7 @@ async function main() {
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
+    journal_heal_ok: journalHealOk,
   };
   const hydrateOk =
     hydrated === true &&
@@ -207,7 +254,8 @@ async function main() {
     hydrateSnap.recent_decisions >= 1 &&
     hydrateSnap.recent_trades >= 2 &&
     hydrateSnap.journal_stage_ok === true &&
-    hydrateSnap.position_stage_pre_manage_ok === false;
+    hydrateSnap.position_stage_pre_manage_ok === false &&
+    journalHealOk;
 
   // Phase A: desired_running=false → manage leftover opens only
   masterRuntime.desired_running = false;
@@ -261,7 +309,6 @@ async function main() {
   // Do NOT call stop() before save — stop() persists desired_running=false and
   // would overwrite the embed we are about to prove. Keep seeded PaperBroker so
   // start()/recover inside resumeDesiredSession cannot ghost-wipe locals.
-  const { ensureOperatorMetaFromStateDir } = await import('../filePersist.js');
   saveRuntimeGates({
     last_loss_ms: 0,
     reject_until_ms: 0,
@@ -316,6 +363,10 @@ async function main() {
       trades: hydrateSnap.recent_trades,
       journal_stage_ok: hydrateSnap.journal_stage_ok,
       journal_stage_detail: hydrateSnap.journal_stage_detail,
+      heal_ok: journalHealOk,
+      heal_via_install: healViaInstall,
+      heal_helper: healHelper,
+      heal_op_meta_called: healOpMeta,
     },
     recover: {
       ok: recoverOk,
