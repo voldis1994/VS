@@ -12,7 +12,7 @@ import { join } from 'path';
 import { ensureOperatorMetaFromStateDir } from '../filePersist.js';
 
 describe('operator_meta newer sidecar parity', () => {
-  it('ensureOperatorMetaFromStateDir restores monitoring/spread/news/fanout/trade_ack', () => {
+  it('ensureOperatorMetaFromStateDir restores monitoring/spread/news/fanout/trade_ack/error_journal', () => {
     const dir = mkdtempSync(join(tmpdir(), 'master-opmeta-parity-'));
     const prev = process.env.MASTER_STATE_DIR;
     process.env.MASTER_STATE_DIR = dir;
@@ -58,6 +58,17 @@ describe('operator_meta newer sidecar parity', () => {
           ts_ack: new Date().toISOString(),
         },
       };
+      const errorJournal = {
+        entries: [
+          {
+            error_id: 'e1',
+            ts: new Date().toISOString(),
+            module: 'master',
+            error_type: 'cycle',
+            message: 'opmeta mid-wipe',
+          },
+        ],
+      };
       writeFileSync(
         join(dir, 'master_state.json'),
         JSON.stringify({
@@ -71,6 +82,7 @@ describe('operator_meta newer sidecar parity', () => {
             news_window: news,
             client_fanout: fanout,
             trade_ack_journal: tradeAck,
+            error_journal: errorJournal,
           },
         })
       );
@@ -80,6 +92,7 @@ describe('operator_meta newer sidecar parity', () => {
       expect(existsSync(join(dir, 'news_window.json'))).toBe(true);
       expect(existsSync(join(dir, 'client_fanout.json'))).toBe(true);
       expect(existsSync(join(dir, 'trade_ack_journal.json'))).toBe(true);
+      expect(existsSync(join(dir, 'error_journal.jsonl'))).toBe(true);
       expect(
         JSON.parse(readFileSync(join(dir, 'monitoring_snapshot.json'), 'utf8'))
           .entry_block_reason
@@ -95,6 +108,13 @@ describe('operator_meta newer sidecar parity', () => {
           'cmd-1'
         ].ticket
       ).toBe('T-1');
+      expect(
+        JSON.parse(
+          readFileSync(join(dir, 'error_journal.jsonl'), 'utf8')
+            .trim()
+            .split('\n')[0]!
+        ).message
+      ).toBe('opmeta mid-wipe');
       // Wipe and restore again
       for (const f of [
         'monitoring_snapshot.json',
@@ -102,15 +122,24 @@ describe('operator_meta newer sidecar parity', () => {
         'news_window.json',
         'client_fanout.json',
         'trade_ack_journal.json',
+        'error_journal.jsonl',
       ]) {
         unlinkSync(join(dir, f));
       }
       expect(ensureOperatorMetaFromStateDir(dir)).toBe(true);
       expect(existsSync(join(dir, 'spread_history.json'))).toBe(true);
+      expect(existsSync(join(dir, 'error_journal.jsonl'))).toBe(true);
       expect(
         JSON.parse(readFileSync(join(dir, 'spread_history.json'), 'utf8')).history
           .length
       ).toBeGreaterThanOrEqual(3);
+      expect(
+        JSON.parse(
+          readFileSync(join(dir, 'error_journal.jsonl'), 'utf8')
+            .trim()
+            .split('\n')[0]!
+        ).error_id
+      ).toBe('e1');
     } finally {
       if (prev === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prev;

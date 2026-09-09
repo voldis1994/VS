@@ -48,6 +48,8 @@ export type FilePersistState = {
     client_fanout?: Record<string, unknown> | null;
     trade_ack_journal?: Record<string, unknown> | null;
     news_calendar?: Record<string, unknown> | null;
+    /** error_journal.jsonl entries — survive mid-wipe (jsonl, not JSON sidecar) */
+    error_journal?: { entries: unknown[] } | null;
   };
 };
 
@@ -306,6 +308,20 @@ export class FilePersist implements PersistClient, JournalMirror {
       if (meta.news_calendar && needsRestore(newsCalPath)) {
         atomicWriteJson(newsCalPath, meta.news_calendar);
       }
+      const errPath = join(this.root, 'error_journal.jsonl');
+      const errEntries = meta.error_journal?.entries;
+      if (Array.isArray(errEntries) && errEntries.length > 0) {
+        const needsJsonl =
+          !existsSync(errPath) ||
+          !readFileSync(errPath, 'utf8').trim();
+        if (needsJsonl) {
+          writeFileSync(
+            errPath,
+            `${errEntries.map((e) => JSON.stringify(e)).join('\n')}\n`,
+            'utf8'
+          );
+        }
+      }
     } catch {
       /* best-effort */
     }
@@ -333,6 +349,28 @@ export class FilePersist implements PersistClient, JournalMirror {
     const fanoutRaw = readJson('client_fanout.json');
     const tradeAckRaw = readJson('trade_ack_journal.json');
     const newsCalRaw = readJson('news_calendar.json');
+    const readErrorJournal = (): { entries: unknown[] } | null => {
+      try {
+        const p = join(this.root, 'error_journal.jsonl');
+        if (!existsSync(p)) return null;
+        const lines = readFileSync(p, 'utf8')
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const entries: unknown[] = [];
+        for (const line of lines) {
+          try {
+            entries.push(JSON.parse(line));
+          } catch {
+            /* skip */
+          }
+        }
+        return entries.length ? { entries } : null;
+      } catch {
+        return null;
+      }
+    };
+    const errorJournalRaw = readErrorJournal();
     // Per-field fallback: partial sidecar wipe must not null out embedded meta
     const manage =
       manageRaw ?? this.lastOperatorMeta?.manage ?? null;
@@ -368,6 +406,15 @@ export class FilePersist implements PersistClient, JournalMirror {
       newsCalRaw && Array.isArray(newsCalRaw.events)
         ? newsCalRaw
         : this.lastOperatorMeta?.news_calendar ?? null;
+    const error_journal =
+      errorJournalRaw ??
+      (this.mem.errorJournalPayload &&
+      Array.isArray(this.mem.errorJournalPayload.entries) &&
+      this.mem.errorJournalPayload.entries.length
+        ? { entries: this.mem.errorJournalPayload.entries as unknown[] }
+        : null) ??
+      this.lastOperatorMeta?.error_journal ??
+      null;
     if (
       !manage &&
       owns == null &&
@@ -379,7 +426,8 @@ export class FilePersist implements PersistClient, JournalMirror {
       !news_window &&
       !client_fanout &&
       !trade_ack_journal &&
-      !news_calendar
+      !news_calendar &&
+      !error_journal
     ) {
       // Sidecars wiped — keep prior meta so flush does not erase backup
       return this.lastOperatorMeta;
@@ -396,6 +444,7 @@ export class FilePersist implements PersistClient, JournalMirror {
       client_fanout,
       trade_ack_journal,
       news_calendar,
+      error_journal,
     };
     this.lastOperatorMeta = meta;
     return meta;
@@ -747,6 +796,19 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     const newsCalPath = join(dir, 'news_calendar.json');
     if (raw.operator_meta.news_calendar && needsRestore(newsCalPath)) {
       atomicWriteJson(newsCalPath, raw.operator_meta.news_calendar);
+    }
+    const errPath = join(dir, 'error_journal.jsonl');
+    const errEntries = raw.operator_meta.error_journal?.entries;
+    if (Array.isArray(errEntries) && errEntries.length > 0) {
+      const needsJsonl =
+        !existsSync(errPath) || !readFileSync(errPath, 'utf8').trim();
+      if (needsJsonl) {
+        writeFileSync(
+          errPath,
+          `${errEntries.map((e) => JSON.stringify(e)).join('\n')}\n`,
+          'utf8'
+        );
+      }
     }
     // Also heal wiped decision/trade jsonl from mirrored tails
     ensureJournalSidecarsFromStateDir(dir);

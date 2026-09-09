@@ -744,6 +744,8 @@ async function main() {
       filePersistBody.includes('news_window') &&
       filePersistBody.includes('client_fanout') &&
       filePersistBody.includes('trade_ack_journal') &&
+      filePersistBody.includes('error_journal') &&
+      filePersistBody.includes('error_journal.jsonl') &&
       monitoringOpMetaBody.includes('embedOperatorMetaPatch') &&
       monitoringOpMetaBody.includes('monitoring_snapshot') &&
       readFileSync(join(root, 'src/master/spreadModel.ts'), 'utf8').includes(
@@ -754,6 +756,8 @@ async function main() {
       ) &&
       fanoutBody.includes('embedOperatorMetaPatch') &&
       tradeAckBody.includes('embedOperatorMetaPatch') &&
+      errorJournalBody.includes('embedOperatorMetaPatch') &&
+      errorJournalBody.includes('error_journal') &&
       existsSync(
         join(root, 'src/master/__tests__/operatorMetaSidecarParity.test.ts')
       );
@@ -1280,7 +1284,7 @@ async function main() {
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Hour bars disk_cache + Closed 10s disk_cache + market_cache DualPersist PG heal + epic_cycle_stash DualPersist PG heal + runtime_gates DualPersist PG heal + manage_config DualPersist PG heal + owns_pipeline DualPersist PG heal + monitoring_snapshot DualPersist PG heal + spread_history DualPersist PG heal + trade_ack_journal DualPersist PG heal + error_journal DualPersist PG heal + news_window DualPersist PG heal + client_fanout DualPersist PG heal + news_calendar DualPersist PG heal + Peak/Expectancy/Fees/Win rate/Loss streak KPI hydrate honesty + operator_meta sidecar parity (monitoring/spread/news/fanout/trade_ack) + tick sticky desk arms fallback + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + live-paper desk closed_10s/hour_bars setup|move CLOSED + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed sticky justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias/closed_10s dashboard + decision journal desk_entry provenance + DualPersist PG desk_entry hydrate + Confirm PnL desk_entry perf join + Confirm EV desk-source expectancy + open desk_entry hydrate/backfill + desk_entry status hydrate + open-pos confirm dash + closed-trade confirm dash + TradeEvent durable desk_entry_source + Confirm PnL/EV hydrate warn + TradeEvent desk restart DualPersist heal + desk confirm card hydrate warn + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + desk-source setupKey EV + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent + replay closed_10s/hour_bars desk confirm + systemAudit desk closed_10s/hour_bars resolveDeskEntryConfirm',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Hour bars disk_cache + Closed 10s disk_cache + market_cache DualPersist PG heal + epic_cycle_stash DualPersist PG heal + runtime_gates DualPersist PG heal + manage_config DualPersist PG heal + owns_pipeline DualPersist PG heal + monitoring_snapshot DualPersist PG heal + spread_history DualPersist PG heal + trade_ack_journal DualPersist PG heal + error_journal DualPersist PG heal + news_window DualPersist PG heal + client_fanout DualPersist PG heal + news_calendar DualPersist PG heal + Peak/Expectancy/Fees/Win rate/Loss streak KPI hydrate honesty + operator_meta sidecar parity (monitoring/spread/news/fanout/trade_ack/error_journal) + tick sticky desk arms fallback + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + live-paper desk closed_10s/hour_bars setup|move CLOSED + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed sticky justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias/closed_10s dashboard + decision journal desk_entry provenance + DualPersist PG desk_entry hydrate + Confirm PnL desk_entry perf join + Confirm EV desk-source expectancy + open desk_entry hydrate/backfill + desk_entry status hydrate + open-pos confirm dash + closed-trade confirm dash + TradeEvent durable desk_entry_source + Confirm PnL/EV hydrate warn + TradeEvent desk restart DualPersist heal + desk confirm card hydrate warn + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + desk-source setupKey EV + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent + replay closed_10s/hour_bars desk confirm + systemAudit desk closed_10s/hour_bars resolveDeskEntryConfirm',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
