@@ -1430,6 +1430,19 @@ async function main() {
       runtimeBody.includes('manage_epics') &&
       runtimeBody.includes('floating_pnl_epic_scoped') &&
       runtimeBody.includes('openEpicKeys');
+    const paperQuoteEpicStrictApi =
+      brokerBody.includes(
+        'never return a foreign-epic lastQuote'
+      ) &&
+      brokerBody.includes(
+        'getQuote already fail-closed; quoteForEpic must match for MTM / close / place'
+      ) &&
+      readFileSync(
+        join(root, 'src/master/__tests__/multiEpicManage.test.ts'),
+        'utf8'
+      ).includes(
+        'markToMarket does not apply GOLD quote to SILVER open (equity isolation)'
+      );
     const multiEpicManageUi =
       masterPageBody.includes("'Manage epics'") &&
       masterPageBody.includes('manage_epics') &&
