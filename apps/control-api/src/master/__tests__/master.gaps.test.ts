@@ -5063,21 +5063,27 @@ describe('SELL manageTick partial_close + Check trail', () => {
     const { MasterPipeline, DEFAULT_MASTER_CONFIG, GOLD_SPEC } = await import(
       '../pipeline.js'
     );
+    const prevQuote = masterRuntime.last_quote;
+    const prevDecision = masterRuntime.last_decision;
+    const prevMarket = masterRuntime.last_market;
+    const prevRisk = masterRuntime.last_risk;
+    try {
     const pipe = new MasterPipeline('PAPER');
     const bars = Array.from({ length: 40 }, (_, i) => {
       const o = 4400 + i * 0.4;
       return { open: o, high: o + 1, low: o - 0.3, close: o + 0.2, ts_ms: i * 60_000 };
     });
+    const quote = {
+      bid: 4415.8,
+      ask: 4416.2,
+      mid: 4416,
+      spread: 0.4,
+      ts_ms: Date.now(),
+      epic: 'GOLD',
+    };
     const cycle = await pipe.runCycle({
       bars,
-      quote: {
-        bid: 4415.8,
-        ask: 4416.2,
-        mid: 4416,
-        spread: 0.4,
-        ts_ms: Date.now(),
-        epic: 'GOLD',
-      },
+      quote,
       account: {
         equity: 10_000,
         balance: 10_000,
@@ -5090,6 +5096,7 @@ describe('SELL manageTick partial_close + Check trail', () => {
       instrument: GOLD_SPEC,
       cfg: { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', block_off_hours: false },
     });
+    masterRuntime.last_quote = quote;
     masterRuntime.last_decision = cycle.decision;
     masterRuntime.last_risk = cycle.risk;
     masterRuntime.last_market = {
@@ -5130,7 +5137,14 @@ describe('SELL manageTick partial_close + Check trail', () => {
       expect(typeof stages[id].detail).toBe('string');
     }
     expect(stages.dual_candidates.ok).toBe(true);
+    expect(stages.analysis_regime.ok).toBe(true);
     expect(stages.analysis_regime.detail).toMatch(/:/);
+    } finally {
+      masterRuntime.last_quote = prevQuote;
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_risk = prevRisk;
+    }
   });
 });
 
