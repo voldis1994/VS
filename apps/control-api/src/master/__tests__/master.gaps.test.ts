@@ -2260,6 +2260,106 @@ describe('runMasterFromDesk integration', () => {
     else process.env.MASTER_OWNS_PIPELINE = prev;
   });
 
+  it('desk owns path hard-fails Stage·validate on feed_divergent public mids', async () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    const origRefresh = masterRuntime.refreshPublicReferenceMids.bind(
+      masterRuntime
+    );
+    try {
+      masterRuntime.setOwnsPipeline(true);
+      masterRuntime.setMode('PAPER');
+      masterRuntime.ensurePaperBroker();
+      masterRuntime.setEntriesArmed(true);
+      // Force divergent public consensus vs desk Capital mid (~4406)
+      masterRuntime.refreshPublicReferenceMids = async () => [4600, 4610];
+      const { runMasterFromDesk } = await import('../deskBridge.js');
+      const minutes = Array.from({ length: 12 }, (_, i) => ({
+        open: 4400 + i * 0.5,
+        high: 4401 + i * 0.5,
+        low: 4399 + i * 0.5,
+        close: 4400.4 + i * 0.5,
+        snapshotTime: new Date(Date.now() - (12 - i) * 60_000).toISOString(),
+      }));
+      const res = await runMasterFromDesk({
+        epic: 'GOLD',
+        bid: 4406,
+        ask: 4406.4,
+        mid: 4406.2,
+        update_time: new Date().toISOString(),
+        minuteCandles: minutes as any,
+        closed10s: {
+          open: 4406,
+          high: 4407,
+          low: 4405,
+          close: 4406.2,
+          ts_ms: Date.now(),
+        } as any,
+      });
+      expect(res.active).toBe(true);
+      expect(res.executed).toBe(false);
+      expect(res.detail).toMatch(/feed_divergent|market_validation/);
+      const st = masterRuntime.status();
+      expect(st.pipeline_stages.market_validation.ok).toBe(false);
+      expect(String(st.pipeline_stages.market_validation.detail)).toMatch(
+        /feed_divergent/
+      );
+      expect(String(st.last_block_reason || '')).toMatch(/feed_divergent/);
+    } finally {
+      masterRuntime.refreshPublicReferenceMids = origRefresh;
+      if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+      else process.env.MASTER_OWNS_PIPELINE = prev;
+    }
+  });
+
+  it('desk owns path does not forge feed_divergent when public mids agree', async () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    const origRefresh = masterRuntime.refreshPublicReferenceMids.bind(
+      masterRuntime
+    );
+    try {
+      masterRuntime.setOwnsPipeline(true);
+      masterRuntime.setMode('PAPER');
+      masterRuntime.ensurePaperBroker();
+      masterRuntime.setEntriesArmed(true);
+      masterRuntime.refreshPublicReferenceMids = async () => [
+        4406.1, 4406.3, 4405.9,
+      ];
+      const { runMasterFromDesk } = await import('../deskBridge.js');
+      const minutes = Array.from({ length: 12 }, (_, i) => ({
+        open: 4400 + i * 0.5,
+        high: 4401 + i * 0.5,
+        low: 4399 + i * 0.5,
+        close: 4400.4 + i * 0.5,
+        snapshotTime: new Date(Date.now() - (12 - i) * 60_000).toISOString(),
+      }));
+      await runMasterFromDesk({
+        epic: 'GOLD',
+        bid: 4406,
+        ask: 4406.4,
+        mid: 4406.2,
+        update_time: new Date().toISOString(),
+        minuteCandles: minutes as any,
+        closed10s: {
+          open: 4406,
+          high: 4407,
+          low: 4405,
+          close: 4406.2,
+          ts_ms: Date.now(),
+        } as any,
+      });
+      const st = masterRuntime.status();
+      expect(String(st.pipeline_stages.market_validation.detail || '')).not.toMatch(
+        /feed_divergent/
+      );
+    } finally {
+      masterRuntime.refreshPublicReferenceMids = origRefresh;
+      if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+      else process.env.MASTER_OWNS_PIPELINE = prev;
+    }
+  });
+
   it('GOLD→SILVER→GOLD restores sticky SETUP and retains cycles_by_epic', async () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
     const prevPref = masterRuntime.owns_pipeline_pref;

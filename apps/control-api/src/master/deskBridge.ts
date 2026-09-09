@@ -255,9 +255,15 @@ export async function runMasterFromDesk(input: {
     // Already running (e.g. Capital attach) — stop conflicting Yahoo/broker poll
     masterRuntime.preferDeskMarketFeed();
   }
+  // Owns-pipeline desk path must still feed Stage·validate feed_divergent
+  // (broker/Yahoo loop already refreshes; desk-only ticks previously skipped it)
+  const referenceMids = await masterRuntime.refreshPublicReferenceMids(
+    input.epic
+  );
   const result = await masterRuntime.tick(bars, quote, {
     hour_bars: input.hourCandles ?? null,
     closed_10s: input.closed10s,
+    reference_mids: referenceMids.length ? referenceMids : null,
   });
   const why =
     result.execution_detail ||
