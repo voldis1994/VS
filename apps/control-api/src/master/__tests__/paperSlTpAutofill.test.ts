@@ -453,6 +453,7 @@ describe('Paper full tick manage-before-sync after setQuote auto-fill', () => {
         max_hold_ms: 86_400_000,
       };
       const broker = masterRuntime.ensurePaperBroker();
+      broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
       masterRuntime.running = true;
       masterRuntime.entries_armed = false;
 
@@ -547,6 +548,14 @@ describe('Paper full tick manage-before-sync after setQuote auto-fill', () => {
       expect(masterRuntime.positions.count()).toBe(0);
       expect(String(masterRuntime.last_exit_reason || '')).toMatch(/STOP_HIT/);
     } finally {
+      try {
+        masterRuntime.ensurePaperBroker().hydrateAccount({
+          equity: 10_000,
+          balance: 10_000,
+        });
+      } catch {
+        /* ignore */
+      }
       masterRuntime.stop();
       if (prev === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prev;
