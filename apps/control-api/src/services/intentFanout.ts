@@ -19,6 +19,10 @@ import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot, hasRunningEntryBrain } from './robotDesk.js';
 import { masterOwnsPipeline } from '../master/deskBridge.js';
 import { marketCoreEntryIntentsAllowed } from './marketCoreIntentGate.js';
+import {
+  fanoutOpportunityId,
+  masterIntentIdFromIdem,
+} from '../master/masterClientFanout.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -410,6 +414,7 @@ async function executeForSubscription(
 
     // Manage-only robot: exits / health reads — no entry brain
     try {
+      const masterIntent = masterIntentIdFromIdem(idempotencyKey);
       await attachManageOnlyRobot({
         account_id: sub.account_id,
         epic: sub.epic,
@@ -420,6 +425,9 @@ async function executeForSubscription(
         deal_reference: result.deal_reference || null,
         regime,
         setup_type: setupType,
+        fanout_opportunity_id: masterIntent
+          ? fanoutOpportunityId(masterIntent, sub.account_id)
+          : null,
       });
     } catch {
       /* manage attach best-effort */

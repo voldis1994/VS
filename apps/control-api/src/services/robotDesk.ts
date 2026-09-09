@@ -188,6 +188,8 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** MASTER fanout opportunity id — close attaches journal → performance */
+  fanout_opportunity_id: string | null;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -509,7 +511,38 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.playbook = null;
   s.entry_setup = null;
+  s.fanout_opportunity_id = null;
   s.mode = 'FLAT';
+}
+
+/** Book Client fanout close into MASTER journal when owns + fanout opp id set. */
+function journalFanoutClientCloseIfNeeded(
+  s: Internal,
+  dealId: string | null,
+  quote: { mid: number | null },
+  reason: string,
+  ok: boolean,
+  detail?: string | null
+) {
+  if (!masterOwnsPipeline() || !s.fanout_opportunity_id) return;
+  const holdMs = s.entry_at
+    ? Math.max(0, Date.now() - Date.parse(s.entry_at))
+    : 0;
+  masterRuntime.recordFanoutClientClose({
+    opportunity_id: s.fanout_opportunity_id,
+    position_id: dealId || s.deal_id,
+    epic: s.epic,
+    side: s.open_side,
+    volume: s.lot_size,
+    entry: s.entry_price,
+    exit: quote.mid,
+    reason,
+    ok,
+    detail: detail || null,
+    mae: s.mae,
+    mfe: s.mfe,
+    hold_ms: holdMs,
+  });
 }
 
 /**
@@ -781,7 +814,9 @@ async function exitTrade(
       mid: quote.mid,
       detail: `CLOSE FAIL: ${result.detail}`,
     });
-    if (masterOwnsPipeline()) {
+    if (s.fanout_opportunity_id) {
+      journalFanoutClientCloseIfNeeded(s, dealId, quote, reason, false, result.detail);
+    } else if (masterOwnsPipeline()) {
       masterRuntime.recordDeskOwnedClose({
         position_id: dealId,
         epic: s.epic,
@@ -823,8 +858,10 @@ async function exitTrade(
     });
   }
 
-  // MASTER owns-pipeline deferred path: durable journal must see desk hard exits
-  if (masterOwnsPipeline()) {
+  // MASTER owns: fanout Client closes attach journal; else desk-hard books local MASTER pos
+  if (s.fanout_opportunity_id) {
+    journalFanoutClientCloseIfNeeded(s, dealId, quote, reason, true, result.detail);
+  } else if (masterOwnsPipeline()) {
     masterRuntime.recordDeskOwnedClose({
       position_id: dealId,
       epic: s.epic,
@@ -1286,6 +1323,14 @@ async function robotCycle(s: Internal) {
           detail: 'Broker flat on this epic — trade closed externally · FLAT',
         });
         // Don't stamp hard-exit here — that permanently starved re-entry (75s+120s locks)
+        journalFanoutClientCloseIfNeeded(
+          s,
+          s.deal_id,
+          quote,
+          'external_flat',
+          true,
+          'broker_flat'
+        );
         if (!s.closed_at_ms) s.closed_at_ms = Date.now();
         clearTradeState(s);
       }
@@ -1745,6 +1790,7 @@ export async function startRobotSession(input: {
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
+    fanout_opportunity_id: null,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1804,6 +1850,8 @@ export async function attachManageOnlyRobot(input: {
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
+  /** MASTER fanout opp id — close path attaches journal → performance */
+  fanout_opportunity_id?: string | null;
 }): Promise<RobotSession> {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
@@ -1821,6 +1869,9 @@ export async function attachManageOnlyRobot(input: {
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
+    if (input.fanout_opportunity_id) {
+      existing.fanout_opportunity_id = String(input.fanout_opportunity_id).slice(0, 80);
+    }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -1854,6 +1905,9 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
+    if (input.fanout_opportunity_id) {
+      internal.fanout_opportunity_id = String(input.fanout_opportunity_id).slice(0, 80);
+    }
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
