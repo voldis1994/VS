@@ -115,7 +115,9 @@ async function main() {
       demo?.journals?.execution_stage_ok === false &&
       demo?.journals?.market_validation_stage_ok === false &&
       demo?.journals?.normalization_stage_ok === false &&
-      demo?.journals?.broker_stage_ok === false;
+      demo?.journals?.broker_stage_ok === false &&
+      demo?.journals?.filters_stage_ok === false &&
+      demo?.journals?.dual_candidates_stage_ok === false;
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
@@ -256,6 +258,7 @@ async function main() {
       runtimeBody.includes('flat · no exit yet') &&
       runtimeBody.includes('no filter evidence') &&
       runtimeBody.includes('filter_ok === true') &&
+      runtimeBody.includes('hydrated · BUY') &&
       runtimeBody.includes('no candidate evidence') &&
       runtimeBody.includes('buy?.components') &&
       runtimeBody.includes('liveQuoteStaleForStages') &&

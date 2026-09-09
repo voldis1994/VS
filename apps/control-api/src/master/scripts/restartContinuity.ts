@@ -321,6 +321,10 @@ async function main() {
     exit_stage_detail: stHydrate.pipeline_stages?.exit?.detail ?? null,
     filters_stage_ok: stHydrate.pipeline_stages?.filters?.ok === true,
     filters_stage_detail: stHydrate.pipeline_stages?.filters?.detail ?? null,
+    dual_candidates_stage_ok:
+      stHydrate.pipeline_stages?.dual_candidates?.ok === true,
+    dual_candidates_stage_detail:
+      stHydrate.pipeline_stages?.dual_candidates?.detail ?? null,
     // Cycle-bound stages must stay red until a live tick sets last_market
     analysis_stage_ok: stHydrate.pipeline_stages?.analysis_regime?.ok === true,
     analysis_stage_detail:
@@ -361,7 +365,8 @@ async function main() {
     hydrateSnap.performance_stage_ok === true &&
     hydrateSnap.exit_stage_ok === true &&
     hydrateSnap.exit_stage_detail === 'TakeProfit' &&
-    hydrateSnap.filters_stage_ok === true &&
+    hydrateSnap.filters_stage_ok === false &&
+    hydrateSnap.dual_candidates_stage_ok === false &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
     hydrateSnap.analysis_stage_ok === false &&
     hydrateSnap.decision_stage_ok === false &&
@@ -485,6 +490,8 @@ async function main() {
       exit_stage_detail: hydrateSnap.exit_stage_detail,
       filters_stage_ok: hydrateSnap.filters_stage_ok,
       filters_stage_detail: hydrateSnap.filters_stage_detail,
+      dual_candidates_stage_ok: hydrateSnap.dual_candidates_stage_ok,
+      dual_candidates_stage_detail: hydrateSnap.dual_candidates_stage_detail,
       analysis_stage_ok: hydrateSnap.analysis_stage_ok,
       analysis_stage_detail: hydrateSnap.analysis_stage_detail,
       decision_stage_ok: hydrateSnap.decision_stage_ok,

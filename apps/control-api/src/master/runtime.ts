@@ -4242,21 +4242,30 @@ class MasterRuntime {
                     : '—',
           },
           dual_candidates: {
-            // Fail-closed: score-only journal hydrate has scores but no components
-            ok: !!(d?.buy?.components && d?.sell?.components),
+            // Fail-closed: score-only hydrate lacks components; full hydrate still needs a cycle
+            ok: !!(m && d?.buy?.components && d?.sell?.components),
             detail: !d
               ? '—'
-              : d.buy?.components && d.sell?.components
-                ? `B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
-                : 'no candidate evidence',
+              : !m
+                ? d.buy?.components && d.sell?.components
+                  ? `hydrated · B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
+                  : 'hydrated · no candidate evidence'
+                : d.buy?.components && d.sell?.components
+                  ? `B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
+                  : 'no candidate evidence',
           },
           filters: {
-            ok: filterPass,
+            // Never forge green from journal-hydrate alone — need a live cycle
+            ok: !!(m && filterPass),
             detail: !d
               ? '—'
-              : !filterEvidence
-                ? 'no filter evidence'
-                : `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`,
+              : !m
+                ? !filterEvidence
+                  ? 'hydrated · no filter evidence'
+                  : `hydrated · BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`
+                : !filterEvidence
+                  ? 'no filter evidence'
+                  : `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`,
           },
           decision: {
             // Never forge green from journal-hydrate alone — need a live cycle

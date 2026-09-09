@@ -5503,7 +5503,24 @@ describe('pipeline_stages honesty — normalization never forged green', () => {
 describe('pipeline_stages honesty — filters fail-closed', () => {
   it('score-only journal hydrate must not forge Stage·filters green', () => {
     const prev = masterRuntime.last_decision;
+    const prevMarket = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
     try {
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
       masterRuntime.last_decision = {
         decision_id: 'hydrated',
         kind: 'BUY',
@@ -5565,8 +5582,18 @@ describe('pipeline_stages honesty — filters fail-closed', () => {
       expect(okStages.filters.detail).toMatch(/BUY ok/);
       expect(okStages.filters.detail).toMatch(/SELL spread|SELL fail/);
       expect(okStages.dual_candidates.ok).toBe(true);
+
+      // Full filter/candidate evidence without last_market must stay red
+      masterRuntime.last_market = null;
+      const hydrated = masterRuntime.status().pipeline_stages;
+      expect(hydrated.filters.ok).toBe(false);
+      expect(hydrated.filters.detail).toMatch(/hydrated · BUY ok/);
+      expect(hydrated.dual_candidates.ok).toBe(false);
+      expect(hydrated.dual_candidates.detail).toMatch(/hydrated · B/);
     } finally {
       masterRuntime.last_decision = prev;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_quote = prevQuote;
     }
   });
 });
@@ -5681,8 +5708,11 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(stages.analysis_regime.ok).toBe(false);
       expect(stages.analysis_regime.detail).toMatch(/no cycle/);
       expect(stages.analysis_regime.detail).toMatch(/TREND_UP/);
-      // Filters may still show hydrate evidence — analysis must not
-      expect(stages.filters.ok).toBe(true);
+      // Filters/dual are cycle-bound too — hydrate evidence alone stays red
+      expect(stages.filters.ok).toBe(false);
+      expect(stages.filters.detail).toMatch(/hydrated ·/);
+      expect(stages.dual_candidates.ok).toBe(false);
+      expect(stages.dual_candidates.detail).toMatch(/hydrated ·/);
 
       masterRuntime.last_market = {
         ok: true,
@@ -5694,6 +5724,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       const live = masterRuntime.status().pipeline_stages;
       expect(live.analysis_regime.ok).toBe(true);
       expect(live.analysis_regime.detail).toMatch(/^TREND_UP:/);
+      expect(live.filters.ok).toBe(true);
+      expect(live.dual_candidates.ok).toBe(true);
 
       masterRuntime.last_market = {
         ok: false,
