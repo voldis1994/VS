@@ -377,6 +377,9 @@ async function main() {
     analysis_stage_ok: stHydrate.pipeline_stages?.analysis_regime?.ok === true,
     analysis_stage_detail:
       stHydrate.pipeline_stages?.analysis_regime?.detail ?? null,
+    analysis_stage_hydrated: String(
+      stHydrate.pipeline_stages?.analysis_regime?.detail || ''
+    ).startsWith('hydrated ·'),
     decision_stage_ok: stHydrate.pipeline_stages?.decision?.ok === true,
     decision_stage_detail: stHydrate.pipeline_stages?.decision?.detail ?? null,
     risk_stage_ok: stHydrate.pipeline_stages?.risk?.ok === true,
@@ -464,6 +467,8 @@ async function main() {
     hydrateSnap.dual_candidates_stage_ok === false &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
     hydrateSnap.analysis_stage_ok === false &&
+    hydrateSnap.analysis_stage_hydrated === true &&
+    String(hydrateSnap.analysis_stage_detail || '').startsWith('hydrated ·') &&
     hydrateSnap.decision_stage_ok === false &&
     hydrateSnap.risk_stage_ok === false &&
     hydrateSnap.risk_stage_hydrated === true &&
@@ -624,6 +629,7 @@ async function main() {
       dual_candidates_stage_detail: hydrateSnap.dual_candidates_stage_detail,
       analysis_stage_ok: hydrateSnap.analysis_stage_ok,
       analysis_stage_detail: hydrateSnap.analysis_stage_detail,
+      analysis_stage_hydrated: hydrateSnap.analysis_stage_hydrated,
       decision_stage_ok: hydrateSnap.decision_stage_ok,
       decision_stage_detail: hydrateSnap.decision_stage_detail,
       risk_stage_ok: hydrateSnap.risk_stage_ok,

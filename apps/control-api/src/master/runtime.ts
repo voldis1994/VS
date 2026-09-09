@@ -4335,7 +4335,8 @@ class MasterRuntime {
               ? `stale_quote · ${d?.analysis?.regime || '—'}`
               : !m
                 ? d?.analysis
-                  ? `no cycle · ${d.analysis.regime}:${d.analysis.market_state}`
+                  ? // Align with Stage·dual/filters/decision — journal evidence, not live
+                    `hydrated · ${d.analysis.regime}:${d.analysis.market_state}`
                   : '—'
                 : !m.ok
                   ? `invalid market · ${d?.analysis?.regime || '—'}`

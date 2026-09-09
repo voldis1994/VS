@@ -262,6 +262,22 @@ describe('CycleMonitor', () => {
     m2.noteAlerts([], null);
     expect(m2.snapshot(null).hydrated).toBe(false);
   });
+
+  it('hydrateFromDisk restores ack_latency_ms as hydrated', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-mon-ack-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const m = new CycleMonitor();
+    m.noteAckLatency(250);
+    m.noteCycle(18);
+    m.snapshot(null);
+    const m2 = new CycleMonitor();
+    expect(m2.hydrateFromDisk()).toBe(true);
+    expect(m2.ack_latency_ms).toBe(250);
+    expect(m2.snapshot(null).hydrated).toBe(true);
+    expect(m2.snapshot(null).ack_latency_ms).toBe(250);
+    m2.noteAckLatency(10);
+    expect(m2.snapshot(null).hydrated).toBe(false);
+  });
 });
 
 describe('cycle alerts entry gate', () => {
