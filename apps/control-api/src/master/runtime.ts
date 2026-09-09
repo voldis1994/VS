@@ -5204,6 +5204,17 @@ class MasterRuntime {
         Date.now() + cool
       );
       this.persistRuntimeGates();
+      // Mirror full tick: refresh equity/balance from venue after manage closes
+      // so 1s manageOnly loop does not leave account.equity stale until next tick.
+      try {
+        const acct = await broker.getAccount();
+        if (acct && acct.equity > 0) {
+          this.account.equity = acct.equity;
+          this.account.balance = acct.balance;
+        }
+      } catch {
+        /* keep */
+      }
     }
     this.account.open_positions = this.positions.count();
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
