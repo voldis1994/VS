@@ -5956,9 +5956,11 @@ describe('pipeline_stages honesty — decision/risk never forged from hydrate', 
     const prevMarket = masterRuntime.last_market;
     const prevBook = (masterRuntime as unknown as { bookHydrated: boolean })
       .bookHydrated;
+    const prevRecovered = masterRuntime.recovered;
     const prevPipe = masterRuntime.pipeline;
     try {
       masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.recovered = false;
       masterRuntime.last_decision = null;
       masterRuntime.last_risk = null;
       masterRuntime.last_market = null;
@@ -5972,6 +5974,7 @@ describe('pipeline_stages honesty — decision/risk never forged from hydrate', 
       expect(st.pipeline_stages.risk.detail).toMatch(/^hydrated · /);
     } finally {
       masterRuntime.pipeline = prevPipe;
+      masterRuntime.recovered = prevRecovered;
       masterRuntime.last_decision = prevDecision;
       masterRuntime.last_risk = prevRisk;
       masterRuntime.last_market = prevMarket;
