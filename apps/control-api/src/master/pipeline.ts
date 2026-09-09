@@ -306,7 +306,12 @@ export class MasterPipeline {
     this.journal.attachOutcome(opportunityId, outcome);
     if (decision.side) {
       this.expectancy.record(
-        setupKey(decision.analysis, decision.side, meta?.epic),
+        setupKey(
+          decision.analysis,
+          decision.side,
+          meta?.epic,
+          decision.desk_entry_source
+        ),
         outcome
       );
     }

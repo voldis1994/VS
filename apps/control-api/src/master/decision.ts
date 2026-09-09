@@ -27,9 +27,10 @@ export function decide(
 ): MasterDecision {
   const decision_id = randomUUID();
   const { buy, sell } = buildCandidates(analysis, quote, cfg, bars, relativeSpread);
+  const deskSrc = normalizeDeskConfirmSource(deskEntry?.source);
 
   if (cfg.kill_switch) {
-    return blocked(decision_id, buy, sell, analysis, null, 'kill_switch');
+    return blocked(decision_id, buy, sell, analysis, null, 'kill_switch', deskSrc);
   }
   if (!buy.filter_ok && !sell.filter_ok) {
     return blocked(
@@ -38,7 +39,8 @@ export function decide(
       sell,
       analysis,
       null,
-      buy.filter_reason || sell.filter_reason || 'filters'
+      buy.filter_reason || sell.filter_reason || 'filters',
+      deskSrc
     );
   }
 
@@ -60,6 +62,7 @@ export function decide(
         sell,
         analysis,
         expectancy: null,
+        desk_entry_source: deskSrc,
       };
     }
   } else if (cfg.require_armed_setup && opts?.closed_10s_present) {
@@ -74,6 +77,7 @@ export function decide(
       sell,
       analysis,
       expectancy: null,
+      desk_entry_source: deskSrc,
     };
   }
 
@@ -97,6 +101,7 @@ export function decide(
       sell,
       analysis,
       expectancy: null,
+      desk_entry_source: deskSrc,
     };
   }
 
@@ -113,13 +118,15 @@ export function decide(
       sell,
       analysis,
       expectancy: null,
+      desk_entry_source: deskSrc,
     };
   }
 
   const setup_key = setupKey(
     analysis,
     preferred.side,
-    opts?.epic || quote.epic
+    opts?.epic || quote.epic,
+    deskSrc
   );
   const exp = expectancyLookup(setup_key);
   if (
@@ -134,7 +141,8 @@ export function decide(
       sell,
       analysis,
       exp,
-      `negative_expectancy:${setup_key}:ev=${exp.ev.toFixed(4)}`
+      `negative_expectancy:${setup_key}:ev=${exp.ev.toFixed(4)}`,
+      deskSrc
     );
   }
 
@@ -148,6 +156,7 @@ export function decide(
     sell,
     analysis,
     expectancy: exp,
+    desk_entry_source: deskSrc,
   };
 }
 
@@ -199,7 +208,8 @@ function blocked(
   sell: TradeCandidate,
   analysis: AnalysisSnapshot,
   expectancy: ExpectancySnapshot | null,
-  reason: string
+  reason: string,
+  deskSrc: DeskConfirmSource = 'none'
 ): MasterDecision {
   return {
     decision_id,
@@ -211,21 +221,33 @@ function blocked(
     sell,
     analysis,
     expectancy,
+    desk_entry_source: deskSrc,
   };
 }
 
+/** Desk confirm provenance for expectancy keys (setup ≠ move ≠ none). */
+export type DeskConfirmSource = 'setup' | 'move' | 'none';
+
+export function normalizeDeskConfirmSource(raw?: string | null): DeskConfirmSource {
+  if (raw === 'setup' || raw === 'move') return raw;
+  return 'none';
+}
+
 /**
- * Expectancy / setup identity — epic-scoped so GOLD and SILVER do not share EV.
- * Format: `EPIC|SIDE|regime|trend|session` (Capital aliases collapsed via capitalApiEpic).
+ * Expectancy / setup identity — epic + desk-source scoped so GOLD≠SILVER and
+ * setup≠move EV stay honest (LIVE require_positive_expectancy must not blend paths).
+ * Format: `EPIC|SIDE|regime|trend|session|setup|move|none`
  */
 export function setupKey(
   analysis: AnalysisSnapshot,
   side: 'BUY' | 'SELL',
-  epic?: string | null
+  epic?: string | null,
+  deskSource?: string | null
 ): string {
   const epicPart =
     capitalApiEpic(String(epic || '').trim()) ||
     String(epic || '').trim().toUpperCase() ||
     'UNKNOWN';
-  return `${epicPart}|${side}|${analysis.regime}|${analysis.trend_dir}|${analysis.session}`;
+  const desk = normalizeDeskConfirmSource(deskSource);
+  return `${epicPart}|${side}|${analysis.regime}|${analysis.trend_dir}|${analysis.session}|${desk}`;
 }
