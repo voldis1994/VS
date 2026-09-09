@@ -14,6 +14,13 @@ describe('market_cache persist', () => {
       close: 4400.5 + i,
       ts_ms: Date.now() - (10 - i) * 60_000,
     }));
+    const hourBars = Array.from({ length: 8 }, (_, i) => ({
+      open: 4300 + i * 10,
+      high: 4310 + i * 10,
+      low: 4290 + i * 10,
+      close: 4305 + i * 10,
+      ts_ms: Date.now() - (8 - i) * 3_600_000,
+    }));
     const ok = saveMarketCache(
       {
         epic: 'GOLD',
@@ -26,6 +33,8 @@ describe('market_cache persist', () => {
           epic: 'GOLD',
           ts_ms: Date.now(),
         },
+        hour_bars: hourBars,
+        hour_bars_detail: 'capital_hour',
         structure_seed_source: 'capital_ohlc',
       },
       dir
@@ -34,9 +43,38 @@ describe('market_cache persist', () => {
     expect(existsSync(join(dir, 'market_cache.json'))).toBe(true);
     const loaded = loadMarketCache(dir);
     expect(loaded?.bars.length).toBe(10);
+    expect(loaded?.hour_bars?.length).toBe(8);
+    expect(loaded?.hour_bars_detail).toBe('capital_hour');
     expect(loaded?.epic).toBe('GOLD');
     expect(loaded?.structure_seed_source).toBe('capital_ohlc');
     expect(loaded?.quote?.mid).toBeCloseTo(4410.2, 5);
+  });
+
+  it('persists hour_bars alone when minute bars and quote are empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'master-mkt-hours-only-'));
+    const hourBars = Array.from({ length: 6 }, (_, i) => ({
+      open: 4400 + i,
+      high: 4402 + i,
+      low: 4398 + i,
+      close: 4401 + i,
+      ts_ms: Date.now() - (6 - i) * 3_600_000,
+    }));
+    expect(
+      saveMarketCache(
+        {
+          epic: 'GOLD',
+          bars: [],
+          quote: null,
+          hour_bars: hourBars,
+          hour_bars_detail: 'hours_only',
+        },
+        dir
+      )
+    ).toBe(true);
+    const loaded = loadMarketCache(dir);
+    expect(loaded?.bars.length).toBe(0);
+    expect(loaded?.hour_bars?.length).toBe(6);
+    expect(loaded?.hour_bars_detail).toBe('hours_only');
   });
 
   it('rejects empty garbage', () => {
@@ -102,6 +140,16 @@ describe('market_cache hydrate provenance', () => {
           ts_ms: Date.now() - (40 - i) * 60_000,
         };
       });
+      const hourBars = Array.from({ length: 12 }, (_, i) => {
+        const o = 4300 + i * 5;
+        return {
+          open: o,
+          high: o + 8,
+          low: o - 3,
+          close: o + 4,
+          ts_ms: Date.now() - (12 - i) * 3_600_000,
+        };
+      });
       expect(
         saveMarketCache(
           {
@@ -115,6 +163,8 @@ describe('market_cache hydrate provenance', () => {
               epic: 'GOLD',
               ts_ms: Date.now(),
             },
+            hour_bars: hourBars,
+            hour_bars_detail: 'disk_hour_cache',
             structure_seed_source: 'restart_check',
           },
           dir
@@ -123,6 +173,12 @@ describe('market_cache hydrate provenance', () => {
       masterRuntime.last_quote = null;
       masterRuntime.last_bars = [];
       masterRuntime.last_market = null;
+      (
+        masterRuntime as unknown as {
+          last_hour_bars: unknown[];
+          hourBarsFromDiskCache: boolean;
+        }
+      ).last_hour_bars = [];
       (
         masterRuntime as unknown as {
           quoteFromDiskCache: boolean;
@@ -135,6 +191,9 @@ describe('market_cache hydrate provenance', () => {
           barsFromDiskCache: boolean;
         }
       ).barsFromDiskCache = false;
+      (
+        masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
+      ).hourBarsFromDiskCache = false;
       (
         masterRuntime as unknown as { bookHydrated: boolean }
       ).bookHydrated = false;
@@ -176,6 +235,9 @@ describe('market_cache hydrate provenance', () => {
       const st = masterRuntime.status();
       expect(st.bars_available).toBeGreaterThanOrEqual(40);
       expect(st.bars_cached).toBe(true);
+      expect(st.hour_bars_available).toBeGreaterThanOrEqual(6);
+      expect(st.hour_bars_cached).toBe(true);
+      expect(st.hour_bars_source).toBe('disk_cache');
       expect(st.quote?.cached).toBe(true);
       expect(st.quote?.source).toBe('disk_cache');
       expect(st.floating_pnl).not.toBeNull();
@@ -188,7 +250,17 @@ describe('market_cache hydrate provenance', () => {
       expect(st.pipeline_stages.normalization.detail).toMatch(
         /^hydrated · disk_cache · /
       );
-      // Live tick clears provenance
+      // Live tick clears provenance (incl. hour bars when opts supply live HOUR)
+      const liveHours = Array.from({ length: 8 }, (_, i) => {
+        const o = 4400 + i;
+        return {
+          open: o,
+          high: o + 2,
+          low: o - 1,
+          close: o + 1,
+          ts_ms: Date.now() - (8 - i) * 3_600_000,
+        };
+      });
       await masterRuntime.tick(bars, {
         bid: 4416,
         ask: 4416.4,
@@ -196,11 +268,14 @@ describe('market_cache hydrate provenance', () => {
         spread: 0.4,
         epic: 'GOLD',
         ts_ms: Date.now(),
-      });
+      }, { hour_bars: liveHours });
       const live = masterRuntime.status();
       expect(live.quote?.cached).toBe(false);
       expect(live.quote?.source).toBe('live');
       expect(live.bars_cached).toBe(false);
+      expect(live.hour_bars_cached).toBe(false);
+      expect(live.hour_bars_source).toBe('live');
+      expect(live.hour_bars_available).toBeGreaterThanOrEqual(6);
       expect(live.floating_pnl_cached).toBe(false);
       expect(live.pipeline_stages.market_validation.detail).not.toMatch(
         /hydrated · disk_cache/
@@ -213,6 +288,12 @@ describe('market_cache hydrate provenance', () => {
       masterRuntime.last_quote = prevQuote;
       masterRuntime.last_bars = prevBars;
       masterRuntime.last_market = prevMarket;
+      (
+        masterRuntime as unknown as { last_hour_bars: unknown[] }
+      ).last_hour_bars = [];
+      (
+        masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
+      ).hourBarsFromDiskCache = false;
       if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prevState;
       if (prevGates === undefined) delete process.env.MASTER_GATES_DIR;

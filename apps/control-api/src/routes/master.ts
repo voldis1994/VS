@@ -718,6 +718,7 @@ async function refresh(){
       card('EV gate',s.expectancy_gate_armed?(s.expectancy_would_block&&s.expectancy_would_block.length?('ARMED · block '+s.expectancy_would_block.length):'ARMED'):(s.expectancy_would_block&&s.expectancy_would_block.length?('off · would '+s.expectancy_would_block.length):'off'),s.mode==='LIVE'&&s.expectancy_gate_armed?'ok':(s.mode==='LIVE'&&!s.expectancy_gate_armed&&s.expectancy_would_block&&s.expectancy_would_block.length?'bad':'')),
       card('Structure seed',s.structure_seed_source||'—'),
       card('Bars cache',s.bars_cached?('cached · '+(s.bars_available||0)):String(s.bars_available||0),(s.bars_available||0)<40?'bad':(s.bars_cached?'warn':((s.bars_available||0)>=40?'ok':''))),
+      card('Hour bars',s.hour_bars_cached?('cached · '+(s.hour_bars_available||0)):(s.hour_bars_available?String(s.hour_bars_available):'—'),(s.hour_bars_available||0)>0&&(s.hour_bars_available||0)<6?'bad':(s.hour_bars_cached?'warn':((s.hour_bars_available||0)>=6?'ok':''))),
       card('AI mode',s.ai_mode||'—'),
       card('AI allow close',s.ai_mode==='off'?'n/a':(s.last_ai_allow_close===false?'VETO':s.last_ai_allow_close===true?'allow':'—'),s.ai_mode!=='off'&&s.last_ai_allow_close===false?'bad':''),
       card('Close fail',s.last_close_failed?((s.last_close_failed.exit_reason||'')+' · '+(s.last_close_failed.detail||'')).slice(0,80):'—',s.last_close_failed?'bad':''),

@@ -212,6 +212,9 @@ type MasterStatus = {
   structure_seed_source?: string;
   bars_available?: number;
   bars_cached?: boolean;
+  hour_bars_available?: number;
+  hour_bars_cached?: boolean;
+  hour_bars_source?: 'live' | 'disk_cache' | null;
   news_window?: {
     impact: string;
     window_active: boolean;
@@ -755,6 +758,18 @@ export function MasterPage() {
           // Cached bars ready for manage/replay — not a live feed ok paint
           bad: (status.bars_available ?? 0) < 40,
           ok: (status.bars_available ?? 0) >= 40 && !status.bars_cached,
+        },
+        {
+          k: 'Hour bars',
+          v: status.hour_bars_cached
+            ? `cached · ${status.hour_bars_available ?? 0}`
+            : status.hour_bars_available
+              ? String(status.hour_bars_available)
+              : '—',
+          bad: (status.hour_bars_available ?? 0) > 0 && (status.hour_bars_available ?? 0) < 6,
+          ok:
+            (status.hour_bars_available ?? 0) >= 6 && !status.hour_bars_cached,
+          warn: status.hour_bars_cached === true,
         },
         { k: 'AI mode', v: status.ai_mode || '—' },
         {
