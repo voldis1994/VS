@@ -2583,6 +2583,22 @@ class MasterRuntime {
   }
 
   /**
+   * Flat + post-exit elapsed → clear sticky fingerprint (VS lastFingerprint).
+   * manageOnly must mirror full tick so Stop-with-opens does not persist a spent
+   * GOLD:BUY fingerprint across restart when no later full tick runs.
+   */
+  private clearSpentEntryFingerprint(): void {
+    if (
+      this.positions.count() === 0 &&
+      Date.now() >= this.post_exit_until_ms &&
+      this.last_entry_fingerprint
+    ) {
+      this.last_entry_fingerprint = null;
+      this.persistRuntimeGates();
+    }
+  }
+
+  /**
    * After manage closes: copy venue equity/balance and raise peak_equity (paper wins).
    * Same-tick risk + manageOnly Peak eq KPI must not lag until the next full tick.
    */
@@ -3101,14 +3117,7 @@ class MasterRuntime {
     }
     const exit_reasons = managed.closed.map((c) => c.reason);
     // Flat + post-exit elapsed → clear sticky fingerprint (VS lastFingerprint)
-    if (
-      this.positions.count() === 0 &&
-      Date.now() >= this.post_exit_until_ms &&
-      this.last_entry_fingerprint
-    ) {
-      this.last_entry_fingerprint = null;
-      this.persistRuntimeGates();
-    }
+    this.clearSpentEntryFingerprint();
 
     // 2) Decision + risk — sticky desk arms from disk/live last when opts omit
     const hourBarsForCycle =
@@ -5079,7 +5088,11 @@ class MasterRuntime {
 
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
     // Opens must manage/exit even when runtime_stopped — Recover bootstrap + Stop-with-opens
-    if (this.positions.count() === 0) return;
+    if (this.positions.count() === 0) {
+      // Flat manageOnly: still clear spent fingerprint when cool elapsed (no full tick)
+      this.clearSpentEntryFingerprint();
+      return;
+    }
     // Roll UTC day before any manage/sync close mutates daily_pnl (Stop-with-opens
     // may never hit full tick across midnight — avoid fail-open day-loss wipe).
     this.rollDailyPnl();
@@ -5273,6 +5286,8 @@ class MasterRuntime {
     }
     this.account.open_positions = this.positions.count();
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+    // Flat after manage/sync close + cool elapsed → clear spent fingerprint (full-tick parity)
+    this.clearSpentEntryFingerprint();
     if (this.positions.count() === 0) this.clearManageLoop();
   }
 
