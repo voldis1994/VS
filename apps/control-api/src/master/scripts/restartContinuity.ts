@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState, persistNewsWindowState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState, persistNewsWindowState, persistClientFanoutState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -632,6 +632,29 @@ async function main() {
     primary.newsWindowPayload != null &&
     primary.newsWindowPayload.impact === 'high' &&
     primary.newsWindowPayload.active === true;
+  // Dual-write client_fanout into MemoryPersist primary BEFORE file wipe
+  const fanoutForPrimary = {
+    attempted: true,
+    subscribers: 2,
+    ok_count: 2,
+    fail_count: 0,
+    detail: 'ok=2/2 · journaled=2',
+    journaled_count: 2,
+    ts: new Date().toISOString(),
+  };
+  writeFileSync(
+    join(stateDir, 'client_fanout.json'),
+    JSON.stringify(fanoutForPrimary),
+    'utf8'
+  );
+  await persistClientFanoutState({
+    ...fanoutForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadClientFanout =
+    primary.clientFanoutPayload != null &&
+    primary.clientFanoutPayload.attempted === true &&
+    Number(primary.clientFanoutPayload.ok_count) === 2;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -674,6 +697,9 @@ async function main() {
   const newsWindowGoneBeforeHydrate = !existsSync(
     join(stateDir, 'news_window.json')
   );
+  const clientFanoutGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'client_fanout.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
@@ -684,6 +710,7 @@ async function main() {
   // Do NOT re-seed trade_ack_journal — must heal from DualPersist primary.
   // Do NOT re-seed error_journal — must heal from DualPersist primary.
   // Do NOT re-seed news_window — must heal from DualPersist primary.
+  // Do NOT re-seed client_fanout — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -747,6 +774,7 @@ async function main() {
   masterRuntime.account.day_start_equity = 10_000;
   masterRuntime.account.consecutive_losses = 0;
   masterRuntime.account.daily_pnl_day = null;
+  masterRuntime.last_client_fanout = null;
   // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
@@ -779,6 +807,7 @@ async function main() {
     primaryHadTradeAck &&
     primaryHadErrorJournal &&
     primaryHadNewsWindow &&
+    primaryHadClientFanout &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
@@ -790,6 +819,7 @@ async function main() {
     tradeAckGoneBeforeHydrate &&
     errorJournalGoneBeforeHydrate &&
     newsWindowGoneBeforeHydrate &&
+    clientFanoutGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
@@ -800,7 +830,10 @@ async function main() {
     existsSync(join(stateDir, 'trade_ack_journal.json')) &&
     existsSync(join(stateDir, 'error_journal.jsonl')) &&
     existsSync(join(stateDir, 'news_window.json')) &&
+    existsSync(join(stateDir, 'client_fanout.json')) &&
     newsHealedBlocks &&
+    masterRuntime.last_client_fanout?.attempted === true &&
+    Number(masterRuntime.last_client_fanout?.ok_count) === 2 &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
@@ -823,6 +856,7 @@ async function main() {
     peak_equity: masterRuntime.account.peak_equity,
     day_start_equity: masterRuntime.account.day_start_equity,
     consecutive_losses: masterRuntime.account.consecutive_losses,
+    last_client_fanout: masterRuntime.last_client_fanout,
     last_decision_kind: masterRuntime.last_decision?.kind ?? null,
     open_positions_status: stHydrate.open_positions,
     recent_decisions: stHydrate.recent_decisions?.length ?? 0,
@@ -1366,6 +1400,12 @@ async function main() {
         newsWindowGoneBeforeHydrate &&
         existsSync(join(stateDir, 'news_window.json')) &&
         newsHealedBlocks,
+      client_fanout_pg_primary_heal_ok:
+        primaryHadClientFanout &&
+        clientFanoutGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'client_fanout.json')) &&
+        hydrateSnap.last_client_fanout?.attempted === true &&
+        Number(hydrateSnap.last_client_fanout?.ok_count) === 2,
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

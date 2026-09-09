@@ -1,9 +1,16 @@
 /**
  * MASTER-owns → Client multi-account fanout after accepted OPEN.
  * Market Core EntryReady is blocked while owns_pipeline; MASTER becomes the publisher.
+ * last_client_fanout also DualPersist / MemoryPersist / PG primary so wipe heals.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { PipelineIntentInput } from '../services/intentFanout.js';
 import type { MasterJournal } from './journal.js';
+import {
+  persistClientFanoutState,
+  loadClientFanoutFromPersist,
+} from './persist.js';
 import type {
   ExecutionResult,
   MasterDecision,
@@ -242,4 +249,108 @@ export function buildFanoutCloseOutcome(
     exit_reason: `FANOUT_CLIENT · ${input.reason}`.slice(0, 240),
     pnl_proven: false,
   };
+}
+
+export type ClientFanoutDiskPayload = MasterFanoutSummary & {
+  ts?: string;
+};
+
+function stateDir(root?: string): string {
+  return (
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state')
+  );
+}
+
+function fanoutPath(root?: string): string {
+  return join(stateDir(root), 'client_fanout.json');
+}
+
+function normalizeFanoutSummary(
+  raw: unknown
+): MasterFanoutSummary | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.attempted !== 'boolean') return null;
+  if (typeof o.detail !== 'string') return null;
+  return {
+    attempted: o.attempted === true,
+    subscribers: Math.max(0, Math.floor(Number(o.subscribers) || 0)),
+    ok_count: Math.max(0, Math.floor(Number(o.ok_count) || 0)),
+    fail_count: Math.max(0, Math.floor(Number(o.fail_count) || 0)),
+    detail: String(o.detail || '').slice(0, 400),
+    journaled_count: Math.max(0, Math.floor(Number(o.journaled_count) || 0)),
+  };
+}
+
+/** Durable last Client fanout summary — DualPersist / sidecar. */
+export function saveClientFanoutSummary(
+  summary: MasterFanoutSummary,
+  root?: string
+): boolean {
+  try {
+    const dir = stateDir(root);
+    mkdirSync(dir, { recursive: true });
+    const payload: ClientFanoutDiskPayload = {
+      ...summary,
+      ts: new Date().toISOString(),
+    };
+    writeFileSync(fanoutPath(root), JSON.stringify(payload));
+    void persistClientFanoutState({
+      ...payload,
+      saved_at_ms: Date.now(),
+    }).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadClientFanoutSummary(
+  root?: string
+): MasterFanoutSummary | null {
+  try {
+    const path = fanoutPath(root);
+    if (!existsSync(path)) return null;
+    return normalizeFanoutSummary(
+      JSON.parse(readFileSync(path, 'utf8')) as unknown
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When client_fanout.json was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar before status reads.
+ */
+export async function hydrateClientFanoutFromPersist(
+  root?: string
+): Promise<{ restored: boolean; summary: MasterFanoutSummary | null }> {
+  const dir = stateDir(root);
+  const path = fanoutPath(root);
+  if (existsSync(path)) {
+    return { restored: false, summary: loadClientFanoutSummary(root) };
+  }
+  try {
+    const loaded = await loadClientFanoutFromPersist();
+    const summary = normalizeFanoutSummary(loaded);
+    if (!summary || !summary.attempted) {
+      return { restored: false, summary: null };
+    }
+    mkdirSync(dir, { recursive: true });
+    const payload: ClientFanoutDiskPayload = {
+      ...summary,
+      ts:
+        typeof loaded?.ts === 'string' && loaded.ts
+          ? loaded.ts
+          : new Date().toISOString(),
+    };
+    writeFileSync(path, JSON.stringify(payload));
+    return { restored: true, summary };
+  } catch {
+    return { restored: false, summary: null };
+  }
 }
