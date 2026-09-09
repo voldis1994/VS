@@ -2599,16 +2599,29 @@ class MasterRuntime {
   }
 
   /**
-   * After manage closes: copy venue equity/balance and raise peak_equity (paper wins).
-   * Same-tick risk + manageOnly Peak eq KPI must not lag until the next full tick.
+   * After manage closes: copy venue equity/balance and raise peak_equity.
+   * Same-tick risk + manageOnly Peak eq KPI must not lag.
+   * Also copies currency / available_to_deal / trade_allowed when the venue
+   * returns them (Stop-with-opens must not leave Available/Tradeable stale).
    */
   private applyVenueAccountAfterClose(acct: {
     equity: number;
     balance: number;
+    currency?: string;
+    available?: number | null;
+    trade_allowed?: boolean | null;
   }): void {
     if (!(acct && acct.equity > 0 && Number.isFinite(acct.equity))) return;
     this.account.equity = acct.equity;
     this.account.balance = acct.balance;
+    if (acct.currency) this.account.currency = acct.currency;
+    this.account.available_to_deal =
+      acct.available != null && Number.isFinite(acct.available)
+        ? acct.available
+        : this.account.available_to_deal ?? null;
+    if (typeof acct.trade_allowed === 'boolean') {
+      this.account.trade_allowed = acct.trade_allowed;
+    }
     const prevPeak = this.account.peak_equity;
     const prevDayStart = this.account.day_start_equity;
     this.account.peak_equity = Math.max(
@@ -2623,6 +2636,81 @@ class MasterRuntime {
       this.account.day_start_equity !== prevDayStart
     ) {
       this.persistRuntimeGates();
+    }
+  }
+
+  /**
+   * Full-tick / manageOnly venue account snapshot — equity fields plus Capital
+   * prove, first-prove day/peak seed, and market trade gate (parity with tick).
+   */
+  private async applyVenueAccountSnapshot(
+    broker: MasterBroker,
+    acct: {
+      equity: number;
+      balance: number;
+      currency?: string;
+      available?: number | null;
+      trade_allowed?: boolean | null;
+    } | null,
+    quote?: { market_status?: string | null }
+  ): Promise<void> {
+    let capitalAccountUnproven = false;
+    if (acct && acct.equity > 0 && Number.isFinite(acct.equity)) {
+      if (broker instanceof CapitalBroker && !broker.paper) {
+        this.account.equity = acct.equity;
+        this.account.balance = acct.balance;
+        if (acct.currency) this.account.currency = acct.currency;
+        this.account.available_to_deal =
+          acct.available != null && Number.isFinite(acct.available)
+            ? acct.available
+            : this.account.available_to_deal ?? null;
+        if (typeof acct.trade_allowed === 'boolean') {
+          this.account.trade_allowed = acct.trade_allowed;
+        }
+        this.capitalAccountProven = true;
+        const prevPeak = this.account.peak_equity;
+        const prevDayStart = this.account.day_start_equity;
+        if (!this.capitalDayGatesSeeded) {
+          // First proven Capital equity — seed day/peak (never keep paper £10k)
+          this.account.day_start_equity = acct.equity;
+          this.account.peak_equity = acct.equity;
+          this.capitalDayGatesSeeded = true;
+        } else {
+          this.account.peak_equity = Math.max(
+            this.account.peak_equity,
+            acct.equity
+          );
+        }
+        if (
+          this.account.peak_equity !== prevPeak ||
+          this.account.day_start_equity !== prevDayStart
+        ) {
+          this.persistRuntimeGates();
+        }
+      } else {
+        // Paper / non-Capital: raise peak; seed day_start when missing
+        this.applyVenueAccountAfterClose(acct);
+      }
+    } else if (broker instanceof CapitalBroker && !broker.paper) {
+      // Fail-closed: never size LIVE from leftover equity when Capital unread
+      capitalAccountUnproven = true;
+      this.capitalAccountProven = false;
+      this.account.equity = 0;
+      this.account.balance = 0;
+      this.account.available_to_deal = null;
+      this.account.trade_allowed = false;
+      this.broker_detail = `${this.broker_detail || ''};capital_account_unproven`.slice(
+        -400
+      );
+    }
+
+    // Capital: fail-closed marketStatus (full tick + manageOnly Stop-with-opens)
+    if (broker instanceof CapitalBroker) {
+      const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
+      const status =
+        quote?.market_status ?? broker.cachedMarketStatus(this.epic);
+      this.account.trade_allowed =
+        capitalMarketAllowsTrading(status) && !capitalAccountUnproven;
     }
   }
 
@@ -2870,74 +2958,7 @@ class MasterRuntime {
 
     // Refresh equity from whatever broker is attached (paper or Capital)
     const acct = await broker.getAccount();
-    let capitalAccountUnproven = false;
-    if (acct && acct.equity > 0) {
-      this.account.equity = acct.equity;
-      this.account.balance = acct.balance;
-      this.account.currency = acct.currency;
-      this.account.available_to_deal =
-        acct.available != null && Number.isFinite(acct.available)
-          ? acct.available
-          : this.account.available_to_deal ?? null;
-      if (typeof acct.trade_allowed === 'boolean') {
-        this.account.trade_allowed = acct.trade_allowed;
-      }
-      if (broker instanceof CapitalBroker && !broker.paper) {
-        this.capitalAccountProven = true;
-        const prevPeak = this.account.peak_equity;
-        const prevDayStart = this.account.day_start_equity;
-        if (!this.capitalDayGatesSeeded) {
-          // First proven Capital equity — seed day/peak (never keep paper £10k)
-          this.account.day_start_equity = acct.equity;
-          this.account.peak_equity = acct.equity;
-          this.capitalDayGatesSeeded = true;
-        } else {
-          this.account.peak_equity = Math.max(
-            this.account.peak_equity,
-            acct.equity
-          );
-        }
-        if (
-          this.account.peak_equity !== prevPeak ||
-          this.account.day_start_equity !== prevDayStart
-        ) {
-          this.persistRuntimeGates();
-        }
-      } else {
-        const prevPeak = this.account.peak_equity;
-        const prevDayStart = this.account.day_start_equity;
-        this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
-        if (!this.account.day_start_equity) {
-          this.account.day_start_equity = acct.equity;
-        }
-        if (
-          this.account.peak_equity !== prevPeak ||
-          this.account.day_start_equity !== prevDayStart
-        ) {
-          this.persistRuntimeGates();
-        }
-      }
-    } else if (broker instanceof CapitalBroker && !broker.paper) {
-      // Fail-closed: never size LIVE from leftover equity when Capital unread
-      capitalAccountUnproven = true;
-      this.capitalAccountProven = false;
-      this.account.equity = 0;
-      this.account.balance = 0;
-      this.account.available_to_deal = null;
-      this.account.trade_allowed = false;
-      this.broker_detail = `${this.broker_detail || ''};capital_account_unproven`.slice(
-        -400
-      );
-    }
-
-    // Capital: fail-closed marketStatus every tick (not only feed wrapper side-effect)
-    if (broker instanceof CapitalBroker) {
-      const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-      const status =
-        quote.market_status ?? broker.cachedMarketStatus(this.epic);
-      this.account.trade_allowed =
-        capitalMarketAllowsTrading(status) && !capitalAccountUnproven;
-    }
+    await this.applyVenueAccountSnapshot(broker, acct, quote);
 
     // Reader relative spread — update history every tick
     if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
@@ -5288,11 +5309,12 @@ class MasterRuntime {
       );
       this.persistRuntimeGates();
     }
-    // Always refresh equity/peak after manageOnly MTM — open book (Stop-with-opens)
-    // must not leave Equity/Peak/risk DD stale until the next full tick / close.
+    // Always refresh full venue account snapshot after manageOnly MTM —
+    // open book (Stop-with-opens) must not leave Equity/Peak/Available/Tradeable
+    // or Capital prove stale until the next full tick.
     try {
       const acct = await broker.getAccount();
-      if (acct) this.applyVenueAccountAfterClose(acct);
+      await this.applyVenueAccountSnapshot(broker, acct, quote);
     } catch {
       /* keep */
     }

@@ -1233,4 +1233,137 @@ describe('manageOnly equity refresh after close', () => {
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('manageOnlyTick refreshes available_to_deal and trade_allowed from getAccount', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(
+      join(tmpdir(), 'vs-manage-only-acct-fields-')
+    );
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        time_stop_max_bars: 0,
+        max_hold_ms: 86_400_000,
+        post_exit_cooldown_ms: 0,
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      broker.seedOpens([]);
+      broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+      masterRuntime.account.equity = 10_000;
+      masterRuntime.account.balance = 10_000;
+      masterRuntime.account.peak_equity = 10_000;
+      // Stale Stop-with-opens leftovers — must be overwritten from venue getAccount
+      masterRuntime.account.currency = 'USD';
+      masterRuntime.account.available_to_deal = null;
+      masterRuntime.account.trade_allowed = false;
+      masterRuntime.running = true;
+
+      const entry = 4400;
+      const bars = Array.from({ length: 20 }, (_, i) => ({
+        open: entry,
+        high: entry + 1,
+        low: entry - 1,
+        close: entry,
+        ts_ms: Date.UTC(2026, 8, 9, 18, i),
+      }));
+      broker.setQuote({
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'manage-only-acct-aaaaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        stop_level: entry - 50,
+        profit_level: entry + 50,
+      });
+      expect(placed.ok).toBe(true);
+      masterRuntime.positions.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-manage-only-acct',
+        intent_id: 'manage-only-acct-aaaaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        entry: placed.fill_price!,
+        stop_loss: entry - 50,
+        take_profit: entry + 50,
+        decision: {
+          decision_id: 'd-acct',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.5,
+            structure_bias: 'BULLISH',
+            swing_high: entry + 5,
+            swing_low: entry - 5,
+            buy_pressure: 0.6,
+            sell_pressure: 0.4,
+            behavior_bull: 0.5,
+            behavior_bear: 0.5,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 1,
+            data_quality: 0.9,
+            session: 'LONDON',
+          },
+          expectancy: null,
+        },
+      });
+
+      const mark = {
+        bid: entry + 1,
+        ask: entry + 1.2,
+        mid: entry + 1.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      broker.setQuote(mark);
+      await (
+        masterRuntime as unknown as {
+          manageOnlyTick: (b: typeof bars, q: typeof mark) => Promise<void>;
+        }
+      ).manageOnlyTick(bars, mark);
+
+      expect(masterRuntime.positions.count()).toBe(1);
+      expect(masterRuntime.account.currency).toBe('GBP');
+      expect(masterRuntime.account.trade_allowed).toBe(true);
+      expect(masterRuntime.account.available_to_deal).toBe(10_000);
+      expect(masterRuntime.account.balance).toBe(10_000);
+      expect(masterRuntime.account.equity).toBeGreaterThan(10_000);
+    } finally {
+      try {
+        masterRuntime.ensurePaperBroker().seedOpens([]);
+        masterRuntime.ensurePaperBroker().hydrateAccount({
+          equity: 10_000,
+          balance: 10_000,
+        });
+      } catch {
+        /* ignore */
+      }
+      masterRuntime.stop();
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
