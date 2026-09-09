@@ -2345,15 +2345,23 @@ class MasterRuntime {
       this.trackPersist('recover_orphan', persistOpportunity(stub));
     }
     // Sync-ghost / external-partial closes move venue equity (paper auto-fill)
-    // without manage/manual close — refresh account + peak so KPIs/risk DD match.
+    // without manage/manual close — settle like manage: post-exit cool + equity/peak.
     const syncClosed =
       (sync.orphans_local?.length || 0) + (sync.external_partials?.length || 0);
-    if (syncClosed > 0 && this.broker) {
-      try {
-        const acct = await this.broker.getAccount();
-        if (acct) this.applyVenueAccountAfterClose(acct);
-      } catch {
-        /* keep */
+    if (syncClosed > 0) {
+      const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
+      this.post_exit_until_ms = Math.max(
+        this.post_exit_until_ms,
+        Date.now() + cool
+      );
+      this.persistRuntimeGates();
+      if (this.broker) {
+        try {
+          const acct = await this.broker.getAccount();
+          if (acct) this.applyVenueAccountAfterClose(acct);
+        } catch {
+          /* keep */
+        }
       }
     }
   }

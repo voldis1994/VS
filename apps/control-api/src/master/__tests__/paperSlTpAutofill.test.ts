@@ -837,7 +837,7 @@ describe('manageOnly equity refresh after close', () => {
         mode: 'PAPER',
         time_stop_max_bars: 0,
         max_hold_ms: 86_400_000,
-        post_exit_cooldown_ms: 0,
+        post_exit_cooldown_ms: 60_000,
       };
       const broker = masterRuntime.ensurePaperBroker();
       broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
@@ -845,6 +845,7 @@ describe('manageOnly equity refresh after close', () => {
       masterRuntime.account.balance = 10_000;
       masterRuntime.account.peak_equity = 10_000;
       masterRuntime.running = true;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
 
       const entry = 4400;
       const bars = Array.from({ length: 20 }, (_, i) => ({
@@ -949,6 +950,11 @@ describe('manageOnly equity refresh after close', () => {
       expect(String(masterRuntime.last_exit_reason || '')).toMatch(/STOP_HIT/);
       expect(masterRuntime.account.equity).toBe(broker.equity);
       expect(masterRuntime.account.equity).toBeLessThan(10_000);
+      // Sync-ghost must arm post-exit cool like manage/manual closes (no same-cycle re-entry)
+      expect(masterRuntime.status().post_exit_cooldown_ms).toBeGreaterThan(0);
+      expect(
+        (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms
+      ).toBeGreaterThan(Date.now());
     } finally {
       try {
         masterRuntime.ensurePaperBroker().hydrateAccount({
