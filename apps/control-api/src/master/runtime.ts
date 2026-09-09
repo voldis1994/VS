@@ -995,6 +995,30 @@ class MasterRuntime {
             this.account.peak_equity = this.account.equity;
           }
         }
+        // Open-book hydrate: MTM before UTC day-roll (parity with recover) so
+        // day_start_equity seeds from cash+UPL — not cash-only before manage.
+        if (!capitalAttached && this.positions.count() > 0) {
+          if (!this.broker) this.ensurePaperBroker();
+          this.seedPaperBrokerFromPositions();
+          if (this.broker instanceof PaperBroker && this.last_quote) {
+            const q = this.last_quote;
+            this.broker.setQuote({
+              bid: q.bid,
+              ask: q.ask,
+              mid: q.mid,
+              spread: q.spread,
+              epic: q.epic || this.epic,
+              ts_ms: q.ts_ms,
+            });
+            this.broker.markToMarket();
+            try {
+              const acctPre = await this.broker.getAccount();
+              await this.applyVenueAccountSnapshot(this.broker, acctPre, q);
+            } catch {
+              /* keep journal cash */
+            }
+          }
+        }
         this.rollDailyPnl();
         const today = this.account.daily_pnl_day!;
         let pnlToday = 0;
