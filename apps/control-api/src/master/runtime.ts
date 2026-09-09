@@ -2932,7 +2932,14 @@ class MasterRuntime {
       this.persistRuntimeGates();
     }
 
-    // 2) Decision + risk
+    // 2) Decision + risk — sticky desk arms from disk/live last when opts omit
+    const hourBarsForCycle =
+      opts?.hour_bars && opts.hour_bars.length >= 6
+        ? opts.hour_bars
+        : this.last_hour_bars.length >= 6
+          ? this.last_hour_bars
+          : null;
+    const closed10sForCycle = opts?.closed_10s ?? this.last_closed_10s;
     const cycle = await this.pipeline.runCycle({
       bars,
       quote,
@@ -2947,8 +2954,8 @@ class MasterRuntime {
       relative_spread:
         spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
       reference_mids: opts?.reference_mids ?? this.lastPublicReferenceMids,
-      hour_bars: opts?.hour_bars,
-      closed_10s: opts?.closed_10s,
+      hour_bars: hourBarsForCycle,
+      closed_10s: closed10sForCycle,
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
@@ -2978,7 +2985,8 @@ class MasterRuntime {
         }
       : null;
     this.last_hour_bias = this.pipeline.getStructureBook()?.hour_bias ?? null;
-    this.last_closed_10s_present = !!this.last_closed_10s || !!opts?.closed_10s;
+    this.last_closed_10s_present =
+      !!this.last_closed_10s || !!closed10sForCycle;
     this.rememberCycleForEpic();
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();

@@ -856,9 +856,94 @@ async function main() {
     opens: masterRuntime.positions.count(),
   };
 
-  const allOk = hydrateOk && manageOnlyOk && recoverOk && feedOk;
+  // Sticky desk arms AFTER continuity book is stable: stop feed so a concurrent
+  // live tick cannot race away fixture hour_bars/closed_10s mid-proof.
+  masterRuntime.stop();
+  const savedOpensForSticky = masterRuntime.positions.toJSON();
+  masterRuntime.positions = new PositionManager();
+  const stickyBars =
+    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
+  (
+    masterRuntime as unknown as {
+      last_hour_bars: typeof hourBars;
+      last_hour_bars_detail: string | null;
+      hourBarsFromDiskCache: boolean;
+      last_closed_10s: {
+        open_time_ms: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        ticks: number;
+      } | null;
+      closed10sFromDiskCache: boolean;
+      closed10sFromJournalOnly: boolean;
+      last_closed_10s_present: boolean;
+    }
+  ).last_hour_bars = hourBars.map((h) => ({ ...h }));
+  (
+    masterRuntime as unknown as { last_hour_bars_detail: string | null }
+  ).last_hour_bars_detail = 'restart_check_hours';
+  (
+    masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
+  ).hourBarsFromDiskCache = true;
+  (
+    masterRuntime as unknown as {
+      last_closed_10s: {
+        open_time_ms: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        ticks: number;
+      } | null;
+    }
+  ).last_closed_10s = {
+    open_time_ms: Date.now() - 10_000,
+    open: stickyBars.at(-1)!.close - 0.2,
+    high: stickyBars.at(-1)!.close + 1.5,
+    low: stickyBars.at(-1)!.close - 0.3,
+    close: stickyBars.at(-1)!.close + 1.2,
+    ticks: 4,
+  };
+  (
+    masterRuntime as unknown as { closed10sFromDiskCache: boolean }
+  ).closed10sFromDiskCache = true;
+  (
+    masterRuntime as unknown as { closed10sFromJournalOnly: boolean }
+  ).closed10sFromJournalOnly = false;
+  (
+    masterRuntime as unknown as { last_closed_10s_present: boolean }
+  ).last_closed_10s_present = true;
+  await masterRuntime.tick(stickyBars, {
+    bid: stickyBars.at(-1)!.close - 0.2,
+    ask: stickyBars.at(-1)!.close + 0.2,
+    mid: stickyBars.at(-1)!.close,
+    spread: 0.4,
+    epic: 'GOLD',
+    ts_ms: Date.now(),
+  });
+  const stSticky = masterRuntime.status();
+  const stickyDeskOk =
+    stSticky.hour_bias === 'UP' &&
+    stSticky.closed_10s_present === true &&
+    (stSticky.desk_entry?.source === 'setup' ||
+      stSticky.desk_entry?.source === 'move');
+  const stickyDeskSnap = {
+    ok: stickyDeskOk,
+    hour_bias: stSticky.hour_bias ?? null,
+    desk_entry_source: stSticky.desk_entry?.source ?? null,
+    closed_10s_source: stSticky.closed_10s_source ?? null,
+    hour_bars_source: stSticky.hour_bars_source ?? null,
+  };
+  masterRuntime.positions = new PositionManager();
+  masterRuntime.positions.fromJSON(savedOpensForSticky);
+  await saveOpenPositions(masterRuntime.positions.list());
+
+  const allOk = hydrateOk && stickyDeskOk && manageOnlyOk && recoverOk && feedOk;
   const report = {
     status: allOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
+    sticky_desk: stickyDeskSnap,
     hydrate: { ok: hydrateOk, ...hydrateSnap },
     manage_only: {
       ok: manageOnlyOk,
@@ -964,8 +1049,8 @@ async function main() {
     },
     desired_feed: desiredFeedSnap,
     detail: allOk
-      ? 'boot hydrate + paper seed + recover + desired_running feed resume'
-      : `hydrate_ok=${hydrateOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk} feed_ok=${feedOk}`,
+      ? 'boot hydrate + sticky desk tick + paper seed + recover + desired_running feed resume'
+      : `hydrate_ok=${hydrateOk} sticky_desk_ok=${stickyDeskOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk} feed_ok=${feedOk}`,
   };
 
   writeFileSync(

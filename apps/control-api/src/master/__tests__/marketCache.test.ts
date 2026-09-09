@@ -363,6 +363,123 @@ describe('market_cache hydrate provenance', () => {
     }
   });
 
+  it('tick without opts uses disk hour_bars + closed_10s for desk confirm', async () => {
+    const { masterRuntime } = await import('../runtime.js');
+    const dir = mkdtempSync(join(tmpdir(), 'master-mkt-sticky-'));
+    const prevState = process.env.MASTER_STATE_DIR;
+    const prevGates = process.env.MASTER_GATES_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    process.env.MASTER_GATES_DIR = dir;
+    const prevQuote = masterRuntime.last_quote;
+    const prevBars = masterRuntime.last_bars;
+    const prevMarket = masterRuntime.last_market;
+    const prevCfg = masterRuntime.cfg;
+    try {
+      masterRuntime.cfg = {
+        ...masterRuntime.cfg,
+        min_score: 0.25,
+        require_armed_setup: false,
+        block_off_hours: false,
+        block_high_impact_news: false,
+      };
+      const bars = Array.from({ length: 50 }, (_, i) => {
+        const o = 4400 + i * 0.8;
+        return {
+          open: o,
+          high: o + 1.2,
+          low: o - 0.1,
+          close: o + 0.9,
+          ts_ms: Date.now() - (50 - i) * 60_000,
+        };
+      });
+      const hourBars = [
+        { open: 4300, high: 4350, low: 4290, close: 4340, ts_ms: 1 },
+        { open: 4340, high: 4380, low: 4330, close: 4370, ts_ms: 2 },
+        { open: 4370, high: 4410, low: 4365, close: 4405, ts_ms: 3 },
+        { open: 4405, high: 4430, low: 4400, close: 4420, ts_ms: 4 },
+        { open: 4420, high: 4440, low: 4415, close: 4435, ts_ms: 5 },
+        { open: 4435, high: 4450, low: 4430, close: 4445, ts_ms: 6 },
+      ];
+      const last = bars.at(-1)!;
+      expect(
+        saveMarketCache(
+          {
+            epic: 'GOLD',
+            bars,
+            quote: {
+              bid: last.close - 0.2,
+              ask: last.close + 0.2,
+              mid: last.close,
+              spread: 0.4,
+              epic: 'GOLD',
+              ts_ms: Date.now(),
+            },
+            hour_bars: hourBars,
+            hour_bars_detail: 'sticky_test',
+            closed_10s: {
+              open_time_ms: Date.now() - 10_000,
+              open: last.close - 0.2,
+              high: last.close + 1.5,
+              low: last.close - 0.3,
+              close: last.close + 1.2,
+              ticks: 4,
+            },
+            structure_seed_source: 'sticky_test',
+          },
+          dir
+        )
+      ).toBe(true);
+      masterRuntime.last_quote = null;
+      masterRuntime.last_bars = [];
+      masterRuntime.last_market = null;
+      (
+        masterRuntime as unknown as { last_hour_bars: unknown[] }
+      ).last_hour_bars = [];
+      (
+        masterRuntime as unknown as { last_closed_10s: unknown }
+      ).last_closed_10s = null;
+      (
+        masterRuntime as unknown as {
+          hydrateMarketCacheFromDisk: () => void;
+        }
+      ).hydrateMarketCacheFromDisk();
+      masterRuntime.ensurePaperBroker();
+      masterRuntime.setMode('PAPER');
+      // No opts — must sticky-fall back to disk arms for hour_bias + desk confirm
+      await masterRuntime.tick(bars, {
+        bid: last.close - 0.2,
+        ask: last.close + 0.2,
+        mid: last.close,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const st = masterRuntime.status();
+      expect(st.hour_bias).toBe('UP');
+      expect(st.hour_bars_source).toBe('disk_cache');
+      expect(st.closed_10s_present).toBe(true);
+      expect(st.closed_10s_source).toBe('disk_cache');
+      expect(st.desk_entry?.source === 'setup' || st.desk_entry?.source === 'move').toBe(
+        true
+      );
+    } finally {
+      masterRuntime.last_quote = prevQuote;
+      masterRuntime.last_bars = prevBars;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.cfg = prevCfg;
+      (
+        masterRuntime as unknown as { last_hour_bars: unknown[] }
+      ).last_hour_bars = [];
+      (
+        masterRuntime as unknown as { last_closed_10s: unknown }
+      ).last_closed_10s = null;
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+      if (prevGates === undefined) delete process.env.MASTER_GATES_DIR;
+      else process.env.MASTER_GATES_DIR = prevGates;
+    }
+  });
+
   it('aged disk_cache quote stays hydrated · disk_cache — not live stale_quote', async () => {
     const { masterRuntime } = await import('../runtime.js');
     const dir = mkdtempSync(join(tmpdir(), 'master-mkt-aged-'));
