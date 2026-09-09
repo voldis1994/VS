@@ -128,7 +128,11 @@ export class FilePersist implements PersistClient, JournalMirror {
 
   private load() {
     const path = this.statePath();
-    if (!existsSync(path)) return;
+    if (!existsSync(path)) {
+      // Sidecars alone must still back DualPersist mirror SELECTs after cold start
+      this.seedSingletonPayloadsFromDisk();
+      return;
+    }
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
       this.mem.positions = (raw.positions || []).map((p) => ({
@@ -219,7 +223,200 @@ export class FilePersist implements PersistClient, JournalMirror {
       }
       this.restoreJournalSidecars();
     } catch {
-      /* start clean */
+      /* start clean — still seed singleton SQL mem from sidecars */
+    }
+    this.seedSingletonPayloadsFromDisk();
+  }
+
+  /**
+   * Cold start: sidecar JSON/jsonl must populate MemoryPersist singleton fields
+   * so DualPersist mirror SELECTs (empty/stale PG heal, newer-mirror) work without
+   * an in-process INSERT first.
+   */
+  private seedSingletonPayloadsFromDisk(): void {
+    const readJson = (name: string): Record<string, unknown> | null => {
+      try {
+        const p = join(this.root, name);
+        if (!existsSync(p)) return null;
+        const raw = JSON.parse(readFileSync(p, 'utf8'));
+        return raw && typeof raw === 'object'
+          ? (raw as Record<string, unknown>)
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const withSavedAt = (
+      obj: Record<string, unknown> | null
+    ): Record<string, unknown> | null => {
+      if (!obj) return null;
+      if (obj.saved_at_ms == null || !Number.isFinite(Number(obj.saved_at_ms))) {
+        return { ...obj, saved_at_ms: Date.now() };
+      }
+      return obj;
+    };
+    const meta = this.lastOperatorMeta;
+
+    if (!this.mem.marketCachePayload) {
+      const disk = readJson('market_cache.json');
+      const fromMeta =
+        meta?.market_cache && typeof meta.market_cache === 'object'
+          ? (meta.market_cache as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src && Array.isArray(src.bars)) {
+        this.mem.marketCachePayload = withSavedAt(src);
+      }
+    }
+    if (!this.mem.epicCycleStashPayload) {
+      const disk = readJson('epic_cycle_stash.json');
+      const fromMeta =
+        meta?.epic_cycle_stash && typeof meta.epic_cycle_stash === 'object'
+          ? (meta.epic_cycle_stash as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src && (src.setups_by_epic || src.cycles_by_epic)) {
+        this.mem.epicCycleStashPayload = withSavedAt(src);
+      }
+    }
+    if (!this.mem.runtimeGatesPayload) {
+      const disk = readJson('runtime_gates.json');
+      const fromMeta =
+        meta?.gates && typeof meta.gates === 'object'
+          ? (meta.gates as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src) this.mem.runtimeGatesPayload = withSavedAt(src);
+    }
+    if (!this.mem.manageConfigPayload) {
+      const disk = readJson('master_manage_config.json');
+      const fromMeta =
+        meta?.manage && typeof meta.manage === 'object'
+          ? (meta.manage as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src) this.mem.manageConfigPayload = withSavedAt(src);
+    }
+    if (!this.mem.ownsPipelinePayload) {
+      const disk = readJson('owns_pipeline.json');
+      const owns =
+        disk && typeof disk.owns_pipeline === 'boolean'
+          ? disk.owns_pipeline
+          : typeof meta?.owns_pipeline === 'boolean'
+            ? meta.owns_pipeline
+            : null;
+      if (owns != null) {
+        this.mem.ownsPipelinePayload = {
+          owns_pipeline: owns === true,
+          saved_at_ms:
+            disk && Number.isFinite(Number(disk.saved_at_ms))
+              ? Number(disk.saved_at_ms)
+              : Date.now(),
+        };
+      }
+    }
+    if (!this.mem.monitoringSnapshotPayload) {
+      const disk = readJson('monitoring_snapshot.json');
+      const fromMeta =
+        meta?.monitoring_snapshot &&
+        typeof meta.monitoring_snapshot === 'object'
+          ? (meta.monitoring_snapshot as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src) this.mem.monitoringSnapshotPayload = withSavedAt(src);
+    }
+    if (!this.mem.spreadHistoryPayload) {
+      const disk = readJson('spread_history.json');
+      const fromMeta =
+        meta?.spread_history && typeof meta.spread_history === 'object'
+          ? (meta.spread_history as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src && Array.isArray(src.history)) {
+        this.mem.spreadHistoryPayload = withSavedAt(src);
+      }
+    }
+    if (!this.mem.tradeAckJournalPayload) {
+      const disk = readJson('trade_ack_journal.json');
+      const fromMeta =
+        meta?.trade_ack_journal && typeof meta.trade_ack_journal === 'object'
+          ? (meta.trade_ack_journal as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src) {
+        this.mem.tradeAckJournalPayload = withSavedAt(
+          src.records && typeof src.records === 'object'
+            ? src
+            : { records: src, saved_at_ms: src.saved_at_ms }
+        );
+      }
+    }
+    if (!this.mem.newsWindowPayload) {
+      const disk = readJson('news_window.json');
+      const fromMeta =
+        meta?.news_window && typeof meta.news_window === 'object'
+          ? (meta.news_window as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src) this.mem.newsWindowPayload = withSavedAt(src);
+    }
+    if (!this.mem.clientFanoutPayload) {
+      const disk = readJson('client_fanout.json');
+      const fromMeta =
+        meta?.client_fanout && typeof meta.client_fanout === 'object'
+          ? (meta.client_fanout as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src && typeof src.attempted === 'boolean') {
+        this.mem.clientFanoutPayload = withSavedAt(src);
+      }
+    }
+    if (!this.mem.newsCalendarPayload) {
+      const disk = readJson('news_calendar.json');
+      const fromMeta =
+        meta?.news_calendar && typeof meta.news_calendar === 'object'
+          ? (meta.news_calendar as Record<string, unknown>)
+          : null;
+      const src = disk ?? fromMeta;
+      if (src && Array.isArray(src.events)) {
+        this.mem.newsCalendarPayload = withSavedAt(src);
+      }
+    }
+    if (!this.mem.errorJournalPayload) {
+      try {
+        const errPath = join(this.root, 'error_journal.jsonl');
+        let entries: unknown[] | null = null;
+        if (existsSync(errPath)) {
+          const lines = readFileSync(errPath, 'utf8')
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean);
+          const parsed: unknown[] = [];
+          for (const line of lines) {
+            try {
+              parsed.push(JSON.parse(line));
+            } catch {
+              /* skip */
+            }
+          }
+          if (parsed.length) entries = parsed;
+        }
+        if (
+          !entries &&
+          meta?.error_journal &&
+          Array.isArray(meta.error_journal.entries)
+        ) {
+          entries = meta.error_journal.entries;
+        }
+        if (entries?.length) {
+          this.mem.errorJournalPayload = {
+            entries,
+            saved_at_ms: Date.now(),
+          };
+        }
+      } catch {
+        /* ignore */
+      }
     }
   }
 

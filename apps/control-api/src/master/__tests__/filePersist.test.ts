@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -481,11 +481,56 @@ describe('VS MASTER dual persist (DB fail → file mirror)', () => {
         9_000,
       ]
     );
-    setPersistClient(new DualPersist(primary, mirror));
+    // Cold FilePersist must SELECT from sidecar without prior in-process INSERT
+    setPersistClient(new DualPersist(primary, new FilePersist(dir)));
     const loaded = await loadRuntimeGatesFromPersist();
     expect(Number(loaded?.peak_equity)).toBe(12_500);
     expect(Number(loaded?.consecutive_losses)).toBe(0);
     expect(Number(loaded?.saved_at_ms)).toBe(9_000);
+  });
+
+  it('cold FilePersist seeds singleton mem from sidecar JSON for DualPersist SELECT', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-fp-singleton-seed-'));
+    writeFileSync(
+      join(dir, 'runtime_gates.json'),
+      JSON.stringify({
+        peak_equity: 11_111,
+        consecutive_losses: 2,
+        saved_at_ms: 7_777,
+      }),
+      'utf8'
+    );
+    writeFileSync(
+      join(dir, 'news_calendar.json'),
+      JSON.stringify({
+        events: [
+          {
+            title: 'NFP',
+            country: 'USD',
+            date: new Date().toISOString(),
+            impact: 'High',
+          },
+        ],
+        fetched_at_ms: 7_700,
+        saved_at_ms: 7_700,
+      }),
+      'utf8'
+    );
+    const cold = new FilePersist(dir);
+    const gates = await cold.query(
+      `SELECT payload, saved_at_ms FROM master_runtime_gates WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    expect(gates.rows.length).toBe(1);
+    expect(Number(gates.rows[0].saved_at_ms)).toBe(7_777);
+    expect(Number(gates.rows[0].payload.peak_equity)).toBe(11_111);
+    const cal = await cold.query(
+      `SELECT payload, saved_at_ms FROM master_news_calendar WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    expect(cal.rows.length).toBe(1);
+    expect(Array.isArray(cal.rows[0].payload.events)).toBe(true);
+    expect(cal.rows[0].payload.events.length).toBe(1);
   });
 
   it('merges pnl_proven:false from file mirror onto PG null rows', async () => {
