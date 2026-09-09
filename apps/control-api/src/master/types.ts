@@ -100,6 +100,8 @@ export type MasterDecision = {
   sell: TradeCandidate;
   analysis: AnalysisSnapshot;
   expectancy: ExpectancySnapshot | null;
+  /** Desk 10s confirm path that drove this decide (EV setupKey dimension). */
+  desk_entry_source?: 'setup' | 'move' | 'none' | null;
 };
 
 export type ExpectancySnapshot = {

@@ -5074,6 +5074,7 @@ describe('expectancy gate + pure evaluate', () => {
       min_expectancy_samples: 3,
     };
     const key = setupKey(a, 'BUY', 'GOLD');
+    expect(key.endsWith('|none')).toBe(true);
     const d = decide(a, q, cfg, (k) =>
       k === key
         ? {
@@ -5091,6 +5092,7 @@ describe('expectancy gate + pure evaluate', () => {
     expect(d.kind).toBe('BLOCK');
     expect(String(d.block_reason || '')).toMatch(/negative_expectancy/);
     expect(String(d.block_reason || '')).toMatch(/^negative_expectancy:GOLD\|/);
+    expect(d.desk_entry_source).toBe('none');
     // SILVER must not share GOLD's negative EV bucket
     const silverKey = setupKey(a, 'BUY', 'SILVER');
     expect(silverKey).not.toBe(key);
@@ -5101,6 +5103,99 @@ describe('expectancy gate + pure evaluate', () => {
       (k) => (k === key ? { setup_key: key, samples: 5, p_win: 0.2, avg_win: 1, avg_loss: 2, costs: 0.1, ev: -1.4, positive: false } : null)
     );
     expect(dSilver.kind).not.toBe('BLOCK');
+  });
+
+  it('setupKey desk_entry source isolates setup vs move expectancy', async () => {
+    const { decide, setupKey, normalizeDeskConfirmSource } = await import('../decision.js');
+    const a = baseAnalysis({
+      regime: 'TREND',
+      trend_dir: 'UP',
+      momentum_dir: 'UP',
+      trend_strength: 0.8,
+      structure_bias: 'BULLISH',
+      buy_pressure: 0.9,
+      sell_pressure: 0.1,
+      behavior_bull: 0.9,
+      momentum_score: 0.8,
+      atr: 2,
+      context_quality: 0.9,
+      impact_score: 0.8,
+    });
+    const q: Quote = {
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      ts_ms: Date.now(),
+      epic: 'GOLD',
+    };
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      min_score: 0.4,
+      block_off_hours: false,
+      require_positive_expectancy: true,
+      min_expectancy_samples: 3,
+      require_armed_setup: false,
+    };
+    expect(normalizeDeskConfirmSource('setup')).toBe('setup');
+    expect(normalizeDeskConfirmSource('move')).toBe('move');
+    expect(normalizeDeskConfirmSource(null)).toBe('none');
+    const moveKey = setupKey(a, 'BUY', 'GOLD', 'move');
+    const setupKeyStr = setupKey(a, 'BUY', 'GOLD', 'setup');
+    const noneKey = setupKey(a, 'BUY', 'GOLD', 'none');
+    expect(moveKey).not.toBe(setupKeyStr);
+    expect(setupKeyStr).not.toBe(noneKey);
+    expect(moveKey.endsWith('|move')).toBe(true);
+    expect(setupKeyStr.endsWith('|setup')).toBe(true);
+    const negMove = {
+      setup_key: moveKey,
+      samples: 5,
+      p_win: 0.2,
+      avg_win: 1,
+      avg_loss: 2,
+      costs: 0.1,
+      ev: -1.4,
+      positive: false,
+    };
+    // Negative move EV must not block setup confirm path
+    const dSetup = decide(
+      a,
+      q,
+      cfg,
+      (k) => (k === moveKey ? negMove : null),
+      null,
+      null,
+      null,
+      {
+        side: 'BUY',
+        source: 'setup',
+        reason: 'test',
+        setup_kind: 'PULLBACK',
+        playbook: null,
+      }
+    );
+    expect(dSetup.kind).toBe('BUY');
+    expect(dSetup.desk_entry_source).toBe('setup');
+    // Same negative EV on move path must block
+    const dMove = decide(
+      a,
+      q,
+      cfg,
+      (k) => (k === moveKey ? negMove : null),
+      null,
+      null,
+      null,
+      {
+        side: 'BUY',
+        source: 'move',
+        reason: 'test',
+        setup_kind: 'IMPULSE',
+        playbook: null,
+      }
+    );
+    expect(dMove.kind).toBe('BLOCK');
+    expect(String(dMove.block_reason || '')).toMatch(/negative_expectancy:.*\|move/);
+    expect(dMove.desk_entry_source).toBe('move');
   });
 
   it('evaluate does not mutate last_ai_allow_close or live journal', async () => {
