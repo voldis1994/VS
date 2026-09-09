@@ -775,6 +775,18 @@ async function exitTrade(
       mid: quote.mid,
       detail: `CLOSE FAIL: ${result.detail}`,
     });
+    if (masterOwnsPipeline()) {
+      masterRuntime.recordDeskOwnedClose({
+        position_id: dealId,
+        epic: s.epic,
+        side: s.open_side,
+        volume: s.lot_size,
+        exit: quote.mid,
+        reason,
+        ok: false,
+        detail: result.detail,
+      });
+    }
     return;
   }
 
@@ -802,6 +814,20 @@ async function exitTrade(
       trade_type: mapTradeType(s.open_side, s.entry_setup, s.regime),
       lot_size: s.lot_size,
       reason,
+    });
+  }
+
+  // MASTER owns-pipeline deferred path: durable journal must see desk hard exits
+  if (masterOwnsPipeline()) {
+    masterRuntime.recordDeskOwnedClose({
+      position_id: dealId,
+      epic: s.epic,
+      side: s.open_side,
+      volume: s.lot_size,
+      exit: quote.mid,
+      reason,
+      ok: true,
+      detail: result.detail,
     });
   }
 
