@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
+  decideHardProtectiveExit,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
@@ -235,5 +236,72 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       2002.5
     );
     expect(d.exit).toBe(false);
+  });
+});
+
+describe('decideHardProtectiveExit (desk deferred owns-pipeline)', () => {
+  it('cuts HardInvalidation losers only', () => {
+    const cut = decideHardProtectiveExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(60_000),
+        mfe: 0,
+        mae: 50,
+        peak_retention: null,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      1980 // deep red
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('does not PeakProtect / TimeDecay / Target (soft brain off)', () => {
+    // PeakProtect-shaped: big MFE, poor retention
+    const peak = decideHardProtectiveExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(120_000),
+        mfe: 10,
+        peak_retention: 0.2,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      2002
+    );
+    expect(peak.exit).toBe(false);
+
+    // TimeDecay-shaped: flat long hold
+    const decay = decideHardProtectiveExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(500_000),
+        mfe: 0,
+        peak_retention: null,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      2000.1
+    );
+    expect(decay.exit).toBe(false);
+
+    // Target-shaped: green to TP
+    const target = decideHardProtectiveExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(60_000),
+        mfe: 20,
+        peak_retention: 1,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      2040
+    );
+    expect(target.exit).toBe(false);
   });
 });

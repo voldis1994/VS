@@ -93,6 +93,11 @@ export type MasterStatus = {
   epic: string;
   ai_mode: MasterConfig['ai_mode'];
   owns_pipeline: boolean;
+  /**
+   * Who owns exits: MASTER | DESK_DEFERRED_HARD (owns-pipeline but Capital unsafe —
+   * hard SL only) | DESK (legacy dual-brain when owns off).
+   */
+  manage_owner: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
   broker: string | null;
   broker_detail: string | null;
   /** Primary LIVE venue — Capital.com API direct (not MT4 bridge) */
@@ -348,6 +353,12 @@ class MasterRuntime {
   last_ai_allow_close = true;
   /** null = follow MASTER_OWNS_PIPELINE env; else dashboard override */
   owns_pipeline_pref: boolean | null = null;
+  /**
+   * Last desk-reported manage owner hint (DESK_DEFERRED_HARD when Capital unsafe).
+   * Status falls back to resolveManageOwner from venue opens.
+   */
+  private desk_manage_owner_hint: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK' | null =
+    null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   /** VS-System 1s trail/manage loop while a position is open (entry stays on slower feed). */
@@ -1120,6 +1131,27 @@ class MasterRuntime {
   ownsPipelineEffective(): boolean {
     if (this.owns_pipeline_pref != null) return this.owns_pipeline_pref;
     return process.env.MASTER_OWNS_PIPELINE === 'true';
+  }
+
+  /** Desk tick reports who owns exits (avoids deskBridge↔runtime import cycle). */
+  setDeskManageOwnerHint(owner: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK') {
+    this.desk_manage_owner_hint = owner;
+  }
+
+  /**
+   * Operator-facing manage owner. Prefers last desk hint; else derives from
+   * owns-pipeline + Capital LIVE attach + MASTER_LIVE_ENABLED + venue opens.
+   */
+  resolveManageOwnerStatus(): 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK' {
+    if (this.desk_manage_owner_hint) return this.desk_manage_owner_hint;
+    if (!this.ownsPipelineEffective()) return 'DESK';
+    if (this.cfg.mode === 'LIVE' && this.broker?.name === 'CAPITAL') {
+      return 'MASTER';
+    }
+    if (process.env.MASTER_LIVE_ENABLED === 'true') return 'DESK_DEFERRED_HARD';
+    if (this.capitalVenueOpens > 0) return 'DESK_DEFERRED_HARD';
+    if (this.broker != null) return 'MASTER';
+    return 'DESK_DEFERRED_HARD';
   }
 
   /**
@@ -3957,6 +3989,7 @@ class MasterRuntime {
       epic: this.epic,
       ai_mode: this.cfg.ai_mode,
       owns_pipeline: this.ownsPipelineEffective(),
+      manage_owner: this.resolveManageOwnerStatus(),
       broker: this.broker?.name ?? null,
       broker_detail: this.broker_detail,
       primary_live_venue: 'capital.com_api_direct',

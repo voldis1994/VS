@@ -694,6 +694,7 @@ async function refresh(){
       card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', s.floating_pnl==null?'':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':'')),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),
       card('Owns pipeline',s.owns_pipeline?'YES':'no',s.owns_pipeline?'ok':(s.mode==='LIVE'?'bad':'')),
+      card('Manage owner',s.manage_owner||'—',s.manage_owner==='MASTER'?'ok':(s.manage_owner==='DESK_DEFERRED_HARD'||(s.mode==='LIVE'&&s.manage_owner==='DESK')?'bad':'')),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
       card('AI allow close',s.ai_mode==='off'?'n/a':(s.last_ai_allow_close===false?'VETO':s.last_ai_allow_close===true?'allow':'—'),s.ai_mode!=='off'&&s.last_ai_allow_close===false?'bad':''),

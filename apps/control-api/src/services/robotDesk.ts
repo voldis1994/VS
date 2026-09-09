@@ -21,7 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, decideHardProtectiveExit, favorableMove } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -51,10 +51,12 @@ import {
   deskCapitalPoolConnectionId,
   ensureMasterCapitalBroker,
   masterOwnsManageSafely,
+  resolveManageOwner,
   syncMasterEntryOwnership,
   masterOwnsPipeline,
   runMasterFromDesk,
 } from '../master/deskBridge.js';
+import { masterRuntime } from '../master/runtime.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -1275,6 +1277,7 @@ async function robotCycle(s: Internal) {
       });
       syncMasterEntryOwnership(!!brokerOpen);
       if (masterOwnsManageSafely(!!brokerOpen)) {
+        masterRuntime.setDeskManageOwnerHint('MASTER');
         const master = await runMasterFromDesk({
           epic: s.epic,
           bid: quote.bid,
@@ -1300,15 +1303,16 @@ async function robotCycle(s: Internal) {
         });
         return;
       }
-      // Fall through to desk Best-Outcome manage — MASTER cannot safely own live exits
-      // Prefer desk Capital OHLC so MASTER Yahoo poll does not dual-manage in parallel
+      // Fall through to desk HARD-protective manage — MASTER cannot safely own live exits.
+      // Soft BestOutcome / PeakProtect / TimeDecay stay OFF (single exit brain honesty).
       masterRuntime.preferDeskMarketFeed();
+      masterRuntime.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
       pushTick(s, {
         phase: brokerOpen ? 'MANAGE' : 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `MASTER owns-pipeline deferred · ${ensured.detail || 'no live broker'} · desk manage`,
+        detail: `MASTER owns-pipeline deferred · ${ensured.detail || 'no live broker'} · desk HARD manage · owner=${resolveManageOwner(!!brokerOpen)}`,
       });
       if (!brokerOpen && !s.open_side) {
         // No open risk — still skip legacy entry while owns-pipeline flag is on
@@ -1321,7 +1325,18 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      const deferredHard =
+        masterOwnsPipeline() && !masterOwnsManageSafely(!!brokerOpen);
+      if (deferredHard) {
+        masterRuntime.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
+      } else if (!masterOwnsPipeline()) {
+        masterRuntime.setDeskManageOwnerHint('DESK');
+      } else {
+        masterRuntime.setDeskManageOwnerHint('MASTER');
+      }
+      const decision = deferredHard
+        ? decideHardProtectiveExit(s, quote.mid)
+        : decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
@@ -1332,11 +1347,15 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
-          s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
-          s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        detail: deferredHard
+          ? `ONE TRADE · DESK_DEFERRED_HARD · ${s.open_side} · hard SL only · no soft BestOutcome · UPL ${
+              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
+            }`
+          : `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
+              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
+            } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
+              s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+            } · no new orders`,
       });
       return;
     }

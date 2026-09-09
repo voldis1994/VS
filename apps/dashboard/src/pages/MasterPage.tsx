@@ -8,6 +8,7 @@ type MasterStatus = {
   epic: string;
   ai_mode: string;
   owns_pipeline: boolean;
+  manage_owner?: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
   broker: string | null;
   broker_detail: string | null;
   primary_live_venue?: string;
@@ -410,6 +411,12 @@ export function MasterPage() {
             : 'structure/MFE (preset off)',
         },
         { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no', ok: !!status.owns_pipeline, bad: status.mode === 'LIVE' && !status.owns_pipeline },
+        {
+          k: 'Manage owner',
+          v: status.manage_owner || '—',
+          ok: status.manage_owner === 'MASTER',
+          bad: status.manage_owner === 'DESK_DEFERRED_HARD' || (status.mode === 'LIVE' && status.manage_owner === 'DESK'),
+        },
         {
           k: 'Entries',
           v: status.entries_armed === false
