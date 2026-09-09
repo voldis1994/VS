@@ -9,6 +9,20 @@ type MasterStatus = {
   ai_mode: string;
   owns_pipeline: boolean;
   manage_owner?: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
+  persist_backend?: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
+  journal_audit?: {
+    decisions: number;
+    trades: number;
+    decision_sidecar: boolean;
+    trade_sidecar: boolean;
+    healed_from_persist: boolean;
+    last_hydrate?: {
+      decisions: number;
+      trades: number;
+      wrote_jsonl: boolean;
+      at: string;
+    } | null;
+  };
   broker: string | null;
   broker_detail: string | null;
   primary_live_venue?: string;
@@ -416,6 +430,39 @@ export function MasterPage() {
           v: status.manage_owner || '—',
           ok: status.manage_owner === 'MASTER',
           bad: status.manage_owner === 'DESK_DEFERRED_HARD' || (status.mode === 'LIVE' && status.manage_owner === 'DESK'),
+        },
+        {
+          k: 'Persist',
+          v: status.persist_backend || '—',
+          ok:
+            status.persist_backend === 'dual' ||
+            status.persist_backend === 'file',
+        },
+        {
+          k: 'Journal audit',
+          v: status.journal_audit
+            ? `D${status.journal_audit.decisions}/T${status.journal_audit.trades}${
+                status.journal_audit.healed_from_persist ? ' · healed' : ''
+              }${
+                !status.journal_audit.decision_sidecar ||
+                !status.journal_audit.trade_sidecar
+                  ? ' · sidecar missing'
+                  : ''
+              }`
+            : '—',
+          ok:
+            !!status.journal_audit &&
+            status.journal_audit.decision_sidecar &&
+            status.journal_audit.trade_sidecar &&
+            (status.journal_audit.decisions > 0 ||
+              status.journal_audit.trades > 0 ||
+              status.journal_audit.healed_from_persist),
+          bad:
+            !!status.journal_audit &&
+            (!status.journal_audit.decision_sidecar ||
+              !status.journal_audit.trade_sidecar) &&
+            status.journal_audit.decisions === 0 &&
+            status.journal_audit.trades === 0,
         },
         {
           k: 'Entries',

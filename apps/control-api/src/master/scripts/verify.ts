@@ -212,6 +212,7 @@ async function main() {
       'src/db/migrations/011_master_journal.sql',
       'src/db/migrations/014_master_decision_trade_events.sql',
       'src/master/auditJournalHydrate.ts',
+      'src/master/persistBackend.ts',
       '../dashboard/src/pages/MasterPage.tsx',
       '../dashboard/src/pages/RobotDeskPage.tsx',
     ];
@@ -242,6 +243,18 @@ async function main() {
       runtimeBody.includes('manage_owner:') &&
       runtimeBody.includes('resolveManageOwnerStatus') &&
       runtimeBody.includes('DESK_DEFERRED_HARD');
+    const journalAuditApi =
+      runtimeBody.includes('persist_backend:') &&
+      runtimeBody.includes('journal_audit:') &&
+      runtimeBody.includes('healed_from_persist');
+    const journalAuditUi =
+      masterPageBody.includes('persist_backend') &&
+      masterPageBody.includes('journal_audit') &&
+      masterPageBody.includes('Journal audit');
+    const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
+    const journalAuditEmbed =
+      masterRouteBody.includes('persist_backend') &&
+      masterRouteBody.includes('Journal audit');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -253,15 +266,18 @@ async function main() {
       manageOwnerMasterUi &&
       manageOwnerDeskUi &&
       manageOwnerApi &&
+      journalAuditApi &&
+      journalAuditUi &&
+      journalAuditEmbed &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, Master+RobotDesk manage_owner honesty',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit honesty',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}`,
     });
   }
 
