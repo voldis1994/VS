@@ -36,10 +36,90 @@ describe('MASTER owns → Client fanout helpers', () => {
         { ok: true, detail: 'filled' },
         { ok: false, detail: 'Already open on epic — skip' },
       ],
+      journaled_count: 1,
     });
     expect(mixed.ok_count).toBe(1);
     expect(mixed.fail_count).toBe(1);
+    expect(mixed.journaled_count).toBe(1);
     expect(mixed.detail).toMatch(/ok=1\/2/);
+    expect(mixed.detail).toMatch(/journaled=1/);
+  });
+
+  it('journalMasterFanoutFills writes MASTER opportunities for ok fills only', async () => {
+    const { MasterJournal } = await import('../journal.js');
+    const { journalMasterFanoutFills } = await import('../masterClientFanout.js');
+    const { analyzeBars } = await import('../analysis.js');
+    const { decide } = await import('../decision.js');
+    const { DEFAULT_MASTER_CONFIG } = await import('../pipeline.js');
+    const bars: import('../types.js').Bar[] = [];
+    for (let i = 0; i < 40; i++) {
+      const o = 4400 + i * 0.8;
+      bars.push({
+        open: o,
+        high: o + 1.2,
+        low: o - 0.1,
+        close: o + 0.9,
+        ts_ms: i * 60_000,
+      });
+    }
+    const a = analyzeBars(bars, 0.4);
+    const last = bars.at(-1)!;
+    const d = decide(
+      a,
+      {
+        bid: last.close - 0.2,
+        ask: last.close + 0.2,
+        mid: last.close,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.2, block_off_hours: false },
+      () => null,
+      bars
+    );
+    const forced =
+      d.kind === 'BUY' || d.kind === 'SELL'
+        ? d
+        : {
+            ...d,
+            kind: 'BUY' as const,
+            side: 'BUY' as const,
+            block_reason: null,
+            buy: { ...d.buy, valid: true, filter_ok: true, score: 0.9 },
+          };
+    const journal = new MasterJournal();
+    const recs = journalMasterFanoutFills({
+      journal,
+      mode: 'LIVE',
+      epic: 'GOLD',
+      side: 'BUY',
+      intent_id: 'intent-xyz',
+      decision: forced,
+      fills: [
+        {
+          client_id: 1,
+          account_id: 10,
+          lot_size: 0.1,
+          ok: true,
+          detail: 'filled',
+          entry_price: 4410,
+        },
+        {
+          client_id: 2,
+          account_id: 20,
+          lot_size: 0.2,
+          ok: false,
+          detail: 'Already open',
+          entry_price: null,
+        },
+      ],
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0]!.executed).toBe(true);
+    expect(recs[0]!.execution?.accepted).toBe(true);
+    expect(recs[0]!.execution?.detail).toMatch(/client_fanout/);
+    expect(recs[0]!.risk.volume).toBe(0.1);
+    expect(journal.opportunities).toHaveLength(1);
   });
 });
 
