@@ -1155,6 +1155,97 @@ class MasterRuntime {
   }
 
   /**
+   * Desk hard-protective close while owns_pipeline (DESK_DEFERRED_HARD):
+   * write MASTER trade journal + last_exit so dashboard/journal stage stay honest.
+   * If a local ManagedPosition matches dealId/epic, book the outcome (pnl unproven).
+   */
+  recordDeskOwnedClose(input: {
+    position_id: string | null;
+    epic: string;
+    side: string | null;
+    volume: number | null;
+    exit: number | null;
+    reason: string;
+    ok: boolean;
+    detail?: string | null;
+  }): { journaled: boolean; booked_local: boolean } {
+    if (!this.ownsPipelineEffective()) {
+      return { journaled: false, booked_local: false };
+    }
+    const detail = `DESK_DEFERRED_HARD · ${input.reason}${
+      input.detail ? ` · ${input.detail}` : ''
+    }`;
+    logTradeEvent({
+      event: 'CLOSE',
+      broker: 'CAPITAL',
+      epic: input.epic,
+      side: input.side,
+      volume: input.volume,
+      price: input.exit,
+      position_id: input.position_id,
+      ok: input.ok,
+      detail,
+    });
+    if (!input.ok) {
+      this.last_close_failed = {
+        position_id: input.position_id || 'desk',
+        exit_reason: input.reason,
+        detail: input.detail || 'desk_close_fail',
+        ts: new Date().toISOString(),
+      };
+      this.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
+      return { journaled: true, booked_local: false };
+    }
+    this.last_exit_reason = `DESK_HARD · ${input.reason}`;
+    this.last_close_failed = null;
+    this.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
+
+    const epicKey = String(input.epic || '')
+      .trim()
+      .toUpperCase();
+    const pos =
+      (input.position_id && this.positions.get(input.position_id)) ||
+      this.positions
+        .list()
+        .find((p) => String(p.epic || '').trim().toUpperCase() === epicKey) ||
+      null;
+    if (!pos) return { journaled: true, booked_local: false };
+
+    const exitPx =
+      input.exit != null && Number.isFinite(input.exit) ? Number(input.exit) : pos.entry;
+    const holdMs = pos.entry_at
+      ? Math.max(0, Date.now() - Date.parse(pos.entry_at))
+      : 0;
+    const outcome: TradeOutcome = {
+      position_id: pos.position_id,
+      side: pos.side,
+      entry: pos.entry,
+      exit: exitPx,
+      volume: pos.size,
+      pnl: 0,
+      fees: 0,
+      slippage: 0,
+      mae: pos.mae,
+      mfe: pos.mfe,
+      r_multiple: 0,
+      hold_ms: holdMs,
+      exit_reason: `DESK_HARD · ${input.reason}`,
+      pnl_proven: false,
+    };
+    this.pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+      epic: pos.epic,
+    });
+    this.positions.drop(pos.position_id);
+    const sk = pos.decision?.side
+      ? setupKey(pos.decision.analysis, pos.decision.side)
+      : null;
+    this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, sk));
+    this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+    this.account.open_positions = this.positions.count();
+    return { journaled: true, booked_local: true };
+  }
+
+  /**
    * Capital LIVE single-owner: default-on when unset; refuse when operator
    * explicitly turned owns_pipeline OFF (dual-brain with Robot Desk).
    */
