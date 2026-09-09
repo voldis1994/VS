@@ -4439,16 +4439,25 @@ describe('cycle alerts block entries on stale tick', () => {
     broker.setQuote(quote);
     const r = await masterRuntime.tick(bars, quote);
     expect(r.executed).toBe(false);
-    expect(String(r.execution_detail || '')).toMatch(
-      new RegExp(`alert:${ALERT_DATA_STALE}`)
+    // Hard-fail validateMarket(stale_quote) blocks before BUY/SELL — detail is
+    // market_validation, not alert:DATA_STALE on execution_detail.
+    expect(String(r.decision.block_reason || '')).toMatch(
+      /market_validation:.*stale_quote/
     );
+    expect(r.decision.kind).toBe('BLOCK');
     const st = masterRuntime.status();
     expect(st.monitoring?.entry_block_reason).toMatch(
       new RegExp(`alert:${ALERT_DATA_STALE}`)
     );
-    expect(String(st.last_block_reason || '')).toMatch(
-      new RegExp(`alert:${ALERT_DATA_STALE}`)
+    expect(st.monitoring?.active_alerts?.some((a) => a.code === ALERT_DATA_STALE)).toBe(
+      true
     );
+    expect(String(st.last_block_reason || '')).toMatch(
+      /market_validation:.*stale_quote/
+    );
+    expect(st.pipeline_stages.market_validation.ok).toBe(false);
+    expect(st.pipeline_stages.market_validation.detail).toMatch(/stale_quote/);
+    expect(st.pipeline_stages.normalization.ok).toBe(false);
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
@@ -5434,7 +5443,17 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
 describe('pipeline_stages honesty — normalization never forged green', () => {
   it('flat_tape / failed validation keeps Stage·normalize red despite bars_out', () => {
     const prev = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
     try {
+      // Isolate flat_tape from liveQuoteStaleForStages (prior tests may leave aged quote)
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
       masterRuntime.last_market = {
         ok: false,
         quality: 0.3,
@@ -5462,6 +5481,7 @@ describe('pipeline_stages honesty — normalization never forged green', () => {
       expect(okStages.normalization.detail).toBe('40/40 bars');
     } finally {
       masterRuntime.last_market = prev;
+      masterRuntime.last_quote = prevQuote;
     }
   });
 });
@@ -5513,6 +5533,54 @@ describe('pipeline_stages honesty — filters fail-closed', () => {
       expect(okStages.filters.detail).toMatch(/SELL spread|SELL fail/);
     } finally {
       masterRuntime.last_decision = prev;
+    }
+  });
+});
+
+describe('pipeline_stages honesty — stale quote fails Stage·validate', () => {
+  it('sticky last_market green cannot survive aged last_quote', () => {
+    const prevMarket = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
+    const prevCfg = masterRuntime.cfg;
+    try {
+      masterRuntime.cfg = { ...masterRuntime.cfg, stale_quote_ms: 5_000 };
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now() - 60_000,
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(masterRuntime.status().quote?.stale).toBe(true);
+      expect(stages.market_validation.ok).toBe(false);
+      expect(stages.market_validation.detail).toMatch(/stale_quote/);
+      expect(stages.normalization.ok).toBe(false);
+      expect(stages.normalization.detail).toMatch(/stale_quote/);
+
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      const fresh = masterRuntime.status().pipeline_stages;
+      expect(fresh.market_validation.ok).toBe(true);
+      expect(fresh.normalization.ok).toBe(true);
+    } finally {
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_quote = prevQuote;
+      masterRuntime.cfg = prevCfg;
     }
   });
 });

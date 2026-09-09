@@ -4167,6 +4167,11 @@ class MasterRuntime {
         const m = this.last_market;
         const d = this.last_decision;
         const r = this.last_risk;
+        // Sticky last_market must not forge green while live quote is DATA_STALE
+        const liveQuoteStaleForStages =
+          quote != null &&
+          quoteAgeMs != null &&
+          quoteAgeMs > this.cfg.stale_quote_ms;
         // Fail-closed: missing filter_ok (journal hydrate scores-only) must not forge green
         const buyOk = d?.buy?.filter_ok === true;
         const sellOk = d?.sell?.filter_ok === true;
@@ -4193,23 +4198,27 @@ class MasterRuntime {
           oppCount > 0;
         return {
           market_validation: {
-            ok: m ? m.ok : false,
-            detail: m
-              ? `Q=${m.quality.toFixed(2)}${m.reasons.length ? ` · ${m.reasons.slice(0, 2).join('|')}` : ''}`
-              : 'no cycle',
+            ok: !!(m && m.ok && !liveQuoteStaleForStages),
+            detail: liveQuoteStaleForStages
+              ? `stale_quote · age=${Math.round((quoteAgeMs || 0) / 1000)}s`
+              : m
+                ? `Q=${m.quality.toFixed(2)}${m.reasons.length ? ` · ${m.reasons.slice(0, 2).join('|')}` : ''}`
+                : 'no cycle',
           },
           normalization: {
-            // Never forge green after failed validation (flat_tape etc. can still emit bars)
-            ok: !!(m && m.ok && m.bars_out >= 5),
-            detail: m
-              ? `${m.bars_out}/${m.bars_in} bars${
-                  !m.ok && m.reasons.length
-                    ? ` · ${m.reasons.slice(0, 2).join('|')}`
-                    : !m.ok
-                      ? ' · invalid'
-                      : ''
-                }`
-              : 'no cycle',
+            // Never forge green after failed validation (flat_tape / stale quote)
+            ok: !!(m && m.ok && m.bars_out >= 5 && !liveQuoteStaleForStages),
+            detail: liveQuoteStaleForStages
+              ? `${m ? `${m.bars_out}/${m.bars_in} bars · ` : ''}stale_quote`
+              : m
+                ? `${m.bars_out}/${m.bars_in} bars${
+                    !m.ok && m.reasons.length
+                      ? ` · ${m.reasons.slice(0, 2).join('|')}`
+                      : !m.ok
+                        ? ' · invalid'
+                        : ''
+                  }`
+                : 'no cycle',
           },
           analysis_regime: {
             ok: !!(d?.analysis?.regime && d.analysis.regime !== 'UNKNOWN'),

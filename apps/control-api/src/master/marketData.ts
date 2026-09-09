@@ -148,11 +148,13 @@ export function validateMarket(
   quality = Math.max(0, Math.min(1, quality));
 
   // Flat public tape must not trade — soft −0.1 still left entries open on dead mids
+  // Stale quote must hard-fail so Stage·validate matches DATA_STALE / Quote card
   const hardFail =
     reasons.includes('insufficient_bars') ||
     reasons.includes('invalid_quote') ||
     reasons.includes('spread_insane') ||
-    reasons.includes('flat_tape');
+    reasons.includes('flat_tape') ||
+    reasons.includes('stale_quote');
 
   return {
     ok: !hardFail && quality >= 0.35,
