@@ -769,6 +769,34 @@ async function main() {
     journalHealOk &&
     pgPrimaryHealOk;
 
+  // Sticky desk arms: tick WITHOUT opts must use disk hour_bars + closed_10s
+  const stickyBars =
+    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
+  await masterRuntime.tick(stickyBars, {
+    bid: 4415,
+    ask: 4415.4,
+    mid: 4415.2,
+    spread: 0.4,
+    epic: 'GOLD',
+    ts_ms: Date.now(),
+  });
+  const stSticky = masterRuntime.status();
+  const stickyDeskOk =
+    stSticky.hour_bias === 'UP' &&
+    stSticky.closed_10s_present === true &&
+    stSticky.closed_10s_source === 'disk_cache' &&
+    stSticky.hour_bars_cached === true &&
+    stSticky.hour_bars_source === 'disk_cache' &&
+    (stSticky.desk_entry?.source === 'setup' ||
+      stSticky.desk_entry?.source === 'move');
+  const stickyDeskSnap = {
+    ok: stickyDeskOk,
+    hour_bias: stSticky.hour_bias ?? null,
+    desk_entry_source: stSticky.desk_entry?.source ?? null,
+    closed_10s_source: stSticky.closed_10s_source ?? null,
+    hour_bars_source: stSticky.hour_bars_source ?? null,
+  };
+
   // Phase A: desired_running=false → manage leftover opens only
   masterRuntime.desired_running = false;
   const resumeManage = await masterRuntime.resumeDesiredSession();
@@ -856,9 +884,10 @@ async function main() {
     opens: masterRuntime.positions.count(),
   };
 
-  const allOk = hydrateOk && manageOnlyOk && recoverOk && feedOk;
+  const allOk = hydrateOk && stickyDeskOk && manageOnlyOk && recoverOk && feedOk;
   const report = {
     status: allOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
+    sticky_desk: stickyDeskSnap,
     hydrate: { ok: hydrateOk, ...hydrateSnap },
     manage_only: {
       ok: manageOnlyOk,
@@ -964,8 +993,8 @@ async function main() {
     },
     desired_feed: desiredFeedSnap,
     detail: allOk
-      ? 'boot hydrate + paper seed + recover + desired_running feed resume'
-      : `hydrate_ok=${hydrateOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk} feed_ok=${feedOk}`,
+      ? 'boot hydrate + sticky desk tick + paper seed + recover + desired_running feed resume'
+      : `hydrate_ok=${hydrateOk} sticky_desk_ok=${stickyDeskOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk} feed_ok=${feedOk}`,
   };
 
   writeFileSync(
