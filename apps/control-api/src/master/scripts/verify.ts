@@ -869,10 +869,22 @@ async function main() {
     const setupArmedUi =
       masterPageBody.includes("'SETUP'") &&
       masterPageBody.includes('setup_gate_armed') &&
-      masterPageBody.includes('market_setup');
+      masterPageBody.includes('market_setup') &&
+      masterPageBody.includes(
+        "cyclePending ? 'hydrated · ' : ''}${status.setup_gate_armed ? 'gate · ' : ''}${status.market_setup.status"
+      ) &&
+      masterPageBody.includes("'Entries'") &&
+      masterPageBody.includes(
+        "cyclePending ? 'hydrated · ' : ''}armed"
+      );
     const setupArmedEmbed =
       masterRouteBody.includes("card('SETUP'") &&
-      masterRouteBody.includes('setup_gate_armed');
+      masterRouteBody.includes('setup_gate_armed') &&
+      masterRouteBody.includes(
+        "cyclePending?'hydrated · ':'')+(s.setup_gate_armed?'gate · ':'')+s.market_setup.status"
+      ) &&
+      masterRouteBody.includes("card('Entries'") &&
+      masterRouteBody.includes("cyclePending?'hydrated · ':'')+'armed'");
     const liveExpectancyDefaultApi =
       runtimeBody.includes("require_positive_expectancy: mode === 'LIVE'") &&
       runtimeBody.includes('require_positive_expectancy') &&
