@@ -39,6 +39,7 @@ type MasterStatus = {
       sell_score: number | null;
     }
   >;
+  cycles_by_epic_hydrated?: boolean;
   manage_owner?: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
   persist_backend?: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
   journal_audit?: {
@@ -529,7 +530,7 @@ export function MasterPage() {
             const active = String(status.epic || '')
               .trim()
               .toUpperCase();
-            return Object.keys(cycles)
+            const body = Object.keys(cycles)
               .sort((a, b) => a.localeCompare(b))
               .map((epic) => {
                 const row = cycles[epic]!;
@@ -541,9 +542,14 @@ export function MasterPage() {
                 return `${mark}${epic}:${setupBit} · ${row.decision_kind || '—'}`;
               })
               .join(' · ')
-              .slice(0, 240);
+              .slice(0, 220);
+            return status.cycles_by_epic_hydrated
+              ? `hydrated · ${body}`
+              : body;
           })(),
-          ok: Object.keys(status.cycles_by_epic || {}).length >= 2,
+          ok:
+            !status.cycles_by_epic_hydrated &&
+            Object.keys(status.cycles_by_epic || {}).length >= 2,
         },
         {
           k: 'Manage owner',

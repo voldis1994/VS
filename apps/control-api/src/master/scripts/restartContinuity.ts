@@ -30,6 +30,8 @@ import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js
 import { PositionManager } from '../positionManager.js';
 import { masterRuntime } from '../runtime.js';
 import { saveMarketCache } from '../marketCache.js';
+import { saveEpicCycleStash } from '../epicCycleStash.js';
+import { emptySetup } from '../../services/marketSetup.js';
 import { saveRuntimeGates } from '../runtimeGates.js';
 import { setJournalMirror } from '../journalMirror.js';
 import { loadDecisionEvents } from '../decisionJournal.js';
@@ -164,6 +166,68 @@ async function main() {
     },
     structure_seed_source: 'restart_check',
   });
+  saveEpicCycleStash({
+    setups_by_epic: {
+      GOLD: {
+        setup: {
+          ...emptySetup('restart_gold'),
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        structure: null,
+      },
+      SILVER: {
+        setup: {
+          ...emptySetup('restart_silver'),
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        structure: null,
+      },
+    },
+    cycles_by_epic: {
+      GOLD: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        last_market: {
+          ok: true,
+          quality: 0.9,
+          reasons: [],
+          bars_in: bars.length,
+          bars_out: bars.length,
+        },
+        decision_kind: 'BUY',
+        buy_score: 0.7,
+        sell_score: 0.3,
+      },
+      SILVER: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        last_market: null,
+        decision_kind: 'WAIT',
+        buy_score: 0.2,
+        sell_score: 0.5,
+      },
+    },
+  });
 
   // Phase J: wipe decision/trade jsonl — DualPersist mirror must heal on boot
   const decPath = join(stateDir, 'decision_journal.jsonl');
@@ -258,6 +322,69 @@ async function main() {
     },
     structure_seed_source: 'restart_check',
   });
+  // Re-seed epic cycle stash (same non-SQL sidecar class as market_cache)
+  saveEpicCycleStash({
+    setups_by_epic: {
+      GOLD: {
+        setup: {
+          ...emptySetup('restart_gold'),
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        structure: null,
+      },
+      SILVER: {
+        setup: {
+          ...emptySetup('restart_silver'),
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        structure: null,
+      },
+    },
+    cycles_by_epic: {
+      GOLD: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        last_market: {
+          ok: true,
+          quality: 0.9,
+          reasons: [],
+          bars_in: bars.length,
+          bars_out: bars.length,
+        },
+        decision_kind: 'BUY',
+        buy_score: 0.7,
+        sell_score: 0.3,
+      },
+      SILVER: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        last_market: null,
+        decision_kind: 'WAIT',
+        buy_score: 0.2,
+        sell_score: 0.5,
+      },
+    },
+  });
   // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
   writeFileSync(
     join(stateDir, 'monitoring_snapshot.json'),
@@ -317,6 +444,26 @@ async function main() {
       barsFromDiskCache: boolean;
     }
   ).barsFromDiskCache = false;
+  // Clear in-memory multi-epic stash — must reload from epic_cycle_stash.json
+  (
+    masterRuntime as unknown as {
+      setupByEpic: Map<string, unknown>;
+      cycleByEpic: Map<string, unknown>;
+      epicCycleStashHydrated: boolean;
+    }
+  ).setupByEpic = new Map();
+  (
+    masterRuntime as unknown as {
+      setupByEpic: Map<string, unknown>;
+      cycleByEpic: Map<string, unknown>;
+      epicCycleStashHydrated: boolean;
+    }
+  ).cycleByEpic = new Map();
+  (
+    masterRuntime as unknown as {
+      epicCycleStashHydrated: boolean;
+    }
+  ).epicCycleStashHydrated = false;
   masterRuntime.account.daily_pnl = 0;
   // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
   masterRuntime.cfg = {
@@ -355,6 +502,10 @@ async function main() {
     open_positions_status: stHydrate.open_positions,
     recent_decisions: stHydrate.recent_decisions?.length ?? 0,
     recent_trades: stHydrate.recent_trades?.length ?? 0,
+    cycles_by_epic_keys: Object.keys(stHydrate.cycles_by_epic || {}),
+    cycles_by_epic_hydrated: stHydrate.cycles_by_epic_hydrated === true,
+    cycles_gold: !!stHydrate.cycles_by_epic?.GOLD,
+    cycles_silver: !!stHydrate.cycles_by_epic?.SILVER,
     journal_stage_ok: stHydrate.pipeline_stages?.journal?.ok === true,
     journal_stage_detail: stHydrate.pipeline_stages?.journal?.detail ?? null,
     journal_stage_hydrated: String(
@@ -531,6 +682,9 @@ async function main() {
     hydrateSnap.monitoring_hydrated === true &&
     String(hydrateSnap.monitoring_entry_block || '').startsWith('hydrated ·') &&
     hydrateSnap.last_block_reason_hydrated === true &&
+    hydrateSnap.cycles_by_epic_hydrated === true &&
+    hydrateSnap.cycles_gold === true &&
+    hydrateSnap.cycles_silver === true &&
     journalHealOk &&
     pgPrimaryHealOk;
 

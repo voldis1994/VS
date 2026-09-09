@@ -66,6 +66,12 @@ import {
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { loadMarketCache, saveMarketCache } from './marketCache.js';
+import {
+  loadEpicCycleStash,
+  saveEpicCycleStash,
+  type EpicCycleRow,
+  type EpicSetupSnap,
+} from './epicCycleStash.js';
 import { validateMarket } from './marketData.js';
 import { newsBlocksEntries, resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import { refreshNewsCalendar } from './newsCalendar.js';
@@ -214,6 +220,8 @@ export type MasterStatus = {
       sell_score: number | null;
     }
   >;
+  /** True when cycles_by_epic came from disk stash (cleared on live tick). */
+  cycles_by_epic_hydrated: boolean;
   /** True when require_armed_setup is on (LIVE default). */
   setup_gate_armed: boolean;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
@@ -373,25 +381,11 @@ class MasterRuntime {
    * Per-epic sticky SETUP/structure — setEpic stashes/restores so GOLD↔SILVER
    * desk ticks do not wipe ARMED setup.
    */
-  private setupByEpic = new Map<
-    string,
-    {
-      setup: import('../services/marketSetup.js').MarketSetup | null;
-      structure: import('../services/marketSetup.js').StructureBook | null;
-    }
-  >();
+  private setupByEpic = new Map<string, EpicSetupSnap>();
   /** Last cycle evidence per epic (dashboard / multi-robot honesty). */
-  private cycleByEpic = new Map<
-    string,
-    {
-      at: string;
-      market_setup: MasterStatus['market_setup'];
-      last_market: MasterStatus['last_market'];
-      decision_kind: string | null;
-      buy_score: number | null;
-      sell_score: number | null;
-    }
-  >();
+  private cycleByEpic = new Map<string, EpicCycleRow>();
+  /** True after disk hydrate until a live rememberCycleForEpic. */
+  private epicCycleStashHydrated = false;
   last_bars: Bar[] = [];
   last_quote: Quote | null = null;
   /** True while last_quote was restored from market_cache (cleared on live quote). */
@@ -541,6 +535,7 @@ class MasterRuntime {
     }
     this.epic = next;
     this.persistRuntimeGates();
+    this.persistEpicCycleStash();
   }
 
   /** Record last cycle evidence under the active epic key. */
@@ -558,6 +553,42 @@ class MasterRuntime {
     const snap = this.pipeline.snapshotMarketSetup();
     if (snap.setup || snap.structure) {
       this.setupByEpic.set(key, snap);
+    }
+    this.epicCycleStashHydrated = false;
+    this.persistEpicCycleStash();
+  }
+
+  private persistEpicCycleStash(): void {
+    if (!this.setupByEpic.size && !this.cycleByEpic.size) return;
+    saveEpicCycleStash({
+      setups_by_epic: Object.fromEntries(this.setupByEpic.entries()),
+      cycles_by_epic: Object.fromEntries(this.cycleByEpic.entries()),
+    });
+  }
+
+  /** Restore multi-epic SETUP/cycle Maps from disk (restart honesty). */
+  private hydrateEpicCycleStashFromDisk(): void {
+    const cached = loadEpicCycleStash();
+    if (!cached) return;
+    for (const [epic, snap] of Object.entries(cached.setups_by_epic || {})) {
+      if (!epic) continue;
+      this.setupByEpic.set(epic, {
+        setup: snap?.setup ?? null,
+        structure: snap?.structure ?? null,
+      });
+    }
+    for (const [epic, row] of Object.entries(cached.cycles_by_epic || {})) {
+      if (!epic || !row) continue;
+      this.cycleByEpic.set(epic, row);
+    }
+    if (this.setupByEpic.size || this.cycleByEpic.size) {
+      this.epicCycleStashHydrated = true;
+      const activeKey =
+        capitalApiEpic(this.epic) || String(this.epic || '').toUpperCase();
+      const restored = activeKey ? this.setupByEpic.get(activeKey) : null;
+      if (restored && !this.pipeline.getMarketSetup()) {
+        this.pipeline.restoreMarketSetup(restored);
+      }
     }
   }
 
@@ -767,6 +798,7 @@ class MasterRuntime {
         at: new Date().toISOString(),
       };
       this.hydrateMarketCacheFromDisk();
+      this.hydrateEpicCycleStashFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -4961,6 +4993,7 @@ class MasterRuntime {
         return s;
       })(),
       cycles_by_epic: Object.fromEntries(this.cycleByEpic.entries()),
+      cycles_by_epic_hydrated: this.epicCycleStashHydrated,
       setup_gate_armed: !!this.cfg.require_armed_setup,
       entry_gates: (() => {
         const now = Date.now();
