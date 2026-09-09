@@ -697,6 +697,7 @@ async function refresh(){
       card('Float UPL',s.floating_pnl!=null?((s.floating_pnl_cached?'cached · ':'')+Number(s.floating_pnl).toFixed(2)):'—', s.floating_pnl==null?'':(s.floating_pnl_cached?'warn':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':''))),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),
       card('Owns pipeline',s.owns_pipeline?'YES':'no',s.owns_pipeline?'ok':(s.mode==='LIVE'?'bad':'')),
+      card('Market Core intents',s.market_core_intents_allowed?'allowed':'BLOCKED (MASTER owns)',s.market_core_intents_allowed?(s.owns_pipeline?'bad':'ok'):(s.owns_pipeline?'ok':'')),
       card('Client fanout',s.last_client_fanout?(s.last_client_fanout.attempted?(s.last_client_fanout.detail||'—'):'idle'):'—',s.last_client_fanout&&s.last_client_fanout.attempted&&s.last_client_fanout.ok_count>0?'ok':(s.last_client_fanout&&s.last_client_fanout.attempted&&s.last_client_fanout.fail_count>0&&!s.last_client_fanout.ok_count?'bad':'')),
       card('Manage owner',s.manage_owner||'—',s.manage_owner==='MASTER'?'ok':(s.manage_owner==='DESK_DEFERRED_HARD'||(s.mode==='LIVE'&&s.manage_owner==='DESK')?'bad':'')),
       card('Persist',s.persist_backend||'—',s.persist_backend==='dual'||s.persist_backend==='file'?'ok':''),

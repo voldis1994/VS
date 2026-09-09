@@ -97,6 +97,8 @@ export type MasterStatus = {
   epic: string;
   ai_mode: MasterConfig['ai_mode'];
   owns_pipeline: boolean;
+  /** False while owns_pipeline — Market Core EntryReady HTTP is 409 */
+  market_core_intents_allowed: boolean;
   /**
    * Who owns exits: MASTER | DESK_DEFERRED_HARD (owns-pipeline but Capital unsafe —
    * hard SL only) | DESK (legacy dual-brain when owns off).
@@ -4367,6 +4369,10 @@ class MasterRuntime {
       epic: this.epic,
       ai_mode: this.cfg.ai_mode,
       owns_pipeline: this.ownsPipelineEffective(),
+      // Same rule as marketCoreEntryIntentsAllowed — avoid import cycle via deskBridge
+      market_core_intents_allowed:
+        (process.env.MASTER_ALLOW_MARKET_CORE_INTENTS || '').trim() === 'true' ||
+        !this.ownsPipelineEffective(),
       manage_owner: this.resolveManageOwnerStatus(),
       broker: this.broker?.name ?? null,
       broker_detail: this.broker_detail,

@@ -301,6 +301,7 @@ async function main() {
       'src/master/setupDerive.ts',
       'src/master/masterClientFanout.ts',
       'src/master/deskEntryConfirm.ts',
+      'src/services/marketCoreIntentGate.ts',
       '../dashboard/src/pages/MasterPage.tsx',
       '../dashboard/src/pages/RobotDeskPage.tsx',
     ];
@@ -542,6 +543,17 @@ async function main() {
       readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8').includes(
         'last_hour_candles'
       );
+    const pipelineRouteBody = readFileSync(
+      join(root, 'src/routes/pipeline.ts'),
+      'utf8'
+    );
+    const marketCoreFailClosed =
+      existsSync(join(root, 'src/services/marketCoreIntentGate.ts')) &&
+      pipelineRouteBody.includes('marketCoreEntryIntentsAllowed') &&
+      pipelineRouteBody.includes('409') &&
+      runtimeBody.includes('market_core_intents_allowed') &&
+      masterPageBody.includes("'Market Core intents'") &&
+      masterRouteBody.includes("card('Market Core intents'");
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -587,15 +599,16 @@ async function main() {
       masterOwnsFanoutUi &&
       masterOwnsFanoutEmbed &&
       deskEntryApi &&
+      marketCoreFailClosed &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + desk SETUP ARMED decide gate + MASTER owns Client fanout + desk 1h/10s entry confirm',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + desk SETUP ARMED decide gate + MASTER owns Client fanout + desk 1h/10s entry confirm + Market Core EntryReady fail-closed',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; market_core_failclosed=${marketCoreFailClosed}`,
     });
   }
 

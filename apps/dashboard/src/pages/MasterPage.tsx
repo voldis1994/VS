@@ -8,6 +8,7 @@ type MasterStatus = {
   epic: string;
   ai_mode: string;
   owns_pipeline: boolean;
+  market_core_intents_allowed?: boolean;
   last_client_fanout?: {
     attempted: boolean;
     subscribers: number;
@@ -474,6 +475,14 @@ export function MasterPage() {
             : 'structure/MFE (preset off)',
         },
         { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no', ok: !!status.owns_pipeline, bad: status.mode === 'LIVE' && !status.owns_pipeline },
+        {
+          k: 'Market Core intents',
+          v: status.market_core_intents_allowed
+            ? 'allowed'
+            : 'BLOCKED (MASTER owns)',
+          ok: !status.market_core_intents_allowed && !!status.owns_pipeline,
+          bad: !!status.market_core_intents_allowed && !!status.owns_pipeline,
+        },
         {
           k: 'Client fanout',
           v: status.last_client_fanout
