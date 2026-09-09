@@ -16,6 +16,29 @@ type MasterStatus = {
     fail_count: number;
     detail: string;
   } | null;
+  cycles_by_epic?: Record<
+    string,
+    {
+      at: string;
+      market_setup: {
+        kind: string;
+        side: string | null;
+        status: string;
+        reason: string;
+        confirm: number;
+      } | null;
+      last_market: {
+        ok: boolean;
+        quality: number;
+        reasons: string[];
+        bars_in: number;
+        bars_out: number;
+      } | null;
+      decision_kind: string | null;
+      buy_score: number | null;
+      sell_score: number | null;
+    }
+  >;
   manage_owner?: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
   persist_backend?: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
   journal_audit?: {
@@ -497,6 +520,30 @@ export function MasterPage() {
             !!status.last_client_fanout?.attempted &&
             (status.last_client_fanout.fail_count ?? 0) > 0 &&
             !(status.last_client_fanout.ok_count > 0),
+        },
+        {
+          k: 'Cycles by epic',
+          v: (() => {
+            const cycles = status.cycles_by_epic;
+            if (!cycles || !Object.keys(cycles).length) return '—';
+            const active = String(status.epic || '')
+              .trim()
+              .toUpperCase();
+            return Object.keys(cycles)
+              .sort((a, b) => a.localeCompare(b))
+              .map((epic) => {
+                const row = cycles[epic]!;
+                const setup = row.market_setup;
+                const setupBit = setup
+                  ? `${setup.status || '?'}${setup.side ? ` ${setup.side}` : ''}`
+                  : 'no-setup';
+                const mark = active && epic.toUpperCase() === active ? '*' : '';
+                return `${mark}${epic}:${setupBit} · ${row.decision_kind || '—'}`;
+              })
+              .join(' · ')
+              .slice(0, 240);
+          })(),
+          ok: Object.keys(status.cycles_by_epic || {}).length >= 2,
         },
         {
           k: 'Manage owner',
