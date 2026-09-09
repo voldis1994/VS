@@ -1,11 +1,16 @@
 /**
  * Persist post-loss / reject cooldowns across restart.
  * File-backed (MASTER_STATE_DIR) — works for standalone and as dual mirror for API.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
 import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
 import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
+import {
+  persistRuntimeGatesState,
+  loadRuntimeGatesFromPersist,
+} from './persist.js';
 
 export type RuntimeGates = {
   last_loss_ms: number;
@@ -151,6 +156,11 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
     if (ok) {
       // Keep operator_meta in sync even when no position write flushes FilePersist
       embedOperatorMetaPatch({ gates: payload });
+      // DualPersist / MemoryPersist / PG primary — survive full file wipe
+      void persistRuntimeGatesState({
+        ...payload,
+        saved_at_ms: Date.now(),
+      }).catch(() => {});
     }
     return ok;
   } catch {
@@ -183,7 +193,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
           ? String(raw.daily_pnl_day).trim().slice(0, 10)
           : null,
       consecutive_losses:
-        raw.consecutive_losses == null || raw.consecutive_losses === ''
+        raw.consecutive_losses == null || (raw.consecutive_losses as unknown) === ''
           ? null
           : Number.isFinite(streak) && streak >= 0
             ? Math.floor(streak)
@@ -229,5 +239,32 @@ export function loadRuntimeGates(): RuntimeGates | null {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * When runtime_gates.json was wiped but DualPersist/PG primary still holds the
+ * singleton payload, rewrite the sidecar (+ operator_meta) before disk hydrate.
+ */
+export async function hydrateRuntimeGatesFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir =
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state');
+  const path = join(dir, 'runtime_gates.json');
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadRuntimeGatesFromPersist();
+    if (!loaded || typeof loaded !== 'object') return { restored: false };
+    const payload = normalizeRuntimeGates(loaded as RuntimeGates);
+    mkdirSync(dir, { recursive: true });
+    atomicWriteJson(path, payload);
+    embedOperatorMetaPatch({ gates: payload }, dir);
+    return { restored: true };
+  } catch {
+    return { restored: false };
   }
 }

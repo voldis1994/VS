@@ -355,9 +355,8 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState } = await import(
-    '../persist.js'
-  );
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState } =
+    await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
     saved_at_ms: Date.now(),
@@ -442,6 +441,29 @@ async function main() {
     !!primary.epicCycleStashPayload.setups_by_epic?.SILVER &&
     !!primary.epicCycleStashPayload.cycles_by_epic?.GOLD &&
     !!primary.epicCycleStashPayload.cycles_by_epic?.SILVER;
+  // Dual-write runtime_gates into MemoryPersist primary BEFORE file wipe
+  const gatesForPrimary = {
+    last_loss_ms: 0,
+    reject_until_ms: 0,
+    desired_running: true,
+    mode: 'PAPER' as const,
+    epic: 'GOLD',
+    kill_switch: false,
+    day_start_equity: 10_000,
+    peak_equity: 10_250,
+    daily_pnl_day: new Date().toISOString().slice(0, 10),
+  };
+  saveRuntimeGates(gatesForPrimary);
+  await persistRuntimeGatesState({
+    ...gatesForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadRuntimeGates =
+    primary.runtimeGatesPayload != null &&
+    primary.runtimeGatesPayload.desired_running === true &&
+    primary.runtimeGatesPayload.mode === 'PAPER' &&
+    primary.runtimeGatesPayload.epic === 'GOLD' &&
+    Number(primary.runtimeGatesPayload.day_start_equity) === 10_000;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -460,8 +482,12 @@ async function main() {
   const epicStashGoneBeforeHydrate = !existsSync(
     join(stateDir, 'epic_cycle_stash.json')
   );
+  const runtimeGatesGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'runtime_gates.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
+  // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
   // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
   writeFileSync(
     join(stateDir, 'monitoring_snapshot.json'),
@@ -564,11 +590,14 @@ async function main() {
     primaryHadOpens &&
     primaryHadMarketCache &&
     primaryHadEpicStash &&
+    primaryHadRuntimeGates &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
+    runtimeGatesGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
+    existsSync(join(stateDir, 'runtime_gates.json')) &&
     stHydrate.persist_backend === 'dual' &&
     stHydrate.journal_audit?.healed_from_persist === true &&
     stHydrate.journal_audit?.decision_sidecar === true &&
@@ -1082,6 +1111,10 @@ async function main() {
         primaryHadEpicStash &&
         epicStashGoneBeforeHydrate &&
         existsSync(join(stateDir, 'epic_cycle_stash.json')),
+      runtime_gates_pg_primary_heal_ok:
+        primaryHadRuntimeGates &&
+        runtimeGatesGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'runtime_gates.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

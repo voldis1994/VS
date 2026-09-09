@@ -888,6 +888,11 @@ class MasterRuntime {
       );
       await hydrateEpicCycleStashFromPersist();
       this.hydrateEpicCycleStashFromDisk();
+      const { hydrateRuntimeGatesFromPersist } = await import(
+        './runtimeGates.js'
+      );
+      await hydrateRuntimeGatesFromPersist();
+      this.hydrateRuntimeGatesFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3531,7 +3536,11 @@ class MasterRuntime {
     ensureOperatorMetaFromStateDir();
     this.hydrateManageConfig();
     this.hydrateOwnsPipelinePref();
+    const { hydrateMarketCacheFromPersist } = await import('./marketCache.js');
+    await hydrateMarketCacheFromPersist();
     this.hydrateMarketCacheFromDisk();
+    const { hydrateRuntimeGatesFromPersist } = await import('./runtimeGates.js');
+    await hydrateRuntimeGatesFromPersist();
     const loaded = await loadOpenPositions();
     const valid = loaded.filter((p) => p.decision && p.position_id);
     this.positions.fromJSON(valid);
