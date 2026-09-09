@@ -355,7 +355,9 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState } = await import('../persist.js');
+  const { persistMarketCacheState, persistEpicCycleStashState } = await import(
+    '../persist.js'
+  );
   await persistMarketCacheState({
     ...cacheForPrimary,
     saved_at_ms: Date.now(),
@@ -365,6 +367,81 @@ async function main() {
     Array.isArray(primary.marketCachePayload.hour_bars) &&
     primary.marketCachePayload.hour_bars.length >= 6 &&
     !!primary.marketCachePayload.closed_10s;
+  // Dual-write epic_cycle_stash into MemoryPersist primary BEFORE file wipe
+  const stashForPrimary = {
+    setups_by_epic: {
+      GOLD: {
+        setup: {
+          ...emptySetup('restart_gold'),
+          kind: 'CONTINUATION',
+          side: 'BUY' as const,
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        structure: null,
+      },
+      SILVER: {
+        setup: {
+          ...emptySetup('restart_silver'),
+          kind: 'CONTINUATION',
+          side: 'SELL' as const,
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        structure: null,
+      },
+    },
+    cycles_by_epic: {
+      GOLD: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'BUY' as const,
+          status: 'ARMED',
+          reason: 'restart_gold',
+          confirm: 2,
+        },
+        last_market: {
+          ok: true,
+          quality: 0.9,
+          reasons: [] as string[],
+          bars_in: bars.length,
+          bars_out: bars.length,
+        },
+        decision_kind: 'BUY',
+        buy_score: 0.7,
+        sell_score: 0.3,
+      },
+      SILVER: {
+        at: new Date().toISOString(),
+        market_setup: {
+          kind: 'CONTINUATION',
+          side: 'SELL' as const,
+          status: 'FORMING',
+          reason: 'restart_silver',
+          confirm: 0,
+        },
+        last_market: null,
+        decision_kind: 'WAIT',
+        buy_score: 0.2,
+        sell_score: 0.5,
+      },
+    },
+  };
+  saveEpicCycleStash(stashForPrimary);
+  await persistEpicCycleStashState({
+    at: new Date().toISOString(),
+    ...stashForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadEpicStash =
+    primary.epicCycleStashPayload != null &&
+    !!primary.epicCycleStashPayload.setups_by_epic?.GOLD &&
+    !!primary.epicCycleStashPayload.setups_by_epic?.SILVER &&
+    !!primary.epicCycleStashPayload.cycles_by_epic?.GOLD &&
+    !!primary.epicCycleStashPayload.cycles_by_epic?.SILVER;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -380,70 +457,11 @@ async function main() {
   const marketCacheGoneBeforeHydrate = !existsSync(
     join(stateDir, 'market_cache.json')
   );
+  const epicStashGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'epic_cycle_stash.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
-  // Re-seed epic cycle stash (still non-SQL sidecar class for this PR)
-  saveEpicCycleStash({
-    setups_by_epic: {
-      GOLD: {
-        setup: {
-          ...emptySetup('restart_gold'),
-          kind: 'CONTINUATION',
-          side: 'BUY',
-          status: 'ARMED',
-          reason: 'restart_gold',
-          confirm: 2,
-        },
-        structure: null,
-      },
-      SILVER: {
-        setup: {
-          ...emptySetup('restart_silver'),
-          kind: 'CONTINUATION',
-          side: 'SELL',
-          status: 'FORMING',
-          reason: 'restart_silver',
-          confirm: 0,
-        },
-        structure: null,
-      },
-    },
-    cycles_by_epic: {
-      GOLD: {
-        at: new Date().toISOString(),
-        market_setup: {
-          kind: 'CONTINUATION',
-          side: 'BUY',
-          status: 'ARMED',
-          reason: 'restart_gold',
-          confirm: 2,
-        },
-        last_market: {
-          ok: true,
-          quality: 0.9,
-          reasons: [],
-          bars_in: bars.length,
-          bars_out: bars.length,
-        },
-        decision_kind: 'BUY',
-        buy_score: 0.7,
-        sell_score: 0.3,
-      },
-      SILVER: {
-        at: new Date().toISOString(),
-        market_setup: {
-          kind: 'CONTINUATION',
-          side: 'SELL',
-          status: 'FORMING',
-          reason: 'restart_silver',
-          confirm: 0,
-        },
-        last_market: null,
-        decision_kind: 'WAIT',
-        buy_score: 0.2,
-        sell_score: 0.5,
-      },
-    },
-  });
+  // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
   writeFileSync(
     join(stateDir, 'monitoring_snapshot.json'),
@@ -545,9 +563,12 @@ async function main() {
     primaryHadTrades &&
     primaryHadOpens &&
     primaryHadMarketCache &&
+    primaryHadEpicStash &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
+    epicStashGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
+    existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     stHydrate.persist_backend === 'dual' &&
     stHydrate.journal_audit?.healed_from_persist === true &&
     stHydrate.journal_audit?.decision_sidecar === true &&
@@ -1057,6 +1078,10 @@ async function main() {
         primaryHadMarketCache &&
         marketCacheGoneBeforeHydrate &&
         existsSync(join(stateDir, 'market_cache.json')),
+      epic_cycle_stash_pg_primary_heal_ok:
+        primaryHadEpicStash &&
+        epicStashGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'epic_cycle_stash.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

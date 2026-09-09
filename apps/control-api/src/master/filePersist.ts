@@ -449,6 +449,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.marketCachePayload
       );
     }
+    // Dual-write epic_cycle_stash sidecar when SQL path updated MemoryPersist
+    if (this.mem.epicCycleStashPayload) {
+      atomicWriteJson(
+        join(this.root, 'epic_cycle_stash.json'),
+        this.mem.epicCycleStashPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

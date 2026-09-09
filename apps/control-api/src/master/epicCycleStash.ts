@@ -2,12 +2,17 @@
  * Persist per-epic sticky SETUP + cycle evidence so GOLD↔SILVER desk ticks
  * survive restart (not memory-only Maps).
  * Embeds into master_state.json operator_meta for DualPersist / sidecar heal.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
 import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 import type { MarketSetup, StructureBook } from '../services/marketSetup.js';
+import {
+  persistEpicCycleStashState,
+  loadEpicCycleStashFromPersist,
+} from './persist.js';
 
 export type EpicSetupSnap = {
   setup: MarketSetup | null;
@@ -81,10 +86,33 @@ export function saveEpicCycleStash(
     };
     atomicWriteJson(stashPath(dir), state);
     embedEpicCycleStashInOperatorMeta(state, dir);
+    // DualPersist / MemoryPersist / PG primary — survive full file wipe
+    void persistEpicCycleStashState(state).catch(() => {});
     return true;
   } catch {
     return false;
   }
+}
+
+function normalizeEpicCycleStashState(
+  raw: EpicCycleStashState | null | undefined
+): EpicCycleStashState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const setups =
+    raw.setups_by_epic && typeof raw.setups_by_epic === 'object'
+      ? raw.setups_by_epic
+      : {};
+  const cycles =
+    raw.cycles_by_epic && typeof raw.cycles_by_epic === 'object'
+      ? raw.cycles_by_epic
+      : {};
+  if (!Object.keys(setups).length && !Object.keys(cycles).length) return null;
+  return {
+    at: String(raw.at || ''),
+    setups_by_epic: setups,
+    cycles_by_epic: cycles,
+    saved_at_ms: Number(raw.saved_at_ms) || 0,
+  };
 }
 
 export function loadEpicCycleStash(root?: string): EpicCycleStashState | null {
@@ -92,23 +120,31 @@ export function loadEpicCycleStash(root?: string): EpicCycleStashState | null {
     const path = stashPath(epicCycleStashDir(root));
     if (!existsSync(path)) return null;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as EpicCycleStashState;
-    if (!raw || typeof raw !== 'object') return null;
-    const setups =
-      raw.setups_by_epic && typeof raw.setups_by_epic === 'object'
-        ? raw.setups_by_epic
-        : {};
-    const cycles =
-      raw.cycles_by_epic && typeof raw.cycles_by_epic === 'object'
-        ? raw.cycles_by_epic
-        : {};
-    if (!Object.keys(setups).length && !Object.keys(cycles).length) return null;
-    return {
-      at: String(raw.at || ''),
-      setups_by_epic: setups,
-      cycles_by_epic: cycles,
-      saved_at_ms: Number(raw.saved_at_ms) || 0,
-    };
+    return normalizeEpicCycleStashState(raw);
   } catch {
     return null;
+  }
+}
+
+/**
+ * When epic_cycle_stash.json was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar (+ operator_meta) before disk hydrate.
+ */
+export async function hydrateEpicCycleStashFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir = epicCycleStashDir(root);
+  const path = stashPath(dir);
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadEpicCycleStashFromPersist();
+    const state = normalizeEpicCycleStashState(loaded);
+    if (!state) return { restored: false };
+    mkdirSync(dir, { recursive: true });
+    atomicWriteJson(path, state);
+    embedEpicCycleStashInOperatorMeta(state, dir);
+    return { restored: true };
+  } catch {
+    return { restored: false };
   }
 }
