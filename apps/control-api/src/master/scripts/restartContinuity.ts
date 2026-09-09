@@ -996,11 +996,13 @@ async function main() {
 
   // Sticky desk arms AFTER continuity book is stable: stop feed so a concurrent
   // live tick cannot race away fixture hour_bars/closed_10s mid-proof.
+  // Always use fixture bars — live last_bars can flip SETUP to SELL and refuse
+  // a bullish closed_10s confirm (desk_entry stays null while hour_bias=UP).
   masterRuntime.stop();
   const savedOpensForSticky = masterRuntime.positions.toJSON();
   masterRuntime.positions = new PositionManager();
-  const stickyBars =
-    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
+  const stickyBars = bars;
+  masterRuntime.pipeline.resetMarketSetup();
   (
     masterRuntime as unknown as {
       last_hour_bars: typeof hourBars;
@@ -1025,18 +1027,7 @@ async function main() {
   (
     masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
   ).hourBarsFromDiskCache = true;
-  (
-    masterRuntime as unknown as {
-      last_closed_10s: {
-        open_time_ms: number;
-        open: number;
-        high: number;
-        low: number;
-        close: number;
-        ticks: number;
-      } | null;
-    }
-  ).last_closed_10s = {
+  const stickyClosed10s = {
     open_time_ms: Date.now() - 10_000,
     open: stickyBars.at(-1)!.close - 0.2,
     high: stickyBars.at(-1)!.close + 1.5,
@@ -1044,6 +1035,11 @@ async function main() {
     close: stickyBars.at(-1)!.close + 1.2,
     ticks: 4,
   };
+  (
+    masterRuntime as unknown as {
+      last_closed_10s: typeof stickyClosed10s | null;
+    }
+  ).last_closed_10s = stickyClosed10s;
   (
     masterRuntime as unknown as { closed10sFromDiskCache: boolean }
   ).closed10sFromDiskCache = true;
