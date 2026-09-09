@@ -5054,6 +5054,7 @@ describe('SELL manageTick partial_close + Check trail', () => {
     expect(typeof s.entry_gates.weekend).toBe('boolean');
     expect(typeof s.entry_gates.hours_ok).toBe('boolean');
     expect(typeof s.entry_gates.session).toBe('string');
+    expect(typeof s.entry_gates.session_hydrated).toBe('boolean');
     expect(Array.isArray(s.expectancy_would_block)).toBe(true);
     expect(typeof s.bars_available).toBe('number');
     expect(Array.isArray(masterRuntime.barsSnapshot(10))).toBe(true);
@@ -5720,6 +5721,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(st.sell_filter?.reason).toBe('hydrated');
       expect(st.regime).toMatch(/^hydrated · TREND_UP$/);
       expect(st.market_state).toMatch(/^hydrated · TREND_UP:/);
+      expect(st.entry_gates.session_hydrated).toBe(true);
+      expect(st.entry_gates.session).toMatch(/^hydrated ·/);
 
       masterRuntime.last_market = {
         ok: true,
@@ -5740,6 +5743,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(liveSt.sell_filter?.reason).toBe('spread');
       expect(liveSt.regime).toBe('TREND_UP');
       expect(liveSt.market_state).toBe('TREND_UP:UP:BULLISH');
+      expect(liveSt.entry_gates.session_hydrated).toBe(false);
+      expect(liveSt.entry_gates.session).not.toMatch(/^hydrated ·/);
 
       masterRuntime.last_market = {
         ok: false,
