@@ -1370,6 +1370,155 @@ describe('MASTER daily pnl day boundary', () => {
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
+
+  it('full tick defers UTC day-roll when replaying disk/stale open-book quote', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    const broker = masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      ai_mode: 'off',
+      stale_quote_ms: 15_000,
+      soft_trail_money_arm: 0,
+      be_start: 0,
+      trail_start: 0,
+      scalp_pct_chase: false,
+      time_stop_max_bars: 0,
+      max_hold_ms: 86_400_000,
+      post_exit_cooldown_ms: 0,
+    };
+    masterRuntime.setEntriesArmed(false, 'test_day_roll_only');
+    const entry = 4400;
+    masterRuntime.positions.register({
+      position_id: 'full-tick-disk-day-roll',
+      opportunity_id: 'opp-full-tick-disk',
+      intent_id: 'intent-full-tick-disk',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 50,
+      take_profit: entry + 50,
+      entry_at: new Date().toISOString(),
+      decision: {
+        decision_id: 'd-full-tick-disk',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null,
+        sell: null,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    broker.seedOpens([
+      {
+        position_id: 'full-tick-disk-day-roll',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: entry,
+        stop_level: entry - 50,
+        profit_level: entry + 50,
+      },
+    ]);
+    const cash = 9750;
+    broker.hydrateAccount({ equity: cash, balance: cash });
+    masterRuntime.account.equity = cash;
+    masterRuntime.account.balance = cash;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+
+    const staleMark: Quote = {
+      bid: entry - 0.5,
+      ask: entry - 0.3,
+      mid: entry - 0.4,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now() - 60_000,
+    };
+    masterRuntime.last_quote = staleMark;
+    (
+      masterRuntime as unknown as { quoteFromDiskCache: boolean }
+    ).quoteFromDiskCache = true;
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = entry - 2 + i * 0.05;
+      return {
+        open: o,
+        high: o + 0.2,
+        low: o - 0.2,
+        close: o + 0.05,
+        ts_ms: Date.now() - (40 - i) * 60_000,
+      };
+    });
+    masterRuntime.last_bars = bars;
+    masterRuntime.running = true;
+
+    // Interval-style replay: same disk mark object identity path (ts/mid match)
+    await masterRuntime.tick(bars, staleMark);
+
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(masterRuntime.account.daily_pnl_day).toBe('2000-01-01');
+    expect(masterRuntime.account.day_start_equity).toBe(10_000);
+    expect(
+      (masterRuntime as unknown as { quoteFromDiskCache: boolean }).quoteFromDiskCache
+    ).toBe(true);
+
+    const markBid = entry - 0.5;
+    const freshMark: Quote = {
+      bid: markBid,
+      ask: markBid + 0.2,
+      mid: markBid + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    await masterRuntime.tick(bars, freshMark);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const expectedEquity = cash + (markBid - entry);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.account.day_start_equity).toBeCloseTo(expectedEquity, 5);
+    expect(masterRuntime.account.day_start_equity).toBeLessThan(cash);
+
+    masterRuntime.stop();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.last_quote = null;
+    (
+      masterRuntime as unknown as { quoteFromDiskCache: boolean }
+    ).quoteFromDiskCache = false;
+    masterRuntime.positions = new PositionManager();
+  });
 });
 
 describe('MASTER per-tick ghost sync', () => {
