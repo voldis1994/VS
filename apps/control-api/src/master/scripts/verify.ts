@@ -1452,7 +1452,7 @@ async function main() {
         'Open-book hydrate: MTM before UTC day-roll (parity with recover)'
       ) &&
       runtimeBody.includes(
-        'day_start_equity seeds from cash+UPL — not cash-only before manage'
+        'Use a throwaway PaperBroker — do not attach this.broker'
       ) &&
       readFileSync(
         join(root, 'src/master/__tests__/dailyPnl.test.ts'),
