@@ -1344,9 +1344,9 @@ async function main() {
       );
     const manualCloseVenueEquityApi =
       runtimeBody.includes(
-        'Desk Flatten/Close: refresh equity/balance/peak from venue'
+        'Desk Flatten/Close: refresh full venue account snapshot'
       ) &&
-      runtimeBody.includes('applyVenueAccountAfterClose(acct)') &&
+      runtimeBody.includes('applyVenueAccountSnapshot(broker, acct, quote)') &&
       readFileSync(
         join(root, 'src/master/__tests__/operatorClose.test.ts'),
         'utf8'
@@ -1359,6 +1359,9 @@ async function main() {
       ) &&
       runtimeBody.includes('syncClosed > 0') &&
       runtimeBody.includes('async applySyncJournal') &&
+      runtimeBody.includes(
+        'await this.applyVenueAccountSnapshot(this.broker, acct, quote)'
+      ) &&
       readFileSync(
         join(root, 'src/master/__tests__/paperSlTpAutofill.test.ts'),
         'utf8'
@@ -1367,7 +1370,7 @@ async function main() {
       );
     const syncGhostPostExitApi =
       runtimeBody.includes(
-        'settle like manage: post-exit cool + equity/peak'
+        'settle like manage: post-exit cool + full'
       ) &&
       runtimeBody.includes('syncClosed > 0') &&
       runtimeBody.includes('post_exit_until_ms') &&
@@ -1376,6 +1379,22 @@ async function main() {
         'utf8'
       ).includes(
         'Sync-ghost must arm post-exit cool like manage/manual closes'
+      );
+    const closePathAccountSnapshotApi =
+      runtimeBody.includes(
+        'Desk Flatten/Close: refresh full venue account snapshot'
+      ) &&
+      runtimeBody.includes(
+        'await this.applyVenueAccountSnapshot(this.broker, acct, quote)'
+      ) &&
+      runtimeBody.includes(
+        'available/trade_allowed + Capital prove), not thinner AfterClose only'
+      ) &&
+      readFileSync(
+        join(root, 'src/master/__tests__/operatorClose.test.ts'),
+        'utf8'
+      ).includes(
+        'Desk close refreshes available_to_deal via venue account snapshot'
       );
     const manageOnlyDailyPnlRollApi =
       runtimeBody.includes(

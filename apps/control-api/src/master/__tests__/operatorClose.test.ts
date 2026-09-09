@@ -137,6 +137,95 @@ describe('operator close + manage config', () => {
     expect(opp?.outcome?.r_multiple).toBeGreaterThan(0);
   });
 
+  it('Desk close refreshes available_to_deal via venue account snapshot', async () => {
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    broker.setQuote({
+      bid: 4415,
+      ask: 4415.4,
+      mid: 4415.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'op-acct-snap-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+      profit_level: 4430,
+    });
+    masterRuntime.positions.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-op-acct-snap',
+      intent_id: 'op-acct-snap-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: placed.fill_price!,
+      stop_loss: 4400,
+      take_profit: 4430,
+      decision: {
+        decision_id: 'd-acct-snap',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0.2,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4420,
+          swing_low: 4400,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+    broker.setQuote({
+      bid: 4420,
+      ask: 4420.4,
+      mid: 4420.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    // Stale Stop-with-opens leftovers — snapshot must overwrite from getAccount
+    masterRuntime.account.currency = 'USD';
+    masterRuntime.account.available_to_deal = null;
+    masterRuntime.account.trade_allowed = false;
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+
+    const r = await masterRuntime.closePositionManual(
+      placed.position_id!,
+      'OPERATOR_CLOSE'
+    );
+    expect(r.ok).toBe(true);
+    expect(masterRuntime.positions.count()).toBe(0);
+    expect(masterRuntime.account.currency).toBe('GBP');
+    expect(masterRuntime.account.trade_allowed).toBe(true);
+    expect(masterRuntime.account.available_to_deal).toBe(broker.balance);
+    expect(masterRuntime.account.equity).toBe(broker.equity);
+    expect(masterRuntime.account.peak_equity).toBe(broker.equity);
+  });
+
   it('operator close failure sets last_close_failed + journals ok:false', async () => {
     const broker = masterRuntime.ensurePaperBroker();
     broker.setQuote({
