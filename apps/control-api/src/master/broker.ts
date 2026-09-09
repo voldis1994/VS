@@ -289,6 +289,8 @@ export class PaperBroker implements MasterBroker {
   readonly paper = true;
   readonly supportsPartialClose = true;
   private positions = new Map<string, BrokerPosition>();
+  /** Per-epic last marks — never return GOLD mid for a SILVER getQuote. */
+  private quotesByEpic = new Map<string, BrokerQuote>();
   private lastQuote: BrokerQuote | null = null;
   private processed = new Set<string>();
   equity = 10_000;
@@ -300,11 +302,16 @@ export class PaperBroker implements MasterBroker {
 
   setQuote(q: BrokerQuote) {
     this.lastQuote = q;
+    const key = capitalApiEpic(q.epic) || String(q.epic || '').trim().toUpperCase();
+    if (key) this.quotesByEpic.set(key, q);
   }
 
   async getQuote(epic: string) {
-    if (this.lastQuote && this.lastQuote.epic === epic) return this.lastQuote;
-    return this.lastQuote;
+    const key = capitalApiEpic(epic) || String(epic || '').trim().toUpperCase();
+    if (key && this.quotesByEpic.has(key)) return this.quotesByEpic.get(key)!;
+    // Legacy: only return lastQuote when it matches the requested epic
+    if (this.lastQuote && epicsMatch(this.lastQuote.epic, epic)) return this.lastQuote;
+    return null;
   }
 
   async getAccount() {
