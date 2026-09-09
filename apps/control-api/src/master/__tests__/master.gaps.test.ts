@@ -2321,6 +2321,144 @@ describe('runtime gates persist', () => {
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('feed-miss manage-on-quote runs with short OHLC cache (parity with bootstrap)', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(
+      join(tmpdir(), 'vs-feed-miss-quote-')
+    );
+    const prevDesired = masterRuntime.desired_running;
+    const prevRunning = masterRuntime.running;
+    const prevMode = masterRuntime.cfg.mode;
+    try {
+      masterRuntime.stop();
+      masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER' };
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.desired_running = false;
+      masterRuntime.running = false;
+      const broker = masterRuntime.ensurePaperBroker();
+      broker.seedOpens([]);
+      broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+      const entry = 4410;
+      broker.setQuote({
+        bid: entry,
+        ask: entry + 0.4,
+        mid: entry + 0.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'feed-miss-quote-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        stop_level: entry - 100,
+        profit_level: entry + 200,
+      });
+      expect(placed.ok).toBe(true);
+      masterRuntime.positions.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-feed-miss-quote',
+        intent_id: 'feed-miss-quote-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: placed.fill_price!,
+        stop_loss: entry - 100,
+        take_profit: entry + 200,
+        decision: {
+          decision_id: 'd-fmq',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.5,
+            structure_bias: 'BULLISH',
+            swing_high: entry + 10,
+            swing_low: entry - 10,
+            buy_pressure: 0.6,
+            sell_pressure: 0.4,
+            behavior_bull: 0.5,
+            behavior_bear: 0.5,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 1,
+            data_quality: 0.9,
+            session: 'LONDON',
+          },
+          expectancy: null,
+        },
+      });
+      // Quote-only disk cache under feed miss — fewer than 5 bars (old gate would skip)
+      masterRuntime.last_bars = [
+        {
+          open: entry,
+          high: entry + 1,
+          low: entry - 1,
+          close: entry,
+          ts_ms: Date.now() - 60_000,
+        },
+        {
+          open: entry,
+          high: entry + 1,
+          low: entry - 1,
+          close: entry + 0.2,
+          ts_ms: Date.now() - 30_000,
+        },
+      ];
+      masterRuntime.last_quote = {
+        bid: entry + 1,
+        ask: entry + 1.4,
+        mid: entry + 1.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now() - 5_000,
+      };
+      (
+        masterRuntime as unknown as { last_manage_tick_ms: number }
+      ).last_manage_tick_ms = 0;
+      masterRuntime.account.available_to_deal = null;
+      masterRuntime.account.trade_allowed = false;
+
+      const r = await masterRuntime.feedMissManageFallbackPublic();
+      expect(r.bars).toBeLessThan(5);
+      expect(r.managed).toBe(true);
+      expect(
+        (masterRuntime as unknown as { last_manage_tick_ms: number })
+          .last_manage_tick_ms
+      ).toBeGreaterThan(0);
+      expect(masterRuntime.account.trade_allowed).toBe(true);
+      expect(masterRuntime.account.available_to_deal).toBe(10_000);
+    } finally {
+      try {
+        masterRuntime.ensurePaperBroker().seedOpens([]);
+        masterRuntime.ensurePaperBroker().hydrateAccount({
+          equity: 10_000,
+          balance: 10_000,
+        });
+      } catch {
+        /* ignore */
+      }
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.stop();
+      masterRuntime.desired_running = prevDesired;
+      masterRuntime.running = prevRunning;
+      masterRuntime.cfg = { ...masterRuntime.cfg, mode: prevMode };
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
 
 describe('error journal', () => {
