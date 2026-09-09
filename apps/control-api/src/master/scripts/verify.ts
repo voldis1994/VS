@@ -660,7 +660,10 @@ async function main() {
       performanceBody.includes('performanceByDeskEntry') &&
       performanceBody.includes('OpportunityRecord.decision') &&
       performanceBody.includes('fromOpp') &&
+      performanceBody.includes('deskSourceFromSetupKey') &&
+      performanceBody.includes('r.setup_key') &&
       runtimeBody.includes('performanceByDeskEntry') &&
+      runtimeBody.includes('applyOutcomeSetupKeys') &&
       runtimeBody.includes('performance_by_desk_entry') &&
       masterPageBody.includes('performance_by_desk_entry') &&
       masterPageBody.includes("'Confirm PnL'") &&
