@@ -2,7 +2,7 @@
  * File-backed persist for MASTER_STANDALONE (no Postgres).
  * Same recovery contract as DB tables — open positions + seen intents + journal.
  */
-import { mkdirSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { ManagedPosition } from './positionManager.js';
 import type { OpportunityRecord, TradeOutcome } from './types.js';
@@ -13,6 +13,11 @@ import {
 } from './persist.js';
 import { atomicWriteJson } from './atomicIo.js';
 import type { MarketCacheState } from './marketCache.js';
+import type { DecisionEvent } from './decisionJournal.js';
+import type { TradeEvent } from './tradeEventJournal.js';
+import { setJournalMirror, type JournalMirror } from './journalMirror.js';
+
+const MAX_MIRRORED_JOURNAL = 500;
 
 export type FilePersistState = {
   opportunities: OpportunityRecord[];
@@ -25,6 +30,9 @@ export type FilePersistState = {
   }>;
   positions: ManagedPosition[];
   intents: string[];
+  /** Reader audit tails — survive jsonl sidecar wipe under DualPersist mirror */
+  decision_events?: DecisionEvent[];
+  trade_events?: TradeEvent[];
   /** Manage/owns/gates/market_cache — survive with positions when sidecar JSON is wiped */
   operator_meta?: {
     manage?: Record<string, unknown> | null;
@@ -35,14 +43,69 @@ export type FilePersistState = {
   };
 };
 
-export class FilePersist implements PersistClient {
+export class FilePersist implements PersistClient, JournalMirror {
   private mem = new MemoryPersist();
   /** Last known operator_meta from disk — survives sidecar wipe mid-process. */
   private lastOperatorMeta: FilePersistState['operator_meta'] | undefined;
+  private decisionEvents: DecisionEvent[] = [];
+  private tradeEvents: TradeEvent[] = [];
 
   constructor(private readonly root: string) {
     mkdirSync(root, { recursive: true });
     this.load();
+    setJournalMirror(this);
+  }
+
+  appendDecision(entry: DecisionEvent): void {
+    this.decisionEvents.push(entry);
+    if (this.decisionEvents.length > MAX_MIRRORED_JOURNAL) {
+      this.decisionEvents = this.decisionEvents.slice(-MAX_MIRRORED_JOURNAL);
+    }
+    this.flush();
+  }
+
+  appendTrade(entry: TradeEvent): void {
+    this.tradeEvents.push(entry);
+    if (this.tradeEvents.length > MAX_MIRRORED_JOURNAL) {
+      this.tradeEvents = this.tradeEvents.slice(-MAX_MIRRORED_JOURNAL);
+    }
+    this.flush();
+  }
+
+  loadDecisions(limit: number): DecisionEvent[] {
+    return [...this.decisionEvents].reverse().slice(0, Math.max(0, limit));
+  }
+
+  loadTrades(limit: number): TradeEvent[] {
+    return [...this.tradeEvents].reverse().slice(0, Math.max(0, limit));
+  }
+
+  /** Rewrite missing decision/trade jsonl from mirrored master_state tails. */
+  restoreJournalSidecars(): boolean {
+    let wrote = false;
+    try {
+      const decPath = join(this.root, 'decision_journal.jsonl');
+      if (!existsSync(decPath) && this.decisionEvents.length) {
+        writeFileSync(
+          decPath,
+          `${this.decisionEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
+          'utf8'
+        );
+        wrote = true;
+      }
+      const tradePath = join(this.root, 'trade_event_journal.jsonl');
+      if (!existsSync(tradePath) && this.tradeEvents.length) {
+        writeFileSync(
+          tradePath,
+          `${this.tradeEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
+          'utf8'
+        );
+        wrote = true;
+      }
+    } catch {
+      return false;
+    }
+    return wrote;
   }
 
   private statePath() {
@@ -132,6 +195,13 @@ export class FilePersist implements PersistClient {
         this.lastOperatorMeta = raw.operator_meta;
         this.restoreOperatorMeta(raw.operator_meta);
       }
+      if (Array.isArray(raw.decision_events)) {
+        this.decisionEvents = raw.decision_events.slice(-MAX_MIRRORED_JOURNAL);
+      }
+      if (Array.isArray(raw.trade_events)) {
+        this.tradeEvents = raw.trade_events.slice(-MAX_MIRRORED_JOURNAL);
+      }
+      this.restoreJournalSidecars();
     } catch {
       /* start clean */
     }
@@ -343,6 +413,8 @@ export class FilePersist implements PersistClient {
         })(),
       })),
       intents: [...this.mem.intents],
+      decision_events: this.decisionEvents.slice(-MAX_MIRRORED_JOURNAL),
+      trade_events: this.tradeEvents.slice(-MAX_MIRRORED_JOURNAL),
       operator_meta: this.snapshotOperatorMeta(),
     };
     atomicWriteJson(this.statePath(), state);
@@ -366,6 +438,49 @@ export function installFilePersist(root?: string): FilePersist {
   const fp = new FilePersist(dir);
   setPersistClient(fp);
   return fp;
+}
+
+/** Restore decision/trade jsonl from master_state mirror when sidecars were wiped. */
+export function ensureJournalSidecarsFromStateDir(root?: string): boolean {
+  const dir =
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    join(process.cwd(), '.master-state');
+  try {
+    const path = join(dir, 'master_state.json');
+    if (!existsSync(path)) return false;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
+    let wrote = false;
+    const decPath = join(dir, 'decision_journal.jsonl');
+    if (
+      !existsSync(decPath) &&
+      Array.isArray(raw.decision_events) &&
+      raw.decision_events.length
+    ) {
+      writeFileSync(
+        decPath,
+        `${raw.decision_events.map((e) => JSON.stringify(e)).join('\n')}\n`,
+        'utf8'
+      );
+      wrote = true;
+    }
+    const tradePath = join(dir, 'trade_event_journal.jsonl');
+    if (
+      !existsSync(tradePath) &&
+      Array.isArray(raw.trade_events) &&
+      raw.trade_events.length
+    ) {
+      writeFileSync(
+        tradePath,
+        `${raw.trade_events.map((e) => JSON.stringify(e)).join('\n')}\n`,
+        'utf8'
+      );
+      wrote = true;
+    }
+    return wrote;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -413,6 +528,8 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     if (raw.operator_meta.market_cache && needsRestore(cachePath)) {
       atomicWriteJson(cachePath, raw.operator_meta.market_cache);
     }
+    // Also heal wiped decision/trade jsonl from mirrored tails
+    ensureJournalSidecarsFromStateDir(dir);
     return true;
   } catch {
     return false;

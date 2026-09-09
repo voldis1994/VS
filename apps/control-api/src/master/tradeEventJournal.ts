@@ -17,6 +17,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { loadMirroredTrades, mirrorTradeEvent } from './journalMirror.js';
 
 export type TradeEventKind = 'OPEN' | 'MODIFY' | 'CLOSE';
 
@@ -144,6 +145,7 @@ export function logTradeEvent(input: {
   } catch {
     /* never break the cycle */
   }
+  mirrorTradeEvent(entry);
   return entry;
 }
 
@@ -151,21 +153,23 @@ export function logTradeEvent(input: {
 export function loadTradeEvents(limit = 50): TradeEvent[] {
   try {
     const path = journalPath();
-    if (!existsSync(path)) return [];
-    const lines = readFileSync(path, 'utf8')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    const out: TradeEvent[] = [];
-    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
-      try {
-        out.push(JSON.parse(lines[i]!) as TradeEvent);
-      } catch {
-        /* skip */
+    if (existsSync(path)) {
+      const lines = readFileSync(path, 'utf8')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const out: TradeEvent[] = [];
+      for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+        try {
+          out.push(JSON.parse(lines[i]!) as TradeEvent);
+        } catch {
+          /* skip */
+        }
       }
+      if (out.length) return out;
     }
-    return out;
   } catch {
-    return [];
+    /* fall through to DualPersist/FilePersist mirror */
   }
+  return loadMirroredTrades(limit);
 }

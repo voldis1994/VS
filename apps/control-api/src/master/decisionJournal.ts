@@ -16,6 +16,10 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import {
+  loadMirroredDecisions,
+  mirrorDecisionEvent,
+} from './journalMirror.js';
 
 export type DecisionEvent = {
   event_id: string;
@@ -125,6 +129,7 @@ export function logDecisionEvent(input: {
   } catch {
     /* never break the cycle */
   }
+  mirrorDecisionEvent(entry);
   return entry;
 }
 
@@ -132,21 +137,23 @@ export function logDecisionEvent(input: {
 export function loadDecisionEvents(limit = 50): DecisionEvent[] {
   try {
     const path = journalPath();
-    if (!existsSync(path)) return [];
-    const lines = readFileSync(path, 'utf8')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    const out: DecisionEvent[] = [];
-    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
-      try {
-        out.push(JSON.parse(lines[i]!) as DecisionEvent);
-      } catch {
-        /* skip */
+    if (existsSync(path)) {
+      const lines = readFileSync(path, 'utf8')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const out: DecisionEvent[] = [];
+      for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+        try {
+          out.push(JSON.parse(lines[i]!) as DecisionEvent);
+        } catch {
+          /* skip */
+        }
       }
+      if (out.length) return out;
     }
-    return out;
   } catch {
-    return [];
+    /* fall through to DualPersist/FilePersist mirror */
   }
+  return loadMirroredDecisions(limit);
 }
