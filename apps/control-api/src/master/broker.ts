@@ -291,7 +291,7 @@ export class PaperBroker implements MasterBroker {
   readonly paper = true;
   readonly supportsPartialClose = true;
   private positions = new Map<string, BrokerPosition>();
-  /** Per-epic last marks — never return GOLD mid for a SILVER getQuote. */
+  /** Per-epic last marks — never return GOLD mid for a SILVER getQuote/quoteForEpic. */
   private quotesByEpic = new Map<string, BrokerQuote>();
   private lastQuote: BrokerQuote | null = null;
   private processed = new Set<string>();
@@ -462,11 +462,15 @@ export class PaperBroker implements MasterBroker {
     };
   }
 
+  /**
+   * Per-epic mark lookup — never return a foreign-epic lastQuote.
+   * (getQuote already fail-closed; quoteForEpic must match for MTM / close / place.)
+   */
   private quoteForEpic(epic: string): BrokerQuote | null {
     const key = capitalApiEpic(epic) || String(epic || '').trim().toUpperCase();
     if (key && this.quotesByEpic.has(key)) return this.quotesByEpic.get(key)!;
     if (this.lastQuote && epicsMatch(this.lastQuote.epic, epic)) return this.lastQuote;
-    return this.lastQuote;
+    return null;
   }
 
   async getQuote(epic: string) {
@@ -529,7 +533,7 @@ export class PaperBroker implements MasterBroker {
       };
     }
     this.processed.add(input.intent_id);
-    const q = this.quoteForEpic(input.epic) || this.lastQuote;
+    const q = this.quoteForEpic(input.epic);
     if (!q) {
       return {
         ok: false,

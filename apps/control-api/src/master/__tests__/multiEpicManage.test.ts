@@ -320,6 +320,79 @@ describe('PaperBroker getQuote epic isolation', () => {
     expect(sil?.mid).toBeCloseTo(31.025, 5);
     expect((await broker.getQuote('GOLD'))?.mid).toBeCloseTo(4400.2, 5);
   });
+
+  it('markToMarket does not apply GOLD quote to SILVER open (equity isolation)', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.2,
+      mid: 4400.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const gold = await broker.placeOrder({
+      intent_id: 'gold-mtm-iso-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4350,
+      profit_level: 4500,
+    });
+    expect(gold.ok).toBe(true);
+    // SILVER open with NO SILVER quote stored — quoteForEpic must not use GOLD lastQuote
+    broker.seedOpens([
+      {
+        position_id: gold.position_id!,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: gold.fill_price!,
+        stop_level: 4350,
+        profit_level: 4500,
+      },
+      {
+        position_id: 'sil-no-quote',
+        epic: 'SILVER',
+        side: 'BUY',
+        size: 1,
+        open_level: 31,
+        stop_level: 30,
+        profit_level: 35,
+      },
+    ]);
+    broker.setQuote({
+      bid: 4405,
+      ask: 4405.2,
+      mid: 4405.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    broker.markToMarket();
+    const listed = await broker.listOpenPositions();
+    const silPos = listed.positions.find((p) => p.epic === 'SILVER');
+    const goldPos = listed.positions.find((p) => p.epic === 'GOLD');
+    expect(silPos).toBeTruthy();
+    expect(goldPos).toBeTruthy();
+    // Fail-open GOLD mark on SILVER would invent UPL ≈ 4405−31 ≈ +4374
+    expect(silPos!.upl == null || Math.abs(Number(silPos!.upl)) < 5).toBe(true);
+    expect(Number(goldPos!.upl)).toBeGreaterThan(0);
+    const acct = await broker.getAccount();
+    expect(acct!.equity).toBeLessThan(10_100);
+    expect(acct!.equity).toBeGreaterThan(9_900);
+    // placeOrder must not fill SILVER from GOLD lastQuote alone
+    const noQuote = await broker.placeOrder({
+      intent_id: 'sil-no-quote-aaaaaaaaaa',
+      epic: 'SILVER',
+      side: 'BUY',
+      size: 1,
+    });
+    expect(noQuote.ok).toBe(false);
+    expect(noQuote.detail).toBe('no_quote');
+  });
 });
 
 describe('runtime multi-epic manage + float honesty', () => {
