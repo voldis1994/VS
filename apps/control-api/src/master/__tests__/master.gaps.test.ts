@@ -5664,10 +5664,10 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       masterRuntime.last_market = null;
       masterRuntime.last_decision = {
         decision_id: 'hydrated',
-        kind: 'BUY',
-        side: 'BUY',
+        kind: 'BLOCK',
+        side: null,
         score: 0.8,
-        block_reason: null,
+        block_reason: 'filters:spread',
         buy: {
           score: 0.8,
           filter_ok: true,
@@ -5723,6 +5723,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(st.market_state).toMatch(/^hydrated · TREND_UP:/);
       expect(st.entry_gates.session_hydrated).toBe(true);
       expect(st.entry_gates.session).toMatch(/^hydrated ·/);
+      // Why must mark journal BLOCK as hydrated — not live-bad
+      expect(String(st.last_block_reason || '')).toMatch(/^hydrated · filters:spread$/);
 
       masterRuntime.last_market = {
         ok: true,
@@ -5745,6 +5747,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(liveSt.market_state).toBe('TREND_UP:UP:BULLISH');
       expect(liveSt.entry_gates.session_hydrated).toBe(false);
       expect(liveSt.entry_gates.session).not.toMatch(/^hydrated ·/);
+      expect(String(liveSt.last_block_reason || '')).toBe('filters:spread');
+      expect(String(liveSt.last_block_reason || '')).not.toMatch(/^hydrated ·/);
 
       masterRuntime.last_market = {
         ok: false,
@@ -5902,6 +5906,109 @@ describe('pipeline_stages honesty — decision/risk never forged from hydrate', 
       masterRuntime.last_risk = prevRisk;
       masterRuntime.last_market = prevMarket;
       masterRuntime.last_quote = prevQuote;
+    }
+  });
+});
+
+describe('Why / monitoring disk-hydrate honesty', () => {
+  it('status marks disk monitor + block reason hydrated until a live cycle', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-why-mon-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const prevMarket = masterRuntime.last_market;
+    const prevDecision = masterRuntime.last_decision;
+    try {
+      writeFileSync(
+        join(dir, 'monitoring_snapshot.json'),
+        JSON.stringify({
+          timestamp_utc: new Date().toISOString(),
+          cycle_latency_ms: 33,
+          relative_spread: 2.2,
+          instance_health: 'DEGRADED',
+          entry_block_reason: 'alert:DATA_STALE',
+          active_alerts: [
+            { code: 'DATA_STALE', level: 'WARN', message: 'disk' },
+          ],
+        }),
+        'utf8'
+      );
+      (masterRuntime as unknown as { monitorHydrated: boolean }).monitorHydrated =
+        false;
+      masterRuntime.hydrateMonitorFromDisk();
+      masterRuntime.last_market = null;
+      masterRuntime.last_decision = {
+        decision_id: 'disk-why',
+        kind: 'BLOCK',
+        side: null,
+        score: 0,
+        block_reason: 'alert:DATA_STALE',
+        buy: {
+          score: 0.1,
+          filter_ok: false,
+          filter_reason: 'score',
+          valid: true,
+          components: {
+            momentum: 0,
+            trend: 0,
+            structure: 0,
+            pressure: 0,
+            behavior: 0,
+            impact: 0,
+            context: 0,
+          },
+        } as never,
+        sell: {
+          score: 0.1,
+          filter_ok: false,
+          filter_reason: 'score',
+          valid: true,
+          components: {
+            momentum: 0,
+            trend: 0,
+            structure: 0,
+            pressure: 0,
+            behavior: 0,
+            impact: 0,
+            context: 0,
+          },
+        } as never,
+        analysis: { ...baseAnalysis(), session: 'LONDON' },
+        expectancy: null,
+      };
+      const st = masterRuntime.status();
+      expect(st.monitoring.hydrated).toBe(true);
+      expect(String(st.monitoring.entry_block_reason || '')).toMatch(
+        /^hydrated · alert:DATA_STALE$/
+      );
+      expect(String(st.last_block_reason || '')).toMatch(/^hydrated · /);
+      expect(st.monitoring.relative_spread).toBe(2.2);
+
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.9,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      // Live note clears disk flag
+      (
+        masterRuntime as unknown as {
+          monitor: {
+            noteAlerts: (a: unknown[], b: string | null) => void;
+          };
+        }
+      ).monitor.noteAlerts([], null);
+      const live = masterRuntime.status();
+      expect(live.monitoring.hydrated).toBe(false);
+      expect(String(live.last_block_reason || '')).toBe('alert:DATA_STALE');
+      expect(String(live.last_block_reason || '')).not.toMatch(/^hydrated ·/);
+    } finally {
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_decision = prevDecision;
+      (masterRuntime as unknown as { monitorHydrated: boolean }).monitorHydrated =
+        false;
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
     }
   });
 });

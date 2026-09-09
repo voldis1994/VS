@@ -257,6 +257,29 @@ async function main() {
     },
     structure_seed_source: 'restart_check',
   });
+  // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
+  writeFileSync(
+    join(stateDir, 'monitoring_snapshot.json'),
+    JSON.stringify({
+      timestamp_utc: new Date().toISOString(),
+      cycle_latency_ms: 55,
+      data_freshness_ms: 1200,
+      error_count: 0,
+      error_rate_per_min: 0,
+      instance_health: 'DEGRADED',
+      relative_spread: 1.8,
+      ack_latency_ms: null,
+      entry_block_reason: 'alert:DATA_STALE',
+      active_alerts: [
+        {
+          code: 'DATA_STALE',
+          level: 'WARN',
+          message: 'stale before restart',
+        },
+      ],
+    }),
+    'utf8'
+  );
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -277,6 +300,8 @@ async function main() {
   masterRuntime.last_quote = null;
   masterRuntime.last_bars = [];
   masterRuntime.last_market = null;
+  (masterRuntime as unknown as { monitorHydrated: boolean }).monitorHydrated =
+    false;
   (
     masterRuntime as unknown as {
       quoteFromDiskCache: boolean;
@@ -378,6 +403,12 @@ async function main() {
     entry_gates_session: stHydrate.entry_gates?.session ?? null,
     entry_gates_session_hydrated:
       stHydrate.entry_gates?.session_hydrated === true,
+    monitoring_hydrated: stHydrate.monitoring?.hydrated === true,
+    monitoring_entry_block: stHydrate.monitoring?.entry_block_reason ?? null,
+    last_block_reason: stHydrate.last_block_reason ?? null,
+    last_block_reason_hydrated: String(
+      stHydrate.last_block_reason || ''
+    ).startsWith('hydrated ·'),
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -423,6 +454,9 @@ async function main() {
     hydrateSnap.bars_available >= 40 &&
     hydrateSnap.entry_gates_session_hydrated === true &&
     String(hydrateSnap.entry_gates_session || '').startsWith('hydrated ·') &&
+    hydrateSnap.monitoring_hydrated === true &&
+    String(hydrateSnap.monitoring_entry_block || '').startsWith('hydrated ·') &&
+    hydrateSnap.last_block_reason_hydrated === true &&
     journalHealOk &&
     pgPrimaryHealOk;
 
@@ -568,6 +602,10 @@ async function main() {
       bars_cached: hydrateSnap.bars_cached,
       entry_gates_session: hydrateSnap.entry_gates_session,
       entry_gates_session_hydrated: hydrateSnap.entry_gates_session_hydrated,
+      monitoring_hydrated: hydrateSnap.monitoring_hydrated,
+      monitoring_entry_block: hydrateSnap.monitoring_entry_block,
+      last_block_reason: hydrateSnap.last_block_reason,
+      last_block_reason_hydrated: hydrateSnap.last_block_reason_hydrated,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,

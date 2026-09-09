@@ -133,6 +133,8 @@ type MasterStatus = {
     instance_health?: string;
     entry_block_reason?: string | null;
     active_alerts?: Array<{ code: string; level: string; message: string }>;
+    /** Disk restore — Alert/Rel spread/health must not paint live */
+    hydrated?: boolean;
   };
   opportunities: number;
   traded: number;
@@ -362,15 +364,23 @@ export function MasterPage() {
     status?.last_execution_detail ||
     status?.last_decision?.kind ||
     '—';
-  // Journal-hydrated Why must not read as the current cycle
+  // Journal / disk Why must not read as the current cycle — including BLOCK reasons
   const why =
-    cyclePending &&
-    !status?.last_block_reason &&
-    !status?.monitoring?.entry_block_reason &&
-    whyRaw !== '—'
-      ? `hydrated · ${whyRaw}`
+    cyclePending && whyRaw !== '—'
+      ? String(whyRaw).startsWith('hydrated ·')
+        ? String(whyRaw)
+        : `hydrated · ${whyRaw}`
       : whyRaw;
   const whyHydrated = cyclePending && why.startsWith('hydrated ·');
+  const monHydrated =
+    !!status?.monitoring?.hydrated ||
+    (cyclePending &&
+      !!(
+        status?.monitoring?.entry_block_reason ||
+        (status?.monitoring?.active_alerts?.length || 0) > 0 ||
+        status?.monitoring?.relative_spread != null ||
+        status?.monitoring?.instance_health
+      ));
   const wouldGateNote =
     !status?.expectancy_gate_armed && expWould ? expWould : null;
   const healthBad =
@@ -914,9 +924,11 @@ export function MasterPage() {
           k: 'Rel spread',
           v:
             status.monitoring?.relative_spread != null
-              ? Number(status.monitoring.relative_spread).toFixed(2)
+              ? `${monHydrated ? 'hydrated · ' : ''}${Number(status.monitoring.relative_spread).toFixed(2)}`
               : '—',
+          // Disk-hydrated spread must not paint live-bad
           bad:
+            !monHydrated &&
             status.monitoring?.relative_spread != null &&
             status.monitoring.relative_spread > 1.5,
         },
@@ -924,7 +936,7 @@ export function MasterPage() {
           k: 'Cycle ms',
           v:
             status.monitoring?.last_cycle_ms != null
-              ? String(status.monitoring.last_cycle_ms)
+              ? `${monHydrated ? 'hydrated · ' : ''}${status.monitoring.last_cycle_ms}`
               : '—',
         },
         {
@@ -936,26 +948,36 @@ export function MasterPage() {
         },
         {
           k: 'Health',
-          v: status.monitoring?.instance_health || '—',
+          v: status.monitoring?.instance_health
+            ? `${monHydrated ? 'hydrated · ' : ''}${status.monitoring.instance_health}`
+            : '—',
           bad:
-            status.monitoring?.instance_health === 'CRITICAL' ||
-            status.monitoring?.instance_health === 'DEGRADED',
-          ok: status.monitoring?.instance_health === 'OK',
+            !monHydrated &&
+            (status.monitoring?.instance_health === 'CRITICAL' ||
+              status.monitoring?.instance_health === 'DEGRADED'),
+          ok: !monHydrated && status.monitoring?.instance_health === 'OK',
         },
         {
           k: 'Alert block',
-          v: status.monitoring?.entry_block_reason || '—',
-          bad: !!status.monitoring?.entry_block_reason,
+          v: status.monitoring?.entry_block_reason
+            ? String(status.monitoring.entry_block_reason).startsWith('hydrated ·')
+              ? String(status.monitoring.entry_block_reason)
+              : monHydrated
+                ? `hydrated · ${status.monitoring.entry_block_reason}`
+                : String(status.monitoring.entry_block_reason)
+            : '—',
+          bad:
+            !monHydrated && !!status.monitoring?.entry_block_reason,
         },
         {
           k: 'Alerts',
           v: status.monitoring?.active_alerts?.length
-            ? status.monitoring.active_alerts
+            ? `${monHydrated ? 'hydrated · ' : ''}${status.monitoring.active_alerts
                 .slice(0, 3)
                 .map((a) => a.code)
-                .join(' · ')
+                .join(' · ')}`
             : '—',
-          bad: (status.monitoring?.active_alerts?.length || 0) > 0,
+          bad: !monHydrated && (status.monitoring?.active_alerts?.length || 0) > 0,
         },
         {
           k: 'Err/min',
@@ -963,7 +985,7 @@ export function MasterPage() {
             status.monitoring?.error_rate_per_min != null
               ? String(status.monitoring.error_rate_per_min)
               : '—',
-          bad: (status.monitoring?.error_rate_per_min || 0) > 0,
+          bad: !monHydrated && (status.monitoring?.error_rate_per_min || 0) > 0,
         },
         {
           k: 'Max DD',

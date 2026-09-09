@@ -4129,9 +4129,33 @@ class MasterRuntime {
       this.broker instanceof CapitalBroker
         ? this.broker.isMarketStreamHealthy(undefined, this.epic)
         : null;
-    const monitoring = this.monitor.snapshot(
+    const monitoringRaw = this.monitor.snapshot(
       quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null
     );
+    const cyclePending = !this.last_market;
+    // Disk-hydrated monitor must not look like a live alert/spread gate
+    const monHydrated = monitoringRaw.hydrated === true;
+    const monBlockRaw = monitoringRaw.entry_block_reason;
+    const monitoring = {
+      ...monitoringRaw,
+      hydrated: monHydrated,
+      entry_block_reason:
+        monHydrated && monBlockRaw && !String(monBlockRaw).startsWith('hydrated ·')
+          ? `hydrated · ${monBlockRaw}`
+          : monBlockRaw,
+    };
+    const rawBlockReason =
+      this.last_decision?.block_reason ||
+      monitoring.entry_block_reason ||
+      this.last_risk?.reasons.join(',') ||
+      null;
+    // Journal / disk Why must not paint as the current cycle block
+    const lastBlockReason =
+      rawBlockReason && cyclePending
+        ? String(rawBlockReason).startsWith('hydrated ·')
+          ? String(rawBlockReason)
+          : `hydrated · ${rawBlockReason}`
+        : rawBlockReason;
     return {
       mode: this.cfg.mode,
       running: this.running,
@@ -4156,11 +4180,7 @@ class MasterRuntime {
       capital_venue_opens_proven: this.capitalVenueOpensProven,
       last_decision: this.last_decision,
       last_risk: this.last_risk,
-      last_block_reason:
-        this.last_decision?.block_reason ||
-        monitoring.entry_block_reason ||
-        this.last_risk?.reasons.join(',') ||
-        null,
+      last_block_reason: lastBlockReason,
       last_execution_detail: this.last_execution_detail,
       last_exit_reason: this.last_exit_reason,
       last_close_failed: this.last_close_failed,
