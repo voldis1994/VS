@@ -581,6 +581,12 @@ async function main() {
       readFileSync(join(root, 'src/master/positionManager.ts'), 'utf8').includes(
         'epicsMatch(pos.epic, quote.epic)'
       );
+    const multiEpicCycleUi =
+      masterPageBody.includes("'Cycles by epic'") &&
+      masterPageBody.includes('cycles_by_epic');
+    const multiEpicCycleEmbed =
+      masterRouteBody.includes("card('Cycles by epic'") &&
+      masterRouteBody.includes('cycles_by_epic');
     const honestyOk =
       stagesUi &&
       stagesApi &&
@@ -623,7 +629,9 @@ async function main() {
       deskEntryApi &&
       marketCoreFailClosed &&
       deskBridgeMeta &&
-      multiEpicCycleApi;
+      multiEpicCycleApi &&
+      multiEpicCycleUi &&
+      multiEpicCycleEmbed;
     checks.push({
       id: 'artifacts_present',
       requirement:
@@ -631,7 +639,7 @@ async function main() {
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle=${multiEpicCycleApi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle api=${multiEpicCycleApi} ui=${multiEpicCycleUi} embed=${multiEpicCycleEmbed}`,
     });
   }
 
