@@ -29,8 +29,6 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
-  decideEntryFromSetup,
-  decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -39,6 +37,7 @@ import {
   type MarketSetup,
   type StructureBook,
 } from './marketSetup.js';
+import { resolveDeskEntryConfirm } from '../master/deskEntryConfirm.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -1629,15 +1628,22 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    let entry =
-      setup.kind !== 'NONE' && setup.status === 'ARMED'
-        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
-        : null;
-
-    // Trade every real 10s move — NONE / FORMING / no setup-confirm all fall through to with-flow MOVE
-    if (!entry) {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-    }
+    // Single entry path shared with MASTER pipeline (setup confirm → else MOVE)
+    const confirm = resolveDeskEntryConfirm({
+      setup,
+      structure: st,
+      closed_10s: bar,
+      minutes: s.last_minute_candles,
+    });
+    const entry = confirm
+      ? {
+          direction: confirm.side,
+          setup: confirm.setup_kind,
+          playbook: (confirm.playbook || 'LONG') as TradePlaybook,
+          reason: confirm.reason,
+          source: confirm.source,
+        }
+      : null;
 
     if (!entry) {
       pushTick(s, {
@@ -1674,7 +1680,7 @@ async function robotCycle(s: Internal) {
     const direction = entry.direction;
     const setupType = entry.setup;
     const entryPlaybook = entry.playbook;
-    const reason = entry.reason;
+    const reason = `${entry.source}:${entry.reason}`;
     s.playbook = entryPlaybook;
     s.entry_setup = setupType;
 

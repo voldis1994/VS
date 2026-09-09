@@ -565,6 +565,12 @@ async function main() {
       pipelineBody.includes('closed_10s') &&
       pipelineBody.includes('hour_bars') &&
       decisionBody.includes('setup_confirm_pending') &&
+      readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8').includes(
+        'resolveDeskEntryConfirm'
+      ) &&
+      !readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8').includes(
+        'decideEntryFromSetup('
+      ) &&
       readFileSync(join(root, 'src/master/deskBridge.ts'), 'utf8').includes(
         'hourCandles'
       ) &&
