@@ -4,14 +4,16 @@
  * Also embeds into master_state.json operator_meta so DualPersist / sidecar
  * wipe cannot leave manage blind while positions recover from PG.
  *
- * Hour bars (desk hour_bias structure) persist beside minute bars so restart
- * does not wait on network for 1h OHLC.
+ * Hour bars (desk hour_bias structure) and sticky closed_10s (desk confirm)
+ * persist beside minute bars so restart does not wait on network for 1h OHLC
+ * or a brand-new 10s close before resolveDeskEntryConfirm can fire.
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
 import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 import type { Bar, Quote } from './types.js';
+import type { TenSecBar } from '../services/tenSecondOhlc.js';
 
 function finiteBar(b: Bar | null | undefined): boolean {
   return !!(
@@ -23,6 +25,18 @@ function finiteBar(b: Bar | null | undefined): boolean {
   );
 }
 
+function finiteTenSec(b: TenSecBar | null | undefined): boolean {
+  return !!(
+    b &&
+    Number.isFinite(b.open) &&
+    Number.isFinite(b.high) &&
+    Number.isFinite(b.low) &&
+    Number.isFinite(b.close) &&
+    Number.isFinite(b.open_time_ms) &&
+    Number.isFinite(b.ticks)
+  );
+}
+
 export type MarketCacheState = {
   epic: string;
   bars: Bar[];
@@ -30,6 +44,8 @@ export type MarketCacheState = {
   /** Desk 1h structure OHLC (hour_bias) — optional, survives restart. */
   hour_bars?: Bar[];
   hour_bars_detail?: string | null;
+  /** Sticky desk closed_10s — optional, survives restart for confirm gate. */
+  closed_10s?: TenSecBar | null;
   structure_seed_source?: string | null;
   saved_at_ms: number;
 };
@@ -61,6 +77,7 @@ export function saveMarketCache(
     quote: Quote | null;
     hour_bars?: Bar[] | null;
     hour_bars_detail?: string | null;
+    closed_10s?: TenSecBar | null;
     structure_seed_source?: string | null;
   },
   root?: string
@@ -69,13 +86,16 @@ export function saveMarketCache(
     const dir = marketCacheDir(root);
     const bars = (input.bars || []).slice(-120).filter(finiteBar);
     const hour_bars = (input.hour_bars || []).slice(-48).filter(finiteBar);
-    if (!bars.length && !input.quote && !hour_bars.length) return false;
+    const closed_10s = finiteTenSec(input.closed_10s) ? input.closed_10s! : null;
+    if (!bars.length && !input.quote && !hour_bars.length && !closed_10s)
+      return false;
     const state: MarketCacheState = {
       epic: input.epic,
       bars,
       quote: input.quote,
       ...(hour_bars.length ? { hour_bars } : {}),
       hour_bars_detail: input.hour_bars_detail ?? null,
+      ...(closed_10s ? { closed_10s } : {}),
       structure_seed_source: input.structure_seed_source ?? null,
       saved_at_ms: Date.now(),
     };
@@ -97,6 +117,7 @@ export function loadMarketCache(root?: string): MarketCacheState | null {
     const hour_bars = Array.isArray(raw.hour_bars)
       ? raw.hour_bars.filter(finiteBar)
       : [];
+    const closed_10s = finiteTenSec(raw.closed_10s) ? raw.closed_10s! : null;
     return {
       epic: String(raw.epic || ''),
       bars: raw.bars.filter(finiteBar),
@@ -109,6 +130,7 @@ export function loadMarketCache(root?: string): MarketCacheState | null {
           : null,
       ...(hour_bars.length ? { hour_bars } : {}),
       hour_bars_detail: raw.hour_bars_detail ?? null,
+      ...(closed_10s ? { closed_10s } : {}),
       structure_seed_source: raw.structure_seed_source ?? null,
       saved_at_ms: Number(raw.saved_at_ms) || 0,
     };

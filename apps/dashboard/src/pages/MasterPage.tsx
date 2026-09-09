@@ -175,6 +175,8 @@ type MasterStatus = {
   } | null;
   hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
   closed_10s_present?: boolean;
+  closed_10s_cached?: boolean;
+  closed_10s_source?: 'disk_cache' | 'live' | 'journal' | null;
   entry_gates?: {
     news_cfg_on: boolean;
     news_blocks: boolean;
@@ -714,11 +716,23 @@ export function MasterPage() {
         },
         {
           k: 'Closed 10s',
-          v: `${cyclePending ? 'hydrated · ' : ''}${
-            status.closed_10s_present ? 'present' : 'none'
-          }`,
-          ok: !cyclePending && !!status.closed_10s_present,
-          warn: cyclePending || !status.closed_10s_present,
+          v: status.closed_10s_cached
+            ? `cached · present`
+            : status.closed_10s_source === 'journal'
+              ? `${cyclePending ? 'hydrated · ' : ''}journal · present`
+              : `${cyclePending ? 'hydrated · ' : ''}${
+                  status.closed_10s_present ? 'present' : 'none'
+                }`,
+          ok:
+            !cyclePending &&
+            !!status.closed_10s_present &&
+            status.closed_10s_source !== 'journal' &&
+            !status.closed_10s_cached,
+          warn:
+            cyclePending ||
+            !status.closed_10s_present ||
+            status.closed_10s_cached === true ||
+            status.closed_10s_source === 'journal',
         },
         {
           k: 'EV gate',
@@ -763,9 +777,11 @@ export function MasterPage() {
           k: 'Hour bars',
           v: status.hour_bars_cached
             ? `cached · ${status.hour_bars_available ?? 0}`
-            : status.hour_bars_available
-              ? String(status.hour_bars_available)
-              : '—',
+            : status.hour_bars_source === 'live'
+              ? `live · ${status.hour_bars_available ?? 0}`
+              : status.hour_bars_available
+                ? String(status.hour_bars_available)
+                : '—',
           bad: (status.hour_bars_available ?? 0) > 0 && (status.hour_bars_available ?? 0) < 6,
           ok:
             (status.hour_bars_available ?? 0) >= 6 && !status.hour_bars_cached,

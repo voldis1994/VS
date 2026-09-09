@@ -240,6 +240,10 @@ export type MasterStatus = {
   hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
   /** True when last tick had sticky/desk closed_10s (confirm gate armed). */
   closed_10s_present: boolean;
+  /** Sticky closed_10s restored from disk market_cache (bar-armed, not journal-only). */
+  closed_10s_cached: boolean;
+  /** disk_cache | live | journal provenance for Closed 10s card. */
+  closed_10s_source: 'disk_cache' | 'live' | 'journal' | null;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
   entry_gates: {
     news_cfg_on: boolean;
@@ -430,6 +434,12 @@ class MasterRuntime {
   last_hour_bias: MasterStatus['hour_bias'] = null;
   /** Sticky closed_10s present on last tick (desk last_closed parity). */
   last_closed_10s_present = false;
+  /** Sticky closed_10s bar — survives restart via market_cache (confirm-armed). */
+  private last_closed_10s: import('../services/tenSecondOhlc.js').TenSecBar | null =
+    null;
+  private closed10sFromDiskCache = false;
+  /** Journal DecisionEvent flag only — no real TenSecBar yet. */
+  private closed10sFromJournalOnly = false;
   /**
    * Per-epic sticky SETUP/structure — setEpic stashes/restores so GOLD↔SILVER
    * desk ticks do not wipe ARMED setup.
@@ -1069,11 +1079,14 @@ class MasterRuntime {
       );
       if (withBias?.hour_bias) this.last_hour_bias = withBias.hour_bias;
     }
-    if (!this.last_closed_10s_present) {
+    if (!this.last_closed_10s_present && !this.last_closed_10s) {
       const with10s = loadDecisionEvents(96).find(
         (e) => e.closed_10s_present === true
       );
-      if (with10s) this.last_closed_10s_present = true;
+      if (with10s) {
+        this.last_closed_10s_present = true;
+        this.closed10sFromJournalOnly = true;
+      }
     }
   }
 
@@ -2662,6 +2675,26 @@ class MasterRuntime {
       this.hourBarsFromDiskCache = false;
       this.last_hour_bars_detail = 'tick';
     }
+    if (opts?.closed_10s) {
+      const next = {
+        open_time_ms: Number(opts.closed_10s.open_time_ms),
+        open: Number(opts.closed_10s.open),
+        high: Number(opts.closed_10s.high),
+        low: Number(opts.closed_10s.low),
+        close: Number(opts.closed_10s.close),
+        ticks: Number(opts.closed_10s.ticks) || 1,
+      };
+      const isNewBucket =
+        !this.last_closed_10s ||
+        next.open_time_ms !== this.last_closed_10s.open_time_ms;
+      this.last_closed_10s = next;
+      this.last_closed_10s_present = true;
+      // Sticky reuse of disk bar must keep disk_cache until a new 10s bucket closes
+      if (isNewBucket) {
+        this.closed10sFromDiskCache = false;
+        this.closed10sFromJournalOnly = false;
+      }
+    }
     // Keep hourBarsFromDiskCache until live HOUR refresh replaces hours
     this.persistMarketCache();
     this.rollDailyPnl();
@@ -2945,7 +2978,7 @@ class MasterRuntime {
         }
       : null;
     this.last_hour_bias = this.pipeline.getStructureBook()?.hour_bias ?? null;
-    this.last_closed_10s_present = !!opts?.closed_10s;
+    this.last_closed_10s_present = !!this.last_closed_10s || !!opts?.closed_10s;
     this.rememberCycleForEpic();
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();
@@ -4038,7 +4071,8 @@ class MasterRuntime {
       };
     }
     /** Desk last_closed parity — confirm gate stays armed between 10s closes */
-    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
+    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null =
+      this.last_closed_10s;
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -4265,7 +4299,8 @@ class MasterRuntime {
       };
     }
     /** Desk last_closed parity — confirm gate stays armed between 10s closes */
-    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
+    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null =
+      this.last_closed_10s;
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -4570,7 +4605,8 @@ class MasterRuntime {
     if (
       !this.last_bars.length &&
       !this.last_quote &&
-      !this.last_hour_bars.length
+      !this.last_hour_bars.length &&
+      !this.last_closed_10s
     )
       return;
     saveMarketCache({
@@ -4579,6 +4615,7 @@ class MasterRuntime {
       quote: this.last_quote,
       hour_bars: this.last_hour_bars.length ? this.last_hour_bars : null,
       hour_bars_detail: this.last_hour_bars_detail,
+      closed_10s: this.last_closed_10s,
       structure_seed_source: this.structure_seed_source,
     });
   }
@@ -4614,6 +4651,12 @@ class MasterRuntime {
       if (cached.hour_bars_detail) {
         this.last_hour_bars_detail = String(cached.hour_bars_detail);
       }
+    }
+    if (!this.last_closed_10s && cached.closed_10s) {
+      this.last_closed_10s = cached.closed_10s;
+      this.last_closed_10s_present = true;
+      this.closed10sFromDiskCache = true;
+      this.closed10sFromJournalOnly = false;
     }
   }
 
@@ -5450,7 +5493,15 @@ class MasterRuntime {
       setup_gate_armed: !!this.cfg.require_armed_setup,
       desk_entry: this.last_desk_entry,
       hour_bias: this.last_hour_bias ?? this.pipeline.getStructureBook()?.hour_bias ?? null,
-      closed_10s_present: this.last_closed_10s_present,
+      closed_10s_present: this.last_closed_10s_present || !!this.last_closed_10s,
+      closed_10s_cached: this.closed10sFromDiskCache && !!this.last_closed_10s,
+      closed_10s_source: this.last_closed_10s
+        ? this.closed10sFromDiskCache
+          ? 'disk_cache'
+          : 'live'
+        : this.closed10sFromJournalOnly && this.last_closed_10s_present
+          ? 'journal'
+          : null,
       entry_gates: (() => {
         const now = Date.now();
         const weekend = isWeekendUtc(now);
