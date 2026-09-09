@@ -2951,7 +2951,6 @@ class MasterRuntime {
     }
     // Keep hourBarsFromDiskCache until live HOUR refresh replaces hours
     this.persistMarketCache();
-    this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
     if (broker instanceof Mt4FileBroker) {
       this.syncEpicFromMt4Chart(broker);
@@ -2970,8 +2969,11 @@ class MasterRuntime {
     }
 
     // Refresh equity from whatever broker is attached (paper or Capital)
+    // BEFORE UTC day-roll so day_start_equity seeds from live MTM/venue equity.
     const acct = await broker.getAccount();
     await this.applyVenueAccountSnapshot(broker, acct, quote);
+    // Roll UTC day before any manage/sync close mutates daily_pnl
+    this.rollDailyPnl();
 
     // Reader relative spread — update history every tick
     if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
@@ -5144,9 +5146,6 @@ class MasterRuntime {
       this.clearSpentEntryFingerprint();
       return;
     }
-    // Roll UTC day before any manage/sync close mutates daily_pnl (Stop-with-opens
-    // may never hit full tick across midnight — avoid fail-open day-loss wipe).
-    this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
     // VS-System 1s trail: pull a fresh broker tick — do not reuse frozen last_quote.
     let quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
@@ -5207,6 +5206,16 @@ class MasterRuntime {
       });
       broker.markToMarket();
     }
+    // Fresh MTM/account BEFORE UTC day-roll so day_start_equity seeds from live
+    // equity (not hours-stale Stop-with-opens leftovers). Still before manage/sync
+    // closes mutate daily_pnl (avoid fail-open day-loss wipe).
+    try {
+      const acctPre = await broker.getAccount();
+      await this.applyVenueAccountSnapshot(broker, acctPre, quote);
+    } catch {
+      /* keep */
+    }
+    this.rollDailyPnl();
 
     const runPaperOrCapitalSync = async () => {
       // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills

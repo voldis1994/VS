@@ -223,6 +223,135 @@ describe('MASTER daily pnl day boundary', () => {
     masterRuntime.stop();
     broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
   });
+
+  it('manageOnlyTick seeds day_start_equity from MTM equity after UTC day roll', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      time_stop_max_bars: 0,
+      max_hold_ms: 86_400_000,
+      post_exit_cooldown_ms: 0,
+      soft_trail_money_arm: 0,
+      be_start: 0,
+      trail_start: 0,
+      scalp_pct_chase: false,
+      ai_mode: 'off',
+    };
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    // Stale account equity left from prior session — must NOT seed day_start
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.running = true;
+
+    const entry = 4400;
+    // Manage-on-quote only — empty bars skip EMA structure exits
+    const bars: Array<{
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      ts_ms: number;
+    }> = [];
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'manage-only-day-mtm-aaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 50,
+      profit_level: entry + 50,
+    });
+    expect(placed.ok).toBe(true);
+    masterRuntime.positions.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-manage-only-day-mtm',
+      intent_id: 'manage-only-day-mtm-aaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: placed.fill_price!,
+      stop_loss: entry - 50,
+      take_profit: entry + 50,
+      decision: {
+        decision_id: 'd-day-mtm',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+
+    // Mild adverse mark — MTM equity drops; stay open (below HardInvalidation ~1.5pts)
+    const loseMark = {
+      bid: entry - 0.5,
+      ask: entry - 0.3,
+      mid: entry - 0.4,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    broker.setQuote(loseMark);
+    // Leave account.equity stale at 10k until manageOnly MTM+snapshot
+    masterRuntime.account.equity = 10_000;
+
+    await (
+      masterRuntime as unknown as {
+        manageOnlyTick: (b: typeof bars, q: typeof loseMark) => Promise<void>;
+      }
+    ).manageOnlyTick(bars, loseMark);
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(broker.equity).toBeLessThan(10_000);
+    // day_start must seed from post-MTM equity, not stale 10k leftovers
+    expect(masterRuntime.account.day_start_equity).toBe(broker.equity);
+    expect(masterRuntime.account.day_start_equity).toBeLessThan(10_000);
+    expect(masterRuntime.account.equity).toBe(broker.equity);
+    masterRuntime.stop();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+  });
 });
 
 describe('MASTER per-tick ghost sync', () => {
