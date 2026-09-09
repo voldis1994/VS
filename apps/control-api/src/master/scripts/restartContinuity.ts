@@ -33,8 +33,8 @@ import { saveMarketCache } from '../marketCache.js';
 import { saveEpicCycleStash } from '../epicCycleStash.js';
 import { emptySetup } from '../../services/marketSetup.js';
 import { saveRuntimeGates } from '../runtimeGates.js';
-import { setJournalMirror } from '../journalMirror.js';
-import { loadDecisionEvents } from '../decisionJournal.js';
+import { saveManageConfig } from '../manageConfig.js';
+import { setJournalMirror } from '../journalMirror.js';import { loadDecisionEvents } from '../decisionJournal.js';
 import { loadTradeEvents } from '../tradeEventJournal.js';
 
 async function main() {
@@ -355,7 +355,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -464,6 +464,29 @@ async function main() {
     primary.runtimeGatesPayload.mode === 'PAPER' &&
     primary.runtimeGatesPayload.epic === 'GOLD' &&
     Number(primary.runtimeGatesPayload.day_start_equity) === 10_000;
+  // Dual-write manage_config into MemoryPersist primary BEFORE file wipe
+  // Soft exits stay 0 so sync-survival proof is not stolen by EMA/BestOutcome.
+  const manageForPrimary = {
+    soft_trail_money_arm: 0,
+    be_start: 0,
+    trail_start: 0,
+    max_hold_ms: 0,
+    scalp_pct_chase: false,
+    block_off_hours: false,
+    profit_lock: 99,
+    min_score: 0.42,
+    require_armed_setup: true,
+  };
+  saveManageConfig(manageForPrimary);
+  await persistManageConfigState({
+    ...manageForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadManageConfig =
+    primary.manageConfigPayload != null &&
+    Number(primary.manageConfigPayload.profit_lock) === 99 &&
+    Number(primary.manageConfigPayload.min_score) === 0.42 &&
+    primary.manageConfigPayload.require_armed_setup === true;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -485,9 +508,13 @@ async function main() {
   const runtimeGatesGoneBeforeHydrate = !existsSync(
     join(stateDir, 'runtime_gates.json')
   );
+  const manageConfigGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'master_manage_config.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
+  // Do NOT re-seed manage_config — must heal from DualPersist primary.
   // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
   writeFileSync(
     join(stateDir, 'monitoring_snapshot.json'),
@@ -591,13 +618,19 @@ async function main() {
     primaryHadMarketCache &&
     primaryHadEpicStash &&
     primaryHadRuntimeGates &&
+    primaryHadManageConfig &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
     runtimeGatesGoneBeforeHydrate &&
+    manageConfigGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
+    existsSync(join(stateDir, 'master_manage_config.json')) &&
+    Number(masterRuntime.cfg.profit_lock) === 99 &&
+    Number(masterRuntime.cfg.min_score) === 0.42 &&
+    masterRuntime.cfg.require_armed_setup === true &&
     stHydrate.persist_backend === 'dual' &&
     stHydrate.journal_audit?.healed_from_persist === true &&
     stHydrate.journal_audit?.decision_sidecar === true &&
@@ -1115,6 +1148,11 @@ async function main() {
         primaryHadRuntimeGates &&
         runtimeGatesGoneBeforeHydrate &&
         existsSync(join(stateDir, 'runtime_gates.json')),
+      manage_config_pg_primary_heal_ok:
+        primaryHadManageConfig &&
+        manageConfigGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'master_manage_config.json')) &&
+        Number(masterRuntime.cfg.profit_lock) === 99,
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

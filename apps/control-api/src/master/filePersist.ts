@@ -463,6 +463,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.runtimeGatesPayload
       );
     }
+    // Dual-write manage_config sidecar when SQL path updated MemoryPersist
+    if (this.mem.manageConfigPayload) {
+      atomicWriteJson(
+        join(this.root, 'master_manage_config.json'),
+        this.mem.manageConfigPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {
