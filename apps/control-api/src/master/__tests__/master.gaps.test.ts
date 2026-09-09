@@ -2259,6 +2259,119 @@ describe('runMasterFromDesk integration', () => {
     if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
     else process.env.MASTER_OWNS_PIPELINE = prev;
   });
+
+  it('GOLD→SILVER→GOLD restores sticky SETUP and retains cycles_by_epic', async () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    const prevEpic = masterRuntime.epic;
+    const prevPipe = masterRuntime.pipeline;
+    try {
+      masterRuntime.setOwnsPipeline(true);
+      masterRuntime.setMode('PAPER');
+      masterRuntime.ensurePaperBroker();
+      masterRuntime.setEntriesArmed(true);
+      const { MasterPipeline } = await import('../pipeline.js');
+      const { emptySetup } = await import('../../services/marketSetup.js');
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      // Seed GOLD ARMED setup, then switch epics
+      masterRuntime.setEpic('GOLD');
+      const armed = {
+        ...emptySetup('test_gold_armed'),
+        kind: 'CONTINUATION' as const,
+        side: 'BUY' as const,
+        status: 'ARMED' as const,
+        reason: 'test_gold_armed',
+        confirm: 2,
+      };
+      masterRuntime.pipeline.restoreMarketSetup({
+        setup: armed,
+        structure: null,
+      });
+      expect(masterRuntime.pipeline.getMarketSetup()?.reason).toBe('test_gold_armed');
+
+      masterRuntime.setEpic('SILVER');
+      expect(masterRuntime.pipeline.getMarketSetup()?.reason).not.toBe('test_gold_armed');
+      // Plant SILVER setup so GOLD restore is not confused
+      masterRuntime.pipeline.restoreMarketSetup({
+        setup: {
+          ...emptySetup('test_silver'),
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          status: 'WATCH',
+          reason: 'test_silver',
+          confirm: 0,
+        },
+        structure: null,
+      });
+
+      masterRuntime.setEpic('GOLD');
+      expect(masterRuntime.pipeline.getMarketSetup()?.reason).toBe('test_gold_armed');
+      expect(masterRuntime.pipeline.getMarketSetup()?.status).toBe('ARMED');
+      expect(masterRuntime.pipeline.getMarketSetup()?.side).toBe('BUY');
+
+      // Simulate cycle remember for both epics via status map after ticks
+      const { runMasterFromDesk } = await import('../deskBridge.js');
+      const goldBars = Array.from({ length: 12 }, (_, i) => ({
+        open: 4400 + i * 0.5,
+        high: 4401 + i * 0.5,
+        low: 4399 + i * 0.5,
+        close: 4400.4 + i * 0.5,
+        snapshotTime: new Date(Date.now() - (12 - i) * 60_000).toISOString(),
+      }));
+      const silverBars = Array.from({ length: 12 }, (_, i) => ({
+        open: 30 + i * 0.05,
+        high: 30.1 + i * 0.05,
+        low: 29.9 + i * 0.05,
+        close: 30.05 + i * 0.05,
+        snapshotTime: new Date(Date.now() - (12 - i) * 60_000).toISOString(),
+      }));
+      const g = await runMasterFromDesk({
+        epic: 'GOLD',
+        bid: 4406,
+        ask: 4406.4,
+        mid: 4406.2,
+        minuteCandles: goldBars as any,
+        closed10s: {
+          open: 4406,
+          high: 4407,
+          low: 4405,
+          close: 4406.2,
+          ts_ms: Date.now(),
+        } as any,
+      });
+      expect(g.active).toBe(true);
+      const s = await runMasterFromDesk({
+        epic: 'SILVER',
+        bid: 30.5,
+        ask: 30.55,
+        mid: 30.52,
+        minuteCandles: silverBars as any,
+        closed10s: {
+          open: 30.5,
+          high: 30.6,
+          low: 30.4,
+          close: 30.52,
+          ts_ms: Date.now(),
+        } as any,
+      });
+      expect(s.active).toBe(true);
+      const st = masterRuntime.status();
+      expect(st.cycles_by_epic.GOLD).toBeTruthy();
+      expect(st.cycles_by_epic.SILVER).toBeTruthy();
+      expect(st.epic).toBe('SILVER');
+      // Switch back — GOLD setup stash should still restore
+      masterRuntime.setEpic('GOLD');
+      const goldSetup = masterRuntime.pipeline.getMarketSetup();
+      expect(goldSetup).toBeTruthy();
+    } finally {
+      masterRuntime.pipeline = prevPipe;
+      masterRuntime.owns_pipeline_pref = prevPref;
+      masterRuntime.setEpic(prevEpic);
+      if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+      else process.env.MASTER_OWNS_PIPELINE = prev;
+    }
+  });
 });
 
 describe('buildMasterBars 10s hygiene', () => {
