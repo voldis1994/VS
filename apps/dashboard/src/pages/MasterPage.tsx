@@ -1054,11 +1054,19 @@ export function MasterPage() {
             const bits = rows
               .filter((r) => r.trades > 0)
               .map((r) => `${r.source}:${r.trades}/${Number(r.total_pnl).toFixed(1)}`);
-            return bits.length ? bits.join(' · ').slice(0, 80) : '—';
+            const body = bits.length ? bits.join(' · ').slice(0, 80) : '—';
+            return body === '—'
+              ? '—'
+              : `${cyclePending ? 'hydrated · ' : ''}${body}`;
           })(),
-          ok: (status.performance_by_desk_entry || []).some(
-            (r) => r.source !== 'none' && r.trades > 0
-          ),
+          ok:
+            !cyclePending &&
+            (status.performance_by_desk_entry || []).some(
+              (r) => r.source !== 'none' && r.trades > 0
+            ),
+          warn:
+            cyclePending &&
+            (status.performance_by_desk_entry || []).some((r) => r.trades > 0),
         },
         {
           k: 'Confirm EV',
@@ -1067,11 +1075,19 @@ export function MasterPage() {
             const bits = rows
               .filter((r) => r.samples > 0)
               .map((r) => `${r.source}:${r.samples}/${Number(r.avg_ev).toFixed(2)}`);
-            return bits.length ? bits.join(' · ').slice(0, 80) : '—';
+            const body = bits.length ? bits.join(' · ').slice(0, 80) : '—';
+            return body === '—'
+              ? '—'
+              : `${cyclePending ? 'hydrated · ' : ''}${body}`;
           })(),
-          ok: (status.expectancy_by_desk_entry || []).some(
-            (r) => r.source !== 'none' && r.samples > 0
-          ),
+          ok:
+            !cyclePending &&
+            (status.expectancy_by_desk_entry || []).some(
+              (r) => r.source !== 'none' && r.samples > 0
+            ),
+          warn:
+            cyclePending &&
+            (status.expectancy_by_desk_entry || []).some((r) => r.samples > 0),
         },
         {
           k: 'Day start eq',

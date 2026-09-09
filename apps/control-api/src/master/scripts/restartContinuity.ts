@@ -88,9 +88,18 @@ async function main() {
     entry: 4410,
     stop_loss: 4390,
     take_profit: 4450,
-    decision: cycle.decision,
+    decision: { ...cycle.decision, desk_entry_source: 'setup' },
   });
   await saveOpenPositions(pm.list());
+  // Stamp desk confirm on decision so Confirm PnL/EV + TradeEvent survive restart
+  cycle.decision = {
+    ...cycle.decision,
+    desk_entry_source: 'setup',
+  };
+  cycle.opportunity = {
+    ...cycle.opportunity,
+    decision: cycle.decision,
+  };
   await persistOpportunity(cycle.opportunity);
   await persistOutcome(
     cycle.opportunity.id,
@@ -109,7 +118,7 @@ async function main() {
       hold_ms: 30_000,
       exit_reason: 'TakeProfit',
     },
-    'TREND:BUY'
+    'GOLD|BUY|LOW_VOLATILITY|UP|LONDON|setup'
   );
   // Decision + trade audit journals must survive restart (journal→performance stage)
   const { logDecisionEvent } = await import('../decisionJournal.js');
@@ -124,6 +133,10 @@ async function main() {
     block_reason: cycle.decision.block_reason,
     executed: true,
     execution_detail: 'restart_check_seed',
+    desk_entry_source: 'setup',
+    desk_entry_side: 'BUY',
+    hour_bias: 'UP',
+    closed_10s_present: true,
   });
   logTradeEvent({
     event: 'OPEN',
@@ -137,6 +150,7 @@ async function main() {
     opportunity_id: cycle.opportunity.id,
     ok: true,
     detail: 'restart_check_seed_open',
+    desk_entry_source: 'setup',
   });
   logTradeEvent({
     event: 'CLOSE',
@@ -151,6 +165,7 @@ async function main() {
     detail: 'TakeProfit',
     pnl: 8,
     fees: 0.1,
+    desk_entry_source: 'setup',
   });
   // Cached bars/quote so hydrate manage can tick without live feed
   saveMarketCache({
@@ -502,6 +517,23 @@ async function main() {
     open_positions_status: stHydrate.open_positions,
     recent_decisions: stHydrate.recent_decisions?.length ?? 0,
     recent_trades: stHydrate.recent_trades?.length ?? 0,
+    recent_trades_desk_setup: (stHydrate.recent_trades || []).filter(
+      (t: { desk_entry_source?: string | null }) =>
+        t.desk_entry_source === 'setup'
+    ).length,
+    trade_jsonl_desk_setup: loadTradeEvents(20).filter(
+      (e) => e.desk_entry_source === 'setup'
+    ).length,
+    decision_jsonl_desk_setup: loadDecisionEvents(20).filter(
+      (e) => e.desk_entry_source === 'setup'
+    ).length,
+    performance_by_desk_setup_trades: (
+      stHydrate.performance_by_desk_entry || []
+    ).find((r: { source: string }) => r.source === 'setup')?.trades ?? 0,
+    desk_entry_source_status: stHydrate.desk_entry?.source ?? null,
+    desk_entry_hydrated:
+      !!stHydrate.desk_entry &&
+      String(stHydrate.desk_entry.reason || '').startsWith('hydrated ·'),
     cycles_by_epic_keys: Object.keys(stHydrate.cycles_by_epic || {}),
     cycles_by_epic_hydrated: stHydrate.cycles_by_epic_hydrated === true,
     cycles_gold: !!stHydrate.cycles_by_epic?.GOLD,
@@ -620,6 +652,12 @@ async function main() {
     hydrateSnap.open_positions_status === 1 &&
     hydrateSnap.recent_decisions >= 1 &&
     hydrateSnap.recent_trades >= 2 &&
+    hydrateSnap.recent_trades_desk_setup >= 1 &&
+    hydrateSnap.trade_jsonl_desk_setup >= 1 &&
+    hydrateSnap.decision_jsonl_desk_setup >= 1 &&
+    hydrateSnap.performance_by_desk_setup_trades >= 1 &&
+    hydrateSnap.desk_entry_source_status === 'setup' &&
+    hydrateSnap.desk_entry_hydrated === true &&
     hydrateSnap.journal_stage_ok === true &&
     hydrateSnap.journal_stage_hydrated === true &&
     String(hydrateSnap.journal_stage_detail || '').startsWith('hydrated ·') &&
@@ -792,6 +830,13 @@ async function main() {
     journals: {
       decisions: hydrateSnap.recent_decisions,
       trades: hydrateSnap.recent_trades,
+      recent_trades_desk_setup: hydrateSnap.recent_trades_desk_setup,
+      trade_jsonl_desk_setup: hydrateSnap.trade_jsonl_desk_setup,
+      decision_jsonl_desk_setup: hydrateSnap.decision_jsonl_desk_setup,
+      performance_by_desk_setup_trades:
+        hydrateSnap.performance_by_desk_setup_trades,
+      desk_entry_source_status: hydrateSnap.desk_entry_source_status,
+      desk_entry_hydrated: hydrateSnap.desk_entry_hydrated,
       journal_stage_ok: hydrateSnap.journal_stage_ok,
       journal_stage_detail: hydrateSnap.journal_stage_detail,
       journal_stage_hydrated: hydrateSnap.journal_stage_hydrated,

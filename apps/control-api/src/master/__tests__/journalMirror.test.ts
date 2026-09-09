@@ -135,6 +135,7 @@ describe('DualPersist/FilePersist journal mirror', () => {
       opportunity_id: 'opp-pg-1',
       ok: true,
       detail: 'pg_primary_open',
+      desk_entry_source: 'setup',
     });
 
     // Allow fire-and-forget persist to land
@@ -146,9 +147,11 @@ describe('DualPersist/FilePersist journal mirror', () => {
     expect(seeded!.desk_entry_side).toBe('BUY');
     expect(seeded!.hour_bias).toBe('UP');
     expect(seeded!.closed_10s_present).toBe(true);
-    expect(
-      (await loadTradeEventsFromPersist(5)).some((e) => e.position_id === 'pos-pg-1')
-    ).toBe(true);
+    const tradeSeeded = (await loadTradeEventsFromPersist(5)).find(
+      (e) => e.position_id === 'pos-pg-1'
+    );
+    expect(tradeSeeded).toBeTruthy();
+    expect(tradeSeeded!.desk_entry_source).toBe('setup');
     expect(primary.decisionEvents.length).toBeGreaterThanOrEqual(1);
     expect(primary.tradeEvents.length).toBeGreaterThanOrEqual(1);
 
@@ -177,8 +180,9 @@ describe('DualPersist/FilePersist journal mirror', () => {
     expect(healed!.desk_entry_side).toBe('BUY');
     expect(healed!.hour_bias).toBe('UP');
     expect(healed!.closed_10s_present).toBe(true);
-    expect(loadTradeEvents(5).some((e) => e.detail === 'pg_primary_open')).toBe(
-      true
-    );
+    const tradeHealed = loadTradeEvents(5).find((e) => e.position_id === 'pos-pg-1');
+    expect(tradeHealed).toBeTruthy();
+    expect(tradeHealed!.detail).toBe('pg_primary_open');
+    expect(tradeHealed!.desk_entry_source).toBe('setup');
   });
 });
