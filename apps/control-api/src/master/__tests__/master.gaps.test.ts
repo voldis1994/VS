@@ -5355,6 +5355,7 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
 
     try {
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms = 0;
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
       masterRuntime.persist_ok = true;
       masterRuntime.last_persist_error = null;
       masterRuntime.positions = new PositionManager();
@@ -5472,6 +5473,7 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
     } finally {
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
         prevManage;
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
       masterRuntime.persist_ok = prevPersist;
       masterRuntime.last_persist_error = prevPersistErr;
       masterRuntime.positions = prevPositions;
