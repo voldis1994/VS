@@ -191,14 +191,20 @@ async function main() {
       !String(demo.journals.normalization_stage_detail).includes('stale_quote') &&
       demo?.hydrate?.performance_total_pnl === 8 &&
       typeof demo?.journals?.performance_stage_detail === 'string' &&
-      String(demo.journals.performance_stage_detail).includes('pnl=');
+      String(demo.journals.performance_stage_detail).includes('pnl=') &&
+      (demo?.journals?.recent_trades_desk_setup ?? 0) >= 1 &&
+      (demo?.journals?.trade_jsonl_desk_setup ?? 0) >= 1 &&
+      (demo?.journals?.decision_jsonl_desk_setup ?? 0) >= 1 &&
+      (demo?.journals?.performance_by_desk_setup_trades ?? 0) >= 1 &&
+      demo?.journals?.desk_entry_source_status === 'setup' &&
+      demo?.journals?.desk_entry_hydrated === true;
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache; entry_gates session hydrated; Why/monitor disk hydrate honesty; Stage·risk from opportunity.risk; Float UPL disk_cache; Stage·exit journal hydrate honesty; Stage·exec decision-journal seed; Stage·validate/normalize disk_cache hydrate (aged quote not live stale); Stage·regime hydrated · (not no cycle ·); Stage·position/broker hydrated awaiting manage/attach; Stage·journal/perf hydrated · while green; Closed PnL/Last error hydrate',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache; entry_gates session hydrated; Why/monitor disk hydrate honesty; Stage·risk from opportunity.risk; Float UPL disk_cache; Stage·exit journal hydrate honesty; Stage·exec decision-journal seed; Stage·validate/normalize disk_cache hydrate (aged quote not live stale); Stage·regime hydrated · (not no cycle ·); Stage·position/broker hydrated awaiting manage/attach; Stage·journal/perf hydrated · while green; Closed PnL/Last error hydrate; TradeEvent+Decision desk_entry setup survive DualPersist wipe; Confirm PnL setup bucket + Desk entry hydrated',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} exit_stage=${demo.journals?.exit_stage_detail} exec_stage=${demo.journals?.execution_stage_detail} validate=${demo.journals?.market_validation_stage_detail} normalize=${demo.journals?.normalization_stage_detail} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} entry_session=${demo.journals?.entry_gates_session} mon_hydrated=${demo.journals?.monitoring_hydrated} why=${demo.journals?.last_block_reason} risk=${demo.journals?.risk_stage_detail} float=${demo.journals?.floating_pnl} float_cached=${demo.journals?.floating_pnl_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok} analysis_hydrated=${demo.journals?.analysis_stage_hydrated} analysis_detail=${demo.journals?.analysis_stage_detail} pos_stage=${demo.journals?.position_stage_pre_manage_detail} broker_stage=${demo.journals?.broker_stage_detail} journal_stage=${demo.journals?.journal_stage_detail} perf_hydrated=${demo.journals?.performance_stage_hydrated}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} exit_stage=${demo.journals?.exit_stage_detail} exec_stage=${demo.journals?.execution_stage_detail} validate=${demo.journals?.market_validation_stage_detail} normalize=${demo.journals?.normalization_stage_detail} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} entry_session=${demo.journals?.entry_gates_session} mon_hydrated=${demo.journals?.monitoring_hydrated} why=${demo.journals?.last_block_reason} risk=${demo.journals?.risk_stage_detail} float=${demo.journals?.floating_pnl} float_cached=${demo.journals?.floating_pnl_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok} analysis_hydrated=${demo.journals?.analysis_stage_hydrated} analysis_detail=${demo.journals?.analysis_stage_detail} pos_stage=${demo.journals?.position_stage_pre_manage_detail} broker_stage=${demo.journals?.broker_stage_detail} journal_stage=${demo.journals?.journal_stage_detail} perf_hydrated=${demo.journals?.performance_stage_hydrated} trade_desk_setup=${demo.journals?.trade_jsonl_desk_setup} recent_desk_setup=${demo.journals?.recent_trades_desk_setup} confirm_pnl_setup=${demo.journals?.performance_by_desk_setup_trades} desk_entry=${demo.journals?.desk_entry_source_status} desk_hydrated=${demo.journals?.desk_entry_hydrated}`
         : r.out.slice(-500),
     });
   }
@@ -679,6 +685,27 @@ async function main() {
       masterPageBody.includes('expectancy_by_desk_entry') &&
       masterPageBody.includes("'Confirm EV'") &&
       masterRouteBody.includes("card('Confirm EV'");
+    const restartBody = readFileSync(
+      join(root, 'src/master/scripts/restartContinuity.ts'),
+      'utf8'
+    );
+    const confirmDeskHydrateWarn =
+      masterPageBody.includes("'Confirm PnL'") &&
+      masterPageBody.includes("'Confirm EV'") &&
+      masterPageBody.includes("cyclePending ? 'hydrated · ' : ''}${body}") &&
+      /Confirm PnL[\s\S]*warn:[\s\S]*cyclePending &&[\s\S]*performance_by_desk_entry/.test(
+        masterPageBody
+      ) &&
+      masterRouteBody.includes("card('Confirm PnL'") &&
+      masterRouteBody.includes("card('Confirm EV'") &&
+      masterRouteBody.includes("cyclePending?'hydrated · ':'')+body");
+    const tradeDeskRestartHydrate =
+      restartBody.includes("desk_entry_source: 'setup'") &&
+      restartBody.includes('recent_trades_desk_setup') &&
+      restartBody.includes('trade_jsonl_desk_setup') &&
+      restartBody.includes('performance_by_desk_setup_trades') &&
+      restartBody.includes('desk_entry_hydrated') &&
+      restartBody.includes('GOLD|BUY|LOW_VOLATILITY|UP|LONDON|setup');
     const deskEntryOpenHydrate =
       existsSync(join(root, 'src/master/deskEntryHydrate.ts')) &&
       runtimeBody.includes('backfillDeskEntrySources') &&
@@ -878,6 +905,8 @@ async function main() {
       deskEntryPgHydrate &&
       deskEntryPerfJoin &&
       deskSourceExpectancyDash &&
+      confirmDeskHydrateWarn &&
+      tradeDeskRestartHydrate &&
       deskEntryOpenHydrate &&
       deskEntryStatusHydrate &&
       openPosConfirmDash &&
