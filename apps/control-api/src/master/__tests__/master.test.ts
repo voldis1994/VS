@@ -1214,7 +1214,7 @@ describe('VS MASTER desk SETUP ARMED gate', () => {
   const armedBuy = {
     kind: 'CONTINUATION' as const,
     side: 'BUY' as const,
-    playbook: 'TREND' as const,
+    playbook: 'LONG' as const,
     status: 'ARMED' as const,
     swing_high: 4450,
     swing_low: 4380,
