@@ -188,6 +188,8 @@ export type MasterStatus = {
     session: string;
     session_blocks: boolean;
     hours_ok: boolean;
+    /** Journal session label without a live cycle — not authoritative. */
+    session_hydrated: boolean;
   };
   /** Null money fields when Capital LIVE account is unproven (never forged £0). */
   account: (Omit<
@@ -4427,8 +4429,14 @@ class MasterRuntime {
           this.epic
         );
         const hoursOk = withinTradingHours(this.cfg.trading_hours, now);
-        const sessionLabel =
+        const cyclePending = !this.last_market;
+        const rawSession =
           this.last_decision?.analysis?.session || 'UNKNOWN';
+        // Journal session must not look live or drive session_blocks until a cycle
+        const sessionHydrated = cyclePending && !!this.last_decision;
+        const sessionLabel = sessionHydrated
+          ? `hydrated · ${rawSession}`
+          : rawSession;
         return {
           news_cfg_on: !!this.cfg.block_high_impact_news,
           news_blocks: !!news.blocked,
@@ -4436,9 +4444,10 @@ class MasterRuntime {
           block_off_hours: !!this.cfg.block_off_hours,
           weekend,
           session: sessionLabel,
+          session_hydrated: sessionHydrated,
           session_blocks:
             !!this.cfg.block_off_hours &&
-            (sessionLabel === 'OFF_HOURS' || weekend),
+            (weekend || (!sessionHydrated && rawSession === 'OFF_HOURS')),
           hours_ok: hoursOk,
         };
       })(),

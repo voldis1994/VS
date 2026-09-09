@@ -121,6 +121,7 @@ type MasterStatus = {
     session: string;
     session_blocks: boolean;
     hours_ok: boolean;
+    session_hydrated?: boolean;
   };
   monitoring?: {
     last_cycle_ms?: number;
@@ -689,9 +690,7 @@ export function MasterPage() {
           v: status.entry_gates
             ? [
                 status.entry_gates.weekend ? 'weekend' : null,
-                status.entry_gates.session_blocks
-                  ? `session=${status.entry_gates.session}`
-                  : `session=${status.entry_gates.session}`,
+                `session=${status.entry_gates.session}`,
                 status.entry_gates.hours_ok ? 'hoursOK' : 'hoursBLOCK',
                 status.entry_gates.news_cfg_on
                   ? status.entry_gates.news_blocks
@@ -702,14 +701,17 @@ export function MasterPage() {
                 .filter(Boolean)
                 .join(' · ')
             : '—',
+          // Hydrated journal session is neutral — live weekend/hours/news still paint
           bad:
             !!status.entry_gates &&
+            !status.entry_gates.session_hydrated &&
             (status.entry_gates.weekend ||
               status.entry_gates.session_blocks ||
               !status.entry_gates.hours_ok ||
               status.entry_gates.news_blocks),
           ok:
             !!status.entry_gates &&
+            !status.entry_gates.session_hydrated &&
             !status.entry_gates.weekend &&
             !status.entry_gates.session_blocks &&
             status.entry_gates.hours_ok &&

@@ -375,6 +375,9 @@ async function main() {
     quote_source: stHydrate.quote?.source ?? null,
     bars_available: stHydrate.bars_available ?? 0,
     bars_cached: stHydrate.bars_cached === true,
+    entry_gates_session: stHydrate.entry_gates?.session ?? null,
+    entry_gates_session_hydrated:
+      stHydrate.entry_gates?.session_hydrated === true,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -418,6 +421,8 @@ async function main() {
     hydrateSnap.quote_cached === true &&
     hydrateSnap.bars_cached === true &&
     hydrateSnap.bars_available >= 40 &&
+    hydrateSnap.entry_gates_session_hydrated === true &&
+    String(hydrateSnap.entry_gates_session || '').startsWith('hydrated ·') &&
     journalHealOk &&
     pgPrimaryHealOk;
 
@@ -561,6 +566,8 @@ async function main() {
       quote_source: hydrateSnap.quote_source,
       bars_available: hydrateSnap.bars_available,
       bars_cached: hydrateSnap.bars_cached,
+      entry_gates_session: hydrateSnap.entry_gates_session,
+      entry_gates_session_hydrated: hydrateSnap.entry_gates_session_hydrated,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,

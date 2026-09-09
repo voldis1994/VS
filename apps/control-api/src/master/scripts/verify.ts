@@ -127,16 +127,19 @@ async function main() {
       demo?.journals?.quote_cached === true &&
       demo?.journals?.bars_cached === true &&
       (demo?.journals?.bars_available ?? 0) >= 40 &&
+      demo?.journals?.entry_gates_session_hydrated === true &&
+      typeof demo?.journals?.entry_gates_session === 'string' &&
+      String(demo.journals.entry_gates_session).startsWith('hydrated ·') &&
       demo?.hydrate?.performance_total_pnl === 8 &&
       typeof demo?.journals?.performance_stage_detail === 'string' &&
       String(demo.journals.performance_stage_detail).includes('pnl=');
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache; entry_gates session hydrated',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} entry_session=${demo.journals?.entry_gates_session} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
         : r.out.slice(-500),
     });
   }
@@ -311,6 +314,9 @@ async function main() {
       masterPageBody.includes("status.quote.cached ? 'cached · '") &&
       masterPageBody.includes('status.bars_cached') &&
       masterPageBody.includes('cached · ${status.bars_available');
+    const entryGatesHydrateUi =
+      masterPageBody.includes('session_hydrated') &&
+      masterPageBody.includes("'Entry gates'");
     const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
     const journalAuditEmbed =
       masterRouteBody.includes('persist_backend') &&
@@ -328,6 +334,9 @@ async function main() {
     const quoteBarsCacheEmbed =
       masterRouteBody.includes("s.quote.cached?'cached · '") &&
       masterRouteBody.includes("s.bars_cached?('cached · '");
+    const entryGatesEmbed =
+      masterRouteBody.includes("card('Entry gates'") &&
+      masterRouteBody.includes('session_hydrated');
     const regimeHydrateApi =
       runtimeBody.includes('hydrated · ${raw}') &&
       runtimeBody.includes('never look live from journal hydrate alone');
@@ -335,6 +344,9 @@ async function main() {
       runtimeBody.includes('quoteFromDiskCache') &&
       runtimeBody.includes("source: this.quoteFromDiskCache ? 'disk_cache' : 'live'") &&
       runtimeBody.includes('bars_cached: this.barsFromDiskCache');
+    const entryGatesHydrateApi =
+      runtimeBody.includes('session_hydrated: sessionHydrated') &&
+      runtimeBody.includes('Journal session must not look live');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -358,15 +370,18 @@ async function main() {
       quoteBarsCacheUi &&
       quoteBarsCacheEmbed &&
       quoteBarsCacheApi &&
+      entryGatesHydrateUi &&
+      entryGatesEmbed &&
+      entryGatesHydrateApi &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates hydrate',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}`,
     });
   }
 
