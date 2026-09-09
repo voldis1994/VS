@@ -636,7 +636,7 @@ button.primary{background:#163528;border-color:#2a5a45;color:var(--ok)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
 .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .v{font-size:17px;margin-top:6px;word-break:break-word}
-.bad{color:var(--bad)}.ok{color:var(--ok)}
+.bad{color:var(--bad)}.ok{color:var(--ok)}.warn{color:#b8860b}
 h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.08em}
 #log{background:#0a1018;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:180px;overflow:auto;font-size:12px;color:#9fb0c0;white-space:pre-wrap}
 </style></head><body>
@@ -707,10 +707,10 @@ async function refresh(){
       card('Market state',s.market_state||'—',s.market_state&&String(s.market_state).indexOf('invalid:')===0?'bad':''),
       card('Norm',s.last_market?('Q='+Number(s.last_market.quality).toFixed(2)+' · '+s.last_market.bars_out+'/'+s.last_market.bars_in+(s.last_market.reasons&&s.last_market.reasons.length?' · '+s.last_market.reasons.slice(0,2).join('|'):'')):'—',s.last_market&&(!s.last_market.ok||s.last_market.quality<0.5)?'bad':(s.last_market&&s.last_market.ok?'ok':'')),
       card('BUY',Number(s.buy_score||0).toFixed(3)),
-      card('BUY filter',s.buy_filter?(s.buy_filter.ok?('ok · '+Number(s.buy_filter.score).toFixed(3)):((s.buy_filter.reason||'fail')+' · '+Number(s.buy_filter.score).toFixed(3))):'—',s.buy_filter&&!s.buy_filter.ok?'bad':(s.buy_filter&&s.buy_filter.ok?'ok':'')),
+      card('BUY filter',s.buy_filter?(s.buy_filter.reason==='hydrated'?('hydrated · '+Number(s.buy_filter.score).toFixed(3)):(s.buy_filter.ok?('ok · '+Number(s.buy_filter.score).toFixed(3)):((s.buy_filter.reason||'fail')+' · '+Number(s.buy_filter.score).toFixed(3)))):'—',s.buy_filter&&s.buy_filter.reason==='hydrated'?'warn':(s.buy_filter&&!s.buy_filter.ok?'bad':(s.buy_filter&&s.buy_filter.ok?'ok':''))),
       card('SELL',Number(s.sell_score||0).toFixed(3)),
-      card('SELL filter',s.sell_filter?(s.sell_filter.ok?('ok · '+Number(s.sell_filter.score).toFixed(3)):((s.sell_filter.reason||'fail')+' · '+Number(s.sell_filter.score).toFixed(3))):'—',s.sell_filter&&!s.sell_filter.ok?'bad':(s.sell_filter&&s.sell_filter.ok?'ok':'')),
-      ...(s.pipeline_stages?['market_validation','normalization','analysis_regime','dual_candidates','filters','decision','risk','execution','broker','position_manager','exit','journal','performance'].map(function(id){var st=s.pipeline_stages[id];var lab={market_validation:'Stage·validate',normalization:'Stage·normalize',analysis_regime:'Stage·regime',dual_candidates:'Stage·dual',filters:'Stage·filters',decision:'Stage·decision',risk:'Stage·risk',execution:'Stage·exec',broker:'Stage·broker',position_manager:'Stage·position',exit:'Stage·exit',journal:'Stage·journal',performance:'Stage·perf'}[id]||id;return card(lab,st?((st.ok?'ok':'—')+' · '+st.detail):'—',st&&st.ok?'ok':(st?'bad':''))}):[]),
+      card('SELL filter',s.sell_filter?(s.sell_filter.reason==='hydrated'?('hydrated · '+Number(s.sell_filter.score).toFixed(3)):(s.sell_filter.ok?('ok · '+Number(s.sell_filter.score).toFixed(3)):((s.sell_filter.reason||'fail')+' · '+Number(s.sell_filter.score).toFixed(3)))):'—',s.sell_filter&&s.sell_filter.reason==='hydrated'?'warn':(s.sell_filter&&!s.sell_filter.ok?'bad':(s.sell_filter&&s.sell_filter.ok?'ok':''))),
+      ...(s.pipeline_stages?['market_validation','normalization','analysis_regime','dual_candidates','filters','decision','risk','execution','broker','position_manager','exit','journal','performance'].map(function(id){var st=s.pipeline_stages[id];var lab={market_validation:'Stage·validate',normalization:'Stage·normalize',analysis_regime:'Stage·regime',dual_candidates:'Stage·dual',filters:'Stage·filters',decision:'Stage·decision',risk:'Stage·risk',execution:'Stage·exec',broker:'Stage·broker',position_manager:'Stage·position',exit:'Stage·exit',journal:'Stage·journal',performance:'Stage·perf'}[id]||id;var det=st?String(st.detail||''):'';var awaiting=det.indexOf('hydrated ·')>=0||det.indexOf('no cycle')>=0;return card(lab,st?((st.ok?'ok':'—')+' · '+st.detail):'—',st&&st.ok?'ok':(st&&awaiting?'warn':(st?'bad':''))}):[]),
       card('Decision',s.last_decision?.kind||'—'),
       card('Why',why,whyCls),
       card('Last exit',s.last_exit_reason||'—'),

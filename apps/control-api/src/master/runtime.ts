@@ -4149,16 +4149,21 @@ class MasterRuntime {
       sell_score: this.last_decision?.sell?.score ?? 0,
       buy_filter: this.last_decision?.buy
         ? {
-            ok: !!this.last_decision.buy.filter_ok,
-            reason: this.last_decision.buy.filter_reason ?? null,
+            // Never forge live-pass from journal hydrate — need last_market cycle
+            ok: !!(this.last_market && this.last_decision.buy.filter_ok),
+            reason: !this.last_market
+              ? 'hydrated'
+              : this.last_decision.buy.filter_reason ?? null,
             score: this.last_decision.buy.score ?? 0,
             valid: !!this.last_decision.buy.valid,
           }
         : null,
       sell_filter: this.last_decision?.sell
         ? {
-            ok: !!this.last_decision.sell.filter_ok,
-            reason: this.last_decision.sell.filter_reason ?? null,
+            ok: !!(this.last_market && this.last_decision.sell.filter_ok),
+            reason: !this.last_market
+              ? 'hydrated'
+              : this.last_decision.sell.filter_reason ?? null,
             score: this.last_decision.sell.score ?? 0,
             valid: !!this.last_decision.sell.valid,
           }
