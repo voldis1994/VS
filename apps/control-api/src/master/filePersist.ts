@@ -499,6 +499,18 @@ export class FilePersist implements PersistClient, JournalMirror {
           : this.mem.tradeAckJournalPayload;
       atomicWriteJson(join(this.root, 'trade_ack_journal.json'), records);
     }
+    // Dual-write error_journal.jsonl when SQL path updated MemoryPersist
+    if (
+      this.mem.errorJournalPayload &&
+      Array.isArray(this.mem.errorJournalPayload.entries)
+    ) {
+      const lines = this.mem.errorJournalPayload.entries
+        .map((e: unknown) => JSON.stringify(e))
+        .join('\n');
+      const path = join(this.root, 'error_journal.jsonl');
+      const body = lines ? `${lines}\n` : '';
+      writeFileSync(path, body, 'utf8');
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

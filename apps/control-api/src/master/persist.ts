@@ -464,6 +464,51 @@ export async function loadTradeAckJournalFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — error_journal singleton for wipe heal. */
+export async function persistErrorJournalState(state: {
+  entries: unknown[];
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    const entries = Array.isArray(state.entries) ? state.entries : [];
+    await client.query(
+      `INSERT INTO master_error_journal (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({ entries }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadErrorJournalFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_error_journal WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -1021,6 +1066,8 @@ export class MemoryPersist implements PersistClient {
   spreadHistoryPayload: any | null = null;
   /** Singleton trade_ack_journal payload — DualPersist primary wipe heal */
   tradeAckJournalPayload: any | null = null;
+  /** Singleton error_journal payload — DualPersist primary wipe heal */
+  errorJournalPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1225,6 +1272,32 @@ export class MemoryPersist implements PersistClient {
             payload: this.tradeAckJournalPayload,
             saved_at_ms:
               Number(this.tradeAckJournalPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_error_journal')) {
+      const raw = params[1];
+      this.errorJournalPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.errorJournalPayload &&
+        typeof this.errorJournalPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.errorJournalPayload.saved_at_ms =
+          Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_error_journal')) {
+      if (!this.errorJournalPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.errorJournalPayload,
+            saved_at_ms: Number(this.errorJournalPayload.saved_at_ms) || 0,
           },
         ],
       };

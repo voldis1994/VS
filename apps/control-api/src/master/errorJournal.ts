@@ -1,6 +1,7 @@
 /**
  * Durable MASTER error / cycle-failure journal (Reader error_journal pattern).
  * File-backed under MASTER_STATE_DIR — survives restart for dashboard honesty.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
 import {
   appendFileSync,
@@ -16,6 +17,10 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import {
+  persistErrorJournalState,
+  loadErrorJournalFromPersist,
+} from './persist.js';
 
 export type MasterErrorEntry = {
   error_id: string;
@@ -28,20 +33,51 @@ export type MasterErrorEntry = {
 
 const MAX_LINES = 500;
 
-function journalDir(): string {
+function journalDir(root?: string): string {
   return (
+    root ||
     process.env.MASTER_STATE_DIR ||
     process.env.MASTER_GATES_DIR ||
     join(process.cwd(), '.master-state')
   );
 }
 
-function journalPath(): string {
-  return join(journalDir(), 'error_journal.jsonl');
+function journalPath(root?: string): string {
+  return join(journalDir(root), 'error_journal.jsonl');
 }
 
-function rotateIfNeeded() {
-  const path = journalPath();
+function readAllEntries(root?: string): MasterErrorEntry[] {
+  try {
+    const path = journalPath(root);
+    if (!existsSync(path)) return [];
+    const lines = readFileSync(path, 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const out: MasterErrorEntry[] = [];
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line) as MasterErrorEntry;
+        if (e && typeof e === 'object' && e.error_id) out.push(e);
+      } catch {
+        /* skip corrupt */
+      }
+    }
+    return out.slice(-MAX_LINES);
+  } catch {
+    return [];
+  }
+}
+
+function dualWriteEntries(entries: MasterErrorEntry[]): void {
+  void persistErrorJournalState({
+    entries: entries.slice(-MAX_LINES),
+    saved_at_ms: Date.now(),
+  }).catch(() => {});
+}
+
+function rotateIfNeeded(root?: string) {
+  const path = journalPath(root);
   if (!existsSync(path)) return;
   try {
     const lines = readFileSync(path, 'utf8')
@@ -59,6 +95,17 @@ function rotateIfNeeded() {
       closeSync(fd);
     }
     renameSync(tmp, path);
+    dualWriteEntries(
+      keep
+        .map((l) => {
+          try {
+            return JSON.parse(l) as MasterErrorEntry;
+          } catch {
+            return null;
+          }
+        })
+        .filter((e): e is MasterErrorEntry => !!e && !!e.error_id)
+    );
   } catch {
     try {
       unlinkSync(`${path}.tmp`);
@@ -97,6 +144,7 @@ export function logMasterError(input: {
       /* best-effort */
     }
     rotateIfNeeded();
+    dualWriteEntries(readAllEntries());
   } catch {
     // Never throw from error journal — logging must not break the cycle
   }
@@ -123,5 +171,38 @@ export function loadMasterErrors(limit = 50): MasterErrorEntry[] {
     return out;
   } catch {
     return [];
+  }
+}
+
+/**
+ * When error_journal.jsonl was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar before dashboard status reads.
+ */
+export async function hydrateErrorJournalFromPersist(
+  root?: string
+): Promise<{ restored: boolean; count: number }> {
+  const dir = journalDir(root);
+  const path = journalPath(root);
+  if (existsSync(path)) return { restored: false, count: 0 };
+  try {
+    const loaded = await loadErrorJournalFromPersist();
+    if (!loaded || typeof loaded !== 'object') {
+      return { restored: false, count: 0 };
+    }
+    const entries = Array.isArray(loaded.entries)
+      ? (loaded.entries as MasterErrorEntry[]).filter(
+          (e) => e && typeof e === 'object' && !!e.error_id
+        )
+      : [];
+    if (entries.length < 1) return { restored: false, count: 0 };
+    mkdirSync(dir, { recursive: true });
+    const keep = entries.slice(-MAX_LINES);
+    const body = `${keep.map((e) => JSON.stringify(e)).join('\n')}\n`;
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, body, 'utf8');
+    renameSync(tmp, path);
+    return { restored: true, count: keep.length };
+  } catch {
+    return { restored: false, count: 0 };
   }
 }
