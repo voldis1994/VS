@@ -812,6 +812,17 @@ class MasterRuntime {
   }
 
   /**
+   * Test/desk: feed-miss manage fallback — same gate as broker/public live-feed
+   * miss paths (quote alone; OHLC ≥5 optional). Returns whether manage ran.
+   */
+  async feedMissManageFallbackPublic(): Promise<{ managed: boolean; bars: number }> {
+    const bars = this.last_bars.length;
+    if (!this.last_quote) return { managed: false, bars };
+    await this.manageOnlyTick(this.last_bars, this.last_quote);
+    return { managed: true, bars };
+  }
+
+  /**
    * Demo/tests: stop background manage timer so fill→exit proof is observed
    * on tick()/exit_drive — not a silent 1s manage close between live polls.
    */
@@ -4340,9 +4351,10 @@ class MasterRuntime {
           q = null;
         }
         if (!q) {
-          // Feed miss must not freeze exits — manage-only on last bars/quote (no OPEN).
+          // Feed miss must not freeze exits — manage-only on last quote (no OPEN).
+          // Quote alone is enough (parity with bootstrap manage-on-quote); OHLC ≥5 optional.
           // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
-          if (this.last_bars.length >= 5 && this.last_quote) {
+          if (this.last_quote) {
             await this.manageOnlyTick(this.last_bars, this.last_quote);
           }
           return;
@@ -4558,10 +4570,11 @@ class MasterRuntime {
         } catch {
           snap = null;
         }
-        // Feed failure must not freeze exits (TIME_STOP / SL) — manage-only on last bars (no OPEN).
+        // Feed failure must not freeze exits (TIME_STOP / SL) — manage-only on last quote (no OPEN).
+        // Quote alone is enough (parity with bootstrap manage-on-quote); OHLC ≥5 optional.
         // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
         if (!snap?.ok || !snap.quote) {
-          if (this.last_bars.length >= 5 && this.last_quote) {
+          if (this.last_quote) {
             await this.manageOnlyTick(this.last_bars, this.last_quote);
           }
           return;
