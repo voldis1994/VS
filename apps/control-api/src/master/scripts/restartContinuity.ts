@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -497,6 +497,41 @@ async function main() {
   const primaryHadOwnsPipeline =
     primary.ownsPipelinePayload != null &&
     primary.ownsPipelinePayload.owns_pipeline === true;
+  // Dual-write monitoring_snapshot into MemoryPersist primary BEFORE file wipe
+  const monitorForPrimary = {
+    timestamp_utc: new Date().toISOString(),
+    cycle_latency_ms: 55,
+    data_freshness_ms: 1200,
+    error_count: 0,
+    error_rate_per_min: 0,
+    instance_health: 'DEGRADED',
+    relative_spread: 1.8,
+    ack_latency_ms: null as number | null,
+    entry_block_reason: 'alert:DATA_STALE',
+    active_alerts: [
+      {
+        code: 'DATA_STALE',
+        level: 'WARN',
+        message: 'stale before restart',
+      },
+    ],
+  };
+  writeFileSync(
+    join(stateDir, 'monitoring_snapshot.json'),
+    JSON.stringify(monitorForPrimary),
+    'utf8'
+  );
+  await persistMonitoringSnapshotState({
+    ...monitorForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadMonitoring =
+    primary.monitoringSnapshotPayload != null &&
+    primary.monitoringSnapshotPayload.entry_block_reason ===
+      'alert:DATA_STALE' &&
+    Number(primary.monitoringSnapshotPayload.relative_spread) === 1.8 &&
+    Array.isArray(primary.monitoringSnapshotPayload.active_alerts) &&
+    primary.monitoringSnapshotPayload.active_alerts.length >= 1;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -524,34 +559,15 @@ async function main() {
   const ownsPipelineGoneBeforeHydrate = !existsSync(
     join(stateDir, 'owns_pipeline.json')
   );
+  const monitoringGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'monitoring_snapshot.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
   // Do NOT re-seed manage_config — must heal from DualPersist primary.
   // Do NOT re-seed owns_pipeline — must heal from DualPersist primary.
-  // Disk monitoring snapshot — Why / Alert block / Rel spread must mark hydrated
-  writeFileSync(
-    join(stateDir, 'monitoring_snapshot.json'),
-    JSON.stringify({
-      timestamp_utc: new Date().toISOString(),
-      cycle_latency_ms: 55,
-      data_freshness_ms: 1200,
-      error_count: 0,
-      error_rate_per_min: 0,
-      instance_health: 'DEGRADED',
-      relative_spread: 1.8,
-      ack_latency_ms: null,
-      entry_block_reason: 'alert:DATA_STALE',
-      active_alerts: [
-        {
-          code: 'DATA_STALE',
-          level: 'WARN',
-          message: 'stale before restart',
-        },
-      ],
-    }),
-    'utf8'
-  );
+  // Do NOT re-seed monitoring_snapshot — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -635,17 +651,20 @@ async function main() {
     primaryHadRuntimeGates &&
     primaryHadManageConfig &&
     primaryHadOwnsPipeline &&
+    primaryHadMonitoring &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
     runtimeGatesGoneBeforeHydrate &&
     manageConfigGoneBeforeHydrate &&
     ownsPipelineGoneBeforeHydrate &&
+    monitoringGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
     existsSync(join(stateDir, 'master_manage_config.json')) &&
     existsSync(join(stateDir, 'owns_pipeline.json')) &&
+    existsSync(join(stateDir, 'monitoring_snapshot.json')) &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
@@ -977,11 +996,13 @@ async function main() {
 
   // Sticky desk arms AFTER continuity book is stable: stop feed so a concurrent
   // live tick cannot race away fixture hour_bars/closed_10s mid-proof.
+  // Always use fixture bars — live last_bars can flip SETUP to SELL and refuse
+  // a bullish closed_10s confirm (desk_entry stays null while hour_bias=UP).
   masterRuntime.stop();
   const savedOpensForSticky = masterRuntime.positions.toJSON();
   masterRuntime.positions = new PositionManager();
-  const stickyBars =
-    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
+  const stickyBars = bars;
+  masterRuntime.pipeline.resetMarketSetup();
   (
     masterRuntime as unknown as {
       last_hour_bars: typeof hourBars;
@@ -1006,18 +1027,7 @@ async function main() {
   (
     masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
   ).hourBarsFromDiskCache = true;
-  (
-    masterRuntime as unknown as {
-      last_closed_10s: {
-        open_time_ms: number;
-        open: number;
-        high: number;
-        low: number;
-        close: number;
-        ticks: number;
-      } | null;
-    }
-  ).last_closed_10s = {
+  const stickyClosed10s = {
     open_time_ms: Date.now() - 10_000,
     open: stickyBars.at(-1)!.close - 0.2,
     high: stickyBars.at(-1)!.close + 1.5,
@@ -1025,6 +1035,11 @@ async function main() {
     close: stickyBars.at(-1)!.close + 1.2,
     ticks: 4,
   };
+  (
+    masterRuntime as unknown as {
+      last_closed_10s: typeof stickyClosed10s | null;
+    }
+  ).last_closed_10s = stickyClosed10s;
   (
     masterRuntime as unknown as { closed10sFromDiskCache: boolean }
   ).closed10sFromDiskCache = true;
@@ -1177,6 +1192,10 @@ async function main() {
         ownsPipelineGoneBeforeHydrate &&
         existsSync(join(stateDir, 'owns_pipeline.json')) &&
         masterRuntime.owns_pipeline_pref === true,
+      monitoring_snapshot_pg_primary_heal_ok:
+        primaryHadMonitoring &&
+        monitoringGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'monitoring_snapshot.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

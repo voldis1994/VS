@@ -903,6 +903,11 @@ class MasterRuntime {
       );
       await hydrateOwnsPipelineFromPersist();
       this.hydrateOwnsPipelinePref();
+      const { hydrateMonitoringSnapshotFromPersist } = await import(
+        './monitoring.js'
+      );
+      await hydrateMonitoringSnapshotFromPersist();
+      this.hydrateMonitorFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3687,6 +3692,10 @@ class MasterRuntime {
     this.persistRuntimeGates();
 
     // Dashboard honesty after restart — seed monitoring from durable snapshot
+    const { hydrateMonitoringSnapshotFromPersist } = await import(
+      './monitoring.js'
+    );
+    await hydrateMonitoringSnapshotFromPersist();
     this.hydrateMonitorFromDisk();
 
     // Reader recover_spread_model — relative-spread gate must not cold-open after restart

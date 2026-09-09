@@ -17,6 +17,10 @@ import { join } from 'path';
 import { loadMasterErrors } from './errorJournal.js';
 import type { CycleAlert } from './cycleAlerts.js';
 import { healthFromAlerts } from './cycleAlerts.js';
+import {
+  persistMonitoringSnapshotState,
+  loadMonitoringSnapshotFromPersist,
+} from './persist.js';
 
 export type CycleMonitorSnapshot = {
   last_cycle_ms: number;
@@ -35,16 +39,57 @@ export type CycleMonitorSnapshot = {
   hydrated: boolean;
 };
 
-function stateDir(): string {
+function stateDir(root?: string): string {
   return (
+    root ||
     process.env.MASTER_STATE_DIR ||
     process.env.MASTER_GATES_DIR ||
     join(process.cwd(), '.master-state')
   );
 }
 
-function snapshotPath(): string {
-  return join(stateDir(), 'monitoring_snapshot.json');
+function snapshotPath(root?: string): string {
+  return join(stateDir(root), 'monitoring_snapshot.json');
+}
+
+export type MonitoringDiskPayload = {
+  timestamp_utc: string;
+  cycle_latency_ms: number;
+  data_freshness_ms: number | null;
+  error_count: number;
+  error_rate_per_min: number;
+  instance_health: string;
+  relative_spread: number | null;
+  ack_latency_ms: number | null;
+  entry_block_reason: string | null;
+  active_alerts: CycleAlert[];
+};
+
+function diskPayloadFromSnap(snap: CycleMonitorSnapshot): MonitoringDiskPayload {
+  return {
+    timestamp_utc: new Date().toISOString(),
+    cycle_latency_ms: snap.last_cycle_ms,
+    data_freshness_ms: snap.data_freshness_ms,
+    error_count: snap.error_count,
+    error_rate_per_min: snap.error_rate_per_min,
+    instance_health: snap.instance_health,
+    relative_spread: snap.relative_spread,
+    ack_latency_ms: snap.ack_latency_ms,
+    entry_block_reason: snap.entry_block_reason,
+    active_alerts: snap.active_alerts,
+  };
+}
+
+function writeDiskPayload(path: string, payload: MonitoringDiskPayload): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(payload, null, 0), 'utf8');
+  const fd = openSync(tmp, 'r+');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
 }
 
 export class CycleMonitor {
@@ -129,34 +174,13 @@ export class CycleMonitor {
     try {
       mkdirSync(stateDir(), { recursive: true });
       const path = snapshotPath();
-      const tmp = `${path}.tmp`;
-      writeFileSync(
-        tmp,
-        JSON.stringify(
-          {
-            timestamp_utc: new Date().toISOString(),
-            cycle_latency_ms: snap.last_cycle_ms,
-            data_freshness_ms: snap.data_freshness_ms,
-            error_count: snap.error_count,
-            error_rate_per_min: snap.error_rate_per_min,
-            instance_health: snap.instance_health,
-            relative_spread: snap.relative_spread,
-            ack_latency_ms: snap.ack_latency_ms,
-            entry_block_reason: snap.entry_block_reason,
-            active_alerts: snap.active_alerts,
-          },
-          null,
-          0
-        ),
-        'utf8'
-      );
-      const fd = openSync(tmp, 'r+');
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      renameSync(tmp, path);
+      const payload = diskPayloadFromSnap(snap);
+      writeDiskPayload(path, payload);
+      // DualPersist / MemoryPersist / PG primary — survive full file wipe
+      void persistMonitoringSnapshotState({
+        ...payload,
+        saved_at_ms: Date.now(),
+      }).catch(() => {});
     } catch {
       try {
         unlinkSync(`${snapshotPath()}.tmp`);
@@ -166,9 +190,9 @@ export class CycleMonitor {
     }
   }
 
-  loadPersisted(): Record<string, unknown> | null {
+  loadPersisted(root?: string): Record<string, unknown> | null {
     try {
-      const path = snapshotPath();
+      const path = snapshotPath(root);
       if (!existsSync(path)) return null;
       return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     } catch {
@@ -181,8 +205,8 @@ export class CycleMonitor {
    * until the first tick. Does not invent cycles count (unknown after crash).
    * Marks fromDisk so Why / Alert block / Rel spread do not paint as live.
    */
-  hydrateFromDisk(): boolean {
-    const raw = this.loadPersisted();
+  hydrateFromDisk(root?: string): boolean {
+    const raw = this.loadPersisted(root);
     if (!raw) return false;
     if (typeof raw.cycle_latency_ms === 'number' && Number.isFinite(raw.cycle_latency_ms)) {
       this.last_cycle_ms = Math.max(0, Math.round(raw.cycle_latency_ms));
@@ -208,5 +232,78 @@ export class CycleMonitor {
     }
     this.fromDisk = true;
     return true;
+  }
+}
+
+/**
+ * When monitoring_snapshot.json was wiped but DualPersist/PG primary still
+ * holds the singleton payload, rewrite the sidecar before disk hydrate.
+ */
+export async function hydrateMonitoringSnapshotFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir = stateDir(root);
+  const path = snapshotPath(root);
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadMonitoringSnapshotFromPersist();
+    if (!loaded || typeof loaded !== 'object') return { restored: false };
+    const hasSignal =
+      typeof loaded.cycle_latency_ms === 'number' ||
+      typeof loaded.relative_spread === 'number' ||
+      typeof loaded.entry_block_reason === 'string' ||
+      (Array.isArray(loaded.active_alerts) && loaded.active_alerts.length > 0);
+    if (!hasSignal) return { restored: false };
+    const payload: MonitoringDiskPayload = {
+      timestamp_utc:
+        typeof loaded.timestamp_utc === 'string' && loaded.timestamp_utc
+          ? loaded.timestamp_utc
+          : new Date().toISOString(),
+      cycle_latency_ms:
+        typeof loaded.cycle_latency_ms === 'number' &&
+        Number.isFinite(loaded.cycle_latency_ms)
+          ? Math.max(0, Math.round(loaded.cycle_latency_ms))
+          : 0,
+      data_freshness_ms:
+        typeof loaded.data_freshness_ms === 'number' &&
+        Number.isFinite(loaded.data_freshness_ms)
+          ? loaded.data_freshness_ms
+          : null,
+      error_count:
+        typeof loaded.error_count === 'number' && Number.isFinite(loaded.error_count)
+          ? Math.max(0, Math.floor(loaded.error_count))
+          : 0,
+      error_rate_per_min:
+        typeof loaded.error_rate_per_min === 'number' &&
+        Number.isFinite(loaded.error_rate_per_min)
+          ? loaded.error_rate_per_min
+          : 0,
+      instance_health:
+        typeof loaded.instance_health === 'string' && loaded.instance_health
+          ? String(loaded.instance_health)
+          : 'OK',
+      relative_spread:
+        typeof loaded.relative_spread === 'number' &&
+        Number.isFinite(loaded.relative_spread)
+          ? Number(loaded.relative_spread)
+          : null,
+      ack_latency_ms:
+        typeof loaded.ack_latency_ms === 'number' &&
+        Number.isFinite(loaded.ack_latency_ms)
+          ? Math.max(0, Math.round(loaded.ack_latency_ms))
+          : null,
+      entry_block_reason:
+        loaded.entry_block_reason == null
+          ? null
+          : String(loaded.entry_block_reason),
+      active_alerts: Array.isArray(loaded.active_alerts)
+        ? (loaded.active_alerts as CycleAlert[])
+        : [],
+    };
+    mkdirSync(dir, { recursive: true });
+    writeDiskPayload(path, payload);
+    return { restored: true };
+  } catch {
+    return { restored: false };
   }
 }
