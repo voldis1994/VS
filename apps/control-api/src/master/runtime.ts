@@ -1071,10 +1071,30 @@ class MasterRuntime {
         }
         if (!deferOpenDayRoll) {
           this.rollDailyPnl();
-        }
-        // Always surface today's closed daily_pnl (even when day-roll deferred)
-        if (!capitalAttached || this.capitalDayGatesSeeded) {
-          this.account.daily_pnl = pnlToday;
+          // After roll, surface today's closed daily_pnl
+          if (!capitalAttached || this.capitalDayGatesSeeded) {
+            this.account.daily_pnl = pnlToday;
+          }
+        } else if (!capitalAttached || this.capitalDayGatesSeeded) {
+          // Defer: keep closed PnL for the still-sealed day — wiping to pnlToday
+          // (often 0) would drop prior-day losses from max_daily_loss while
+          // day_start_equity stays on yesterday.
+          const sealedDay = this.account.daily_pnl_day;
+          if (sealedDay) {
+            let pnlSealed = 0;
+            for (const o of hist.outcomes) {
+              if (o.outcome.pnl_proven === false) continue;
+              if (
+                capitalAttached &&
+                oppMode.get(String(o.opportunity_id)) !== 'LIVE'
+              ) {
+                continue;
+              }
+              const day = String(o.created_at || '').slice(0, 10);
+              if (day === sealedDay) pnlSealed += o.outcome.pnl;
+            }
+            this.account.daily_pnl = pnlSealed;
+          }
         }
       }
       // After opens + journal are available — heal missing desk confirm on decision
@@ -4050,9 +4070,29 @@ class MasterRuntime {
           this.account.equity ||
           this.account.balance;
       }
+      // After roll, surface today's closed daily_pnl
+      this.account.daily_pnl = pnlToday;
+    } else {
+      // Defer: keep closed PnL for the still-sealed day — wiping to pnlToday
+      // (often 0) would drop prior-day losses from max_daily_loss while
+      // day_start_equity stays on yesterday.
+      const sealedDay = this.account.daily_pnl_day;
+      if (sealedDay) {
+        let pnlSealed = 0;
+        for (const o of outcomesAsc) {
+          if (o.outcome.pnl_proven === false) continue;
+          if (
+            capitalAttached &&
+            oppMode.get(String(o.opportunity_id)) !== 'LIVE'
+          ) {
+            continue;
+          }
+          const day = String(o.created_at || '').slice(0, 10);
+          if (day === sealedDay) pnlSealed += o.outcome.pnl;
+        }
+        this.account.daily_pnl = pnlSealed;
+      }
     }
-    // Always surface today's closed daily_pnl (even when day-roll deferred)
-    this.account.daily_pnl = pnlToday;
     this.persistRuntimeGates();
 
     // Dashboard honesty after restart — seed monitoring from durable snapshot
