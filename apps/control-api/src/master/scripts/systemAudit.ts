@@ -21,6 +21,9 @@ import {
 } from '../pipeline.js';
 import { computePerformance } from '../performance.js';
 import { applyAiToDecision, localAdvisor } from '../ai.js';
+import { resolveDeskEntryConfirm } from '../deskEntryConfirm.js';
+import { advanceMarketSetup, barsToSetupCandles } from '../setupDerive.js';
+import { closed10sFromReplayBar } from '../replay.js';
 import type { Bar, Quote } from '../types.js';
 
 function barsTrendUp(n = 45): Bar[] {
@@ -141,6 +144,34 @@ async function main() {
     detail: risk.allowed ? `vol=${risk.volume}` : risk.reasons.join(','),
   };
 
+  // Desk 1h structure (hour_bias) — without hours bias stays UNKNOWN
+  const hourBars = [
+    { open: 4300, high: 4350, low: 4290, close: 4340, ts_ms: 1 },
+    { open: 4340, high: 4380, low: 4330, close: 4370, ts_ms: 2 },
+    { open: 4370, high: 4410, low: 4365, close: 4405, ts_ms: 3 },
+    { open: 4405, high: 4430, low: 4400, close: 4420, ts_ms: 4 },
+    { open: 4420, high: 4440, low: 4415, close: 4435, ts_ms: 5 },
+    { open: 4435, high: 4450, low: 4430, close: 4445, ts_ms: 6 },
+  ];
+  const closed10s = closed10sFromReplayBar(bars.at(-1)!);
+
+  // Prove resolveDeskEntryConfirm refuses entry without closed_10s
+  const advanced = advanceMarketSetup({
+    bars,
+    mid: quote.mid,
+    hours: hourBars,
+  });
+  const noTenSec = resolveDeskEntryConfirm({
+    setup: advanced.setup,
+    structure: advanced.structure,
+    closed_10s: null,
+    minutes: barsToSetupCandles(bars),
+  });
+  stages.desk_closed_10s_gate = {
+    ok: noTenSec === null,
+    detail: noTenSec ? `leak:${noTenSec.source}` : 'null_without_10s',
+  };
+
   const broker = new PaperBroker();
   broker.setQuote({
     bid: quote.bid,
@@ -156,8 +187,45 @@ async function main() {
     quote,
     account,
     instrument: GOLD_SPEC,
-    cfg,
+    cfg: {
+      ...cfg,
+      block_off_hours: false,
+      block_high_impact_news: false,
+    },
+    hour_bars: hourBars,
+    closed_10s: closed10s,
   });
+  stages.desk_hour_bias = {
+    ok: pipe.getStructureBook()?.hour_bias === 'UP',
+    detail: `hour_bias=${pipe.getStructureBook()?.hour_bias || 'none'}`,
+  };
+  // Authoritative cycle must exercise resolveDeskEntryConfirm → setup|move
+  stages.desk_entry_confirm = {
+    ok:
+      !!cycle.desk_entry &&
+      (cycle.desk_entry.source === 'setup' ||
+        cycle.desk_entry.source === 'move') &&
+      (cycle.desk_entry.side === 'BUY' || cycle.desk_entry.side === 'SELL'),
+    detail: cycle.desk_entry
+      ? `${cycle.desk_entry.source}:${cycle.desk_entry.side}:${cycle.desk_entry.reason}`
+      : `null setup=${cycle.market_setup?.status || '?'} hour=${pipe.getStructureBook()?.hour_bias || '?'}`,
+  };
+  // Same inputs via helper must agree with cycle desk_entry source
+  const helperConfirm = resolveDeskEntryConfirm({
+    setup: cycle.market_setup,
+    structure: pipe.getStructureBook(),
+    closed_10s: closed10s,
+    minutes: barsToSetupCandles(bars),
+  });
+  stages.desk_confirm_helper = {
+    ok:
+      !!helperConfirm &&
+      helperConfirm.source === cycle.desk_entry?.source &&
+      helperConfirm.side === cycle.desk_entry?.side,
+    detail: helperConfirm
+      ? `${helperConfirm.source}:${helperConfirm.side}`
+      : 'helper_null',
+  };
 
   const forced =
     cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL'

@@ -60,11 +60,16 @@ async function main() {
   {
     const r = run('npm', ['run', 'master:audit'], 60_000);
     const audit = readJson(join(artifactDir, 'vs_master_system_audit.json'));
+    const deskStagesOk =
+      audit?.stages?.desk_closed_10s_gate?.ok === true &&
+      audit?.stages?.desk_hour_bias?.ok === true &&
+      audit?.stages?.desk_entry_confirm?.ok === true &&
+      audit?.stages?.desk_confirm_helper?.ok === true;
     checks.push({
       id: 'pipeline_stages',
       requirement:
-        'market→validation→analysis→candidates→filters→decision→risk→execution→broker→position→exit→journal→performance',
-      ok: r.ok && audit?.status === 'PASS',
+        'market→validation→analysis→candidates→filters→decision→risk→execution→broker→position→exit→journal→performance + desk closed_10s/hour_bars → resolveDeskEntryConfirm setup|move',
+      ok: r.ok && audit?.status === 'PASS' && deskStagesOk,
       detail: audit ? JSON.stringify(audit.stages) : r.out.slice(-500),
     });
   }
