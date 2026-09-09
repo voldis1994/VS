@@ -1061,8 +1061,12 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? '—'
               : status.account?.daily_pnl != null
-                ? Number(status.account.daily_pnl).toFixed(2)
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.daily_pnl).toFixed(2)}`
                 : '—',
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.daily_pnl != null,
         },
         {
           k: 'Closed PnL',
@@ -1077,6 +1081,7 @@ export function MasterPage() {
             !cyclePending &&
             !!status.performance?.trades &&
             Number(status.performance.total_pnl || 0) < 0,
+          warn: cyclePending && !!status.performance?.trades,
         },
         {
           k: 'Confirm PnL',
@@ -1126,9 +1131,13 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? 'UNPROVEN'
               : status.account?.day_start_equity != null
-                ? Number(status.account.day_start_equity).toFixed(2)
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.day_start_equity).toFixed(2)}`
                 : '—',
           bad: status.capital_account_proven === false,
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.day_start_equity != null,
         },
         {
           k: 'Peak eq',
@@ -1136,9 +1145,13 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? 'UNPROVEN'
               : status.account?.peak_equity != null
-                ? Number(status.account.peak_equity).toFixed(2)
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.peak_equity).toFixed(2)}`
                 : '—',
           bad: status.capital_account_proven === false,
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.peak_equity != null,
         },
         {
           k: 'Reject cool',
@@ -1184,30 +1197,37 @@ export function MasterPage() {
         {
           k: 'Expectancy',
           v: status.performance?.trades
-            ? Number(status.performance?.expectancy || 0).toFixed(3)
+            ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.performance?.expectancy || 0).toFixed(3)}`
             : '—',
+          warn: cyclePending && !!status.performance?.trades,
         },
         {
           k: 'Fees',
-          v:
-            status.performance?.trades
-              ? Number(status.performance.total_fees || 0).toFixed(2)
-              : '—',
+          v: status.performance?.trades
+            ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.performance.total_fees || 0).toFixed(2)}`
+            : '—',
+          warn: cyclePending && !!status.performance?.trades,
         },
         {
           k: 'Win rate',
           v: status.performance?.trades
-            ? `${(Number(status.performance.win_rate || 0) * 100).toFixed(1)}%`
+            ? `${cyclePending ? 'hydrated · ' : ''}${(Number(status.performance.win_rate || 0) * 100).toFixed(1)}%`
             : '—',
+          warn: cyclePending && !!status.performance?.trades,
         },
         {
           k: 'Profit factor',
           v: status.performance?.trades
             ? status.performance?.profit_factor != null &&
               Number.isFinite(status.performance.profit_factor)
-              ? Number(status.performance.profit_factor).toFixed(2)
+              ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.performance.profit_factor).toFixed(2)}`
               : '—'
             : '—',
+          warn:
+            cyclePending &&
+            !!status.performance?.trades &&
+            status.performance?.profit_factor != null &&
+            Number.isFinite(status.performance.profit_factor),
         },
         {
           k: 'Loss streak',
@@ -1215,11 +1235,16 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? '—'
               : status.account?.consecutive_losses != null
-                ? String(status.account.consecutive_losses)
+                ? `${cyclePending ? 'hydrated · ' : ''}${String(status.account.consecutive_losses)}`
                 : '—',
           bad:
+            !cyclePending &&
             status.capital_account_proven !== false &&
             (status.account?.consecutive_losses || 0) >= 3,
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.consecutive_losses != null,
         },
         {
           k: 'MC eq p05/p50/p95',
@@ -1313,8 +1338,9 @@ export function MasterPage() {
         {
           k: 'Max DD',
           v: status.performance?.trades
-            ? Number(status.performance?.max_drawdown || 0).toFixed(2)
+            ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.performance?.max_drawdown || 0).toFixed(2)}`
             : '—',
+          warn: cyclePending && !!status.performance?.trades,
         },
         { k: 'Recovered', v: status.recovered ? 'YES' : '—' },
         {
