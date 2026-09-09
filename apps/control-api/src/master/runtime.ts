@@ -3870,7 +3870,7 @@ class MasterRuntime {
     });
   }
 
-  /** Restore bars always; quote only when still within stale_quote_ms. */
+  /** Restore bars always; quote always as disk_cache provenance (even if aged). */
   private hydrateMarketCacheFromDisk(): void {
     const cached = loadMarketCache();
     if (!cached) return;
@@ -3886,11 +3886,10 @@ class MasterRuntime {
       }
     }
     if (!this.last_quote && cached.quote) {
-      const age = Math.max(0, Date.now() - (cached.quote.ts_ms || cached.saved_at_ms || 0));
-      if (age <= this.cfg.stale_quote_ms) {
-        this.last_quote = cached.quote;
-        this.quoteFromDiskCache = true;
-      }
+      // Always restore — aged disk quotes must paint cached · / hydrated · disk_cache,
+      // never silent blank or live stale_quote before a cycle.
+      this.last_quote = cached.quote;
+      this.quoteFromDiskCache = true;
     }
   }
 
@@ -4242,8 +4241,11 @@ class MasterRuntime {
         const m = this.last_market;
         const d = this.last_decision;
         const r = this.last_risk;
-        // Sticky last_market must not forge green while live quote is DATA_STALE
+        // Sticky last_market must not forge green while a LIVE quote is DATA_STALE.
+        // Disk-cache / pre-cycle quotes must not take the live stale_quote stage path.
         const liveQuoteStaleForStages =
+          !!m &&
+          !this.quoteFromDiskCache &&
           quote != null &&
           quoteAgeMs != null &&
           quoteAgeMs > this.cfg.stale_quote_ms;
@@ -4275,13 +4277,27 @@ class MasterRuntime {
         const diskCacheEvidence =
           !m &&
           (this.barsFromDiskCache || this.quoteFromDiskCache) &&
-          this.last_bars.length >= 5 &&
-          quote != null;
-        const diskMv = diskCacheEvidence
-          ? validateMarket(this.last_bars, quote, {
-              stale_ms: this.cfg.stale_quote_ms,
-            })
-          : null;
+          this.last_bars.length >= 5;
+        const diskMv =
+          diskCacheEvidence && quote != null
+            ? validateMarket(this.last_bars, quote, {
+                stale_ms: this.cfg.stale_quote_ms,
+              })
+            : null;
+        const diskValidateDetail = diskMv
+          ? `hydrated · disk_cache · Q=${diskMv.quality.toFixed(2)}${
+              diskMv.reasons.length
+                ? ` · ${diskMv.reasons.slice(0, 2).join('|')}`
+                : ''
+            }`
+          : diskCacheEvidence
+            ? `hydrated · disk_cache · ${this.last_bars.length} bars`
+            : null;
+        const diskNormalizeDetail = diskMv
+          ? `hydrated · disk_cache · ${diskMv.bars.length}/${this.last_bars.length} bars`
+          : diskCacheEvidence
+            ? `hydrated · disk_cache · ${this.last_bars.length} bars`
+            : null;
         return {
           market_validation: {
             ok: !!(m && m.ok && !liveQuoteStaleForStages),
@@ -4289,13 +4305,7 @@ class MasterRuntime {
               ? `stale_quote · age=${Math.round((quoteAgeMs || 0) / 1000)}s`
               : m
                 ? `Q=${m.quality.toFixed(2)}${m.reasons.length ? ` · ${m.reasons.slice(0, 2).join('|')}` : ''}`
-                : diskMv
-                  ? `hydrated · disk_cache · Q=${diskMv.quality.toFixed(2)}${
-                      diskMv.reasons.length
-                        ? ` · ${diskMv.reasons.slice(0, 2).join('|')}`
-                        : ''
-                    }`
-                  : 'no cycle',
+                : diskValidateDetail || 'no cycle',
           },
           normalization: {
             // Never forge green after failed validation (flat_tape / stale quote)
@@ -4310,9 +4320,7 @@ class MasterRuntime {
                         ? ' · invalid'
                         : ''
                   }`
-                : diskMv
-                  ? `hydrated · disk_cache · ${diskMv.bars.length}/${this.last_bars.length} bars`
-                  : 'no cycle',
+                : diskNormalizeDetail || 'no cycle',
           },
           analysis_regime: {
             // Never forge green from journal-hydrate alone — need proven last_market
@@ -4595,9 +4603,11 @@ class MasterRuntime {
             spread: quote.spread,
             age_ms: Math.max(0, Date.now() - (quote.ts_ms || 0)),
             stale_quote_ms: this.cfg.stale_quote_ms,
+            // Disk-cache age is provenance, not live DATA_STALE
             stale:
+              !this.quoteFromDiskCache &&
               Math.max(0, Date.now() - (quote.ts_ms || 0)) >
-              this.cfg.stale_quote_ms,
+                this.cfg.stale_quote_ms,
             cached: this.quoteFromDiskCache,
             source: this.quoteFromDiskCache ? 'disk_cache' : 'live',
             stream_healthy: streamHealthy,

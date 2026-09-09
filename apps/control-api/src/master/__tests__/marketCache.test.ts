@@ -219,4 +219,109 @@ describe('market_cache hydrate provenance', () => {
       else process.env.MASTER_GATES_DIR = prevGates;
     }
   });
+
+  it('aged disk_cache quote stays hydrated · disk_cache — not live stale_quote', async () => {
+    const { masterRuntime } = await import('../runtime.js');
+    const dir = mkdtempSync(join(tmpdir(), 'master-mkt-aged-'));
+    const prevState = process.env.MASTER_STATE_DIR;
+    const prevGates = process.env.MASTER_GATES_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    process.env.MASTER_GATES_DIR = dir;
+    const prevQuote = masterRuntime.last_quote;
+    const prevBars = masterRuntime.last_bars;
+    const prevMarket = masterRuntime.last_market;
+    const prevCfg = masterRuntime.cfg;
+    try {
+      masterRuntime.cfg = { ...masterRuntime.cfg, stale_quote_ms: 5_000 };
+      const bars = Array.from({ length: 40 }, (_, i) => {
+        const o = 4400 + i * 0.5;
+        return {
+          open: o,
+          high: o + 1,
+          low: o - 0.2,
+          close: o + 0.4,
+          ts_ms: Date.now() - (40 - i) * 60_000,
+        };
+      });
+      expect(
+        saveMarketCache(
+          {
+            epic: 'GOLD',
+            bars,
+            quote: {
+              bid: 4415,
+              ask: 4415.4,
+              mid: 4415.2,
+              spread: 0.4,
+              epic: 'GOLD',
+              ts_ms: Date.now() - 60_000,
+            },
+            structure_seed_source: 'aged_cache',
+          },
+          dir
+        )
+      ).toBe(true);
+      masterRuntime.last_quote = null;
+      masterRuntime.last_bars = [];
+      masterRuntime.last_market = null;
+      (
+        masterRuntime as unknown as {
+          quoteFromDiskCache: boolean;
+          barsFromDiskCache: boolean;
+        }
+      ).quoteFromDiskCache = false;
+      (
+        masterRuntime as unknown as { barsFromDiskCache: boolean }
+      ).barsFromDiskCache = false;
+      (
+        masterRuntime as unknown as {
+          hydrateMarketCacheFromDisk: () => void;
+        }
+      ).hydrateMarketCacheFromDisk();
+      const st = masterRuntime.status();
+      expect(st.quote?.cached).toBe(true);
+      expect(st.quote?.stale).toBe(false);
+      expect(st.pipeline_stages.market_validation.ok).toBe(false);
+      expect(st.pipeline_stages.market_validation.detail).toMatch(
+        /^hydrated · disk_cache/
+      );
+      expect(st.pipeline_stages.market_validation.detail).not.toMatch(
+        /stale_quote · age=/
+      );
+      expect(st.pipeline_stages.normalization.detail).toMatch(
+        /^hydrated · disk_cache/
+      );
+      // Sticky last_market + live (non-cache) aged quote still paints stale_quote
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      (
+        masterRuntime as unknown as { quoteFromDiskCache: boolean }
+      ).quoteFromDiskCache = false;
+      masterRuntime.last_quote = {
+        bid: 4415,
+        ask: 4415.4,
+        mid: 4415.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now() - 60_000,
+      };
+      const liveStale = masterRuntime.status().pipeline_stages;
+      expect(liveStale.market_validation.ok).toBe(false);
+      expect(liveStale.market_validation.detail).toMatch(/stale_quote · age=/);
+    } finally {
+      masterRuntime.last_quote = prevQuote;
+      masterRuntime.last_bars = prevBars;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.cfg = prevCfg;
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+      if (prevGates === undefined) delete process.env.MASTER_GATES_DIR;
+      else process.env.MASTER_GATES_DIR = prevGates;
+    }
+  });
 });
