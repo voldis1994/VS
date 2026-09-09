@@ -243,7 +243,8 @@ async function main() {
   setPersistClient(new DualPersist(primary, mirrorAfterWipe));
   const journalsGoneBeforeHydrate =
     !existsSync(decPath) && !existsSync(tradePath);
-  // Re-seed market cache sidecar (not SQL-mirrored) so later manage has bars
+  // Re-seed market cache sidecar (not SQL-mirrored) so later manage has bars.
+  // Aged quote must still hydrate as disk_cache — not live stale_quote.
   saveMarketCache({
     epic: 'GOLD',
     bars,
@@ -253,7 +254,7 @@ async function main() {
       mid: 4415.2,
       spread: 0.4,
       epic: 'GOLD',
-      ts_ms: Date.now(),
+      ts_ms: Date.now() - 60_000,
     },
     structure_seed_source: 'restart_check',
   });
@@ -477,10 +478,16 @@ async function main() {
     String(hydrateSnap.market_validation_stage_detail || '').includes(
       'disk_cache'
     ) &&
+    !String(hydrateSnap.market_validation_stage_detail || '').includes(
+      'stale_quote · age='
+    ) &&
     hydrateSnap.normalization_stage_ok === false &&
     hydrateSnap.normalization_stage_hydrated === true &&
     String(hydrateSnap.normalization_stage_detail || '').includes(
       'disk_cache'
+    ) &&
+    !String(hydrateSnap.normalization_stage_detail || '').includes(
+      'stale_quote'
     ) &&
     hydrateSnap.broker_stage_ok === false &&
     hydrateSnap.buy_filter_ok === false &&

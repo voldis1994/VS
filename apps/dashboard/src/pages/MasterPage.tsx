@@ -432,8 +432,8 @@ export function MasterPage() {
                     : ''
               }`
             : '—',
-          // Disk cache must not paint green as live feed
-          bad: quoteStale,
+          // Disk cache must not paint live-stale bad or green as live feed
+          bad: quoteStale && !status.quote?.cached,
           ok: !!status.quote && !quoteStale && !status.quote.cached,
         },
         {
