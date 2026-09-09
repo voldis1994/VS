@@ -39,6 +39,8 @@ export type TradeEvent = {
   detail: string | null;
   pnl: number | null;
   fees: number | null;
+  /** Desk confirm path stamped at OPEN/CLOSE — survives without opportunity join. */
+  desk_entry_source?: 'setup' | 'move' | 'none' | null;
 };
 
 const MAX_LINES = 2000;
@@ -83,6 +85,13 @@ function rotateIfNeeded() {
   }
 }
 
+export function normalizeTradeDeskSource(
+  raw?: string | null
+): 'setup' | 'move' | 'none' | null {
+  if (raw === 'setup' || raw === 'move' || raw === 'none') return raw;
+  return null;
+}
+
 export function logTradeEvent(input: {
   event: TradeEventKind;
   broker: string;
@@ -97,7 +106,9 @@ export function logTradeEvent(input: {
   detail?: string | null;
   pnl?: number | null;
   fees?: number | null;
+  desk_entry_source?: string | null;
 }): TradeEvent {
+  const desk = normalizeTradeDeskSource(input.desk_entry_source);
   const entry: TradeEvent = {
     event_id: randomUUID(),
     ts: new Date().toISOString(),
@@ -128,6 +139,7 @@ export function logTradeEvent(input: {
       input.fees != null && Number.isFinite(input.fees)
         ? Number(input.fees)
         : null,
+    ...(desk ? { desk_entry_source: desk } : {}),
   };
   try {
     mkdirSync(journalDir(), { recursive: true });

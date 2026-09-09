@@ -59,7 +59,7 @@ import {
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
 import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
-import { logTradeEvent, loadTradeEvents } from './tradeEventJournal.js';
+import { logTradeEvent, loadTradeEvents, normalizeTradeDeskSource } from './tradeEventJournal.js';
 import { resolvePersistBackend } from './persistBackend.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -1172,6 +1172,7 @@ class MasterRuntime {
         position_id: positionId,
         intent_id: pos.intent_id,
         opportunity_id: pos.opportunity_id,
+        desk_entry_source: pos.decision?.desk_entry_source,
         ok: false,
         detail: `${reason} · ${detail}`,
       });
@@ -1265,6 +1266,7 @@ class MasterRuntime {
       position_id: pos.position_id,
       intent_id: pos.intent_id,
       opportunity_id: pos.opportunity_id,
+      desk_entry_source: pos.decision?.desk_entry_source,
       ok: true,
       detail: outcome.exit_reason,
       // Omit pnl/fees when unproven — do not advertise forged 0 as a flat close
@@ -1564,6 +1566,7 @@ class MasterRuntime {
           position_id: null,
           intent_id: rec.execution?.intent_id || null,
           opportunity_id: rec.id,
+          desk_entry_source: rec.decision?.desk_entry_source,
           ok: true,
           detail: rec.execution?.detail || 'client_fanout',
         });
@@ -1621,6 +1624,7 @@ class MasterRuntime {
     const detail = `FANOUT_CLIENT · ${input.reason}${
       input.detail ? ` · ${input.detail}` : ''
     }`.slice(0, 400);
+    const fanoutOpp = this.pipeline.journal.opportunities.find((o) => o.id === oppId);
     logTradeEvent({
       event: 'CLOSE',
       broker: 'CAPITAL',
@@ -1630,6 +1634,7 @@ class MasterRuntime {
       price: input.exit,
       position_id: input.position_id,
       opportunity_id: oppId,
+      desk_entry_source: fanoutOpp?.decision?.desk_entry_source,
       ok: input.ok,
       detail,
     });
@@ -2077,6 +2082,7 @@ class MasterRuntime {
         position_id: ghost.position_id,
         intent_id: ghost.intent_id,
         opportunity_id: ghost.opportunity_id,
+        desk_entry_source: ghost.decision?.desk_entry_source,
         ok: true,
         detail: outcome.exit_reason,
         ...(outcome.pnl_proven !== false
@@ -2191,6 +2197,7 @@ class MasterRuntime {
         position_id: partial.position_id,
         intent_id: partial.intent_id,
         opportunity_id: partial.opportunity_id,
+        desk_entry_source: partial.decision?.desk_entry_source,
         ok: true,
         detail: outcome.exit_reason,
         ...(outcome.pnl_proven !== false
@@ -2840,6 +2847,7 @@ class MasterRuntime {
         position_id: c.position.position_id,
         intent_id: c.position.intent_id,
         opportunity_id: c.position.opportunity_id,
+        desk_entry_source: c.position.decision?.desk_entry_source,
         ok: true,
         detail: c.reason,
         ...(c.outcome.pnl_proven !== false
@@ -3058,6 +3066,7 @@ class MasterRuntime {
         position_id: place?.position_id ?? null,
         intent_id: execution.intent_id || null,
         opportunity_id: cycle.opportunity.id,
+        desk_entry_source: cycle.decision.desk_entry_source,
         ok: execution.accepted,
         detail: execution.detail,
       });
@@ -3164,6 +3173,7 @@ class MasterRuntime {
             position_id: place.position_id,
             intent_id: execution.intent_id || null,
             opportunity_id: cycle.opportunity.id,
+            desk_entry_source: cycle.decision.desk_entry_source,
             ok: !!mod.ok,
             detail: `post_fill_sl_sync${mod.detail ? `:${mod.detail}` : ''}`,
           });
@@ -4855,6 +4865,7 @@ class MasterRuntime {
         position_id: c.position.position_id,
         intent_id: c.position.intent_id,
         opportunity_id: c.position.opportunity_id,
+        desk_entry_source: c.position.decision?.desk_entry_source,
         ok: true,
         detail: c.reason,
         ...(c.outcome.pnl_proven !== false
@@ -5573,6 +5584,7 @@ class MasterRuntime {
         }));
       })(),
       recent_trades: loadTradeEvents(12).map((e) => {
+        const stamped = normalizeTradeDeskSource(e.desk_entry_source);
         const opp = e.opportunity_id
           ? this.pipeline.journal.opportunities.find(
               (o) => o.id === e.opportunity_id
@@ -5582,12 +5594,15 @@ class MasterRuntime {
         const fromDec: 'setup' | 'move' | 'none' | null =
           raw === 'setup' || raw === 'move' || raw === 'none' ? raw : null;
         const fromKey = deskSourceFromSetupKey(opp?.setup_key ?? null);
+        // Prefer durable TradeEvent stamp; fall back to opportunity join.
         const desk_entry_source =
-          fromDec && fromDec !== 'none'
-            ? fromDec
-            : fromKey && fromKey !== 'none'
-              ? fromKey
-              : fromDec || fromKey || null;
+          stamped && stamped !== 'none'
+            ? stamped
+            : fromDec && fromDec !== 'none'
+              ? fromDec
+              : fromKey && fromKey !== 'none'
+                ? fromKey
+                : stamped || fromDec || fromKey || null;
         return {
           ts: e.ts,
           event: e.event,
