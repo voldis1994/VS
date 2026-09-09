@@ -643,6 +643,21 @@ export function MasterPage() {
           ok: !!status.market_setup && status.market_setup.status === 'ARMED',
         },
         {
+          k: 'EV gate',
+          v: status.expectancy_gate_armed
+            ? status.expectancy_would_block?.length
+              ? `ARMED · block ${status.expectancy_would_block.length}`
+              : 'ARMED'
+            : status.expectancy_would_block?.length
+              ? `off · would ${status.expectancy_would_block.length}`
+              : 'off',
+          ok: !!status.expectancy_gate_armed && status.mode === 'LIVE',
+          bad:
+            status.mode === 'LIVE' &&
+            !status.expectancy_gate_armed &&
+            (status.expectancy_would_block?.length || 0) > 0,
+        },
+        {
           k: 'Structure seed',
           v: status.structure_seed_source || '—',
           bad:
