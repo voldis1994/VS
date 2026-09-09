@@ -5080,6 +5080,9 @@ class MasterRuntime {
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
     // Opens must manage/exit even when runtime_stopped — Recover bootstrap + Stop-with-opens
     if (this.positions.count() === 0) return;
+    // Roll UTC day before any manage/sync close mutates daily_pnl (Stop-with-opens
+    // may never hit full tick across midnight — avoid fail-open day-loss wipe).
+    this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
     // VS-System 1s trail: pull a fresh broker tick — do not reuse frozen last_quote.
     let quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
