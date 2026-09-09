@@ -142,9 +142,25 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
 describe('VS MASTER LIVE Capital path (mocked)', () => {
   const prevLive = process.env.MASTER_LIVE_ENABLED;
   const prevState = process.env.MASTER_STATE_DIR;
+  const prevCapital = {
+    CAPITAL_API_KEY: process.env.CAPITAL_API_KEY,
+    CAPITAL_IDENTIFIER: process.env.CAPITAL_IDENTIFIER,
+    CAPITAL_API_PASSWORD: process.env.CAPITAL_API_PASSWORD,
+    CAPITAL_PASSWORD: process.env.CAPITAL_PASSWORD,
+    CAPITAL_ENVIRONMENT: process.env.CAPITAL_ENVIRONMENT,
+    CAPITAL_ACCOUNT_ID: process.env.CAPITAL_ACCOUNT_ID,
+  };
 
   beforeEach(() => {
     delete process.env.MASTER_LIVE_ENABLED;
+    // Real CAPITAL_* in the shell must not flip capital_credential_source to env
+    // during desk-source / mocked LIVE path assertions.
+    delete process.env.CAPITAL_API_KEY;
+    delete process.env.CAPITAL_IDENTIFIER;
+    delete process.env.CAPITAL_API_PASSWORD;
+    delete process.env.CAPITAL_PASSWORD;
+    delete process.env.CAPITAL_ENVIRONMENT;
+    delete process.env.CAPITAL_ACCOUNT_ID;
     process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-live-path-'));
     clearTradeAckJournalForTest();
   });
@@ -154,6 +170,10 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     else process.env.MASTER_LIVE_ENABLED = prevLive;
     if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prevState;
+    for (const [k, v] of Object.entries(prevCapital)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     clearTradeAckJournalForTest();
     (masterRuntime as any).capitalDeskCredsSeen = false;
     masterRuntime.stop();
