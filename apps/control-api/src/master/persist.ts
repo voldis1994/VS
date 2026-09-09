@@ -126,13 +126,18 @@ export async function persistDecisionEvent(entry: {
   executed: boolean;
   execution_detail: string | null;
   cycle_ms: number | null;
+  desk_entry_source?: 'setup' | 'move' | null;
+  desk_entry_side?: 'BUY' | 'SELL' | null;
+  hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+  closed_10s_present?: boolean | null;
 }): Promise<boolean> {
   try {
     await client.query(
       `INSERT INTO master_decision_events (
          event_id, ts, kind, epic, mode, opportunity_id,
-         buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms,
+         desk_entry_source, desk_entry_side, hour_bias, closed_10s_present
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (event_id) DO NOTHING`,
       [
         entry.event_id,
@@ -147,6 +152,12 @@ export async function persistDecisionEvent(entry: {
         entry.executed,
         entry.execution_detail,
         entry.cycle_ms,
+        entry.desk_entry_source ?? null,
+        entry.desk_entry_side ?? null,
+        entry.hour_bias ?? null,
+        typeof entry.closed_10s_present === 'boolean'
+          ? entry.closed_10s_present
+          : null,
       ]
     );
     return true;
@@ -220,12 +231,17 @@ export async function loadDecisionEventsFromPersist(
     executed: boolean;
     execution_detail: string | null;
     cycle_ms: number | null;
+    desk_entry_source: 'setup' | 'move' | null;
+    desk_entry_side: 'BUY' | 'SELL' | null;
+    hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+    closed_10s_present: boolean | null;
   }>
 > {
   try {
     const { rows } = await client.query(
       `SELECT event_id, ts, kind, epic, mode, opportunity_id,
-              buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms
+              buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms,
+              desk_entry_source, desk_entry_side, hour_bias, closed_10s_present
        FROM master_decision_events
        ORDER BY ts DESC
        LIMIT $1`,
@@ -248,6 +264,27 @@ export async function loadDecisionEventsFromPersist(
         r.cycle_ms != null && Number.isFinite(Number(r.cycle_ms))
           ? Math.round(Number(r.cycle_ms))
           : null,
+      desk_entry_source:
+        r.desk_entry_source === 'setup' || r.desk_entry_source === 'move'
+          ? r.desk_entry_source
+          : null,
+      desk_entry_side:
+        r.desk_entry_side === 'BUY' || r.desk_entry_side === 'SELL'
+          ? r.desk_entry_side
+          : null,
+      hour_bias:
+        r.hour_bias === 'UP' ||
+        r.hour_bias === 'DOWN' ||
+        r.hour_bias === 'FLAT' ||
+        r.hour_bias === 'UNKNOWN'
+          ? r.hour_bias
+          : null,
+      closed_10s_present:
+        typeof r.closed_10s_present === 'boolean'
+          ? r.closed_10s_present
+          : r.closed_10s_present == null
+            ? null
+            : !!r.closed_10s_present,
     }));
   } catch {
     return [];
@@ -619,6 +656,11 @@ export class MemoryPersist implements PersistClient {
           executed: params[9],
           execution_detail: params[10],
           cycle_ms: params[11],
+          desk_entry_source: params[12] ?? null,
+          desk_entry_side: params[13] ?? null,
+          hour_bias: params[14] ?? null,
+          closed_10s_present:
+            typeof params[15] === 'boolean' ? params[15] : params[15] ?? null,
         });
         if (this.decisionEvents.length > 500) {
           this.decisionEvents = this.decisionEvents.slice(-500);
