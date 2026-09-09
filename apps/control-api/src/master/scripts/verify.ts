@@ -191,6 +191,7 @@ async function main() {
       'src/master/closeRequiresSl.ts',
       'src/master/errorJournal.ts',
       'src/master/decisionJournal.ts',
+      'src/master/journalMirror.ts',
       'src/master/atomicIo.ts',
       'src/master/monitoring.ts',
       'src/master/cycleAlerts.ts',
