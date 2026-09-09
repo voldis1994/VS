@@ -4167,9 +4167,15 @@ class MasterRuntime {
         const m = this.last_market;
         const d = this.last_decision;
         const r = this.last_risk;
-        const buyOk = d?.buy?.filter_ok !== false;
-        const sellOk = d?.sell?.filter_ok !== false;
+        // Fail-closed: missing filter_ok (journal hydrate scores-only) must not forge green
+        const buyOk = d?.buy?.filter_ok === true;
+        const sellOk = d?.sell?.filter_ok === true;
         const filterPass = !!(d && (buyOk || sellOk));
+        const filterEvidence =
+          d?.buy != null &&
+          d?.sell != null &&
+          (typeof d.buy.filter_ok === 'boolean' ||
+            typeof d.sell.filter_ok === 'boolean');
         const brokerName = this.broker?.name ?? null;
         const opens = this.positions.count();
         const managedOnce = this.last_manage_tick_ms > 0;
@@ -4219,9 +4225,11 @@ class MasterRuntime {
           },
           filters: {
             ok: filterPass,
-            detail: d
-              ? `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`
-              : '—',
+            detail: !d
+              ? '—'
+              : !filterEvidence
+                ? 'no filter evidence'
+                : `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`,
           },
           decision: {
             ok: !!(

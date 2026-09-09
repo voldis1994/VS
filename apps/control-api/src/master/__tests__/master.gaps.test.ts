@@ -5465,3 +5465,54 @@ describe('pipeline_stages honesty — normalization never forged green', () => {
     }
   });
 });
+
+describe('pipeline_stages honesty — filters fail-closed', () => {
+  it('score-only journal hydrate must not forge Stage·filters green', () => {
+    const prev = masterRuntime.last_decision;
+    try {
+      masterRuntime.last_decision = {
+        decision_id: 'hydrated',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: { score: 0.7 } as never,
+        sell: { score: 0.2 } as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.filters.ok).toBe(false);
+      expect(stages.filters.detail).toMatch(/no filter evidence/);
+      expect(stages.dual_candidates.ok).toBe(true);
+
+      masterRuntime.last_decision = {
+        decision_id: 'live',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: {
+          score: 0.8,
+          filter_ok: true,
+          filter_reason: null,
+          valid: true,
+        } as never,
+        sell: {
+          score: 0.2,
+          filter_ok: false,
+          filter_reason: 'spread',
+          valid: true,
+        } as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      };
+      const okStages = masterRuntime.status().pipeline_stages;
+      expect(okStages.filters.ok).toBe(true);
+      expect(okStages.filters.detail).toMatch(/BUY ok/);
+      expect(okStages.filters.detail).toMatch(/SELL spread|SELL fail/);
+    } finally {
+      masterRuntime.last_decision = prev;
+    }
+  });
+});

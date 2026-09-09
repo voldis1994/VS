@@ -248,6 +248,8 @@ async function main() {
       runtimeBody.includes('journal:') &&
       runtimeBody.includes('performance:') &&
       runtimeBody.includes('flat · no exit yet') &&
+      runtimeBody.includes('no filter evidence') &&
+      runtimeBody.includes('filter_ok === true') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&

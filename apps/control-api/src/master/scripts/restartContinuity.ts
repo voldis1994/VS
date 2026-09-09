@@ -319,6 +319,8 @@ async function main() {
       stHydrate.pipeline_stages?.performance?.detail ?? null,
     exit_stage_ok: stHydrate.pipeline_stages?.exit?.ok === true,
     exit_stage_detail: stHydrate.pipeline_stages?.exit?.detail ?? null,
+    filters_stage_ok: stHydrate.pipeline_stages?.filters?.ok === true,
+    filters_stage_detail: stHydrate.pipeline_stages?.filters?.detail ?? null,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -342,6 +344,7 @@ async function main() {
     hydrateSnap.performance_stage_ok === true &&
     hydrateSnap.exit_stage_ok === true &&
     hydrateSnap.exit_stage_detail === 'TakeProfit' &&
+    hydrateSnap.filters_stage_ok === true &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
     journalHealOk &&
     pgPrimaryHealOk;
@@ -456,6 +459,8 @@ async function main() {
       performance_stage_detail: hydrateSnap.performance_stage_detail,
       exit_stage_ok: hydrateSnap.exit_stage_ok,
       exit_stage_detail: hydrateSnap.exit_stage_detail,
+      filters_stage_ok: hydrateSnap.filters_stage_ok,
+      filters_stage_detail: hydrateSnap.filters_stage_detail,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,
