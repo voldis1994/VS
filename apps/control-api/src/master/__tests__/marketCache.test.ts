@@ -144,11 +144,42 @@ describe('market_cache hydrate provenance', () => {
           hydrateMarketCacheFromDisk: () => void;
         }
       ).hydrateMarketCacheFromDisk();
+      // Open + disk quote → Float UPL must mark cached (not live MTM)
+      const prevPositions = masterRuntime.positions;
+      const { PositionManager } = await import('../positionManager.js');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.positions.register({
+        position_id: 'cache-float-1',
+        opportunity_id: 'cache-opp-1',
+        intent_id: 'cache-intent-1',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4410,
+        stop_loss: 4390,
+        take_profit: 4450,
+        decision: {
+          decision_id: 'cache-d',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.8,
+          block_reason: null,
+          buy: { score: 0.8 } as never,
+          sell: { score: 0.2 } as never,
+          analysis: {
+            regime: 'TREND_UP',
+            market_state: 'test',
+          } as never,
+          expectancy: null,
+        },
+      });
       const st = masterRuntime.status();
       expect(st.bars_available).toBeGreaterThanOrEqual(40);
       expect(st.bars_cached).toBe(true);
       expect(st.quote?.cached).toBe(true);
       expect(st.quote?.source).toBe('disk_cache');
+      expect(st.floating_pnl).not.toBeNull();
+      expect(st.floating_pnl_cached).toBe(true);
       // Live tick clears provenance
       await masterRuntime.tick(bars, {
         bid: 4416,
@@ -162,6 +193,8 @@ describe('market_cache hydrate provenance', () => {
       expect(live.quote?.cached).toBe(false);
       expect(live.quote?.source).toBe('live');
       expect(live.bars_cached).toBe(false);
+      expect(live.floating_pnl_cached).toBe(false);
+      masterRuntime.positions = prevPositions;
     } finally {
       masterRuntime.last_quote = prevQuote;
       masterRuntime.last_bars = prevBars;
