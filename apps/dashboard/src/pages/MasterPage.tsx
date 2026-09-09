@@ -8,6 +8,13 @@ type MasterStatus = {
   epic: string;
   ai_mode: string;
   owns_pipeline: boolean;
+  last_client_fanout?: {
+    attempted: boolean;
+    subscribers: number;
+    ok_count: number;
+    fail_count: number;
+    detail: string;
+  } | null;
   manage_owner?: 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
   persist_backend?: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
   journal_audit?: {
@@ -467,6 +474,21 @@ export function MasterPage() {
             : 'structure/MFE (preset off)',
         },
         { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no', ok: !!status.owns_pipeline, bad: status.mode === 'LIVE' && !status.owns_pipeline },
+        {
+          k: 'Client fanout',
+          v: status.last_client_fanout
+            ? status.last_client_fanout.attempted
+              ? status.last_client_fanout.detail || '—'
+              : 'idle'
+            : '—',
+          ok:
+            !!status.last_client_fanout?.attempted &&
+            (status.last_client_fanout.ok_count ?? 0) > 0,
+          bad:
+            !!status.last_client_fanout?.attempted &&
+            (status.last_client_fanout.fail_count ?? 0) > 0 &&
+            !(status.last_client_fanout.ok_count > 0),
+        },
         {
           k: 'Manage owner',
           v: status.manage_owner || '—',

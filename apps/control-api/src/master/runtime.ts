@@ -119,6 +119,14 @@ export type MasterStatus = {
   last_block_reason: string | null;
   last_execution_detail: string | null;
   last_exit_reason: string | null;
+  /** MASTER-owns Client fanout after last accepted OPEN (multi-account). */
+  last_client_fanout: {
+    attempted: boolean;
+    subscribers: number;
+    ok_count: number;
+    fail_count: number;
+    detail: string;
+  } | null;
   /** Last manage close failure (broker refused / AI veto) — dashboard honesty */
   last_close_failed: {
     position_id: string;
@@ -353,6 +361,7 @@ class MasterRuntime {
   private lastPublicReferenceAtMs = 0;
   last_execution_detail: string | null = null;
   last_exit_reason: string | null = null;
+  last_client_fanout: MasterStatus['last_client_fanout'] = null;
   /** Sticky last close_failed for status/dashboard until a successful close clears it. */
   last_close_failed: {
     position_id: string;
@@ -1238,6 +1247,63 @@ class MasterRuntime {
   ownsPipelineEffective(): boolean {
     if (this.owns_pipeline_pref != null) return this.owns_pipeline_pref;
     return process.env.MASTER_OWNS_PIPELINE === 'true';
+  }
+
+  /**
+   * After MASTER accepts OPEN while owns_pipeline: fan EntryReady to Client
+   * RUNNING subscriptions (Market Core path stays blocked).
+   * Never throws into the tick — DB/Capital fanout failures are status-only.
+   */
+  async fanoutAcceptedOpenToClients(input: {
+    side: 'BUY' | 'SELL';
+    intent_id: string;
+    reference_price?: number | null;
+    regime?: string | null;
+    setup_type?: string | null;
+  }): Promise<MasterStatus['last_client_fanout']> {
+    const {
+      buildMasterFanoutIntent,
+      summarizeFanoutResult,
+    } = await import('./masterClientFanout.js');
+    if (!this.ownsPipelineEffective()) {
+      const summary = summarizeFanoutResult({ attempted: false });
+      this.last_client_fanout = summary;
+      return summary;
+    }
+    try {
+      const { executeMasterOwnedFanout } = await import(
+        '../services/intentFanout.js'
+      );
+      const intent = buildMasterFanoutIntent({
+        epic: this.epic,
+        side: input.side,
+        intent_id: input.intent_id,
+        reference_price: input.reference_price,
+        regime: input.regime,
+        setup_type: input.setup_type,
+      });
+      const fanout = await executeMasterOwnedFanout(intent);
+      const summary = summarizeFanoutResult({
+        attempted: true,
+        subscribers: fanout.subscribers,
+        executed: fanout.executed,
+      });
+      this.last_client_fanout = summary;
+      if (fanout.subscribers > 0) {
+        this.last_execution_detail = `${this.last_execution_detail || 'open'};client_fanout=${summary.detail}`.slice(
+          0,
+          400
+        );
+      }
+      return summary;
+    } catch (err) {
+      const summary = summarizeFanoutResult({
+        attempted: true,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.last_client_fanout = summary;
+      return summary;
+    }
   }
 
   /** Desk tick reports who owns exits (avoids deskBridge↔runtime import cycle). */
@@ -2475,6 +2541,7 @@ class MasterRuntime {
       this.capitalBrokerAttached();
     let executed = false;
     let execution_detail: string | null = null;
+    let acceptedIntentId: string | null = null;
 
     const inflight =
       Date.now() < this.inflight_until_ms || this.positions.count() > 0;
@@ -2570,6 +2637,7 @@ class MasterRuntime {
         epic: this.epic,
         allow_live: allow_live || broker.paper,
       });
+      acceptedIntentId = execution.intent_id || cycle.opportunity.id;
       this.monitor.noteAckLatency(Date.now() - openStarted);
       execution_detail = execution.detail;
       this.last_execution_detail = execution.detail;
@@ -2882,6 +2950,19 @@ class MasterRuntime {
         }
       }
       } // brokerVerifyOk
+      if (executed && this.ownsPipelineEffective() && cycle.decision.side) {
+        const setup = this.pipeline.getMarketSetup();
+        await this.fanoutAcceptedOpenToClients({
+          side: cycle.decision.side,
+          intent_id: acceptedIntentId || cycle.opportunity.id,
+          reference_price: quote.mid,
+          regime: cycle.decision.analysis?.regime ?? null,
+          setup_type:
+            setup && setup.kind !== 'NONE'
+              ? setup.kind
+              : cycle.decision.analysis?.market_state ?? null,
+        });
+      }
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
       execution_detail = !this.running
         ? 'runtime_stopped'
@@ -4296,6 +4377,7 @@ class MasterRuntime {
       last_block_reason: lastBlockReason,
       last_execution_detail: this.last_execution_detail,
       last_exit_reason: this.last_exit_reason,
+      last_client_fanout: this.last_client_fanout,
       last_close_failed: this.last_close_failed,
       last_ai_allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
