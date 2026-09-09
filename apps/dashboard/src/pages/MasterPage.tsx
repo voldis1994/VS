@@ -160,6 +160,7 @@ type MasterStatus = {
     playbook: string | null;
   } | null;
   hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+  closed_10s_present?: boolean;
   entry_gates?: {
     news_cfg_on: boolean;
     news_blocks: boolean;
@@ -664,6 +665,12 @@ export function MasterPage() {
           v: status.hour_bias || '—',
           ok: status.hour_bias === 'UP' || status.hour_bias === 'DOWN',
           warn: status.hour_bias === 'UNKNOWN',
+        },
+        {
+          k: 'Closed 10s',
+          v: status.closed_10s_present ? 'present' : 'none',
+          ok: !!status.closed_10s_present,
+          warn: !status.closed_10s_present,
         },
         {
           k: 'EV gate',

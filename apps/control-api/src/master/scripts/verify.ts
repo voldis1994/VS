@@ -573,12 +573,14 @@ async function main() {
     const liveFeedBody = readFileSync(join(root, 'src/master/liveFeed.ts'), 'utf8');
     const liveFeedClosed10s =
       liveFeedBody.includes('closed10sFromJustClosed') &&
-      runtimeBody.includes('closed10sFromJustClosed') &&
+      liveFeedBody.includes('stickyClosed10s') &&
+      runtimeBody.includes('stickyClosed10s') &&
+      runtimeBody.includes('lastClosed10s') &&
       runtimeBody.includes('justClosed') &&
-      /startBrokerLiveFeed[\s\S]*closed10sFromJustClosed[\s\S]*closed_10s/.test(
+      /startBrokerLiveFeed[\s\S]*stickyClosed10s[\s\S]*lastClosed10s[\s\S]*closed_10s/.test(
         runtimeBody
       ) &&
-      /startPublicLiveFeed[\s\S]*closed10sFromJustClosed[\s\S]*closed_10s/.test(
+      /startPublicLiveFeed[\s\S]*stickyClosed10s[\s\S]*lastClosed10s[\s\S]*closed_10s/.test(
         runtimeBody
       );
     const brokerBody = readFileSync(join(root, 'src/master/broker.ts'), 'utf8');
@@ -599,10 +601,15 @@ async function main() {
       runtimeBody.includes('last_hour_bias') &&
       runtimeBody.includes('desk_entry:') &&
       runtimeBody.includes('hour_bias:') &&
+      runtimeBody.includes('closed_10s_present:') &&
+      runtimeBody.includes('last_closed_10s_present') &&
       masterPageBody.includes("'Desk entry'") &&
       masterPageBody.includes('hour_bias') &&
+      masterPageBody.includes("'Closed 10s'") &&
+      masterPageBody.includes('closed_10s_present') &&
       masterRouteBody.includes("card('Desk entry'") &&
-      masterRouteBody.includes("card('Hour bias'");
+      masterRouteBody.includes("card('Hour bias'") &&
+      masterRouteBody.includes("card('Closed 10s'");
     const pipelineRouteBody = readFileSync(
       join(root, 'src/routes/pipeline.ts'),
       'utf8'
@@ -744,7 +751,7 @@ async function main() {
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias dashboard + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed sticky justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias/closed_10s dashboard + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`

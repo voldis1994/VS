@@ -240,4 +240,39 @@ describe('desk hour bias + 10s entry confirm', () => {
     expect(withClose.decision.kind).toBe('WAIT');
     expect(withClose.decision.block_reason).toBe('setup_confirm_pending');
   });
+
+  it('sticky closed_10s keeps setup_confirm_pending on next poll without justClosed', async () => {
+    const { stickyClosed10s } = await import('../liveFeed.js');
+    const bars = barsTrendUp(50);
+    const q = quoteFrom(bars.at(-1)!);
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER' as const,
+      min_score: 0.25,
+      require_armed_setup: true,
+      block_off_hours: false,
+      block_high_impact_news: false,
+    };
+    let sticky = stickyClosed10s(null, {
+      open: 4405,
+      high: 4405,
+      low: 4405,
+      close: 4405,
+      ts_ms: Date.now() - 10_000,
+    });
+    expect(sticky).not.toBeNull();
+    // Next poll: justClosed null — desk last_closed sticky still arms confirm gate
+    sticky = stickyClosed10s(sticky, null);
+    const pipe = new MasterPipeline('PAPER');
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: q,
+      account,
+      instrument: GOLD_SPEC,
+      cfg,
+      closed_10s: sticky,
+    });
+    expect(cycle.decision.kind).toBe('WAIT');
+    expect(cycle.decision.block_reason).toBe('setup_confirm_pending');
+  });
 });

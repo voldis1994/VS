@@ -87,6 +87,32 @@ describe('VS MASTER live bar builder', () => {
     expect(cached.detail).toBe('capital_hour_8');
   });
 
+  it('stickyClosed10s keeps last_closed across null justClosed (desk parity)', async () => {
+    const { stickyClosed10s, closed10sFromJustClosed } = await import('../liveFeed.js');
+    expect(stickyClosed10s(null, null)).toBeNull();
+    const first = stickyClosed10s(null, {
+      open: 4400,
+      high: 4402,
+      low: 4399,
+      close: 4401,
+      ts_ms: 1_000,
+    });
+    expect(first?.close).toBe(4401);
+    // Forming polls — no new close — sticky retains desk last_closed
+    expect(stickyClosed10s(first, null)).toEqual(first);
+    expect(stickyClosed10s(first, undefined)).toEqual(first);
+    const next = stickyClosed10s(first, {
+      open: 4401,
+      high: 4410,
+      low: 4400,
+      close: 4408,
+      ts_ms: 11_000,
+    });
+    expect(next?.close).toBe(4408);
+    expect(next?.open_time_ms).toBe(11_000);
+    expect(closed10sFromJustClosed(null)).toBeNull();
+  });
+
   it('seedBars marks yahoo_ohlc source', () => {
     const b = new LiveBarBuilder(1000, 20);
     b.seedBars([
