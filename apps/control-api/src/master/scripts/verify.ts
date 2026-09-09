@@ -241,7 +241,8 @@ async function main() {
     const stagesApi =
       runtimeBody.includes('pipeline_stages:') &&
       runtimeBody.includes('market_validation:') &&
-      runtimeBody.includes('dual_candidates:');
+      runtimeBody.includes('dual_candidates:') &&
+      runtimeBody.includes('m.ok && m.bars_out >= 5');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
       runtimeBody.includes('resolveManageOwnerStatus') &&
