@@ -503,6 +503,8 @@ export class PaperBroker implements MasterBroker {
       equity,
       balance: cash,
       currency: 'GBP',
+      // Free cash ≈ available when paper has no separate margin model
+      available: cash,
       trade_allowed: true,
     };
   }

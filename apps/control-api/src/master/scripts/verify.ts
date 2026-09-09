@@ -1282,8 +1282,9 @@ async function main() {
       );
     const manageOnlyEquityRefreshApi =
       runtimeBody.includes('applyVenueAccountAfterClose') &&
+      runtimeBody.includes('applyVenueAccountSnapshot') &&
       runtimeBody.includes(
-        'Always refresh equity/peak after manageOnly MTM'
+        'Always refresh full venue account snapshot after manageOnly MTM'
       ) &&
       runtimeBody.includes(
         'open book (Stop-with-opens)'
@@ -1302,7 +1303,7 @@ async function main() {
         'Updates position.upl and mirrors Capital-style equity = cash + ΣUPL'
       ) &&
       runtimeBody.includes(
-        'Always refresh equity/peak after manageOnly MTM'
+        'Always refresh full venue account snapshot after manageOnly MTM'
       ) &&
       runtimeBody.includes(
         'Paper: seed venue with caller mark first so getQuote cannot revive a stale'
@@ -1312,6 +1313,20 @@ async function main() {
         'utf8'
       ).includes(
         'manageOnlyTick updates account.equity from PaperBroker MTM while open'
+      );
+    const manageOnlyAccountFieldsApi =
+      runtimeBody.includes('applyVenueAccountSnapshot') &&
+      runtimeBody.includes(
+        'copies currency / available_to_deal / trade_allowed when the venue'
+      ) &&
+      runtimeBody.includes(
+        'or Capital prove stale until the next full tick'
+      ) &&
+      readFileSync(
+        join(root, 'src/master/__tests__/paperSlTpAutofill.test.ts'),
+        'utf8'
+      ).includes(
+        'manageOnlyTick refreshes available_to_deal and trade_allowed from getAccount'
       );
     const postClosePeakEquityApi =
       runtimeBody.includes('applyVenueAccountAfterClose') &&
@@ -1526,6 +1541,7 @@ async function main() {
       manageOnlyDailyPnlRollApi &&
       manageOnlyFingerprintClearApi &&
       manageOnlyMtmEquityApi &&
+      manageOnlyAccountFieldsApi &&
       livePaperDeskConfirm &&
       setupArmedApi &&
       setupArmedUi &&
