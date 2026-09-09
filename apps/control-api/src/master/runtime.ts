@@ -4221,10 +4221,25 @@ class MasterRuntime {
                 : 'no cycle',
           },
           analysis_regime: {
-            ok: !!(d?.analysis?.regime && d.analysis.regime !== 'UNKNOWN'),
-            detail: d?.analysis
-              ? `${d.analysis.regime}:${d.analysis.market_state}`
-              : '—',
+            // Never forge green from journal-hydrate alone — need proven last_market
+            ok: !!(
+              m &&
+              m.ok &&
+              !liveQuoteStaleForStages &&
+              d?.analysis?.regime &&
+              d.analysis.regime !== 'UNKNOWN'
+            ),
+            detail: liveQuoteStaleForStages
+              ? `stale_quote · ${d?.analysis?.regime || '—'}`
+              : !m
+                ? d?.analysis
+                  ? `no cycle · ${d.analysis.regime}:${d.analysis.market_state}`
+                  : '—'
+                : !m.ok
+                  ? `invalid market · ${d?.analysis?.regime || '—'}`
+                  : d?.analysis
+                    ? `${d.analysis.regime}:${d.analysis.market_state}`
+                    : '—',
           },
           dual_candidates: {
             ok: !!(d?.buy && d?.sell),

@@ -5584,3 +5584,113 @@ describe('pipeline_stages honesty — stale quote fails Stage·validate', () => 
     }
   });
 });
+
+describe('pipeline_stages honesty — analysis_regime never forged from hydrate', () => {
+  it('journal decision without last_market keeps Stage·analysis red', () => {
+    const prevDecision = masterRuntime.last_decision;
+    const prevMarket = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
+    try {
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      masterRuntime.last_market = null;
+      masterRuntime.last_decision = {
+        decision_id: 'hydrated',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: {
+          score: 0.8,
+          filter_ok: true,
+          filter_reason: null,
+          valid: true,
+        } as never,
+        sell: {
+          score: 0.2,
+          filter_ok: false,
+          filter_reason: 'spread',
+          valid: true,
+        } as never,
+        analysis: {
+          ...baseAnalysis(),
+          regime: 'TREND_UP',
+          market_state: 'TREND_UP:UP:BULLISH',
+        },
+        expectancy: null,
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.analysis_regime.ok).toBe(false);
+      expect(stages.analysis_regime.detail).toMatch(/no cycle/);
+      expect(stages.analysis_regime.detail).toMatch(/TREND_UP/);
+      // Filters may still show hydrate evidence — analysis must not
+      expect(stages.filters.ok).toBe(true);
+
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      const live = masterRuntime.status().pipeline_stages;
+      expect(live.analysis_regime.ok).toBe(true);
+      expect(live.analysis_regime.detail).toMatch(/^TREND_UP:/);
+
+      masterRuntime.last_market = {
+        ok: false,
+        quality: 0.2,
+        reasons: ['flat_tape'],
+        bars_in: 12,
+        bars_out: 12,
+      };
+      const bad = masterRuntime.status().pipeline_stages;
+      expect(bad.analysis_regime.ok).toBe(false);
+      expect(bad.analysis_regime.detail).toMatch(/invalid market/);
+    } finally {
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_quote = prevQuote;
+    }
+  });
+
+  it('score-only decision journal hydrate keeps analysis UNKNOWN / red', () => {
+    const prevDecision = masterRuntime.last_decision;
+    const prevMarket = masterRuntime.last_market;
+    try {
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      masterRuntime.last_decision = {
+        decision_id: 'recovered',
+        kind: 'WAIT',
+        side: null,
+        score: 0.5,
+        block_reason: null,
+        buy: { score: 0.5 } as never,
+        sell: { score: 0.4 } as never,
+        analysis: {
+          regime: 'UNKNOWN',
+          market_state: 'recovered_from_decision_journal',
+        } as never,
+        expectancy: null,
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.analysis_regime.ok).toBe(false);
+      expect(stages.analysis_regime.detail).toMatch(/UNKNOWN|recovered/);
+    } finally {
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_market = prevMarket;
+    }
+  });
+});
