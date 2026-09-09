@@ -21,13 +21,19 @@ function outcome(pnl: number): TradeOutcome {
   };
 }
 
-function opp(id: string, pnl: number): OpportunityRecord {
+function opp(
+  id: string,
+  pnl: number,
+  desk?: 'setup' | 'move' | 'none' | null
+): OpportunityRecord {
   return {
     id,
     ts: new Date().toISOString(),
     mode: 'PAPER',
     epic: 'GOLD',
-    decision: null as never,
+    decision: desk
+      ? ({ desk_entry_source: desk } as OpportunityRecord['decision'])
+      : (null as never),
     risk: null as never,
     executed: true,
     outcome: outcome(pnl),
@@ -61,6 +67,25 @@ describe('performanceByDeskEntry', () => {
     ];
     const slices = performanceByDeskEntry(records, decisions);
     expect(slices.find((s) => s.source === 'move')!.trades).toBe(1);
+    expect(slices.find((s) => s.source === 'none')!.trades).toBe(0);
+  });
+
+  it('falls back to opportunity.decision.desk_entry_source when DecisionEvent missing', () => {
+    const records = [opp('x', 8, 'setup'), opp('y', -2, 'move')];
+    const slices = performanceByDeskEntry(records, []);
+    const by = Object.fromEntries(slices.map((s) => [s.source, s]));
+    expect(by.setup!.trades).toBe(1);
+    expect(by.setup!.total_pnl).toBe(8);
+    expect(by.move!.trades).toBe(1);
+    expect(by.move!.total_pnl).toBe(-2);
+  });
+
+  it('DecisionEvent setup/move wins over opportunity none', () => {
+    const records = [opp('w', 5, 'none')];
+    const slices = performanceByDeskEntry(records, [
+      { opportunity_id: 'w', desk_entry_source: 'setup' },
+    ]);
+    expect(slices.find((s) => s.source === 'setup')!.trades).toBe(1);
     expect(slices.find((s) => s.source === 'none')!.trades).toBe(0);
   });
 });
