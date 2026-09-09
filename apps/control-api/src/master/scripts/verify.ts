@@ -679,6 +679,33 @@ async function main() {
       existsSync(join(root, 'src/db/migrations/027_master_client_fanout.sql')) &&
       restartBody.includes('client_fanout_pg_primary_heal_ok') &&
       restartBody.includes('Do NOT re-seed client_fanout');
+    const filePersistBody = readFileSync(
+      join(root, 'src/master/filePersist.ts'),
+      'utf8'
+    );
+    const monitoringOpMetaBody = readFileSync(
+      join(root, 'src/master/monitoring.ts'),
+      'utf8'
+    );
+    const operatorMetaSidecarParityApi =
+      filePersistBody.includes('monitoring_snapshot') &&
+      filePersistBody.includes('spread_history') &&
+      filePersistBody.includes('news_window') &&
+      filePersistBody.includes('client_fanout') &&
+      filePersistBody.includes('trade_ack_journal') &&
+      monitoringOpMetaBody.includes('embedOperatorMetaPatch') &&
+      monitoringOpMetaBody.includes('monitoring_snapshot') &&
+      readFileSync(join(root, 'src/master/spreadModel.ts'), 'utf8').includes(
+        'embedOperatorMetaPatch'
+      ) &&
+      readFileSync(join(root, 'src/master/newsGate.ts'), 'utf8').includes(
+        'embedOperatorMetaPatch'
+      ) &&
+      fanoutBody.includes('embedOperatorMetaPatch') &&
+      tradeAckBody.includes('embedOperatorMetaPatch') &&
+      existsSync(
+        join(root, 'src/master/__tests__/operatorMetaSidecarParity.test.ts')
+      );
     const tickStickyDeskArmsApi =
       runtimeBody.includes('hourBarsForCycle') &&
       runtimeBody.includes('closed10sForCycle') &&

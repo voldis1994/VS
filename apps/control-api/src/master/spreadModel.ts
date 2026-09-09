@@ -9,6 +9,7 @@ import {
   persistSpreadHistoryState,
   loadSpreadHistoryFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type SpreadModelSnapshot = {
   history: number[];
@@ -153,6 +154,10 @@ export class SpreadHistory {
         ts: new Date().toISOString(),
       };
       writeFileSync(spreadPath(root), JSON.stringify(payload));
+      embedOperatorMetaPatch(
+        { spread_history: payload as unknown as Record<string, unknown> },
+        dir
+      );
       // DualPersist / MemoryPersist / PG primary — survive full file wipe
       void persistSpreadHistoryState({
         ...payload,
@@ -200,6 +205,10 @@ export async function hydrateSpreadHistoryFromPersist(
     };
     mkdirSync(dir, { recursive: true });
     writeFileSync(path, JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { spread_history: payload as unknown as Record<string, unknown> },
+      dir
+    );
     return { restored: true, count: history.length };
   } catch {
     return { restored: false, count: 0 };

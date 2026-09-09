@@ -21,6 +21,7 @@ import {
   persistMonitoringSnapshotState,
   loadMonitoringSnapshotFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type CycleMonitorSnapshot = {
   last_cycle_ms: number;
@@ -176,6 +177,8 @@ export class CycleMonitor {
       const path = snapshotPath();
       const payload = diskPayloadFromSnap(snap);
       writeDiskPayload(path, payload);
+      // Keep operator_meta in sync even when no position write flushes FilePersist
+      embedOperatorMetaPatch({ monitoring_snapshot: payload as unknown as Record<string, unknown> });
       // DualPersist / MemoryPersist / PG primary — survive full file wipe
       void persistMonitoringSnapshotState({
         ...payload,
@@ -302,6 +305,10 @@ export async function hydrateMonitoringSnapshotFromPersist(
     };
     mkdirSync(dir, { recursive: true });
     writeDiskPayload(path, payload);
+    embedOperatorMetaPatch(
+      { monitoring_snapshot: payload as unknown as Record<string, unknown> },
+      dir
+    );
     return { restored: true };
   } catch {
     return { restored: false };

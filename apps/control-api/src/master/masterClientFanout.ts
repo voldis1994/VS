@@ -11,6 +11,7 @@ import {
   persistClientFanoutState,
   loadClientFanoutFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 import type {
   ExecutionResult,
   MasterDecision,
@@ -298,6 +299,10 @@ export function saveClientFanoutSummary(
       ts: new Date().toISOString(),
     };
     writeFileSync(fanoutPath(root), JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { client_fanout: payload as unknown as Record<string, unknown> },
+      dir
+    );
     void persistClientFanoutState({
       ...payload,
       saved_at_ms: Date.now(),
@@ -349,6 +354,10 @@ export async function hydrateClientFanoutFromPersist(
           : new Date().toISOString(),
     };
     writeFileSync(path, JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { client_fanout: payload as unknown as Record<string, unknown> },
+      dir
+    );
     return { restored: true, summary };
   } catch {
     return { restored: false, summary: null };
