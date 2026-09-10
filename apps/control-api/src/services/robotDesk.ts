@@ -204,6 +204,14 @@ const STRUCTURE_HOUR_BARS = 24;
 const ACTIVE_CADENCE_MS = 2_000;
 /** Faster poll while in a trade so LIVE loss exits (BE / HardInv) react quickly */
 const MANAGE_CADENCE_MS = 750;
+/** After HardInv/BE/thesis — short pause (was 75s — too sticky after losses) */
+const COOLDOWN_AFTER_HARD_MS = 40_000;
+/** After Target/PeakProtect/TimeDecay — short; 1m close already waited */
+const COOLDOWN_AFTER_SOFT_MS = 10_000;
+const SIDE_LOCK_AFTER_HARD_MS = 75_000;
+const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
+const HARD_RECENT_WINDOW_MS = 180_000;
+const ENTRY_DEBOUNCE_MS = 3_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -780,7 +788,8 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  if (/HardInvalidation|ThesisFailure|thesis|PeakProtection|BreakevenFail/i.test(reason)) {
+  // Only true loss exits get hard lock — NOT PeakProtect/Target (those already waited 1m close)
+  if (/HardInvalidation|BreakevenFail|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
   s.error = null;
@@ -1420,9 +1429,10 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: wait a real pause; after HardInv — longer lock (stops flip-chase)
+    // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief (1m already waited)
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 300_000 ? 75_000 : 30_000;
+    const POST_CLOSE_COOLDOWN_MS =
+      hardAgo < HARD_RECENT_WINDOW_MS ? COOLDOWN_AFTER_HARD_MS : COOLDOWN_AFTER_SOFT_MS;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1431,7 +1441,7 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 300_000 ? ' · hard-exit lock' : ''
+          hardAgo < HARD_RECENT_WINDOW_MS ? ' · after loss' : ' · after win/soft'
         }`,
       });
       return;
@@ -1570,23 +1580,24 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Debounce Capital order spam (field was written but never enforced)
-    if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < 5_000) {
+    // Debounce Capital order spam
+    if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS) {
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · entry debounce ${Math.ceil(
-          (5_000 - (Date.now() - s.last_entry_attempt_ms)) / 1000
+          (ENTRY_DEBOUNCE_MS - (Date.now() - s.last_entry_attempt_ms)) / 1000
         )}s`,
       });
       return;
     }
 
-    // Opposite-side lock: 1m normal; 3m after HardInv (stops LONG↔SHORT spam)
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 180_000 : 60_000;
+    // Opposite-side lock: short after win; longer only after HardInv/BE
+    const hardRecent =
+      s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < HARD_RECENT_WINDOW_MS;
+    const SIDE_LOCK_MS = hardRecent ? SIDE_LOCK_AFTER_HARD_MS : SIDE_LOCK_AFTER_SOFT_MS;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
