@@ -5,13 +5,14 @@ import {
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
-  fetchCapitalHourPrices,
+  fetchCapitalFifteenMinutePrices,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
   capitalMinuteCandleKey,
   lastClosedCapitalMinute,
+  aggregateMinutesToFifteen,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
@@ -173,7 +174,7 @@ type Internal = RobotSession & {
   regime_age_bars: number;
   playbook_age_bars: number;
   playbook_watch: Playbook;
-  /** Swing structure (1m + 1h) — durable levels */
+  /** Swing structure (1m + 15m) — durable levels */
   structureBook: StructureBook;
   /** Sticky setup — changes only on structure refresh, never every quote tick */
   marketSetup: MarketSetup;
@@ -207,7 +208,7 @@ type Internal = RobotSession & {
 
 const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
-const STRUCTURE_HOUR_BARS = 24;
+const STRUCTURE_15M_BARS = 48;
 
 const ACTIVE_CADENCE_MS = 500;
 /** Manage must be ms-fast — PeakProtect/HardInv cannot wait 750ms–2s on Gold */
@@ -396,7 +397,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   };
 }
 
-/** Capital 1m + 1h → swing structure → sticky setup. Never on every quote tick alone. */
+/** Capital 1m + 15m → swing structure → sticky setup. Never on every quote tick alone. */
 async function refreshStructureAndSetup(
   session: CapitalSession,
   s: Internal,
@@ -416,9 +417,9 @@ async function refreshStructureAndSetup(
         mid < s.structureBook.swing_low - Math.max(s.structureBook.span * 0.15, 1.2));
     if (!drifted) return;
   }
-  const [hist, hours] = await Promise.all([
+  const [hist, m15] = await Promise.all([
     fetchCapitalMinutePrices(session, s.epic, STRUCTURE_MINUTE_BARS),
-    fetchCapitalHourPrices(session, s.epic, STRUCTURE_HOUR_BARS),
+    fetchCapitalFifteenMinutePrices(session, s.epic, STRUCTURE_15M_BARS),
   ]);
   s.last_structure_fetch_ms = now;
   if (!hist.ok || !hist.candles.length) {
@@ -434,9 +435,14 @@ async function refreshStructureAndSetup(
     const closed = lastClosedCapitalMinute(hist.candles);
     if (closed) s.last_1m_entry_key = capitalMinuteCandleKey(closed);
   }
+  // Prefer Capital MINUTE_15; fallback aggregate from 1m if API misses
+  const context15 =
+    m15.ok && m15.candles.length >= 3
+      ? m15.candles
+      : aggregateMinutesToFifteen(hist.candles);
   s.structureBook = buildStructure({
     minutes: hist.candles,
-    hours: hours.ok ? hours.candles : null,
+    context15,
     mid,
     prev: s.structureBook.ready ? s.structureBook : null,
   });
@@ -474,9 +480,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
+    chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse. HardInv→opposite SCALP flip. Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
+      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv→opposite SCALP flip. Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
   };
 }
 
@@ -1593,7 +1599,7 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    // Structure + sticky setup (1h+1m) — not every quote tick
+    // Structure + sticky setup (15m+1m) — not every quote tick
     await refreshStructureAndSetup(
       opened.session,
       s,
@@ -1903,7 +1909,7 @@ export async function startRobotSession(input: {
     regime_age_bars: 0,
     playbook_age_bars: 0,
     playbook_watch: 'WAIT',
-    structureBook: emptyStructure('awaiting minute+hour history'),
+    structureBook: emptyStructure('awaiting minute+15m history'),
     marketSetup: emptySetup('awaiting structure'),
     last_structure_fetch_ms: 0,
     last_minute_candles: [],
@@ -1936,7 +1942,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → Capital 1m CLOSE entry → BEST OUTCOME · never shared Market Core fanout',
+      'Rules: this client alone — structure(15m+1m) → sticky SETUP → Capital 1m CLOSE entry → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);

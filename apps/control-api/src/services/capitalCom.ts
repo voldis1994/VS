@@ -1016,15 +1016,33 @@ export function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
   return `${t}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
 }
 
-/** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
+/** Capital OHLC — SECOND (10s), MINUTE (swing/entry), MINUTE_15 (context), HOUR (legacy). */
+export type CapitalPriceResolution =
+  | 'SECOND'
+  | 'MINUTE'
+  | 'MINUTE_5'
+  | 'MINUTE_15'
+  | 'MINUTE_30'
+  | 'HOUR'
+  | 'HOUR_4'
+  | 'DAY'
+  | 'WEEK';
+
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' | 'HOUR' = 'MINUTE',
+  resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 50 : resolution === 'HOUR' ? 48 : 120;
+  const cap =
+    resolution === 'SECOND'
+      ? 50
+      : resolution === 'HOUR' || resolution === 'HOUR_4'
+        ? 48
+        : resolution === 'MINUTE_15' || resolution === 'MINUTE_5'
+          ? 96
+          : 120;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),
@@ -1068,12 +1086,68 @@ export async function fetchCapitalMinutePrices(
   return fetchCapitalPrices(session, epic, 'MINUTE', max);
 }
 
+/** Context TF for desk bias — 15m (not 1h; entries are on 1m). */
+export async function fetchCapitalFifteenMinutePrices(
+  session: CapitalSession,
+  epic: string,
+  max = 48
+): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+  return fetchCapitalPrices(session, epic, 'MINUTE_15', max);
+}
+
 export async function fetchCapitalHourPrices(
   session: CapitalSession,
   epic: string,
   max = 24
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   return fetchCapitalPrices(session, epic, 'HOUR', max);
+}
+
+/**
+ * Fallback: build 15m OHLC from Capital 1m bars when MINUTE_15 API is unavailable.
+ */
+export function aggregateMinutesToFifteen(
+  minutes: CapitalPriceCandle[]
+): CapitalPriceCandle[] {
+  if (minutes.length < 15) return [];
+  const out: CapitalPriceCandle[] = [];
+  const bucketMs = 15 * 60_000;
+  let bucket: CapitalPriceCandle[] = [];
+  let bucketKey: number | null = null;
+
+  const flush = () => {
+    if (!bucket.length) return;
+    const first = bucket[0]!;
+    const last = bucket[bucket.length - 1]!;
+    out.push({
+      open: first.open,
+      high: Math.max(...bucket.map((c) => c.high)),
+      low: Math.min(...bucket.map((c) => c.low)),
+      close: last.close,
+      snapshot_time_ms: first.snapshot_time_ms ?? null,
+    });
+    bucket = [];
+  };
+
+  for (const c of minutes) {
+    const t = c.snapshot_time_ms;
+    if (t != null && Number.isFinite(t)) {
+      const key = Math.floor(t / bucketMs);
+      if (bucketKey != null && key !== bucketKey) flush();
+      bucketKey = key;
+      bucket.push(c);
+    } else {
+      // No timestamps — pack sequential groups of 15
+      bucket.push(c);
+      if (bucket.length >= 15) {
+        flush();
+        bucketKey = null;
+      }
+    }
+  }
+  // Only flush complete buckets when using time keys mid-stream; at end include partial if ≥8 bars
+  if (bucket.length >= 8) flush();
+  return out;
 }
 
 /**
