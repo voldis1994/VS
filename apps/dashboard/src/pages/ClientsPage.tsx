@@ -310,6 +310,21 @@ export function ClientsPage() {
                           {c.status_reason}
                         </div>
                       )}
+                      {c.run_mode !== 'master_fanout' && c.robot_status !== 'RUNNING' && (
+                        <button
+                          type="button"
+                          className="btn btn-go"
+                          style={{ marginTop: 8, width: '100%' }}
+                          disabled={busySubscribeId === c.id}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleSubscribeFanout(c);
+                          }}
+                        >
+                          {busySubscribeId === c.id ? 'SUBSCRIBING…' : 'SUBSCRIBE FANOUT'}
+                        </button>
+                      )}
                     </td>
                     <td className="mono">
                       {c.live_trade
