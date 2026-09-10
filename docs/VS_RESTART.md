@@ -4,7 +4,7 @@ Dubultklikšķis uz **`VS.bat`** (VS mapes saknē).
 
 1. Aptur veco sistēmu (Vite, API, **PC-Control / B.O.S.S. :5050**)
 2. `git pull` jaunāko **main**
-3. Iestata MASTER env (`MASTER_OWNS_PIPELINE=true`, `MASTER_AUTO_START=true`)
+3. Iestata MASTER env (`MASTER_OWNS_PIPELINE=true`, `MASTER_AUTO_START=true`, `MASTER_MICRO_ACCOUNT=true`)
 4. Palaiž Docker, control-api, dashboard, client panel, market-core
 5. Atver **http://localhost:5173/master** (ne `/robot`)
 6. **Šajā pašā logā** atver klienta Cloudflare tuneli
@@ -25,6 +25,7 @@ Dubultklikšķis uz **`VS.bat`** (VS mapes saknē).
 
 - **PAPER:** automātiski pēc VS.bat (`MASTER_AUTO_START=true`, `MASTER_MODE=PAPER`)
 - **LIVE gate:** VS.bat iestata `MASTER_LIVE_ENABLED=true` (vairs nav “LIVE blocked”)
+- **Micro konts:** `MASTER_MICRO_ACCOUNT=true` — fiksēts 0.01 lots, bez % DD / dienas / streak riska vārtiem (Capital ~€40)
 - **LIVE fills:** Master → **CAPITAL PROBE** → **ATTACH CAPITAL** → **START LIVE**
   (vajag Brokers `capital_com` vai `CAPITAL_*` `.env`)
 
