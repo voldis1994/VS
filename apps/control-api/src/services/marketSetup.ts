@@ -6,8 +6,9 @@
  * Hard rules:
  * - Setup changes only on structure refresh / closed bars — never on every quote tick
  * - NONE = no tradeable setup (not a "WAIT regime")
- * - ARMED = setup ready; entry only on closed 10s confirm at the level
+ * - ARMED = setup ready; ENTRY only on closed Capital 1m candle that confirms the side
  * - Open trade freezes setup; manage = best outcome only
+ * - Live mid / 10s never open a trade (diagnostics / optional extra only)
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
 import type { TradePlaybook } from './playbooks.js';
@@ -809,8 +810,8 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
 }
 
 /**
- * Optional EXTRA confirm on a closed 10s bar — never the only gate.
- * Prefer decideEntryFromArmedLive so entries are not late after the move is done.
+ * Optional EXTRA confirm on a closed 10s bar — desk does NOT open on this alone.
+ * Live path uses decideEntryFromClosed1m (Capital 1m close).
  */
 export function decideEntryFromSetup(
   setup: MarketSetup,
@@ -936,13 +937,25 @@ export function decideEntryFromSetup(
   return null;
 }
 
+/** Map Capital 1m OHLC into the tip-chase probe shape (same open/high/low/close). */
+export function capitalMinuteAsBar(c: CapitalPriceCandle): TenSecBar {
+  return {
+    open_time_ms: c.snapshot_time_ms ?? 0,
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+    ticks: 1,
+  };
+}
+
 /**
- * Primary live entry when sticky setup is ARMED — uses Capital 1m flow + mid, NOT a late 10s body.
- * Closed 10s confirm is optional EXTRA (see decideEntryFromSetup) when it still agrees.
+ * PRIMARY live entry — sticky ARMED setup confirmed by a closed Capital.com 1m candle.
+ * Not live mid, not synthetic 10s: the broker minute body must agree with the side.
  */
-export function decideEntryFromArmedLive(
+export function decideEntryFromClosed1m(
   setup: MarketSetup,
-  mid: number,
+  closed1m: CapitalPriceCandle,
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (
@@ -950,109 +963,135 @@ export function decideEntryFromArmedLive(
     setup.status !== 'ARMED' ||
     !setup.side ||
     !setup.playbook ||
-    !Number.isFinite(mid)
+    !Number.isFinite(closed1m.close) ||
+    !Number.isFinite(closed1m.open)
   ) {
     return null;
   }
 
   const book = setup.playbook;
+  const thr = PLAYBOOK_ENTRY_BODY[book];
+  const bar = capitalMinuteAsBar(closed1m);
+  const body = bodyPct(bar);
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   if (!(hi > lo)) return null;
-  const eps = edgeEps(mid, Math.max(hi - lo, 1));
+  const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
   const flow = priceFlowBias(minutes);
 
+  // Hard: never BUY into a dump / SELL into a rally
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
 
-  const tipProbe: TenSecBar = {
-    open_time_ms: 0,
-    open: mid,
-    high: mid,
-    low: mid,
-    close: mid,
-    ticks: 1,
-  };
-  if (isTipChaseEntry(setup, tipProbe)) return null;
+  if (isTipChaseEntry(setup, bar)) return null;
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
-    if (setup.side === 'BUY' && mid <= lo + eps * 1.25) {
-      return {
-        direction: 'BUY',
-        setup: setup.kind,
-        playbook: book,
-        reason: `ENTRY · ${setup.kind} BUY live @ L${lo.toFixed(2)} · ${setup.reason}`,
-      };
+    if (setup.side === 'BUY') {
+      const touched = bar.low <= lo + eps;
+      const stillDumping = bar.close < bar.open && bar.low < lo - eps * 0.5;
+      if (touched && !stillDumping && body >= thr * 0.85 && bar.close > bar.open) {
+        return {
+          direction: 'BUY',
+          setup: setup.kind,
+          playbook: book,
+          reason: `ENTRY · ${setup.kind} BUY Capital 1m bounce @ L${lo.toFixed(2)} · ${setup.reason}`,
+        };
+      }
+      return null;
     }
-    if (setup.side === 'SELL' && mid >= hi - eps * 1.25) {
+    const touched = bar.high >= hi - eps;
+    const stillRallying = bar.close > bar.open && bar.high > hi + eps * 0.5;
+    if (touched && !stillRallying && body <= -thr * 0.85 && bar.close < bar.open) {
       return {
         direction: 'SELL',
         setup: setup.kind,
         playbook: book,
-        reason: `ENTRY · ${setup.kind} SELL live @ H${hi.toFixed(2)} · ${setup.reason}`,
+        reason: `ENTRY · ${setup.kind} SELL Capital 1m reject @ H${hi.toFixed(2)} · ${setup.reason}`,
       };
     }
     return null;
   }
 
   if (setup.kind === 'BREAKOUT') {
-    if (setup.side === 'BUY' && mid > hi) {
+    if (setup.side === 'BUY' && body >= thr * 0.85 && bar.close > hi) {
       return {
         direction: 'BUY',
         setup: 'BREAKOUT',
         playbook: book,
-        reason: `ENTRY · BREAKOUT BUY live through H${hi.toFixed(2)} · ${setup.reason}`,
+        reason: `ENTRY · BREAKOUT BUY Capital 1m · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && mid < lo) {
+    if (setup.side === 'SELL' && body <= -thr * 0.85 && bar.close < lo) {
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
         playbook: book,
-        reason: `ENTRY · BREAKOUT SELL live through L${lo.toFixed(2)} · ${setup.reason}`,
+        reason: `ENTRY · BREAKOUT SELL Capital 1m · ${setup.reason}`,
       };
     }
     return null;
   }
 
   if (setup.kind === 'PULLBACK') {
-    if (setup.side === 'BUY' && mid < hi - eps && mid > lo - eps) {
+    if (
+      setup.side === 'BUY' &&
+      body >= thr * 0.85 &&
+      (bar.low <= lo + eps * 1.5 || bar.close < setup.swing_high)
+    ) {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
         playbook: book,
-        reason: `ENTRY · PULLBACK BUY live · ${setup.reason}`,
+        reason: `ENTRY · PULLBACK BUY Capital 1m · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && mid > lo + eps && mid < hi + eps) {
+    if (
+      setup.side === 'SELL' &&
+      body <= -thr * 0.85 &&
+      (bar.high >= hi - eps * 1.5 || bar.close > setup.swing_low)
+    ) {
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
         playbook: book,
-        reason: `ENTRY · PULLBACK SELL live · ${setup.reason}`,
+        reason: `ENTRY · PULLBACK SELL Capital 1m · ${setup.reason}`,
       };
     }
     return null;
   }
 
   if (setup.kind === 'CONTINUATION') {
-    // ARMED continuation already has structure/impulse — enter on live mid (don't wait for late 10s)
-    if (setup.side === 'BUY') {
+    // Closed Capital 1m must print a real body in the ARMED direction (no live-mid free pass)
+    if (setup.side === 'BUY' && body >= thr && bar.close > bar.open) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
         playbook: book,
-        reason: `ENTRY · CONTINUATION BUY live · ${setup.reason}`,
+        reason: `ENTRY · CONTINUATION BUY Capital 1m · ${setup.reason}`,
       };
     }
-    return {
-      direction: 'SELL',
-      setup: 'CONTINUATION',
-      playbook: book,
-      reason: `ENTRY · CONTINUATION SELL live · ${setup.reason}`,
-    };
+    if (setup.side === 'SELL' && body <= -thr && bar.close < bar.open) {
+      return {
+        direction: 'SELL',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION SELL Capital 1m · ${setup.reason}`,
+      };
+    }
   }
 
+  return null;
+}
+
+/**
+ * DISABLED on live desk — live mid chase caused LONG↔SHORT flip spam after HardInv.
+ * Kept as null stub so callers/tests stay typed; use decideEntryFromClosed1m.
+ */
+export function decideEntryFromArmedLive(
+  _setup: MarketSetup,
+  _mid: number,
+  _minutes?: CapitalPriceCandle[] | null
+): SetupEntry | null {
   return null;
 }
 
