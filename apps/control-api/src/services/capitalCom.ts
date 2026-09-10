@@ -987,7 +987,34 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
+  /** Candle start (ms) from Capital snapshotTime when present */
+  snapshot_time_ms?: number | null;
 };
+
+/**
+ * Last fully closed Capital 1m candle (not the forming minute).
+ * Prefer candles whose snapshot start + 60s ≤ now; else second-to-last.
+ */
+export function lastClosedCapitalMinute(
+  candles: CapitalPriceCandle[],
+  nowMs = Date.now()
+): CapitalPriceCandle | null {
+  if (!candles.length) return null;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const c = candles[i]!;
+    if (c.snapshot_time_ms != null && Number.isFinite(c.snapshot_time_ms)) {
+      if (c.snapshot_time_ms + 60_000 <= nowMs) return c;
+      continue;
+    }
+  }
+  if (candles.length >= 2) return candles[candles.length - 2]!;
+  return null;
+}
+
+export function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
+  const t = c.snapshot_time_ms != null ? String(c.snapshot_time_ms) : 'x';
+  return `${t}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+}
 
 /** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
 export async function fetchCapitalPrices(
@@ -1020,7 +1047,15 @@ export async function fetchCapitalPrices(
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    candles.push({ open, high, low, close });
+    const snapRaw = p.snapshotTimeUTC || p.snapshotTime || p.from || p.time;
+    let snapshot_time_ms: number | null = null;
+    if (typeof snapRaw === 'string' && snapRaw.trim()) {
+      const ms = Date.parse(snapRaw.includes('T') ? snapRaw : snapRaw.replace(' ', 'T') + 'Z');
+      if (Number.isFinite(ms)) snapshot_time_ms = ms;
+    } else if (typeof snapRaw === 'number' && Number.isFinite(snapRaw)) {
+      snapshot_time_ms = snapRaw < 1e12 ? snapRaw * 1000 : snapRaw;
+    }
+    candles.push({ open, high, low, close, snapshot_time_ms });
   }
   return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }
