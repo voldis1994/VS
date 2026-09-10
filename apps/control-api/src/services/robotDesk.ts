@@ -202,7 +202,7 @@ const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
 const ACTIVE_CADENCE_MS = 2_000;
-/** Faster poll while in a trade so PeakProtect sees giveback before Capital fills worse */
+/** Faster poll while in a trade so LIVE loss exits (BE / HardInv) react quickly */
 const MANAGE_CADENCE_MS = 750;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
@@ -430,7 +430,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'One path: sticky ARMED → 10s entry. Loss exits LIVE (BE/HardInv). Profit exits only on Capital 1m CLOSE (Target/PeakProtect).',
+      'ONE desk path: sticky ARMED → 10s entry → fill. LIVE loss: BE/HardInv/thesis. PLUS: Capital 1m CLOSE only (Target/PeakProtect/TimeDecay). No MASTER. No NONE chase.',
   };
 }
 
@@ -1222,7 +1222,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Restore cadence: faster while managing so PeakProtect / HardInv react quickly
+    // Restore cadence: faster while managing so LIVE loss (BE/HardInv) reacts; profit waits 1m close
     setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
 

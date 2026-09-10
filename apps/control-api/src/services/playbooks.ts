@@ -18,8 +18,8 @@ export type ExitSide = 'BUY' | 'SELL';
  */
 export const MAX_MFE_GIVEBACK = 0.25;
 export const MIN_MFE_RETENTION = 0.75;
-/** Harvest disabled (= PeakProtect) — single 75% lock */
-export const HARVEST_MFE_RETENTION = 0.75;
+/** Harvest field kept for API shape — unused by decide (same as peakRet). */
+export const HARVEST_MFE_RETENTION = MIN_MFE_RETENTION;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -34,14 +34,14 @@ export type PlaybookExitParams = {
   mfeFloorAbs: number;
   /** PeakProtect when retention below this */
   peakRet: number;
-  /** Harvest when retention below this and fav > 0 */
+  /** Alias of peakRet — no separate harvest band */
   harvestRet: number;
   thesisMinHoldMs: number;
   timeDecayMs: number;
 };
 
-/** PeakProtect 75% all books; HardInv ~1.35–1.45pt (BE early-exit covers flat scratches).
- * PeakProtect arms after a real leg (~2pt CONTINUATION / ~1.5pt FADE) — not 0.3pt noise. */
+/** PeakProtect 75%; HardInv ~1.35–1.45pt (BE covers flat scratches).
+ * PeakProtect arms after ~2.5pt CONTINUATION / ~1.5pt FADE — not tick noise. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,

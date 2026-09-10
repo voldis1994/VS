@@ -203,7 +203,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_setup: 'CONTINUATION',
         entry_at: ago(30_000),
       }),
-      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~1pt
+      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~1.45pt
     );
     expect(d.exit).toBe(false);
   });
