@@ -828,7 +828,7 @@ async function exitTrade(
   const closedSide = s.open_side;
   const wasHardInvFlip = String(s.entry_setup || '').toUpperCase() === 'HARDINV_FLIP';
   // Only true loss exits get hard lock — NOT PeakProtect/Target
-  if (/HardInvalidation|BreakevenFail|ThesisFailure|thesis/i.test(reason)) {
+  if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
   // HardInv only → arm opposite SCALP once (skip if this close was already a flip scalp)

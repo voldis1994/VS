@@ -174,7 +174,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('post-BE: was flat/+0.01 then red → exit before HardInv', () => {
+  it('BreakevenFail disabled — BE→red holds until HardInv', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -186,13 +186,12 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_setup: 'CONTINUATION',
         entry_at: ago(30_000),
       }),
-      4380.22 + 0.4 // SELL: price up → fav -0.4
+      4380.22 + 0.4 // SELL: price up → fav -0.4 — must NOT scratch-exit
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/BreakevenFail/);
+    expect(d.exit).toBe(false);
   });
 
-  it('post-BE: if real profit was seen → HOLD (no scratch before HardInv)', () => {
+  it('post-BE with real profit still holds until HardInv', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',

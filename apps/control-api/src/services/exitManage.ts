@@ -10,13 +10,12 @@ import {
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * Post-BE early exit (price points, not account currency):
- * - BE zone ≈ Capital floating +£0.00…+£0.01 on ~0.27 Gold (~0.05–0.08pt) → cap 0.12pt
- * - Real profit ≥ 0.45pt → HOLD until PeakProtect/Target on LIVE mark; never post-BE scratch
- * - After BE-only, exit at −0.35pt — before HardInv ~2.5pt (CONTINUATION)
+ * Soft loss exits use HardInv only (no BreakevenFail scratch path).
+ * PeakProtect / Target bank green on live mark.
  */
-export const BE_ZONE_ABS = 0.12;
+export const BE_ZONE_ABS = 0.12; // diagnostic only — no longer triggers early exit
 export const PROFIT_HOLD_ABS = 0.45;
+/** @deprecated BreakevenFail disabled — kept for imports */
 export const BE_EARLY_EXIT_ABS = 0.35;
 export const BE_EARLY_MIN_HOLD_MS = 8_000;
 
@@ -112,28 +111,12 @@ export function decideBestOutcomeExit(
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention = mfe > 0 ? Math.max(0, fav / mfe) : null;
 
-  const beSeen = Boolean(s.be_seen) || (mfe > 0 && mfe <= BE_ZONE_ABS);
-  const profitSeen = Boolean(s.profit_seen) || mfe >= PROFIT_HOLD_ABS;
-
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantProfit =
     gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
 
   if (wantLoss) {
-    // 0) Was only BE / +£0.00…+£0.01, then turned red → exit before full HardInv
-    if (
-      beSeen &&
-      !profitSeen &&
-      fav <= -BE_EARLY_EXIT_ABS &&
-      heldMs >= BE_EARLY_MIN_HOLD_MS
-    ) {
-      return {
-        exit: true,
-        reason: `BreakevenFail · ${book} · was BE/flat then UPL ${fav.toFixed(5)} ≤ -${BE_EARLY_EXIT_ABS} (before HardInv ${sl.toFixed(5)})`,
-      };
-    }
-
-    // 1) HardInv
+    // 1) HardInv only — BreakevenFail disabled (user: no more BE scratch exits)
     if (fav <= -sl) {
       return {
         exit: true,
