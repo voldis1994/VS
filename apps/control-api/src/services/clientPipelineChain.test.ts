@@ -10,7 +10,7 @@ import {
 import { computeClientRobotStatus } from './clientPanel.js';
 
 const createCapitalPosition = vi.fn();
-const acquireCapitalSession = vi.fn();
+const acquireCapitalSessionLease = vi.fn();
 const listCapitalOpenPositions = vi.fn();
 const fetchCapitalMarketQuote = vi.fn();
 const fetchCapitalMinutePrices = vi.fn();
@@ -24,7 +24,7 @@ const intentDedupe = new Map<string, unknown>();
 
 vi.mock('./capitalCom.js', () => ({
   createCapitalPosition: (...a: unknown[]) => createCapitalPosition(...a),
-  acquireCapitalSession: (...a: unknown[]) => acquireCapitalSession(...a),
+  acquireCapitalSessionLease: (...a: unknown[]) => acquireCapitalSessionLease(...a),
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
@@ -144,6 +144,9 @@ beforeEach(() => {
     if (s.includes('external_account_id')) {
       return { rows: [{ external_account_id: 'XYZ' }] };
     }
+    if (s.includes('COUNT(*)') && s.includes('broker_accounts')) {
+      return { rows: [{ n: 1 }] };
+    }
     if (s.includes('INSERT INTO trade_intents')) return { rows: [{ id: 42 }] };
     if (s.includes('UPDATE trade_intents') || s.includes('INSERT INTO positions')) {
       return { rows: [] };
@@ -151,7 +154,11 @@ beforeEach(() => {
     return { rows: [{ id: 1 }] };
   });
 
-  acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
+  acquireCapitalSessionLease.mockResolvedValue({
+    ok: true,
+    session: { token: 't' },
+    release: () => undefined,
+  });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',

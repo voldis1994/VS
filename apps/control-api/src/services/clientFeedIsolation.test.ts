@@ -79,4 +79,35 @@ describe('per-client robot + Capital feed contract', () => {
     );
     expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
   });
+
+  it('Capital trading lease + account bind prevents CST mix on list/order/close', () => {
+    const capital = readFileSync(fileURLToPath(new URL('./capitalCom.ts', import.meta.url)), 'utf8');
+    expect(capital).toMatch(/acquireCapitalSessionLease/);
+    expect(capital).toMatch(/withBoundCapitalAccount/);
+    expect(capital).toMatch(/bindCapitalSession/);
+    expect(capital).toMatch(/AsyncLocalStorage/);
+
+    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(desk).toMatch(/acquireCapitalSessionLease/);
+    expect(desk).toMatch(/opened\.release\(\)/);
+    expect(desk).toMatch(/external_account_id required \(multi-account connection\)/);
+
+    const fanout = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
+    expect(fanout).toMatch(/acquireCapitalSessionLease/);
+    expect(fanout).toMatch(/opened\.release\(\)/);
+  });
+
+  it('HardInv flip + 1m profit keys live on per-robot Internal (not shared)', () => {
+    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(desk).toMatch(/pending_hardinv_flip/);
+    expect(desk).toMatch(/last_1m_profit_exit_key/);
+    expect(desk).toMatch(/last_1m_entry_key/);
+    expect(desk).toMatch(/robotIdFor\(accountId, epic\)/);
+  });
+
+  it('WS trade events emit only to owning client_id', () => {
+    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(desk).toMatch(/emitToClient\(s\.client_id/);
+    expect(desk).toMatch(/emitToClient\(acc\.client_id/);
+  });
 });

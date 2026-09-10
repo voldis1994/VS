@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSession,
+  acquireCapitalSessionLease,
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
@@ -245,13 +245,29 @@ async function executeForSubscription(
       `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
       [sub.account_id]
     );
-    const opened = await acquireCapitalSession({
+    const capitalAccountId =
+      (acc.rows[0]?.external_account_id as string | null) || null;
+    const acctCount = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM broker_accounts WHERE broker_connection_id = $1`,
+      [sub.connection_id]
+    );
+    if ((acctCount.rows[0]?.n ?? 0) > 1 && !(capitalAccountId || '').trim()) {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'external_account_id required (multi-account connection)',
+        entry_price: null,
+      });
+    }
+    const opened = await acquireCapitalSessionLease({
       environment: connRow.rows[0].environment as string,
       apiKey: creds.api_key || '',
       identifier: String(connRow.rows[0].identifier || '').trim(),
       password: creds.password || '',
       connectionId: sub.connection_id,
-      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
+      capitalAccountId,
     });
     if (!opened.ok) {
       noteBrokerError(sub.client_id, opened.result.detail);
@@ -270,6 +286,7 @@ async function executeForSubscription(
       });
     }
 
+    try {
     const listed = await listCapitalOpenPositions(opened.session);
     if (listed.ok) {
       const existing = listed.positions.find(
@@ -392,6 +409,9 @@ async function executeForSubscription(
       detail: result.detail,
       entry_price: entry,
     });
+    } finally {
+      opened.release();
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);

@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSession,
+  acquireCapitalSessionLease,
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
@@ -492,7 +492,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv LIVE + flip NOW. Profit: 1m CLOSE — continue→PeakProtect, reverse→DirectionFlip. LONG=75%; SCALP=90%.',
+      'Multi-client: robot=account+epic; Capital pool per connection + account bind on list/order/close; own-brain disables fanout. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
   };
 }
 
@@ -1355,7 +1355,26 @@ async function robotCycleBody(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const opened = await acquireCapitalSession({
+  // Fail-closed: multi-account connection without external_account_id would mix orders
+  const acctCount = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM broker_accounts WHERE broker_connection_id = $1`,
+    [s.connection_id]
+  );
+  if ((acctCount.rows[0]?.n ?? 0) > 1 && !(capitalAccountId || '').trim()) {
+    s.reads_fail += 1;
+    s.error = 'external_account_id required (multi-account connection)';
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail:
+        'MULTI-ACCOUNT — set Capital external_account_id on this broker account (refuse mix)',
+    });
+    return;
+  }
+
+  const opened = await acquireCapitalSessionLease({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -1927,6 +1946,8 @@ async function robotCycleBody(s: Internal) {
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
+  } finally {
+    opened.release();
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
 }

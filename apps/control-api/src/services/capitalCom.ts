@@ -1,4 +1,5 @@
 import { createPublicKey, publicEncrypt, constants } from 'crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -347,10 +348,20 @@ function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
 }
 
-/** Serialize acquire/switch per connection so account A cannot place while session sits on B. */
+/**
+ * Serialize acquire/switch/trade per connection so account A cannot place while
+ * the pooled CST sits on B. Re-entrant via AsyncLocalStorage so desk cycle +
+ * nested multi-feed acquire on the same connection do not deadlock.
+ */
 const connectionLocks = new Map<number, Promise<unknown>>();
+const connectionLockDepth = new AsyncLocalStorage<Set<number>>();
 
 async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+  const held = connectionLockDepth.getStore();
+  if (held?.has(connectionId)) {
+    return fn();
+  }
+
   const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((r) => {
@@ -359,12 +370,65 @@ async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>)
   const done = prev.then(() => gate);
   connectionLocks.set(connectionId, done);
   await prev;
+
+  const nextHeld = new Set(held);
+  nextHeld.add(connectionId);
   try {
-    return await fn();
+    return await connectionLockDepth.run(nextHeld, fn);
   } finally {
     release();
     if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
   }
+}
+
+type SessionBind = {
+  connectionId: number;
+  capitalAccountId: string | null;
+};
+
+/** Tracks which Capital account a pooled session must stay on for list/order/close. */
+const capitalSessionBind = new WeakMap<object, SessionBind>();
+
+function bindCapitalSession(
+  session: CapitalSession,
+  connectionId: number,
+  capitalAccountId: string | null
+): void {
+  capitalSessionBind.set(session, {
+    connectionId,
+    capitalAccountId: (capitalAccountId || '').trim() || null,
+  });
+}
+
+/** @internal test/audit helper */
+export function capitalSessionBindingForTest(
+  session: CapitalSession
+): SessionBind | null {
+  return capitalSessionBind.get(session) ?? null;
+}
+
+/**
+ * Before list/order/close: hold connection lock and re-switch to the bound account
+ * so a sibling robot cannot leave the CST on the wrong Capital account.
+ */
+async function withBoundCapitalAccount<T>(
+  session: CapitalSession,
+  fn: () => Promise<T>
+): Promise<T> {
+  const bind = capitalSessionBind.get(session);
+  if (!bind) return fn();
+  return withConnectionLock(bind.connectionId, async () => {
+    const wanted = (bind.capitalAccountId || '').trim();
+    if (wanted) {
+      const sw = await switchCapitalAccount(session, wanted);
+      if (!sw.ok) throw new Error(sw.detail);
+    }
+    const pooled = capitalSessionPool.get(capitalPoolKey(bind.connectionId));
+    if (pooled) {
+      pooled.activeCapitalAccountId = wanted || session.currentAccountId || null;
+    }
+    return fn();
+  });
 }
 
 async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
@@ -432,6 +496,7 @@ export async function switchCapitalAccount(
 /**
  * Reuse Capital.com session per broker connection (multi-client safe).
  * Optionally switches to the correct Capital accountId for that desk account.
+ * Returned session is bound so list/order/close re-assert that account under the connection lock.
  */
 export async function acquireCapitalSession(input: {
   environment: string;
@@ -528,6 +593,8 @@ export async function acquireCapitalSession(input: {
       }
     }
 
+    bindCapitalSession(session!, connectionId, wantedAccount);
+
     capitalSessionPool.set(key, {
       session,
       raw,
@@ -537,6 +604,70 @@ export async function acquireCapitalSession(input: {
     });
     return { ok: true, session: session! };
   });
+}
+
+/**
+ * Hold the connection lock for the whole trading critical section (quote → list →
+ * order/close). Prevents sibling accounts on the same login from stealing the CST mid-cycle.
+ * Nested acquires on this connection re-enter (no deadlock with multi-feed).
+ */
+export async function acquireCapitalSessionLease(input: {
+  environment: string;
+  apiKey: string;
+  identifier: string;
+  password: string;
+  connectionId: number;
+  capitalAccountId?: string | null;
+}): Promise<
+  | { ok: true; session: CapitalSession; release: () => void }
+  | { ok: false; result: CapitalComSessionResult }
+> {
+  const connectionId = Number(input.connectionId);
+  if (!Number.isFinite(connectionId) || connectionId <= 0) {
+    return {
+      ok: false,
+      result: { ok: false, status: 0, detail: 'connectionId required for multi-account session pool' },
+    };
+  }
+
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((r) => {
+    releaseGate = r;
+  });
+  const held = connectionLockDepth.getStore();
+  if (held?.has(connectionId)) {
+    // Already inside this connection's lock (nested) — acquire and no-op release
+    const opened = await acquireCapitalSession(input);
+    if (!opened.ok) return opened;
+    return { ok: true, session: opened.session, release: () => undefined };
+  }
+
+  const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
+  const done = prev.then(() => gate);
+  connectionLocks.set(connectionId, done);
+  await prev;
+
+  const nextHeld = new Set(held);
+  nextHeld.add(connectionId);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseGate();
+    if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
+  };
+
+  try {
+    const opened = await connectionLockDepth.run(nextHeld, () => acquireCapitalSession(input));
+    if (!opened.ok) {
+      release();
+      return opened;
+    }
+    return { ok: true, session: opened.session, release };
+  } catch (err) {
+    release();
+    throw err;
+  }
 }
 
 /** Drop a pooled session for one broker connection (e.g. after HTTP 401). */
@@ -790,6 +921,17 @@ export type CapitalOpenPosition = {
 export async function listCapitalOpenPositions(
   session: CapitalSession
 ): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
+  try {
+    return await withBoundCapitalAccount(session, () => listCapitalOpenPositionsRaw(session));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, positions: [], detail: `Capital account bind: ${detail}` };
+  }
+}
+
+async function listCapitalOpenPositionsRaw(
+  session: CapitalSession
+): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
   const res = await session.get('/api/v1/positions');
   if (!res.ok) {
     return {
@@ -829,6 +971,20 @@ export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
 ): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+  try {
+    return await withBoundCapitalAccount(session, () =>
+      confirmCapitalDealRaw(session, dealReference)
+    );
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, detail: `Capital account bind: ${detail}` };
+  }
+}
+
+async function confirmCapitalDealRaw(
+  session: CapitalSession,
+  dealReference: string
+): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -849,6 +1005,18 @@ export async function confirmCapitalDeal(
 
 /** Close one open position by dealId. */
 export async function closeCapitalPosition(
+  session: CapitalSession,
+  dealId: string
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  try {
+    return await withBoundCapitalAccount(session, () => closeCapitalPositionRaw(session, dealId));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 0, json: {}, detail: `Capital account bind: ${detail}` };
+  }
+}
+
+async function closeCapitalPositionRaw(
   session: CapitalSession,
   dealId: string
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
@@ -886,6 +1054,25 @@ export async function createCapitalPosition(
     /** Absolute price stop (Capital stopLevel) */
     stopLevel?: number;
     /** Distance in Capital POINTS — preferred for tightest legal SL */
+    stopDistance?: number;
+    profitLevel?: number;
+  }
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  try {
+    return await withBoundCapitalAccount(session, () => createCapitalPositionRaw(session, input));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 0, json: {}, detail: `Capital account bind: ${detail}` };
+  }
+}
+
+async function createCapitalPositionRaw(
+  session: CapitalSession,
+  input: {
+    epic: string;
+    direction: 'BUY' | 'SELL';
+    size: number;
+    stopLevel?: number;
     stopDistance?: number;
     profitLevel?: number;
   }
