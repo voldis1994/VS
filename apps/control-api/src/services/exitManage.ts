@@ -20,6 +20,13 @@ export const PROFIT_HOLD_ABS = 0.45;
 export const BE_EARLY_EXIT_ABS = 0.35;
 export const BE_EARLY_MIN_HOLD_MS = 8_000;
 
+/**
+ * - live_loss: BE fail / HardInv / red thesis — fire on live mark
+ * - closed_1m_profit: Target / PeakProtect / TimeDecay — only after Capital 1m close
+ * - all: both (unit tests)
+ */
+export type ExitDecideGate = 'all' | 'live_loss' | 'closed_1m_profit';
+
 export type ExitSnapshot = {
   open_side: ExitSide | null;
   entry_price: number | null;
@@ -66,19 +73,15 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
- * Broker SAFETY SL remains the hard cushion outside this function.
  *
- * Order:
- * 0) Post-BE early exit (BE-only then red → out before HardInv)
- * 1) HardInv
- * 2) thesis (locked entry_regime, red only)
- * 3) Target
- * 4) PeakProtect 75%
- * 5) TimeDecay
+ * Desk wiring:
+ * - live_loss on every quote (wrong side → BE / HardInv)
+ * - closed_1m_profit only on new Capital 1m closed candle (plus side → Target / PeakProtect)
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  mid: number
+  mid: number,
+  gate: ExitDecideGate = 'all'
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
@@ -98,59 +101,65 @@ export function decideBestOutcomeExit(
   const beSeen = Boolean(s.be_seen) || (mfe > 0 && mfe <= BE_ZONE_ABS);
   const profitSeen = Boolean(s.profit_seen) || mfe >= PROFIT_HOLD_ABS;
 
-  // 0) Was only BE / +£0.00…+£0.01, then turned red → exit before full HardInv
-  //    If price ever went to real profit → HOLD (skip this rule).
-  if (
-    beSeen &&
-    !profitSeen &&
-    fav <= -BE_EARLY_EXIT_ABS &&
-    heldMs >= BE_EARLY_MIN_HOLD_MS
-  ) {
-    return {
-      exit: true,
-      reason: `BreakevenFail · ${book} · was BE/flat then UPL ${fav.toFixed(5)} ≤ -${BE_EARLY_EXIT_ABS} (before HardInv ${sl.toFixed(5)})`,
-    };
-  }
+  const wantLoss = gate === 'all' || gate === 'live_loss';
+  const wantProfit = gate === 'all' || gate === 'closed_1m_profit';
 
-  // 1) Losers first — tight capped HardInv
-  if (fav <= -sl) {
-    return {
-      exit: true,
-      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
-    };
-  }
+  if (wantLoss) {
+    // 0) Was only BE / +£0.00…+£0.01, then turned red → exit before full HardInv
+    if (
+      beSeen &&
+      !profitSeen &&
+      fav <= -BE_EARLY_EXIT_ABS &&
+      heldMs >= BE_EARLY_MIN_HOLD_MS
+    ) {
+      return {
+        exit: true,
+        reason: `BreakevenFail · ${book} · was BE/flat then UPL ${fav.toFixed(5)} ≤ -${BE_EARLY_EXIT_ABS} (before HardInv ${sl.toFixed(5)})`,
+      };
+    }
 
-  // 2) Thesis only when underwater + prefer regime locked at entry (desk freezes it)
-  const thesisRegime = s.entry_regime ?? s.regime;
-  if (thesisRegime) {
-    const thesis = thesisFailureForPlaybook(s.open_side, thesisRegime, book);
-    if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
-      return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+    // 1) HardInv
+    if (fav <= -sl) {
+      return {
+        exit: true,
+        reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
+      };
+    }
+
+    // 2) Thesis only when underwater
+    const thesisRegime = s.entry_regime ?? s.regime;
+    if (thesisRegime) {
+      const thesis = thesisFailureForPlaybook(s.open_side, thesisRegime, book);
+      if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
+        return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+      }
     }
   }
 
-  // 3) Target first — bank TP when reached (before giveback logic)
-  if (fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
-  }
+  if (wantProfit) {
+    // 3) Target — bank TP on closed 1m only (desk gate)
+    if (fav >= tp) {
+      return {
+        exit: true,
+        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · 1mClose`,
+      };
+    }
 
-  // 4) PeakProtect — max 25% giveback while still green and below TP
-  if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
-    return {
-      exit: true,
-      reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
-    };
-  }
+    // 4) PeakProtect
+    if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
+      return {
+        exit: true,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · 1mClose`,
+      };
+    }
 
-  // 5) TimeDecay — only when never built a real MFE leg
-  if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
-    return {
-      exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
-    };
+    // 5) TimeDecay — green/flat chop with no real MFE
+    if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
+      return {
+        exit: true,
+        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · 1mClose`,
+      };
+    }
   }
 
   return { exit: false, reason: '' };

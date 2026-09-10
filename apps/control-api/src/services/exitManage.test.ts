@@ -225,6 +225,34 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
+  it('live_loss gate fires HardInv; closed_1m_profit gate ignores live red', () => {
+    const snapLoss = snap({
+      open_side: 'BUY',
+      entry_price: 4400,
+      playbook: 'LONG',
+      entry_setup: 'CONTINUATION',
+      entry_at: ago(20_000),
+    });
+    expect(decideBestOutcomeExit(snapLoss, 4398.8, 'live_loss').reason).toMatch(/HardInvalidation/);
+    expect(decideBestOutcomeExit(snapLoss, 4398.8, 'closed_1m_profit').exit).toBe(false);
+  });
+
+  it('closed_1m_profit gate fires PeakProtect; live_loss ignores green giveback', () => {
+    const snapGreen = snap({
+      open_side: 'SELL',
+      entry_price: 4380.22,
+      mfe: 4.3,
+      profit_seen: true,
+      playbook: 'LONG',
+      entry_setup: 'CONTINUATION',
+      entry_at: ago(60_000),
+    });
+    expect(decideBestOutcomeExit(snapGreen, 4377.84, 'closed_1m_profit').reason).toMatch(
+      /PeakProtection/
+    );
+    expect(decideBestOutcomeExit(snapGreen, 4377.84, 'live_loss').exit).toBe(false);
+  });
+
   it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
     const hold = decideBestOutcomeExit(
       snap({

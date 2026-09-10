@@ -10,6 +10,8 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  capitalMinuteCandleKey,
+  lastClosedCapitalMinute,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
@@ -189,6 +191,10 @@ type Internal = RobotSession & {
   cycle_busy: boolean;
   /** Consecutive broker-empty reads before treating as external close */
   broker_flat_streak: number;
+  /** Last Capital 1m close key used for profit-side exit (Target/PeakProtect) */
+  last_1m_profit_exit_key: string;
+  /** Throttle Capital MINUTE fetch while managing */
+  last_manage_minute_fetch_ms: number;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -282,6 +288,8 @@ function publicSession(s: Internal): RobotSession {
     last_hard_exit_ms: _hardExit,
     cycle_busy: _busy,
     broker_flat_streak: _flatStreak,
+    last_1m_profit_exit_key: _1mExit,
+    last_manage_minute_fetch_ms: _1mFetch,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -422,7 +430,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'One path: sticky ARMED setup → closed 10s → fill mark. Manage: broker fill + ask/bid · Target then PeakProtect 75% · HardInv ~1pt. No NONE chase. No dual brain.',
+      'One path: sticky ARMED → 10s entry. Loss exits LIVE (BE/HardInv). Profit exits only on Capital 1m CLOSE (Target/PeakProtect).',
   };
 }
 
@@ -479,6 +487,7 @@ function clearTradeState(s: Internal) {
   s.entry_regime = null;
   s.mode = 'FLAT';
   s.broker_flat_streak = 0;
+  s.last_1m_profit_exit_key = '';
 }
 
 /**
@@ -1023,6 +1032,7 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
   s.broker_flat_streak = 0;
+  s.last_1m_profit_exit_key = '';
   // Side-lock only after accepted order
   s.last_entry_side = direction;
   s.last_entry_side_ms = Date.now();
@@ -1343,10 +1353,41 @@ async function robotCycleBody(s: Internal) {
       const mark = s.open_side
         ? manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid)
         : quote.mid;
-      const decision = decideBestOutcomeExit(s, mark);
-      if (decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+
+      // LIVE loss path: BE fail / HardInv / red thesis — wrong side exits immediately
+      const lossDec = decideBestOutcomeExit(s, mark, 'live_loss');
+      if (lossDec.exit) {
+        await exitTrade(opened.session, s, quote, lossDec.reason);
         return;
+      }
+
+      // PROFIT path: Target / PeakProtect / TimeDecay — only on Capital 1m CLOSED candle
+      if (Date.now() - s.last_manage_minute_fetch_ms >= 15_000) {
+        s.last_manage_minute_fetch_ms = Date.now();
+        try {
+          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 5);
+          if (mins.ok && mins.candles.length) {
+            s.last_minute_candles = mins.candles;
+          }
+        } catch {
+          /* keep previous minutes */
+        }
+      }
+
+      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+      if (closed1m && s.open_side && s.entry_price != null) {
+        const key = capitalMinuteCandleKey(closed1m);
+        if (key !== s.last_1m_profit_exit_key) {
+          // Mark from Capital 1m close (not live tick) — lets the move finish the minute
+          const profitDec = decideBestOutcomeExit(s, closed1m.close, 'closed_1m_profit');
+          if (profitDec.exit) {
+            s.last_1m_profit_exit_key = key;
+            await exitTrade(opened.session, s, quote, profitDec.reason);
+            return;
+          }
+          // Remember we evaluated this closed minute (no re-fire until next close)
+          s.last_1m_profit_exit_key = key;
+        }
       }
 
       pushTick(s, {
@@ -1358,7 +1399,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose · no new orders`,
       });
       return;
     }
@@ -1728,6 +1769,8 @@ export async function startRobotSession(input: {
     last_hard_exit_ms: 0,
     cycle_busy: false,
     broker_flat_streak: 0,
+    last_1m_profit_exit_key: '',
+    last_manage_minute_fetch_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
