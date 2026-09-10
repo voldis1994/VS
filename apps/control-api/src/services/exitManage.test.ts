@@ -203,7 +203,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_setup: 'CONTINUATION',
         entry_at: ago(30_000),
       }),
-      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~1.45pt
+      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~2.5pt
     );
     expect(d.exit).toBe(false);
   });
@@ -233,8 +233,8 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       entry_setup: 'CONTINUATION',
       entry_at: ago(20_000),
     });
-    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'live_loss').reason).toMatch(/HardInvalidation/);
-    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'closed_1m_profit').exit).toBe(false);
+    expect(decideBestOutcomeExit(snapLoss, 4397.4, 'live_loss').reason).toMatch(/HardInvalidation/);
+    expect(decideBestOutcomeExit(snapLoss, 4397.4, 'closed_1m_profit').exit).toBe(false);
   });
 
   it('closed_1m_profit gate fires PeakProtect; live_loss ignores green giveback', () => {
@@ -253,7 +253,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(decideBestOutcomeExit(snapGreen, 4377.84, 'live_loss').exit).toBe(false);
   });
 
-  it('soft HardInv capped ~1.45pt on Gold CONTINUATION (wider now that BE exists)', () => {
+  it('soft HardInv capped ~2.5pt on Gold CONTINUATION (room for noise)', () => {
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -263,9 +263,21 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.8 // -1.2 — still inside new HardInv
+      4398.4 // -1.6 — still inside widened HardInv
     );
     expect(hold.exit).toBe(false);
+    const stillHold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(10_000),
+        regime: 'TREND_UP',
+      }),
+      4397.6 // -2.4 — just inside 2.5 cap
+    );
+    expect(stillHold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -275,7 +287,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.4 // -1.6 ≥ cap 1.45
+      4397.4 // -2.6 ≥ cap 2.5
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);

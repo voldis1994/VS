@@ -285,9 +285,9 @@ describe('playbook exit', () => {
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0016);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(180_000);
-    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.45);
+    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(2.5);
     expect(PLAYBOOK_EXIT.LONG.tpFloor).toBe(6.0);
-    expect(PLAYBOOK_EXIT.SCALP.slCapAbs).toBe(1.2);
+    expect(PLAYBOOK_EXIT.SCALP.slCapAbs).toBe(2.0);
   });
 
   it('CONTINUATION setup uses LONG 75% retention + TP ≫ SL', () => {
@@ -295,14 +295,14 @@ describe('playbook exit', () => {
     expect(p.peakRet).toBe(0.75);
     expect(p.harvestRet).toBe(0.75);
     expect(p.tpFloor).toBe(6.5);
-    expect(p.slCapAbs).toBe(1.45);
+    expect(p.slCapAbs).toBe(2.5);
     expect(p.mfeFloorAbs).toBe(2.5);
   });
 
   it('PULLBACK SCALP uses 90% PeakProtect', () => {
     const p = exitParamsForTrade('SCALP', 'PULLBACK');
     expect(p.peakRet).toBe(0.9);
-    expect(p.slCapAbs).toBe(1.2);
+    expect(p.slCapAbs).toBe(2.0);
     expect(p.mfeFloorAbs).toBe(1.2);
   });
 });
