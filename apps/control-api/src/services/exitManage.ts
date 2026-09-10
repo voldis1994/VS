@@ -49,6 +49,8 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  * Broker SAFETY SL remains the hard cushion outside this function.
+ *
+ * Order: HardInv (capped) → thesis only when red → PeakProtect 75% → Target.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -60,18 +62,14 @@ export function decideBestOutcomeExit(
   const p = exitParamsForTrade(book, s.entry_setup);
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
 
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-  if (thesis && heldMs >= p.thesisMinHoldMs) {
-    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
-  }
-
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
-  const sl = Math.max(absEntry * p.slPct, p.slFloor);
+  const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
+  // 1) Losers first — tight capped HardInv
   if (fav <= -sl) {
     return {
       exit: true,
@@ -79,6 +77,13 @@ export function decideBestOutcomeExit(
     };
   }
 
+  // 2) Thesis only when underwater — never scratch a green trade on regime flicker
+  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
+    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+  }
+
+  // 3) PeakProtect — only after real leg (75% retention)
   if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
     return {
       exit: true,
@@ -106,7 +111,7 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe < mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,

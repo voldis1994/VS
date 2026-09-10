@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. Max 35% MFE giveback everywhere (keep ≥65%). CONTINUATION/PULLBACK/FADE ride the leg (tp≥3–4pt). Entry on closed 10s confirm.',
+      'Setup-first. Max 25% MFE giveback everywhere (keep ≥75%). HardInv ~1pt; TP ≫ SL. CONTINUATION/PULLBACK/FADE ride the leg. Entry on closed 10s confirm.',
   };
 }
 

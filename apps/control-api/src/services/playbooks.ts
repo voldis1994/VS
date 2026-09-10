@@ -11,13 +11,15 @@ export type TradePlaybook = Exclude<Playbook, 'WAIT'>;
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * Unified MFE trail — max 35% giveback (keep ≥65% of peak run).
- * Same for LONG / SCALP / FADE and every setup override.
+ * #314 base + user exit knobs:
+ * - PeakProtect 75% retention for ALL regimes (max 25% MFE giveback)
+ * - HardInv capped in absolute Gold points (pct alone ≈11pt → fat losses)
+ * - TP floors ≫ SL caps so average win > average loss
  */
-export const MAX_MFE_GIVEBACK = 0.35;
-export const MIN_MFE_RETENTION = 0.65; // keep ≥65% of MFE
-/** Soft harvest band just above hard PeakProtect (same 35% giveback family) */
-export const HARVEST_MFE_RETENTION = 0.7;
+export const MAX_MFE_GIVEBACK = 0.25;
+export const MIN_MFE_RETENTION = 0.75;
+/** Harvest disabled (= PeakProtect) — single 75% lock */
+export const HARVEST_MFE_RETENTION = 0.75;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -26,9 +28,11 @@ export type PlaybookExitParams = {
   /** Soft HardInvalidation */
   slPct: number;
   slFloor: number;
+  /** Cap soft SL in absolute price points (Gold safety) */
+  slCapAbs: number;
   mfeFloorPct: number;
   mfeFloorAbs: number;
-  /** PeakProtect when retention below this (= keep ≥65% / max 35% giveback) */
+  /** PeakProtect when retention below this */
   peakRet: number;
   /** Harvest when retention below this and fav > 0 */
   harvestRet: number;
@@ -36,15 +40,16 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** Exact set from the agreed playbook drawing — giveback unified at 35%. */
+/** PeakProtect 75% all books; HardInv ≈1.0pt; TP ≫ SL. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
-    tpPct: 0.0035,
-    tpFloor: 0.35,
-    slPct: 0.0025,
-    slFloor: 0.25,
-    mfeFloorPct: 0.0018,
-    mfeFloorAbs: 0.18,
+    tpPct: 0.0028,
+    tpFloor: 6.0,
+    slPct: 0.00028,
+    slFloor: 0.85,
+    slCapAbs: 1.0,
+    mfeFloorPct: 0.00055,
+    mfeFloorAbs: 2.5,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 120_000,
@@ -52,11 +57,12 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
   SCALP: {
     tpPct: 0.0022,
-    tpFloor: 0.22,
-    slPct: 0.0019,
-    slFloor: 0.19,
-    mfeFloorPct: 0.0015,
-    mfeFloorAbs: 0.15,
+    tpFloor: 5.0,
+    slPct: 0.00025,
+    slFloor: 0.8,
+    slCapAbs: 0.95,
+    mfeFloorPct: 0.0005,
+    mfeFloorAbs: 2.5,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -64,11 +70,12 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
   FADE: {
     tpPct: 0.0018,
-    tpFloor: 0.18,
-    slPct: 0.0018,
-    slFloor: 0.18,
-    mfeFloorPct: 0.0012,
-    mfeFloorAbs: 0.12,
+    tpFloor: 4.0,
+    slPct: 0.00022,
+    slFloor: 0.7,
+    slCapAbs: 0.9,
+    mfeFloorPct: 0.00045,
+    mfeFloorAbs: 2.2,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -105,7 +112,7 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
-/** Manage exit tuned by locked entry setup — ride bounce/continuation, not +£0.07 scalp. */
+/** Manage exit — PeakProtect 75% all setups; HardInv ≈1.0pt; TP ≫ SL. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
   entrySetup?: string | null
@@ -113,14 +120,15 @@ export function exitParamsForTrade(
   const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — hold for the leg (not tiny tpFloor), same 35% giveback
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
+  // V-bounce / dump continuation — hold for the leg, same 75% PeakProtect
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
     return {
       ...base,
-      tpPct: 0.0028,
-      tpFloor: 4.0,
-      slPct: base.slPct,
-      slFloor: base.slFloor,
+      tpPct: 0.0025,
+      tpFloor: 6.5,
+      slPct: 0.00028,
+      slFloor: 0.85,
+      slCapAbs: 1.0,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
       peakRet: MIN_MFE_RETENTION,
@@ -130,14 +138,17 @@ export function exitParamsForTrade(
     };
   }
 
-  // FADE / failed-break bounce from low — still room to mid, same 35% giveback
+  // FADE / failed-break bounce — still 75% PeakProtect, tight HardInv
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
-      tpPct: 0.0022,
-      tpFloor: 3.0,
+      tpPct: 0.0018,
+      tpFloor: 4.0,
+      slPct: 0.00025,
+      slFloor: 0.8,
+      slCapAbs: 1.0,
       mfeFloorPct: 0.00045,
-      mfeFloorAbs: 1.8,
+      mfeFloorAbs: 2.0,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 120_000,

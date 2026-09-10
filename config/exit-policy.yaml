@@ -1,7 +1,7 @@
 exit_policy:
   horizon_ms: 10000
-  # Keep ≥65% of MFE — max 35% giveback (same as live PeakProtection)
-  peak_retention_threshold: 0.65
+  # PeakProtect 75% retention — max 25% MFE giveback (all regimes)
+  peak_retention_threshold: 0.75
   remaining_rr_threshold: 0.5
   time_decay_seconds: 1.0
   thesis_failure_enabled: true
