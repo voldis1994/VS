@@ -1519,7 +1519,7 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // ARMED + live mid is primary. Closed 10s is EXTRA confirm only (not a late gate).
+    // ARMED waits for Capital 1m CLOSE — live mid / 10s never open alone
     if (setup.kind === 'NONE' || setup.status === 'NONE') {
       pushTick(s, {
         phase: 'DECIDE',
