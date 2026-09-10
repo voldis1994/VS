@@ -338,7 +338,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   stale_quote_ms: 45_000,  min_score: 0.55,
   min_expectancy_samples: 20,
   require_positive_expectancy: false,
-  reward_ratio: 1.8,
+  reward_ratio: 2.5,
   sl_buffer_atr_mult: 0.25,
   kill_switch: false,
   cooldown_ms_after_loss: 30_000,

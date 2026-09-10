@@ -1,7 +1,7 @@
 exit_policy:
   horizon_ms: 10000
-  # Soft PeakProtect — live desk caps losers ≈2.2pt and rides ≥3pt MFE
-  peak_retention_threshold: 0.55
+  # PeakProtect 75% retention (#198 / all regimes) — max 25% MFE giveback
+  peak_retention_threshold: 0.75
   remaining_rr_threshold: 0.5
   time_decay_seconds: 1.0
   thesis_failure_enabled: true
