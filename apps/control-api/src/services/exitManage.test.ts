@@ -74,13 +74,59 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.8,
+        mfe: 7,
+        peak_retention: 0.5, // stale — live fav at 2005.3 is ~76% of MFE, below TP
         playbook: 'LONG',
       }),
-      2004
+      2005.3
     );
     expect(d.exit).toBe(false);
+  });
+
+  it('user Gold SELL example: PeakProtect at ~55% giveback (entry 4380.22 → peak ~4.3pt → close 4377.84)', () => {
+    // Capital: SELL 4380.22, floating +£0.86 (~4.3pt), closed 4377.84 (+2.38pt / ~55% of MFE)
+    const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380.22,
+        mfe: 4.3,
+        peak_retention: 0.9,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(40_000),
+      }),
+      4380.22 - 4.3 * 0.8 // still 80% retention
+    );
+    expect(hold.exit).toBe(false);
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380.22,
+        mfe: 4.3,
+        peak_retention: 0.9, // stale snapshot — live fav must win
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(60_000),
+      }),
+      4377.84
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakProtection/);
+  });
+
+  it('PeakProtect arms after ~1.2pt MFE (not waiting for old 2.5 floor)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380,
+        mfe: 1.5,
+        playbook: 'SCALP',
+        entry_setup: 'BREAKOUT',
+      }),
+      4379.2 // fav 0.8 → ret 53%
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
   });
 
   it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {

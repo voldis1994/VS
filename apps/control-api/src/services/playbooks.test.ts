@@ -137,7 +137,7 @@ describe('playbook exit', () => {
         regime: 'PULLBACK_DOWNTREND',
         playbook: 'LONG',
       },
-      2002
+      2003.2 // still ≥75% of MFE — pullback thesis must not cut
     );
     expect(d.exit).toBe(false);
   });
@@ -168,7 +168,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      2001.6 // green ≥75% MFE — thesis must not cut; PeakProtect must not either
     );
     expect(agedGreen.exit).toBe(false);
     const agedRed = decideBestOutcomeExit(
@@ -243,7 +243,7 @@ describe('playbook exit', () => {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(250_000),
-        mfe: 2,
+        mfe: 0.5, // below PeakProtect floor → TimeDecay path
         mae: 0,
         peak_retention: 0.8,
         regime: 'RANGE',

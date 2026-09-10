@@ -51,6 +51,9 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
  * Order: HardInv (capped) → thesis only when red → PeakProtect 75% → Target.
+ *
+ * PeakProtect uses live fav/MFE (not a stale peak_retention snapshot) so giveback
+ * fires as soon as price gives back >25% of the best excursion seen.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -68,6 +71,9 @@ export function decideBestOutcomeExit(
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+  // Live MFE/retention — never trust a stale peak_retention alone
+  const mfe = Math.max(s.mfe, Math.max(0, fav));
+  const retention = mfe > 0 ? Math.max(0, fav / mfe) : null;
 
   // 1) Losers first — tight capped HardInv
   if (fav <= -sl) {
@@ -83,11 +89,11 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
 
-  // 3) PeakProtect — only after real leg (75% retention)
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
+  // 3) PeakProtect — max 25% giveback while still green (red → HardInv/thesis)
+  if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
     return {
       exit: true,
-      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}`,
+      reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
     };
   }
 
@@ -99,19 +105,19 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe >= mfeFloor &&
+    mfe >= mfeFloor &&
     fav > 0 &&
-    s.peak_retention != null &&
-    s.peak_retention < p.harvestRet &&
-    s.peak_retention >= p.peakRet
+    retention != null &&
+    retention < p.harvestRet &&
+    retention >= p.peakRet
   ) {
     return {
       exit: true,
-      reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
+      reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`,
     };
   }
 
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe < mfeFloor) {
+  if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,

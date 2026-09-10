@@ -40,7 +40,7 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** PeakProtect 75% all books; HardInv ≈1.0pt; TP ≫ SL. */
+/** PeakProtect 75% all books; HardInv ≈1.0pt; TP ≫ SL. PeakProtect arms after ~1.2pt MFE. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,
@@ -48,8 +48,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slPct: 0.00028,
     slFloor: 0.85,
     slCapAbs: 1.0,
-    mfeFloorPct: 0.00055,
-    mfeFloorAbs: 2.5,
+    mfeFloorPct: 0.00028,
+    mfeFloorAbs: 1.2,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 120_000,
@@ -61,8 +61,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slPct: 0.00025,
     slFloor: 0.8,
     slCapAbs: 0.95,
-    mfeFloorPct: 0.0005,
-    mfeFloorAbs: 2.5,
+    mfeFloorPct: 0.00025,
+    mfeFloorAbs: 1.2,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -74,8 +74,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slPct: 0.00022,
     slFloor: 0.7,
     slCapAbs: 0.9,
-    mfeFloorPct: 0.00045,
-    mfeFloorAbs: 2.2,
+    mfeFloorPct: 0.00022,
+    mfeFloorAbs: 1.0,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -129,8 +129,8 @@ export function exitParamsForTrade(
       slPct: 0.00028,
       slFloor: 0.85,
       slCapAbs: 1.0,
-      mfeFloorPct: 0.00055,
-      mfeFloorAbs: 2.5,
+      mfeFloorPct: 0.00028,
+      mfeFloorAbs: 1.2,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 180_000,
@@ -147,8 +147,8 @@ export function exitParamsForTrade(
       slPct: 0.00025,
       slFloor: 0.8,
       slCapAbs: 1.0,
-      mfeFloorPct: 0.00045,
-      mfeFloorAbs: 2.0,
+      mfeFloorPct: 0.00022,
+      mfeFloorAbs: 1.0,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 120_000,
