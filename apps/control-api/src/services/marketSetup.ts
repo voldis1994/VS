@@ -12,7 +12,7 @@
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
 import type { TradePlaybook } from './playbooks.js';
-import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
+import { PLAYBOOK_ENTRY_BODY, withTrendSideFromRegime } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
 export const SETUP_KINDS = [
@@ -966,13 +966,15 @@ export function isQualityEntrySetup(kind: string | null | undefined): boolean {
 
 /**
  * PRIMARY live entry — sticky ARMED CONTINUATION/BREAKOUT + closed Capital 1m.
- * Quality gate: real 1m body, impulse agree, 15m context not against. No FADE/PULLBACK spam.
+ * Quality gate: real 1m body, impulse agree, 15m context not against,
+ * TREND_UP→BUY only / TREND_DOWN→SELL only. No FADE/PULLBACK spam.
  */
 export function decideEntryFromClosed1m(
   setup: MarketSetup,
   closed1m: CapitalPriceCandle,
   minutes?: CapitalPriceCandle[] | null,
-  structure?: StructureBook | null
+  structure?: StructureBook | null,
+  regime?: string | null
 ): SetupEntry | null {
   if (
     setup.kind === 'NONE' ||
@@ -990,6 +992,10 @@ export function decideEntryFromClosed1m(
 
   const bodyAbs = Math.abs(closed1m.close - closed1m.open);
   if (bodyAbs < QUALITY_1M_BODY_ABS) return null;
+
+  // TREND_UP = BUY only; TREND_DOWN = SELL only (with-trend brain)
+  const trendSide = withTrendSideFromRegime(regime);
+  if (trendSide && setup.side !== trendSide) return null;
 
   // 15m context must not fight the side (UNKNOWN/FLAT OK; opposite bias = refuse)
   if (structure?.ready) {

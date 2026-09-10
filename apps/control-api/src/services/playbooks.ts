@@ -193,6 +193,21 @@ export function wasTrend(regime?: string | null): boolean {
   return r === 'TREND_UP' || r === 'TREND_DOWN';
 }
 
+/**
+ * With-trend side from live regime.
+ * TREND_UP / BREAKOUT_UP / PULLBACK_UPTREND → BUY only
+ * TREND_DOWN / BREAKOUT_DOWN / PULLBACK_DOWNTREND → SELL only
+ * RANGE / COMPRESSION / … → null (no side lock from regime)
+ */
+export function withTrendSideFromRegime(
+  regime?: string | null
+): 'BUY' | 'SELL' | null {
+  const r = normalizeRegime(regime);
+  if (r === 'TREND_UP' || r === 'BREAKOUT_UP' || r === 'PULLBACK_UPTREND') return 'BUY';
+  if (r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN' || r === 'PULLBACK_DOWNTREND') return 'SELL';
+  return null;
+}
+
 /** ThesisFailure — divided by playbook (not one list for all). */
 export function thesisFailureForPlaybook(
   side: ExitSide,
