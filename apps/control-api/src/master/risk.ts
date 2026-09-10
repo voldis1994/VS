@@ -1,5 +1,6 @@
 /** Risk engine — can BLOCK any decision. Equity-based sizing required for production volume. */
 import { clampSizeForBuyingPower } from './capitalSize.js';
+import { effectiveSpreadCaps } from './spreadCaps.js';
 import { validateSlTp } from './slTp.js';
 import type {
   AccountSnapshot,
@@ -93,7 +94,9 @@ export function evaluateRisk(
     reasons.push('account_not_tradeable');
   }
 
-  if (quote.spread > cfg.max_spread_abs) reasons.push('spread_protection');
+  if (quote.spread > effectiveSpreadCaps(cfg, opts?.epic || instrument.epic).max_spread_abs) {
+    reasons.push('spread_protection');
+  }
   if (now - quote.ts_ms > cfg.stale_quote_ms) reasons.push('stale_data_protection');
 
   if (
