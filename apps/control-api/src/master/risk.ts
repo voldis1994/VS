@@ -1,5 +1,6 @@
 /** Risk engine — can BLOCK any decision. Equity-based sizing required for production volume. */
 import { clampSizeForBuyingPower } from './capitalSize.js';
+import { effectiveSpreadCaps } from './spreadCaps.js';
 import { validateSlTp } from './slTp.js';
 import type {
   AccountSnapshot,
@@ -42,11 +43,14 @@ export function evaluateRisk(
     reasons.push('utc_day_roll_deferred');
   }
 
+  // 0 = disabled (micro / no %-risk mode). Without this, limit 0 fires on every tick.
   const dd =
     account.peak_equity > 0
       ? (account.peak_equity - account.equity) / account.peak_equity
       : 0;
-  if (dd >= cfg.max_drawdown_pct) reasons.push('max_drawdown');
+  if (cfg.max_drawdown_pct > 0 && dd >= cfg.max_drawdown_pct) {
+    reasons.push('max_drawdown');
+  }
 
   const dayStart =
     account.day_start_equity != null &&
@@ -60,9 +64,14 @@ export function evaluateRisk(
   const closedLossPct =
     dayStart > 0 ? Math.max(0, -account.daily_pnl) / dayStart : 0;
   const dailyLossPct = Math.max(equityDrawdownPct, closedLossPct);
-  if (dailyLossPct >= cfg.max_daily_loss_pct) reasons.push('max_daily_loss');
+  if (cfg.max_daily_loss_pct > 0 && dailyLossPct >= cfg.max_daily_loss_pct) {
+    reasons.push('max_daily_loss');
+  }
 
-  if (account.consecutive_losses >= cfg.consecutive_loss_limit) {
+  if (
+    cfg.consecutive_loss_limit > 0 &&
+    account.consecutive_losses >= cfg.consecutive_loss_limit
+  ) {
     reasons.push('consecutive_loss_protection');
   }
 
@@ -93,7 +102,9 @@ export function evaluateRisk(
     reasons.push('account_not_tradeable');
   }
 
-  if (quote.spread > cfg.max_spread_abs) reasons.push('spread_protection');
+  if (quote.spread > effectiveSpreadCaps(cfg, opts?.epic || instrument.epic).max_spread_abs) {
+    reasons.push('spread_protection');
+  }
   if (now - quote.ts_ms > cfg.stale_quote_ms) reasons.push('stale_data_protection');
 
   if (

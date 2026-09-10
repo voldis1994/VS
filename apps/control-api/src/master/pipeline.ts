@@ -330,12 +330,12 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   max_open_positions: 1,
   max_symbol_positions: 1,
   consecutive_loss_limit: 4,
-  max_spread_abs: 1.5,
-  max_spread_pct: 0.0004,
+  // GOLD-first: Capital XAU often 0.5–2.5; FX-era 1.5 false-blocked ARMED setups
+  max_spread_abs: 3,
+  max_spread_pct: 0.001,
   // Capital LIVE: venue quote ts often ages 15–30s between polls while still tradable.
   // 15s FX-era default hard-BLOCKED ARMED setups (Stage·validate age=17s).
-  stale_quote_ms: 45_000,
-  min_score: 0.55,
+  stale_quote_ms: 45_000,  min_score: 0.55,
   min_expectancy_samples: 20,
   require_positive_expectancy: false,
   reward_ratio: 1.8,
@@ -353,7 +353,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   volatility_lookback_bars: 14,
   max_relative_volatility: 1.5,
   spread_lookback_bars: 20,
-  max_relative_spread: 1.5,
+  max_relative_spread: 2.5,
   trailing_buffer_atr_mult: 0.15,
   profit_lock: 0,
   equity_floor: 0,

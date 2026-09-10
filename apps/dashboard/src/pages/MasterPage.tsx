@@ -1379,7 +1379,7 @@ export function MasterPage() {
           bad:
             !monHydrated &&
             status.monitoring?.relative_spread != null &&
-            status.monitoring.relative_spread > 1.5,
+            status.monitoring.relative_spread > 2.5,
         },
         {
           k: 'Cycle ms',

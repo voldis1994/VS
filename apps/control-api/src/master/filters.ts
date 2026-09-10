@@ -3,6 +3,7 @@
  * Separated so the pipeline has one explicit filter owner (Reader-style).
  */
 import { newsBlocksEntries } from './newsGate.js';
+import { effectiveSpreadCaps } from './spreadCaps.js';
 import { relativeSpreadAcceptable } from './spreadModel.js';
 import { withinTradingHours } from './tradingHours.js';
 import {
@@ -16,6 +17,8 @@ export type FilterVerdict = {
   reason: string | null;
   checks: Record<string, boolean>;
 };
+
+export { effectiveSpreadCaps, isMetalEpic } from './spreadCaps.js';
 
 /** Check- style weekend hard gate (UTC Sat/Sun). */
 export function isWeekendUtc(nowMs = Date.now()): boolean {
@@ -40,17 +43,24 @@ export function applyMarketFilters(
   );
   const relVol = calculateRelativeVolatility(bars, cfg.volatility_lookback_bars);
   const relOk = relativeVolatilityAcceptable(relVol, cfg.max_relative_volatility);
+  const caps = effectiveSpreadCaps(cfg, symbol ?? quote.epic);
   const relSpread =
     relativeSpread != null && Number.isFinite(relativeSpread) ? relativeSpread : null;
+  // Relative z-score only when abs is already elevated — otherwise tight GOLD
+  // history (std≈0.05) turns 0.4→0.7 into z>5 and kills ARMED setups.
+  const nearAbsLimit = quote.spread > caps.max_spread_abs * 0.85;
   const spreadRelOk =
     relSpread == null ||
-    relativeSpreadAcceptable(relSpread, cfg.max_relative_spread);
+    !nearAbsLimit ||
+    relativeSpreadAcceptable(relSpread, caps.max_relative_spread);
   const hoursOk = withinTradingHours(cfg.trading_hours, nowMs);
   const checks: Record<string, boolean> = {
     data_quality: a.data_quality >= 0.35,
-    spread_abs: quote.spread <= cfg.max_spread_abs,
-    spread_pct: !(quote.mid > 0 && quote.spread / quote.mid > cfg.max_spread_pct),
-    // Reader relative spread z-score (skipped until history exists)
+    spread_abs: quote.spread <= caps.max_spread_abs,
+    spread_pct: !(
+      quote.mid > 0 && quote.spread / quote.mid > caps.max_spread_pct
+    ),
+    // Reader relative spread z-score (skipped until history exists / near abs)
     spread_relative: spreadRelOk,
     // UNKNOWN is tradeable-with-caution; only UNSTABLE hard-blocks both sides
     regime_stable: a.regime !== 'UNSTABLE',

@@ -66,13 +66,18 @@ export function decide(
     if (confirmed.valid && confirmed.filter_ok) {
       preferred = confirmed;
     } else if (cfg.require_armed_setup) {
+      // Surface underlying filter (often spread_*) — was hidden as setup_confirm_blocked
+      const detail = !confirmed.filter_ok
+        ? confirmed.filter_reason || 'filter'
+        : confirmed.score < cfg.min_score
+          ? `score:${confirmed.score.toFixed(2)}`
+          : 'invalid';
       return {
         decision_id,
         kind: 'WAIT',
         side: null,
         score: Math.max(buy.score, sell.score),
-        block_reason: `setup_confirm_blocked:${deskAligned.source}:${deskAligned.side}`,
-        buy,
+        block_reason: `setup_confirm_blocked:${deskAligned.source}:${deskAligned.side}:${detail}`,        buy,
         sell,
         analysis,
         expectancy: null,
