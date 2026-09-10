@@ -23,7 +23,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove, BE_ZONE_ABS, PROFIT_HOLD_ABS } from './exitManage.js';
+import { decideBestOutcomeExit, favorableMove, BE_ZONE_ABS, PROFIT_HOLD_ABS, hardInvOppositeScalpSide } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -187,6 +187,11 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
+  /**
+   * After HardInv close: arm opposite SCALP entry once (catch the move that killed us).
+   * Cleared on fill / expiry. Not armed when the closed trade was already a HardInv flip.
+   */
+  pending_hardinv_flip: { side: 'BUY' | 'SELL'; armed_at_ms: number } | null;
   /** Prevent overlapping robotCycle (double entry/exit) */
   cycle_busy: boolean;
   /** Consecutive broker-empty reads before treating as external close */
@@ -213,6 +218,8 @@ const COOLDOWN_AFTER_SOFT_MS = 10_000;
 const SIDE_LOCK_AFTER_HARD_MS = 75_000;
 const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
 const HARD_RECENT_WINDOW_MS = 180_000;
+/** HardInv → opposite SCALP must fire quickly or expire */
+const HARDINV_FLIP_EXPIRE_MS = 25_000;
 const ENTRY_DEBOUNCE_MS = 3_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
@@ -296,6 +303,7 @@ function publicSession(s: Internal): RobotSession {
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
     last_hard_exit_ms: _hardExit,
+    pending_hardinv_flip: _hardFlip,
     cycle_busy: _busy,
     broker_flat_streak: _flatStreak,
     last_1m_profit_exit_key: _1mExit,
@@ -467,7 +475,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup. Manage @200ms LIVE PeakProtect/Target/HardInv. LONG=75% PeakProtect; SCALP=90%. No MASTER.',
+      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup. HardInv → opposite SCALP flip once. Manage @200ms LIVE. LONG=75% PeakProtect; SCALP=90%. No MASTER.',
   };
 }
 
@@ -817,9 +825,28 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  // Only true loss exits get hard lock — NOT PeakProtect/Target (those already waited 1m close)
+  const closedSide = s.open_side;
+  const wasHardInvFlip = String(s.entry_setup || '').toUpperCase() === 'HARDINV_FLIP';
+  // Only true loss exits get hard lock — NOT PeakProtect/Target
   if (/HardInvalidation|BreakevenFail|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
+  }
+  // HardInv only → arm opposite SCALP once (skip if this close was already a flip scalp)
+  const flipSide = hardInvOppositeScalpSide(reason, closedSide, s.entry_setup);
+  if (flipSide) {
+    s.pending_hardinv_flip = {
+      side: flipSide,
+      armed_at_ms: Date.now(),
+    };
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `HARDINV FLIP armed · next ${flipSide} SCALP (catch the move)`,
+    });
+  } else {
+    s.pending_hardinv_flip = null;
   }
   s.error = null;
   pushTick(s, {
@@ -1052,13 +1079,17 @@ async function enterTrade(
   s.entry_setup = setupType || null;
   s.entry_regime = s.regime; // freeze thesis input at fill
   // Freeze sticky setup identity for the whole trade — no tick reclassify
+  const lockedKind =
+    String(setupType || '').toUpperCase() === 'HARDINV_FLIP'
+      ? 'PULLBACK'
+      : ((setupType as MarketSetup['kind']) || s.marketSetup.kind);
   s.marketSetup = {
     ...s.marketSetup,
-    kind: (setupType as MarketSetup['kind']) || s.marketSetup.kind,
+    kind: lockedKind,
     side: direction,
     playbook: s.playbook === 'WAIT' ? null : s.playbook,
     status: 'ARMED',
-    reason: `LOCKED ${direction} ${s.playbook} · ${setupType || s.marketSetup.kind} · hold until Best Outcome`,
+    reason: `LOCKED ${direction} ${s.playbook} · ${setupType || lockedKind} · hold until Best Outcome`,
     confirm: Math.max(s.marketSetup.confirm, 99),
     watch_buy: direction === 'BUY' ? `IN TRADE BUY · ${s.playbook}` : null,
     watch_sell: direction === 'SELL' ? `IN TRADE SELL · ${s.playbook}` : null,
@@ -1445,7 +1476,62 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief (1m already waited)
+    // ——— HardInv flip: opposite SCALP immediately (bypass cooldown / side-lock / 1m wait) ———
+    if (s.pending_hardinv_flip) {
+      const flip = s.pending_hardinv_flip;
+      if (Date.now() - flip.armed_at_ms > HARDINV_FLIP_EXPIRE_MS) {
+        s.pending_hardinv_flip = null;
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'HARDINV FLIP expired · back to normal setup wait',
+        });
+      } else if (quote.mid == null) {
+        return;
+      } else {
+        if (
+          s.last_entry_attempt_ms > 0 &&
+          Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS
+        ) {
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HARDINV FLIP ${flip.side} SCALP · debounce ${Math.ceil(
+              (ENTRY_DEBOUNCE_MS - (Date.now() - s.last_entry_attempt_ms)) / 1000
+            )}s`,
+          });
+          return;
+        }
+        const flipSide = flip.side;
+        s.pending_hardinv_flip = null; // one shot
+        s.last_entry_attempt_ms = Date.now();
+        const reason = `HARDINV FLIP · ${flipSide} SCALP · catch move after HardInv`;
+        pushTick(s, {
+          phase: 'ORDER',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `OPEN ${flipSide} · ${reason}`,
+        });
+        await enterTrade(
+          opened.session,
+          s,
+          flipSide,
+          quote,
+          reason,
+          'HARDINV_FLIP',
+          'SCALP'
+        );
+        return;
+      }
+    }
+
+    // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief
+    // (skipped above when HardInv flip is armed)
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
     const POST_CLOSE_COOLDOWN_MS =
       hardAgo < HARD_RECENT_WINDOW_MS ? COOLDOWN_AFTER_HARD_MS : COOLDOWN_AFTER_SOFT_MS;
@@ -1807,6 +1893,7 @@ export async function startRobotSession(input: {
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
+    pending_hardinv_flip: null,
     cycle_busy: false,
     broker_flat_streak: 0,
     last_1m_profit_exit_key: '',

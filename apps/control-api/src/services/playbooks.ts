@@ -143,8 +143,12 @@ export function exitParamsForTrade(
     };
   }
 
-  // Pullback scalp — 90% PeakProtect, tighter HardInv, faster bank
-  if (setup === 'PULLBACK' || playbook === 'SCALP') {
+  // Pullback scalp / HardInv flip — 90% PeakProtect, tighter HardInv, faster bank
+  if (
+    setup === 'PULLBACK' ||
+    setup === 'HARDINV_FLIP' ||
+    playbook === 'SCALP'
+  ) {
     return {
       ...PLAYBOOK_EXIT.SCALP,
       peakRet: MIN_MFE_RETENTION_SCALP,

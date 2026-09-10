@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
   favorableMove,
+  hardInvOppositeScalpSide,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -347,5 +348,23 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       4420.68
     );
     expect(d.exit).toBe(false);
+  });
+});
+
+describe('hardInvOppositeScalpSide', () => {
+  it('arms opposite after HardInv', () => {
+    expect(hardInvOppositeScalpSide('HardInvalidation · LONG · UPL', 'BUY')).toBe('SELL');
+    expect(hardInvOppositeScalpSide('HardInvalidation · SCALP', 'SELL')).toBe('BUY');
+  });
+
+  it('does not arm on PeakProtect / BreakevenFail', () => {
+    expect(hardInvOppositeScalpSide('PeakProtection · LONG · live', 'BUY')).toBeNull();
+    expect(hardInvOppositeScalpSide('BreakevenFail · SCALP', 'SELL')).toBeNull();
+  });
+
+  it('does not chain — no flip of a HARDINV_FLIP scalp', () => {
+    expect(
+      hardInvOppositeScalpSide('HardInvalidation · SCALP', 'BUY', 'HARDINV_FLIP')
+    ).toBeNull();
   });
 });
