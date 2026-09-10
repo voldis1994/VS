@@ -345,9 +345,14 @@ export function ClientsPage() {
                           STOP
                         </button>
                         <button
+                          type="button"
                           className="btn btn-go"
                           disabled={busySubscribeId === c.id}
-                          onClick={() => void handleSubscribeFanout(c)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleSubscribeFanout(c);
+                          }}
                           title="Subscribe to MASTER OPEN fanout (same epic as MASTER)"
                         >
                           {busySubscribeId === c.id ? '…' : 'SUBSCRIBE FANOUT'}
