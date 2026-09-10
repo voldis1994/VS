@@ -114,19 +114,63 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(cut.reason).toMatch(/PeakProtection/);
   });
 
-  it('PeakProtect arms after ~1.2pt MFE (not waiting for old 2.5 floor)', () => {
-    const d = decideBestOutcomeExit(
+  it('PeakProtect arms after ~2.5pt MFE on CONTINUATION (not 1.2 noise)', () => {
+    const early = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
         entry_price: 4380,
         mfe: 1.5,
-        playbook: 'SCALP',
-        entry_setup: 'BREAKOUT',
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
       }),
-      4379.2 // fav 0.8 → ret 53%
+      4379.2 // fav 0.8 — below CONTINUATION floor
+    );
+    expect(early.exit).toBe(false);
+    const armed = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380,
+        mfe: 3.0,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4378.5 // fav 1.5 → ret 50%
+    );
+    expect(armed.exit).toBe(true);
+    expect(armed.reason).toMatch(/PeakProtection/);
+  });
+
+  it('Target beats PeakProtect when fav ≥ TP', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 20,
+        peak_retention: 0.5,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      2007 // fav 7 ≥ tpFloor 6.5 (pct×2000=5 → floor wins)
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/Target/);
+  });
+
+  it('thesis uses entry_regime not live flicker', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 0.5,
+        entry_at: ago(200_000),
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_regime: 'TREND_UP', // locked at fill — still valid
+        regime: 'TREND_DOWN', // live flicker must not scratch
+      }),
+      4399.5 // slightly red
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {

@@ -16,7 +16,10 @@ export type ExitSnapshot = {
   mfe: number;
   mae: number;
   peak_retention: number | null;
+  /** Live diagnostic 10s label — NOT used for thesis while entry_regime is locked */
   regime?: string | null;
+  /** Regime frozen at fill — only thesis input (no flicker scratches) */
+  entry_regime?: string | null;
   /** Locked at entry — drives exit policy */
   playbook?: Playbook | null;
   /** Locked setup kind at entry — CONTINUATION/PULLBACK/FADE tune hold vs scalp */
@@ -41,7 +44,7 @@ export function thesisFailureReason(
 function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
   const p = s.playbook;
   if (p === 'LONG' || p === 'SCALP' || p === 'FADE') return p;
-  const fromRegime = playbookFromRegime(s.regime);
+  const fromRegime = playbookFromRegime(s.entry_regime || s.regime);
   if (fromRegime === 'WAIT') return 'SCALP';
   return fromRegime;
 }
@@ -50,10 +53,8 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
- * Order: HardInv (capped) → thesis only when red → PeakProtect 75% → Target.
- *
- * PeakProtect uses live fav/MFE (not a stale peak_retention snapshot) so giveback
- * fires as soon as price gives back >25% of the best excursion seen.
+ * Order: HardInv → thesis (locked entry_regime, red only) → Target → PeakProtect 75%.
+ * Target before PeakProtect so runners that hit TP bank the target instead of giveback-exit.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -71,7 +72,6 @@ export function decideBestOutcomeExit(
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
-  // Live MFE/retention — never trust a stale peak_retention alone
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention = mfe > 0 ? Math.max(0, fav / mfe) : null;
 
@@ -83,20 +83,16 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // 2) Thesis only when underwater — never scratch a green trade on regime flicker
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-  if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
-    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+  // 2) Thesis only when underwater + prefer regime locked at entry (desk freezes it)
+  const thesisRegime = s.entry_regime ?? s.regime;
+  if (thesisRegime) {
+    const thesis = thesisFailureForPlaybook(s.open_side, thesisRegime, book);
+    if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
+      return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+    }
   }
 
-  // 3) PeakProtect — max 25% giveback while still green (red → HardInv/thesis)
-  if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
-    return {
-      exit: true,
-      reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
-    };
-  }
-
+  // 3) Target first — bank TP when reached (before giveback logic)
   if (fav >= tp) {
     return {
       exit: true,
@@ -104,19 +100,15 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (
-    mfe >= mfeFloor &&
-    fav > 0 &&
-    retention != null &&
-    retention < p.harvestRet &&
-    retention >= p.peakRet
-  ) {
+  // 4) PeakProtect — max 25% giveback while still green and below TP
+  if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
     return {
       exit: true,
-      reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`,
+      reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
     };
   }
 
+  // 5) TimeDecay — only when never built a real MFE leg
   if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
     return {
       exit: true,
