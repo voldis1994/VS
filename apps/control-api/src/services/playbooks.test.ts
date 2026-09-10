@@ -305,6 +305,12 @@ describe('playbook exit', () => {
     expect(p.slCapAbs).toBe(2.0);
     expect(p.mfeFloorAbs).toBe(1.2);
   });
+
+  it('HARDINV_FLIP uses SCALP 90% PeakProtect', () => {
+    const p = exitParamsForTrade('SCALP', 'HARDINV_FLIP');
+    expect(p.peakRet).toBe(0.9);
+    expect(p.slCapAbs).toBe(2.0);
+  });
 });
 
 describe('nearRangeEdge', () => {
