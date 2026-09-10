@@ -64,9 +64,9 @@ describe('validateMarket flat_tape', () => {
     expect(v.ok).toBe(false);
   });
 
-  it('Capital LIVE default 45s allows age=30s (was false-BLOCK at 15s)', () => {
+  it('Capital LIVE default 90s allows age=60s (was false-BLOCK)', () => {
     const q = quote(4400 + 11 * 0.5);
-    q.ts_ms = Date.now() - 30_000;
+    q.ts_ms = Date.now() - 60_000;
     const v = validateMarket(barsVarying(12), q);
     expect(v.reasons).not.toContain('stale_quote');
     expect(v.ok).toBe(true);

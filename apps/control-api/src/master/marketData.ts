@@ -152,7 +152,7 @@ export function validateMarket(
 ): MarketValidation {
   const reasons: string[] = [];
   const min_bars = opts?.min_bars ?? 5;
-  const stale_ms = opts?.stale_ms ?? 45_000;
+  const stale_ms = opts?.stale_ms ?? 90_000;
   const max_spread = opts?.max_spread_abs ?? 5;
   const now = opts?.now_ms ?? Date.now();
 
