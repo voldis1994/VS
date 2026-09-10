@@ -30,7 +30,6 @@ import {
 import {
   buildStructure,
   decideEntryFromSetup,
-  decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -409,7 +408,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. Max 25% MFE giveback everywhere (keep ≥75%). HardInv ~1pt; TP ≫ SL. CONTINUATION/PULLBACK/FADE ride the leg. Entry on closed 10s confirm.',
+      'Setup-first. No NONE 10s chase. Impulse FORMING→sticky ARMED. Max 25% MFE giveback (keep ≥75%). HardInv ~1pt; TP ≫ SL.',
   };
 }
 
@@ -1284,9 +1283,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: 1×10s bar pause; after HardInv — brief lock
+    // After close: wait a real pause; after HardInv — longer lock (stops flip-chase)
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 300_000 ? 75_000 : 30_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1295,7 +1294,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+          hardAgo < 300_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1384,19 +1383,16 @@ async function robotCycle(s: Internal) {
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
-    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
+    // NONE mid-swing chase DISABLED — wait for sticky ARMED setup (structure data)
     if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-      if (!entry) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · NONE · ${setup.reason}`,
-        });
-        return;
-      }
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · NONE · waiting setup (no 10s chase) · ${setup.reason}`,
+      });
+      return;
     }
 
     if (setup.status === 'FORMING' && !entry) {
@@ -1431,9 +1427,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    // Opposite-side lock: 1m normal; 3m after HardInv (stops LONG↔SHORT spam)
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    const SIDE_LOCK_MS = hardRecent ? 180_000 : 60_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&

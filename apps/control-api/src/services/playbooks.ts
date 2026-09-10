@@ -83,11 +83,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body — 10s Gold-friendly (was too strict → missed real 10s moves). */
+/** Entry body — closed 10s must be a real Gold move (not a half-point chase). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00018, // ~0.8pt Gold @ 4400
-  SCALP: 0.00015, // ~0.65pt
-  FADE: 0.00012, // ~0.55pt bounce/reject
+  LONG: 0.00028, // ~1.2pt Gold @ 4400
+  SCALP: 0.00024, // ~1.05pt
+  FADE: 0.0002, // ~0.9pt bounce/reject
 };
 
 /**

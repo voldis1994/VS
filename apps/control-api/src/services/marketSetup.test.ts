@@ -209,7 +209,7 @@ describe('marketSetup', () => {
     );
   });
 
-  it('impulse UP flips sticky SELL to BUY immediately (through swing high)', () => {
+  it('impulse UP flips sticky SELL to BUY FORMING (sticky must confirm before ARMED)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) {
       bars.push(candle(4430, 4432, 4428, 4430));
@@ -234,12 +234,15 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).toBe('BUY');
-    expect(setup.status).toBe('ARMED');
-    expect(setup.reason).toMatch(/IMPULSE UP|BREAKOUT|flipped/i);
+    expect(setup.status).toBe('FORMING');
+    expect(setup.reason).toMatch(/IMPULSE UP|BREAKOUT|flipped|forming/i);
     expect(setup.watch_buy).toBeTruthy();
+    // Second sticky tick on same side → ARMED
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.status).toBe('ARMED');
   });
 
-  it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
+  it('local dump impulse forms CONTINUATION SELL — arms on sticky confirm', () => {
     const bars: CapitalPriceCandle[] = [];
     // Quiet base then hard dump ~8 minutes
     for (let i = 0; i < 25; i++) {
@@ -255,6 +258,8 @@ describe('marketSetup', () => {
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.kind).not.toBe('NONE');
     expect(setup.side).toBe('SELL');
+    expect(setup.status).toBe('FORMING');
+    setup = updateSetupSticky(setup, st, bars);
     expect(setup.status).toBe('ARMED');
   });
 
@@ -271,20 +276,17 @@ describe('marketSetup', () => {
     expect(recentImpulse(bars, 'flip')).toBe('UP');
   });
 
-  it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
+  it('decideEntryFromTenSecMove is disabled (no mid-NONE chase)', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2005 });
     expect(st.ready).toBe(true);
     const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
-    const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
-    expect(buy?.direction).toBe('BUY');
-    expect(buy?.setup).toBe('CONTINUATION');
+    expect(decideEntryFromTenSecMove(st, buyBar, minutes)).toBeNull();
     const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
-    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
-    expect(sell?.direction).toBe('SELL');
+    expect(decideEntryFromTenSecMove(st, sellBar, minutes)).toBeNull();
   });
 
-  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
+  it('decideEntryFromTenSecMove still null at swing tip', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
