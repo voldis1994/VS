@@ -203,12 +203,12 @@ const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
-const ACTIVE_CADENCE_MS = 2_000;
-/** Faster poll while in a trade so LIVE loss exits (BE / HardInv) react quickly */
-const MANAGE_CADENCE_MS = 750;
+const ACTIVE_CADENCE_MS = 500;
+/** Manage must be ms-fast — PeakProtect/HardInv cannot wait 750ms–2s on Gold */
+const MANAGE_CADENCE_MS = 200;
 /** After HardInv/BE/thesis — short pause (was 75s — too sticky after losses) */
 const COOLDOWN_AFTER_HARD_MS = 40_000;
-/** After Target/PeakProtect/TimeDecay — short; 1m close already waited */
+/** After Target/PeakProtect/TimeDecay — short pause */
 const COOLDOWN_AFTER_SOFT_MS = 10_000;
 const SIDE_LOCK_AFTER_HARD_MS = 75_000;
 const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
@@ -467,7 +467,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup/playbook for whole trade. LONG=75% PeakProtect; SCALP/FADE=90%. LIVE loss BE/HardInv. PLUS on Capital 1m CLOSE. No MASTER.',
+      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup. Manage @200ms LIVE PeakProtect/Target/HardInv. LONG=75% PeakProtect; SCALP=90%. No MASTER.',
   };
 }
 
@@ -1405,40 +1405,12 @@ async function robotCycleBody(s: Internal) {
         ? manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid)
         : quote.mid;
 
-      // LIVE loss path: BE fail / HardInv / red thesis — wrong side exits immediately
-      const lossDec = decideBestOutcomeExit(s, mark, 'live_loss');
-      if (lossDec.exit) {
-        await exitTrade(opened.session, s, quote, lossDec.reason);
+      // LIVE everything: loss (BE/HardInv) + profit (PeakProtect/Target) on this mark.
+      // Waiting for 1m close let green ride to red before exit.
+      const dec = decideBestOutcomeExit(s, mark, 'all');
+      if (dec.exit) {
+        await exitTrade(opened.session, s, quote, dec.reason);
         return;
-      }
-
-      // PROFIT path: Target / PeakProtect / TimeDecay — only on Capital 1m CLOSED candle
-      if (Date.now() - s.last_manage_minute_fetch_ms >= 15_000) {
-        s.last_manage_minute_fetch_ms = Date.now();
-        try {
-          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 5);
-          if (mins.ok && mins.candles.length) {
-            s.last_minute_candles = mins.candles;
-          }
-        } catch {
-          /* keep previous minutes */
-        }
-      }
-
-      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
-      if (closed1m && s.open_side && s.entry_price != null) {
-        const key = capitalMinuteCandleKey(closed1m);
-        if (key !== s.last_1m_profit_exit_key) {
-          // Mark from Capital 1m close (not live tick) — lets the move finish the minute
-          const profitDec = decideBestOutcomeExit(s, closed1m.close, 'closed_1m_profit');
-          if (profitDec.exit) {
-            s.last_1m_profit_exit_key = key;
-            await exitTrade(opened.session, s, quote, profitDec.reason);
-            return;
-          }
-          // Remember we evaluated this closed minute (no re-fire until next close)
-          s.last_1m_profit_exit_key = key;
-        }
       }
 
       pushTick(s, {
@@ -1452,7 +1424,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose · setup LOCKED · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · exit=live@${MANAGE_CADENCE_MS}ms · setup LOCKED · no new orders`,
       });
       return;
     }
@@ -1882,7 +1854,7 @@ export async function startRobotSession(input: {
     robot_status: 'RUNNING',
   });
   void robotCycle(session);
-  // 2s when TRADEABLE (flat); 750ms while managing; auto-slows to 90s when market closed
+  // 500ms when TRADEABLE (flat); 200ms while managing; auto-slows to 90s when market closed
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
   return publicSession(session);

@@ -12,7 +12,7 @@ export type ExitSide = 'BUY' | 'SELL';
 /**
  * Post-BE early exit (price points, not account currency):
  * - BE zone ≈ Capital floating +£0.00…+£0.01 on ~0.27 Gold (~0.05–0.08pt) → cap 0.12pt
- * - Real profit ≥ 0.45pt → HOLD (PeakProtect/Target on 1m close); never post-BE scratch
+ * - Real profit ≥ 0.45pt → HOLD until PeakProtect/Target on LIVE mark; never post-BE scratch
  * - After BE-only, exit at −0.35pt — before HardInv ~1.45pt (CONTINUATION)
  */
 export const BE_ZONE_ABS = 0.12;
@@ -22,10 +22,11 @@ export const BE_EARLY_MIN_HOLD_MS = 8_000;
 
 /**
  * - live_loss: BE fail / HardInv / red thesis — fire on live mark
- * - closed_1m_profit: Target / PeakProtect / TimeDecay — only after Capital 1m close
- * - all: both (unit tests)
+ * - live_profit: Target / PeakProtect / TimeDecay — fire on live mark (bank green before giveback)
+ * - closed_1m_profit: alias of live_profit (legacy desk/tests)
+ * - all: both
  */
-export type ExitDecideGate = 'all' | 'live_loss' | 'closed_1m_profit';
+export type ExitDecideGate = 'all' | 'live_loss' | 'live_profit' | 'closed_1m_profit';
 
 export type ExitSnapshot = {
   open_side: ExitSide | null;
@@ -74,9 +75,8 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  *
- * Desk wiring:
- * - live_loss on every quote (wrong side → BE / HardInv)
- * - closed_1m_profit only on new Capital 1m closed candle (plus side → Target / PeakProtect)
+ * Desk wiring: every manage tick uses live mark for BOTH loss and profit
+ * (PeakProtect must bank green before the move flips to red).
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -102,7 +102,8 @@ export function decideBestOutcomeExit(
   const profitSeen = Boolean(s.profit_seen) || mfe >= PROFIT_HOLD_ABS;
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
-  const wantProfit = gate === 'all' || gate === 'closed_1m_profit';
+  const wantProfit =
+    gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
 
   if (wantLoss) {
     // 0) Was only BE / +£0.00…+£0.01, then turned red → exit before full HardInv
@@ -137,19 +138,19 @@ export function decideBestOutcomeExit(
   }
 
   if (wantProfit) {
-    // 3) Target — bank TP on closed 1m only (desk gate)
+    // 3) Target — bank TP on LIVE mark
     if (fav >= tp) {
       return {
         exit: true,
-        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · 1mClose`,
+        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · live`,
       };
     }
 
-    // 4) PeakProtect
+    // 4) PeakProtect — LIVE so giveback cannot ride to red
     if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
       return {
         exit: true,
-        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · 1mClose`,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
       };
     }
 
@@ -157,7 +158,7 @@ export function decideBestOutcomeExit(
     if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
       return {
         exit: true,
-        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · 1mClose`,
+        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · live`,
       };
     }
   }
