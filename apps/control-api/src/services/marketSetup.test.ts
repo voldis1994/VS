@@ -7,6 +7,8 @@ import {
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  emptyStructure,
+  isQualityEntrySetup,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
@@ -347,8 +349,14 @@ describe('marketSetup', () => {
     expect(decideEntryFromArmedLive(contBuy, 2005, minutes)).toBeNull();
   });
 
-  it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body', () => {
-    const minutes = rangeMinutes();
+  it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body + UP impulse', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
+    // Impulse UP last minutes
+    bars.push(candle(2000, 2002, 1999.5, 2001.5));
+    bars.push(candle(2001.5, 2004, 2001, 2003.5));
+    bars.push(candle(2003.5, 2007, 2003, 2006.5));
+    expect(recentImpulse(bars, 'flip') || recentImpulse(bars)).toBe('UP');
     const contBuy = {
       ...emptySetup(),
       kind: 'CONTINUATION' as const,
@@ -357,17 +365,22 @@ describe('marketSetup', () => {
       status: 'ARMED' as const,
       confirm: 3,
       swing_high: 2010,
-      swing_low: 2000,
+      swing_low: 1995,
       reason: 'CONTINUATION up',
     };
-    const green1m = candle(2004, 2006.5, 2003.8, 2006.2); // ~1.1pt body
-    const e = decideEntryFromClosed1m(contBuy, green1m, minutes);
+    const green1m = candle(2004, 2008, 2003.8, 2007.2); // ~3.2pt body
+    const st = buildStructure({ minutes: bars, mid: 2007 });
+    const e = decideEntryFromClosed1m(contBuy, green1m, bars, st);
     expect(e?.direction).toBe('BUY');
     expect(e?.reason).toMatch(/Capital 1m/);
   });
 
-  it('decideEntryFromClosed1m refuses red 1m for BUY CONTINUATION', () => {
-    const minutes = rangeMinutes();
+  it('decideEntryFromClosed1m refuses small 1m body as noise', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
+    bars.push(candle(2000, 2002, 1999.5, 2001.5));
+    bars.push(candle(2001.5, 2004, 2001, 2003.5));
+    bars.push(candle(2003.5, 2007, 2003, 2006.5));
     const contBuy = {
       ...emptySetup(),
       kind: 'CONTINUATION' as const,
@@ -376,10 +389,50 @@ describe('marketSetup', () => {
       status: 'ARMED' as const,
       confirm: 3,
       swing_high: 2010,
+      swing_low: 1995,
+    };
+    const micro = candle(2005, 2006, 2004.8, 2005.8); // 0.8pt — noise
+    expect(decideEntryFromClosed1m(contBuy, micro, bars)).toBeNull();
+  });
+
+  it('decideEntryFromClosed1m refuses FADE / PULLBACK (quality gate)', () => {
+    const minutes = rangeMinutes();
+    const fadeBuy = {
+      ...emptySetup(),
+      kind: 'FADE' as const,
+      side: 'BUY' as const,
+      playbook: 'FADE' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
       swing_low: 2000,
     };
-    const red1m = candle(2006, 2006.2, 2003.5, 2003.8);
-    expect(decideEntryFromClosed1m(contBuy, red1m, minutes)).toBeNull();
+    const bigGreen = candle(2001, 2005, 2000.5, 2004.5);
+    expect(decideEntryFromClosed1m(fadeBuy, bigGreen, minutes)).toBeNull();
+    expect(isQualityEntrySetup('FADE')).toBe(false);
+    expect(isQualityEntrySetup('PULLBACK')).toBe(false);
+    expect(isQualityEntrySetup('CONTINUATION')).toBe(true);
+    expect(isQualityEntrySetup('BREAKOUT')).toBe(true);
+  });
+
+  it('decideEntryFromClosed1m refuses red 1m for BUY CONTINUATION', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
+    bars.push(candle(2000, 2002, 1999.5, 2001.5));
+    bars.push(candle(2001.5, 2004, 2001, 2003.5));
+    bars.push(candle(2003.5, 2007, 2003, 2006.5));
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 1995,
+    };
+    const red1m = candle(2007, 2007.2, 2003.5, 2003.8);
+    expect(decideEntryFromClosed1m(contBuy, red1m, bars)).toBeNull();
   });
 
   it('decideEntryFromClosed1m refuses BUY into dump flow', () => {
@@ -400,8 +453,7 @@ describe('marketSetup', () => {
       swing_high: 4440,
       swing_low: 4428,
     };
-    // Green blip 1m mid-dump must still be blocked by flow
-    const greenBlip1m = candle(4433.5, 4434.5, 4433.2, 4434.2);
+    const greenBlip1m = candle(4433.5, 4437, 4433.2, 4436.5); // big body but dump flow
     expect(decideEntryFromClosed1m(contBuy, greenBlip1m, bars)).toBeNull();
   });
 });
