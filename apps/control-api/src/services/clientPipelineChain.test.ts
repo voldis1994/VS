@@ -306,6 +306,34 @@ describe('Idempotency', () => {
 
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
   });
+
+  it('two clients on same intent execute Capital in parallel (not A-then-B)', async () => {
+    const { fanoutEntryIntent } = await import('./intentFanout.js');
+    listActiveSubscriptionsForEpic.mockResolvedValue([
+      sub({ client_id: 1, account_id: 10, epic: 'XAUUSD', lot_size: 0.1 }),
+      sub({ client_id: 2, account_id: 20, epic: 'XAUUSD', lot_size: 0.2 }),
+    ]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    createCapitalPosition.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight -= 1;
+      return { ok: true, detail: 'filled', deal_reference: 'DR-x' };
+    });
+
+    await fanoutEntryIntent({
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      decision: 'ENTRY_READY',
+      idempotency_key: 'mc-parallel-clients',
+    });
+
+    expect(createCapitalPosition).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('Client isolation', () => {

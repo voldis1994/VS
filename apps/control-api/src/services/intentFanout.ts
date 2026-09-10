@@ -91,31 +91,31 @@ export async function executePipelineIntent(
       : null;
 
   const subs = await listActiveSubscriptionsForEpic(epic);
-  const executed: FanoutResult['executed'] = [];
 
-  for (const sub of subs) {
-    // Own desk brain owns entry for this account+epic — never double-open via Market Core fanout
-    if (hasRunningEntryBrain(sub.account_id, sub.epic)) {
-      executed.push({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'skipped — client runs own entry brain',
-        entry_price: null,
-      });
-      continue;
-    }
-    const row = await executeForSubscription(
-      sub,
-      direction,
-      setupType,
-      regime,
-      intent.reference_price,
-      idem
-    );
-    executed.push(row);
-  }
+  // All clients in parallel — never queue A then B then C (Capital locks still
+  // serialize only same connectionId; different clients keep their own CST).
+  const executed = await Promise.all(
+    subs.map(async (sub) => {
+      if (hasRunningEntryBrain(sub.account_id, sub.epic)) {
+        return {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false as const,
+          detail: 'skipped — client runs own entry brain',
+          entry_price: null,
+        };
+      }
+      return executeForSubscription(
+        sub,
+        direction,
+        setupType,
+        regime,
+        intent.reference_price,
+        idem
+      );
+    })
+  );
 
   return {
     epic,
