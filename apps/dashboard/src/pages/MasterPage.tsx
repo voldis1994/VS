@@ -9,6 +9,7 @@ type MasterStatus = {
   ai_mode: string;
   owns_pipeline: boolean;
   market_core_intents_allowed?: boolean;
+  fanout_subscribers_live?: number;
   last_client_fanout?: {
     attempted: boolean;
     subscribers: number;
@@ -585,28 +586,42 @@ export function MasterPage() {
         {
           k: 'Client fanout',
           v: (() => {
-            if (!status.last_client_fanout) return '—';
+            const live = status.fanout_subscribers_live;
+            const liveBit =
+              live != null ? `subscribed=${live}` : null;
+            if (!status.last_client_fanout) {
+              return liveBit || '—';
+            }
             const prefix = cyclePending ? 'hydrated · ' : '';
-            if (!status.last_client_fanout.attempted) return `${prefix}idle`;
+            if (!status.last_client_fanout.attempted) {
+              return liveBit
+                ? `${prefix}${liveBit} · last=idle`
+                : `${prefix}idle`;
+            }
             const detail = status.last_client_fanout.detail || '—';
-            // Status card is not a button — point operator to Clients subscribe
             if (detail === 'no_subscribers' || detail.includes('no_subscribers')) {
+              if (live != null && live > 0) {
+                return `${prefix}${liveBit} · last OPEN found 0 (wait next OPEN)`;
+              }
               return `${prefix}no_subscribers → Clients → SUBSCRIBE FANOUT`;
             }
-            return `${prefix}${detail}`;
+            return liveBit ? `${prefix}${liveBit} · ${detail}` : `${prefix}${detail}`;
           })(),
           ok:
-            !cyclePending &&
-            !!status.last_client_fanout?.attempted &&
-            (status.last_client_fanout.ok_count ?? 0) > 0,
+            (!cyclePending &&
+              !!status.last_client_fanout?.attempted &&
+              (status.last_client_fanout.ok_count ?? 0) > 0) ||
+            (status.fanout_subscribers_live ?? 0) > 0,
           bad:
             !cyclePending &&
             !!status.last_client_fanout?.attempted &&
             (status.last_client_fanout.fail_count ?? 0) > 0 &&
-            !(status.last_client_fanout.ok_count > 0),
+            !(status.last_client_fanout.ok_count > 0) &&
+            !(status.fanout_subscribers_live ?? 0),
           warn:
             (cyclePending && !!status.last_client_fanout) ||
-            (!!status.last_client_fanout?.attempted &&
+            ((status.fanout_subscribers_live ?? 0) === 0 &&
+              !!status.last_client_fanout?.attempted &&
               (status.last_client_fanout.detail || '').includes('no_subscribers')),
         },
         {

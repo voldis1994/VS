@@ -266,10 +266,14 @@ export function ClientsPage() {
                     <td>
                       <span
                         className={`badge ${
-                          c.access_enabled && c.has_access_code ? 'badge-healthy' : 'badge-unhealthy'
+                          c.access_enabled ? 'badge-healthy' : 'badge-unhealthy'
                         }`}
                       >
-                        {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
+                        {c.access_enabled
+                          ? c.has_access_code
+                            ? 'PANEL'
+                            : 'ACCESS ON'
+                          : 'NO ACCESS'}
                       </span>
                     </td>
                     <td>
