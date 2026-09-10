@@ -173,6 +173,58 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
+  it('post-BE: was flat/+0.01 then red → exit before HardInv', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380.22,
+        mfe: 0.05, // only BE / +£0.01 class
+        be_seen: true,
+        profit_seen: false,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(30_000),
+      }),
+      4380.22 + 0.4 // SELL: price up → fav -0.4
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/BreakevenFail/);
+  });
+
+  it('post-BE: if real profit was seen → HOLD (no scratch before HardInv)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4380.22,
+        mfe: 2.0,
+        be_seen: true,
+        profit_seen: true,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(30_000),
+      }),
+      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~1pt
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('never touched BE → no early exit at −0.4 (wait HardInv)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4380,
+        mfe: 0,
+        be_seen: false,
+        profit_seen: false,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(30_000),
+      }),
+      4379.6 // fav -0.4
+    );
+    expect(d.exit).toBe(false);
+  });
+
   it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
     const hold = decideBestOutcomeExit(
       snap({
