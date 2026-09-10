@@ -121,16 +121,16 @@ if not exist "%ROOT%\.env" (
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
 call :upsert_env MARKET_CORE_BRIDGE 1
-REM VS MASTER — single pipeline (PAPER by default; LIVE needs CAPITAL_* + MASTER_LIVE_ENABLED)
+REM VS MASTER — owns pipeline + LIVE gate on (Capital still needs Brokers/CAPITAL_* attach)
 call :upsert_env MASTER_OWNS_PIPELINE true
 call :upsert_env MASTER_AUTO_START true
+call :upsert_env MASTER_LIVE_ENABLED true
 call :upsert_env MASTER_LIVE_FEED public
 call :upsert_env_if_absent MASTER_MODE PAPER
-call :upsert_env_if_absent MASTER_LIVE_ENABLED false
 call :upsert_env_if_absent MASTER_AI_MODE off
 call :upsert_env_if_absent MASTER_STATE_DIR ./.master-state
 call :upsert_env_if_absent MASTER_CAPITAL_CONNECTION_ID 900001
-echo [OK] MASTER env: OWNS_PIPELINE=true AUTO_START=true (mode no .env)
+echo [OK] MASTER env: OWNS_PIPELINE=true AUTO_START=true LIVE_ENABLED=true
 
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
@@ -214,8 +214,8 @@ set "EX=%ROOT%\build\windows-debug\apps\execution-service\execution-service.exe"
 if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\execution-service.exe"
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
-REM DOTENV_CONFIG_PATH → root .env (cwd ir apps\control-api). MASTER_* process env = owns + auto-start.
-start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set DOTENV_CONFIG_PATH=%ROOT%\.env^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& set MASTER_OWNS_PIPELINE=true^& set MASTER_AUTO_START=true^& set MASTER_LIVE_FEED=public^& npm run dev
+REM DOTENV_CONFIG_PATH → root .env (cwd ir apps\control-api). MASTER_* process env = owns + LIVE gate + auto-start.
+start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set DOTENV_CONFIG_PATH=%ROOT%\.env^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& set MASTER_OWNS_PIPELINE=true^& set MASTER_AUTO_START=true^& set MASTER_LIVE_ENABLED=true^& set MASTER_LIVE_FEED=public^& npm run dev
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 echo [..] MASTER owns_pipeline + status...
@@ -285,7 +285,7 @@ start "" "http://localhost:5173/master"
 start "" "http://127.0.0.1:18080"
 echo [OK] VS MASTER   http://localhost:5173/master
 echo [OK] klientam    http://127.0.0.1:18080  (NESUTI :5173)
-echo [OK] LIVE: .env → MASTER_LIVE_ENABLED=true + CAPITAL_*  tad Master → Start LIVE
+echo [OK] LIVE gate ON — Master → CAPITAL PROBE → ATTACH CAPITAL → START LIVE
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)
