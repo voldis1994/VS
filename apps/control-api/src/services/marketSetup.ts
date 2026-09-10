@@ -1,7 +1,7 @@
 /**
  * Setup-first market model (LIVE desk brain).
  *
- * Capital quote + 1m (+ optional 1h) + 10s → STRUCTURE → SETUP → ENTRY → BEST OUTCOME
+ * Capital quote + 1m (+ 15m context) + 10s → STRUCTURE → SETUP → ENTRY → BEST OUTCOME
  *
  * Hard rules:
  * - Setup changes only on structure refresh / closed bars — never on every quote tick
@@ -36,6 +36,7 @@ export type StructureBook = {
   bias: 'ABOVE' | 'BELOW' | 'INSIDE';
   near_high: boolean;
   near_low: boolean;
+  /** Context TF bias from Capital 15m (field name legacy; was 1h) */
   hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN';
   bar_count: number;
   detail: string;
@@ -179,9 +180,10 @@ export function detectSwingLevels(minutes: CapitalPriceCandle[]): {
   return { high, low, ok: true };
 }
 
-function hourBiasFrom(hours: CapitalPriceCandle[] | null | undefined): StructureBook['hour_bias'] {
-  if (!hours || hours.length < 3) return 'UNKNOWN';
-  const last = hours.slice(-6);
+/** Bias from Capital 15m context candles (replaces slow 1h). */
+function contextBiasFrom(bars: CapitalPriceCandle[] | null | undefined): StructureBook['hour_bias'] {
+  if (!bars || bars.length < 3) return 'UNKNOWN';
+  const last = bars.slice(-6);
   const bodies = last.map((c) => (c.close - c.open) / Math.max(Math.abs(c.open), 1e-9));
   const p = mean(bodies.map((v) => (v > 0.0002 ? 1 : v < -0.0002 ? -1 : 0)));
   if (p > 0.35) return 'UP';
@@ -190,16 +192,20 @@ function hourBiasFrom(hours: CapitalPriceCandle[] | null | undefined): Structure
 }
 
 /**
- * Build durable structure from Capital minutes (+ optional hours).
+ * Build durable structure from Capital minutes (+ optional 15m context).
  * Optional prevSwing keeps levels sticky across refreshes until clearly broken.
  */
 export function buildStructure(input: {
   minutes: CapitalPriceCandle[];
+  /** @deprecated use context15 — kept for callers */
   hours?: CapitalPriceCandle[] | null;
+  /** Capital 15m candles for context bias */
+  context15?: CapitalPriceCandle[] | null;
   mid?: number | null;
   prev?: StructureBook | null;
 }): StructureBook {
-  const { minutes, hours, mid: lastMid, prev } = input;
+  const { minutes, mid: lastMid, prev } = input;
+  const context = input.context15 ?? input.hours;
   if (!minutes.length || minutes.length < MIN_SWING_BARS) {
     return emptyStructure(`need ≥${MIN_SWING_BARS} minute bars · have ${minutes.length}`);
   }
@@ -243,7 +249,7 @@ export function buildStructure(input: {
   if (px > midZ + span * 0.1) bias = 'ABOVE';
   else if (px < midZ - span * 0.1) bias = 'BELOW';
 
-  const hb = hourBiasFrom(hours);
+  const hb = contextBiasFrom(context);
 
   return {
     ready: true,
@@ -256,7 +262,7 @@ export function buildStructure(input: {
     near_low,
     hour_bias: hb,
     bar_count: minutes.length,
-    detail: `swing H${hi.toFixed(2)} L${lo.toFixed(2)} · ${bias} · 1h ${hb} · 1m×${minutes.length}`,
+    detail: `swing H${hi.toFixed(2)} L${lo.toFixed(2)} · ${bias} · 15m ${hb} · 1m×${minutes.length}`,
     updated_at: new Date().toISOString(),
   };
 }
@@ -557,7 +563,7 @@ function rawSetupFromStructure(
     };
   }
 
-  // CONTINUATION / PULLBACK in trend (hour + minute persistence) — mid/pullback only
+  // CONTINUATION / PULLBACK in trend (15m + minute persistence) — mid/pullback only
   const trendUp =
     pers > 0.35 || structure.hour_bias === 'UP' || structure.bias === 'ABOVE';
   const trendDown =
@@ -960,7 +966,7 @@ export function isQualityEntrySetup(kind: string | null | undefined): boolean {
 
 /**
  * PRIMARY live entry — sticky ARMED CONTINUATION/BREAKOUT + closed Capital 1m.
- * Quality gate: real 1m body, impulse agree, hour not against. No FADE/PULLBACK spam.
+ * Quality gate: real 1m body, impulse agree, 15m context not against. No FADE/PULLBACK spam.
  */
 export function decideEntryFromClosed1m(
   setup: MarketSetup,
@@ -985,7 +991,7 @@ export function decideEntryFromClosed1m(
   const bodyAbs = Math.abs(closed1m.close - closed1m.open);
   if (bodyAbs < QUALITY_1M_BODY_ABS) return null;
 
-  // Hour must not fight the side (UNKNOWN/FLAT OK; opposite bias = refuse)
+  // 15m context must not fight the side (UNKNOWN/FLAT OK; opposite bias = refuse)
   if (structure?.ready) {
     if (setup.side === 'BUY' && structure.hour_bias === 'DOWN') return null;
     if (setup.side === 'SELL' && structure.hour_bias === 'UP') return null;
