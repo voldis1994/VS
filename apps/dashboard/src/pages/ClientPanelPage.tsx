@@ -39,6 +39,8 @@ type Status = {
   last_broker_ok_at?: string | null;
   broker_error?: string | null;
   status_reason?: string | null;
+  master_owns_pipeline?: boolean;
+  run_mode?: 'own_brain' | 'master_fanout' | null;
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
@@ -298,7 +300,11 @@ export function ClientPanelPage() {
       : errorState
         ? 'ERROR'
         : 'STOPPED';
-  const hintLabel = requestedActive ? 'TAP TO STOP' : 'TAP TO START';
+  const hintLabel = requestedActive
+    ? 'TAP TO STOP'
+    : status?.master_owns_pipeline
+      ? 'TAP TO SUBSCRIBE MASTER FANOUT'
+      : 'TAP TO START';
 
   return (
     <div className="ccp-shell">
@@ -381,6 +387,9 @@ export function ClientPanelPage() {
             </span>
           </button>
           <div className={`ccp-status ${statusClass}`}>{statusLabel}</div>
+          {status?.run_mode === 'master_fanout' && (
+            <div className="ccp-hint">MASTER FANOUT</div>
+          )}
           <div className="ccp-hint">
             {errorState
               ? status?.broker_error || status?.status_reason || 'SYSTEM ERROR — TAP TO STOP'

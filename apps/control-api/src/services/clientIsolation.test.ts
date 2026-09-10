@@ -34,14 +34,16 @@ describe('multi-client isolation invariants', () => {
     expect(bGold).toContain('18');
   });
 
-  it('Client Panel START uses own desk brain — not Market Core fanout subscription', () => {
+  it('Client Panel START: own desk brain when Owns OFF; MASTER fanout subscribe when Owns ON', () => {
     const src = readFileSync(fileURLToPath(new URL('./clientPanel.ts', import.meta.url)), 'utf8');
     expect(src).toMatch(/startRobotSession/);
     expect(src).toMatch(/mode: 'own_brain'/);
+    expect(src).toMatch(/mode: 'master_fanout'/);
     expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
     expect(src).toMatch(/assertClientOwnBrainStartAllowed/);
     expect(src).toMatch(/masterOwnsPipeline/);
-    expect(src).not.toMatch(/\bactivateSubscription\b/);
+    expect(src).toMatch(/subscribeClientToMasterFanout/);
+    expect(src).toMatch(/\bactivateSubscription\b/);
   });
 
   it('refuses Client own-brain START while MASTER owns_pipeline', async () => {
