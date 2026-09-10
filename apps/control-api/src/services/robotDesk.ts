@@ -493,13 +493,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Multi-client PARALLEL: each robot own timer; fanout Promise.all. Capital lock only same connection. Own-brain disables fanout. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
+      'With-trend: TREND_UP→BUY only, TREND_DOWN→SELL only. Multi-client PARALLEL. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
   };
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
-  // Diagnostic 10s label — never drives entry. Thesis uses entry_regime locked at fill.
-  // Skip updates while in a trade so manage ticks do not flicker the live label either.
+  // Live 10s regime: TREND_UP → BUY-only entry, TREND_DOWN → SELL-only entry
+  // (via decideEntryFromClosed1m). Thesis uses entry_regime locked at fill.
+  // Skip updates while in a trade so manage ticks do not flicker the live label.
   if (s.open_side) return;
   const incoming = bars?.length
     ? bars
@@ -1857,12 +1858,27 @@ async function robotCycleBody(s: Internal) {
       setup,
       closed1mEntry,
       s.last_minute_candles,
-      st
+      st,
+      s.regime
     );
 
     if (!entry) {
       // Consumed this closed minute — do not re-spam decide every quote until next close
       s.last_1m_entry_key = entryKey;
+      const trendSide =
+        s.regime === 'TREND_UP' ||
+        s.regime === 'BREAKOUT_UP' ||
+        s.regime === 'PULLBACK_UPTREND'
+          ? 'BUY'
+          : s.regime === 'TREND_DOWN' ||
+              s.regime === 'BREAKOUT_DOWN' ||
+              s.regime === 'PULLBACK_DOWNTREND'
+            ? 'SELL'
+            : null;
+      const trendNote =
+        trendSide && setup.side && setup.side !== trendSide
+          ? ` · blocked ${setup.side} vs ${s.regime} (with-trend=${trendSide})`
+          : '';
       const tipNote =
         setup.side &&
         ((setup.side === 'BUY' &&
@@ -1882,7 +1898,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · ${bodyNote} no entry${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · ${bodyNote} no entry${trendNote}${tipNote} · regime ${s.regime} · ${setup.reason}`,
       });
       return;
     }

@@ -13,6 +13,7 @@ import {
   recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
+import { withTrendSideFromRegime } from './playbooks.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function candle(o: number, h: number, l: number, c: number): CapitalPriceCandle {
@@ -373,6 +374,56 @@ describe('marketSetup', () => {
     const e = decideEntryFromClosed1m(contBuy, green1m, bars, st);
     expect(e?.direction).toBe('BUY');
     expect(e?.reason).toMatch(/Capital 1m/);
+  });
+
+  it('decideEntryFromClosed1m: TREND_DOWN blocks BUY; TREND_UP allows BUY', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
+    bars.push(candle(2000, 2002, 1999.5, 2001.5));
+    bars.push(candle(2001.5, 2004, 2001, 2003.5));
+    bars.push(candle(2003.5, 2007, 2003, 2006.5));
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 1995,
+      reason: 'CONTINUATION up',
+    };
+    const green1m = candle(2004, 2008, 2003.8, 2007.2);
+    const st = buildStructure({ minutes: bars, mid: 2007 });
+    expect(withTrendSideFromRegime('TREND_DOWN')).toBe('SELL');
+    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_DOWN')).toBeNull();
+    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_UP')?.direction).toBe(
+      'BUY'
+    );
+  });
+
+  it('decideEntryFromClosed1m: TREND_UP blocks SELL', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(2010, 2012, 2008, 2010));
+    bars.push(candle(2010, 2010.5, 2006, 2006.5));
+    bars.push(candle(2006.5, 2007, 2003, 2003.5));
+    bars.push(candle(2003.5, 2004, 2000, 2000.5));
+    const contSell = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'SELL' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2015,
+      swing_low: 1995,
+      reason: 'CONTINUATION down',
+    };
+    const red1m = candle(2004, 2004.2, 2000, 2000.5);
+    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_UP')).toBeNull();
+    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_DOWN')?.direction).toBe(
+      'SELL'
+    );
   });
 
   it('decideEntryFromClosed1m refuses small 1m body as noise', () => {

@@ -35,6 +35,28 @@ describe('playbookFromRegime', () => {
   });
 });
 
+describe('withTrendSideFromRegime', () => {
+  it('TREND_UP / BREAKOUT_UP / PULLBACK_UPTREND → BUY', async () => {
+    const { withTrendSideFromRegime } = await import('./playbooks.js');
+    expect(withTrendSideFromRegime('TREND_UP')).toBe('BUY');
+    expect(withTrendSideFromRegime('BREAKOUT_UP')).toBe('BUY');
+    expect(withTrendSideFromRegime('PULLBACK_UPTREND')).toBe('BUY');
+  });
+
+  it('TREND_DOWN / BREAKOUT_DOWN / PULLBACK_DOWNTREND → SELL', async () => {
+    const { withTrendSideFromRegime } = await import('./playbooks.js');
+    expect(withTrendSideFromRegime('TREND_DOWN')).toBe('SELL');
+    expect(withTrendSideFromRegime('BREAKOUT_DOWN')).toBe('SELL');
+    expect(withTrendSideFromRegime('PULLBACK_DOWNTREND')).toBe('SELL');
+  });
+
+  it('RANGE / COMPRESSION → no side lock', async () => {
+    const { withTrendSideFromRegime } = await import('./playbooks.js');
+    expect(withTrendSideFromRegime('RANGE')).toBeNull();
+    expect(withTrendSideFromRegime('COMPRESSION')).toBeNull();
+  });
+});
+
 describe('playbook entry', () => {
   const longDip = bar(2000, 1998.8); // 0.06% down — LONG body
   const longRally = bar(2000, 2001.2);
