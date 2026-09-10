@@ -64,6 +64,14 @@ describe('validateMarket flat_tape', () => {
     expect(v.ok).toBe(false);
   });
 
+  it('Capital LIVE default 45s allows age=30s (was false-BLOCK at 15s)', () => {
+    const q = quote(4400 + 11 * 0.5);
+    q.ts_ms = Date.now() - 30_000;
+    const v = validateMarket(barsVarying(12), q);
+    expect(v.reasons).not.toContain('stale_quote');
+    expect(v.ok).toBe(true);
+  });
+
   it('hard-fails feed_divergent when public mids disagree with quote (READER honesty)', () => {
     const v = validateMarket(barsVarying(12), quote(4400), {
       reference_mids: [4400, 4600],
