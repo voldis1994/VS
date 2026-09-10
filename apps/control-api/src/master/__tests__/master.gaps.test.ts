@@ -748,9 +748,10 @@ describe('MASTER filters + dual flow', () => {
       0.5
     );
     expect(pass.ok).toBe(true);
+    // Relative gate only arms near abs limit (avoids GOLD false blocks on tiny std)
     const fail = applyMarketFilters(
       baseAnalysis({ volatility: 0.001 }),
-      { ...quote, spread: 1.5 },
+      { ...quote, spread: 4.6 },
       { ...DEFAULT_MASTER_CONFIG, max_spread_abs: 5, max_spread_pct: 0.01 },
       Date.UTC(2026, 8, 7, 12),
       null,
