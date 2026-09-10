@@ -46,9 +46,23 @@ export function decide(
 
   let preferred = pickPreferred(buy, sell, cfg.min_score_delta);
 
+  // Sticky ARMED setup owns the side — ignore opposite MOVE confirm so we do not
+  // prefer BUY then WAIT setup_side_mismatch:SELL (LIVE desk screenshot noise).
+  const armedSide =
+    cfg.require_armed_setup &&
+    marketSetup &&
+    marketSetup.status === 'ARMED' &&
+    (marketSetup.side === 'BUY' || marketSetup.side === 'SELL') &&
+    marketSetup.kind !== 'NONE'
+      ? marketSetup.side
+      : null;
+  const deskAligned =
+    deskEntry && (!armedSide || deskEntry.side === armedSide) ? deskEntry : null;
+  const deskSrcAligned = normalizeDeskConfirmSource(deskAligned?.source);
+
   // Desk 10s SETUP/MOVE confirm — prefer confirmed side when candidate is valid
-  if (deskEntry) {
-    const confirmed = deskEntry.side === 'BUY' ? buy : sell;
+  if (deskAligned) {
+    const confirmed = deskAligned.side === 'BUY' ? buy : sell;
     if (confirmed.valid && confirmed.filter_ok) {
       preferred = confirmed;
     } else if (cfg.require_armed_setup) {
@@ -57,27 +71,31 @@ export function decide(
         kind: 'WAIT',
         side: null,
         score: Math.max(buy.score, sell.score),
-        block_reason: `setup_confirm_blocked:${deskEntry.source}:${deskEntry.side}`,
+        block_reason: `setup_confirm_blocked:${deskAligned.source}:${deskAligned.side}`,
         buy,
         sell,
         analysis,
         expectancy: null,
-        desk_entry_source: deskSrc,
+        desk_entry_source: deskSrcAligned,
       };
     }
   } else if (cfg.require_armed_setup && opts?.closed_10s_present) {
-    // LIVE desk path: ARMED alone is not enough without closed 10s confirm
+    // LIVE desk path: ARMED alone is not enough without matching closed 10s confirm
+    const need =
+      armedSide && deskEntry && deskEntry.side !== armedSide
+        ? `setup_confirm_pending:need_${armedSide}`
+        : 'setup_confirm_pending';
     return {
       decision_id,
       kind: 'WAIT',
       side: null,
       score: Math.max(buy.score, sell.score),
-      block_reason: 'setup_confirm_pending',
+      block_reason: need,
       buy,
       sell,
       analysis,
       expectancy: null,
-      desk_entry_source: deskSrc,
+      desk_entry_source: deskSrcAligned,
     };
   }
 
@@ -101,7 +119,7 @@ export function decide(
       sell,
       analysis,
       expectancy: null,
-      desk_entry_source: deskSrc,
+      desk_entry_source: deskSrcAligned,
     };
   }
 
@@ -118,7 +136,7 @@ export function decide(
       sell,
       analysis,
       expectancy: null,
-      desk_entry_source: deskSrc,
+      desk_entry_source: deskSrcAligned,
     };
   }
 
@@ -126,7 +144,7 @@ export function decide(
     analysis,
     preferred.side,
     opts?.epic || quote.epic,
-    deskSrc
+    deskSrcAligned
   );
   const exp = expectancyLookup(setup_key);
   if (
@@ -142,7 +160,7 @@ export function decide(
       analysis,
       exp,
       `negative_expectancy:${setup_key}:ev=${exp.ev.toFixed(4)}`,
-      deskSrc
+      deskSrcAligned
     );
   }
 
@@ -156,7 +174,7 @@ export function decide(
     sell,
     analysis,
     expectancy: exp,
-    desk_entry_source: deskSrc,
+    desk_entry_source: deskSrcAligned,
   };
 }
 

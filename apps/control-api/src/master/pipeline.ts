@@ -332,7 +332,9 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   consecutive_loss_limit: 4,
   max_spread_abs: 1.5,
   max_spread_pct: 0.0004,
-  stale_quote_ms: 15_000,
+  // Capital LIVE: venue quote ts often ages 15–30s between polls while still tradable.
+  // 15s FX-era default hard-BLOCKED ARMED setups (Stage·validate age=17s).
+  stale_quote_ms: 45_000,
   min_score: 0.55,
   min_expectancy_samples: 20,
   require_positive_expectancy: false,
