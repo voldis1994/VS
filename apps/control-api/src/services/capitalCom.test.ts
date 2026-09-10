@@ -3,6 +3,8 @@ import {
   aggregateMinutesToFifteen,
   capitalComBaseUrl,
   encryptCapitalPassword,
+  lastClosedCapitalMinute,
+  prevClosedCapitalMinute,
   testCapitalComSession,
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
@@ -70,5 +72,19 @@ describe('aggregateMinutesToFifteen', () => {
     expect(m15[0]!.close).toBe(114.5);
     expect(m15[0]!.high).toBe(115);
     expect(m15[0]!.low).toBe(99);
+  });
+});
+
+describe('prevClosedCapitalMinute', () => {
+  it('returns the closed bar before lastClosed', () => {
+    const now = 1_700_000_000_000;
+    const candles = [
+      { open: 1, high: 2, low: 0.5, close: 1.5, snapshot_time_ms: now - 180_000 },
+      { open: 1.5, high: 3, low: 1.4, close: 2.8, snapshot_time_ms: now - 120_000 },
+      { open: 2.8, high: 3.1, low: 2.5, close: 2.6, snapshot_time_ms: now - 60_000 },
+      { open: 2.6, high: 2.7, low: 2.5, close: 2.55, snapshot_time_ms: now }, // forming
+    ];
+    expect(lastClosedCapitalMinute(candles, now)!.close).toBe(2.6);
+    expect(prevClosedCapitalMinute(candles, now)!.close).toBe(2.8);
   });
 });

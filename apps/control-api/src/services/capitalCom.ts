@@ -1011,6 +1011,24 @@ export function lastClosedCapitalMinute(
   return null;
 }
 
+/** Closed Capital 1m immediately before `lastClosedCapitalMinute` (for direction-change). */
+export function prevClosedCapitalMinute(
+  candles: CapitalPriceCandle[],
+  nowMs = Date.now()
+): CapitalPriceCandle | null {
+  if (!candles.length) return null;
+  const closed: CapitalPriceCandle[] = [];
+  for (const c of candles) {
+    if (c.snapshot_time_ms != null && Number.isFinite(c.snapshot_time_ms)) {
+      if (c.snapshot_time_ms + 60_000 <= nowMs) closed.push(c);
+    }
+  }
+  if (closed.length >= 2) return closed[closed.length - 2]!;
+  // No usable timestamps: lastClosed = second-to-last raw → prev = third-to-last
+  if (candles.length >= 3) return candles[candles.length - 3]!;
+  return null;
+}
+
 export function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
   const t = c.snapshot_time_ms != null ? String(c.snapshot_time_ms) : 'x';
   return `${t}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
