@@ -186,6 +186,8 @@ const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
 const ACTIVE_CADENCE_MS = 2_000;
+/** Faster poll while in a trade so PeakProtect sees giveback before Capital fills worse */
+const MANAGE_CADENCE_MS = 750;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -545,16 +547,28 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function updateExcursion(s: Internal, mid: number) {
+function updateExcursion(s: Internal, mark: number) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  const fav = favorableMove(s.open_side, s.entry_price, mark);
   s.unrealized = fav;
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = mid;
+    s.peak_favorable = mark;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+}
+
+/** Exit-realistic mark: BUY closes on bid, SELL on ask (matches Capital floating P&L). */
+function manageMarkPrice(
+  side: 'BUY' | 'SELL',
+  bid: number | null,
+  ask: number | null,
+  mid: number
+): number {
+  if (side === 'BUY' && bid != null && Number.isFinite(bid)) return bid;
+  if (side === 'SELL' && ask != null && Number.isFinite(ask)) return ask;
+  return mid;
 }
 
 /** Exact id only — never returns a different robot */
@@ -1145,8 +1159,8 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    // Restore cadence: faster while managing so PeakProtect / HardInv react quickly
+    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
 
     // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
@@ -1218,7 +1232,8 @@ async function robotCycle(s: Internal) {
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote.mid);
+      const mark = manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid);
+      updateExcursion(s, mark);
     }
 
     pushTick(s, {
@@ -1247,7 +1262,10 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      const mark = s.open_side
+        ? manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid)
+        : quote.mid;
+      const decision = decideBestOutcomeExit(s, mark);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
