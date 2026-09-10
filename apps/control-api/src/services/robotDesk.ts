@@ -305,6 +305,19 @@ function publicSession(s: Internal): RobotSession {
   } = s;
   const st = s.structureBook;
   const setup = s.marketSetup;
+  // While in a trade: publish LOCKED entry identity — never live sticky/tick flicker
+  const locked = Boolean(s.open_side);
+  const pubKind = locked
+    ? String(s.entry_setup || setup.kind || 'NONE').toUpperCase()
+    : setup.kind;
+  const pubSide = locked ? s.open_side : setup.side;
+  const pubStatus = locked ? 'ARMED' : setup.status;
+  const pubPlaybook = locked
+    ? (s.playbook && s.playbook !== 'WAIT' ? s.playbook : setup.playbook)
+    : setup.playbook;
+  const pubReason = locked
+    ? `LOCKED ${s.open_side} ${pubPlaybook || '?'} · ${pubKind} · hold until Best Outcome`
+    : setup.reason;
   return {
     ...rest,
     ohlc_10s: publicOhlc10s(s.ohlcState),
@@ -315,22 +328,30 @@ function publicSession(s: Internal): RobotSession {
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
     zones: {
       ready: st.ready,
-      structure: setup.kind === 'NONE' ? 'NONE' : setup.kind,
-      high: st.swing_high,
-      low: st.swing_low,
+      structure: pubKind === 'NONE' ? 'NONE' : pubKind,
+      high: locked ? setup.swing_high || st.swing_high : st.swing_high,
+      low: locked ? setup.swing_low || st.swing_low : st.swing_low,
       bias: st.bias,
-      detail: st.detail,
+      detail: locked ? pubReason : st.detail,
     },
     market_setup: {
-      kind: setup.kind,
-      side: setup.side,
-      status: setup.status,
-      playbook: setup.playbook,
-      reason: setup.reason,
+      kind: pubKind as typeof setup.kind,
+      side: pubSide,
+      status: pubStatus as typeof setup.status,
+      playbook: (pubPlaybook as typeof setup.playbook) ?? null,
+      reason: pubReason,
       swing_high: setup.swing_high || st.swing_high,
       swing_low: setup.swing_low || st.swing_low,
-      watch_buy: setup.watch_buy ?? null,
-      watch_sell: setup.watch_sell ?? null,
+      watch_buy: locked
+        ? pubSide === 'BUY'
+          ? `IN TRADE BUY · ${pubPlaybook}`
+          : null
+        : setup.watch_buy ?? null,
+      watch_sell: locked
+        ? pubSide === 'SELL'
+          ? `IN TRADE SELL · ${pubPlaybook}`
+          : null
+        : setup.watch_sell ?? null,
     },
     decision_chain: buildDecisionChain(s),
   };
@@ -446,7 +467,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → ENTRY only on Capital 1m CLOSE. LIVE loss: BE/HardInv. PLUS: Capital 1m CLOSE (Target/PeakProtect). No live-mid / 10s chase. No MASTER.',
+      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup/playbook for whole trade. LONG=75% PeakProtect; SCALP/FADE=90%. LIVE loss BE/HardInv. PLUS on Capital 1m CLOSE. No MASTER.',
   };
 }
 
@@ -1030,6 +1051,19 @@ async function enterTrade(
   if (s.playbook === 'WAIT') s.playbook = 'SCALP';
   s.entry_setup = setupType || null;
   s.entry_regime = s.regime; // freeze thesis input at fill
+  // Freeze sticky setup identity for the whole trade — no tick reclassify
+  s.marketSetup = {
+    ...s.marketSetup,
+    kind: (setupType as MarketSetup['kind']) || s.marketSetup.kind,
+    side: direction,
+    playbook: s.playbook === 'WAIT' ? null : s.playbook,
+    status: 'ARMED',
+    reason: `LOCKED ${direction} ${s.playbook} · ${setupType || s.marketSetup.kind} · hold until Best Outcome`,
+    confirm: Math.max(s.marketSetup.confirm, 99),
+    watch_buy: direction === 'BUY' ? `IN TRADE BUY · ${s.playbook}` : null,
+    watch_sell: direction === 'SELL' ? `IN TRADE SELL · ${s.playbook}` : null,
+    updated_at: new Date().toISOString(),
+  };
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
   // Prefer fill-side mark until broker open_level arrives
@@ -1412,11 +1446,13 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${
+          s.entry_setup || '?'
+        } · lockedRegime ${s.entry_regime || s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose · setup LOCKED · no new orders`,
       });
       return;
     }

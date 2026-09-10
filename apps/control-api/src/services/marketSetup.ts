@@ -409,7 +409,7 @@ function rawSetupFromStructure(
       return {
         kind: 'BREAKOUT',
         side: 'BUY',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
@@ -431,7 +431,7 @@ function rawSetupFromStructure(
       return {
         kind: 'BREAKOUT',
         side: 'SELL',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
@@ -490,7 +490,7 @@ function rawSetupFromStructure(
     return {
       kind: 'BREAKOUT',
       side: 'BUY',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
@@ -501,7 +501,7 @@ function rawSetupFromStructure(
     return {
       kind: 'BREAKOUT',
       side: 'SELL',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
@@ -568,7 +568,7 @@ function rawSetupFromStructure(
       return {
         kind: 'PULLBACK',
         side: 'BUY',
-        playbook: 'LONG',
+        playbook: 'SCALP',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
@@ -593,7 +593,7 @@ function rawSetupFromStructure(
       return {
         kind: 'PULLBACK',
         side: 'SELL',
-        playbook: 'LONG',
+        playbook: 'SCALP',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
