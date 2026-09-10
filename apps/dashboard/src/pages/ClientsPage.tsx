@@ -116,6 +116,20 @@ export function ClientsPage() {
     refresh();
   };
 
+  const handleSubscribeFanout = async (client: ClientRow) => {
+    setMsg(null);
+    try {
+      await apiFetch(`/api/clients/${client.id}/subscribe-fanout`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setMsg(`Subscribed #${client.id} to MASTER fanout`);
+      refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Subscribe fanout failed');
+    }
+  };
+
   const handlePreferredAccount = async (client: ClientRow, accountId: number | '') => {
     await apiFetch(`/api/clients/${client.id}`, {
       method: 'PUT',
@@ -288,6 +302,13 @@ export function ClientsPage() {
                           onClick={() => void handleAdminStop(c)}
                         >
                           STOP
+                        </button>
+                        <button
+                          className="btn btn-go"
+                          onClick={() => void handleSubscribeFanout(c)}
+                          title="Subscribe to MASTER OPEN fanout (same epic as MASTER)"
+                        >
+                          SUBSCRIBE FANOUT
                         </button>
                         <button className="btn btn-danger" onClick={() => void handleDelete(c)}>
                           Delete

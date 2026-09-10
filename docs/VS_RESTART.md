@@ -33,3 +33,19 @@ Ja vecajā `.env` vēl ir `MASTER_LIVE_ENABLED=false`, VS.bat to **pārraksta uz
 ## Piezīme
 
 `VS.bat` sākumā ņem launcher no GitHub `main` (lai vecs fails diskā nespētu atvērt Vite tuneli). Tāpēc MASTER izmaiņām jābūt uz `main`.
+
+## Klienti (MASTER fanout)
+
+Kad MASTER ir **Owns ON** un LIVE/PAPER strādā, `CLIENT FANOUT: no_subscribers` nozīmē, ka neviens klients nav abonējis OPEN kopēšanu.
+
+Lai pievienotu klientu fanout:
+
+1. **Clients** — kontam jābūt Enabled + Access On + Capital broker + markets pulled
+2. Izvēlies to pašu tirgu kā MASTER (piem. **GOLD**) un lot size (Clients panelī vai Client Control)
+3. Vai nu:
+   - Admin: **SUBSCRIBE FANOUT** pogu Clients lapā
+   - Vai Client Control: **TAP TO START** (kad MASTER Owns ON = subscribe, nevis own-brain)
+4. Nākamajā MASTER OPEN `CLIENT FANOUT` rādīs `ok=N/N` nevis `no_subscribers`
+
+**Piezīme:** Own-brain START ir bloķēts kamēr Owns ON — tas ir paredzēts (viens smadzeņu ceļš). Fanout ir pareizais multi-account režīms.
+

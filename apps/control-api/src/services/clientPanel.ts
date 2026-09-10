@@ -11,6 +11,7 @@ import { emitToClient } from './clientEvents.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
 import {
+  activateSubscription,
   deactivateSubscription,
   getBrokerHealth,
   noteBrokerError,
@@ -21,6 +22,8 @@ import {
   listCapitalOpenPositions,
 } from './capitalCom.js';
 import { deskCapitalPoolConnectionId, masterOwnsPipeline } from '../master/deskBridge.js';
+import { masterRuntime } from '../master/runtime.js';
+import { epicsMatch } from '../master/broker.js';
 import { decrypt } from '../security/encryption.js';
 
 export type ClientMarket = {
@@ -67,8 +70,10 @@ export type ClientPanelStatus = {
   status_reason?: string | null;
   /** True when VS MASTER owns the single pipeline — Client START must not dual-brain */
   master_owns_pipeline: boolean;
-  /** Non-null when Client own-brain START is refused (MASTER owns) */
+  /** Own-brain START refused while MASTER owns — fanout START still allowed */
   start_blocked_reason: string | null;
+  /** own_brain | master_fanout when RUNNING/STARTING */
+  run_mode?: 'own_brain' | 'master_fanout' | null;
   /** @deprecated use connection_status */
   connection_ok: boolean;
 };
@@ -89,23 +94,31 @@ export function assertClientOwnBrainStartAllowed():
 }
 
 export function clientStartBlockedReason(): string | null {
-  const gate = assertClientOwnBrainStartAllowed();
-  return gate.ok ? null : gate.detail;
+  // MASTER owns: Client START becomes fanout subscribe (not own-brain) — do not block UI.
+  return null;
 }
 
 /**
- * Per-client own-brain status.
- * RUNNING only when this client's desk entry session is live — never via shared Market Core fanout.
+ * Per-client status.
+ * Own-brain RUNNING only when desk entry is live.
+ * MASTER fanout RUNNING when subscribed (ais.trading_enabled) while owns_pipeline.
  */
 export function computeClientRobotStatus(input: {
   requestedRunning: boolean;
   hasAccount: boolean;
   hasEpic: boolean;
   deskEntryRunning: boolean;
+  masterFanoutActive?: boolean;
 }): { robot_status: ClientPanelStatus['robot_status']; status_reason: string | null } {
   if (!input.requestedRunning) return { robot_status: 'STOPPED', status_reason: null };
   if (!input.hasAccount) return { robot_status: 'ERROR', status_reason: 'No broker account' };
   if (!input.hasEpic) return { robot_status: 'ERROR', status_reason: 'No market selected' };
+  if (input.masterFanoutActive) {
+    return {
+      robot_status: 'RUNNING',
+      status_reason: 'Subscribed to MASTER fanout',
+    };
+  }
   if (!input.deskEntryRunning) {
     return { robot_status: 'STARTING', status_reason: 'Starting this client\'s own robot brain' };
   }
@@ -345,11 +358,33 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     }
   }
 
+  let instrumentIdForFanout: number | null = null;
+  if (account && c.panel_epic) {
+    const mkt = await loadMarketForClient(clientId, c.panel_epic);
+    instrumentIdForFanout = mkt?.instrument_id ?? null;
+  }
+  let masterFanoutActive = false;
+  if (
+    requestedRunning &&
+    account &&
+    instrumentIdForFanout != null &&
+    masterOwnsPipeline()
+  ) {
+    const ais = await pool.query(
+      `SELECT trading_enabled FROM account_instrument_settings
+       WHERE broker_account_id = $1 AND instrument_id = $2
+       LIMIT 1`,
+      [account.account_id, instrumentIdForFanout]
+    );
+    masterFanoutActive = Boolean(ais.rows[0]?.trading_enabled);
+  }
+
   const computed = computeClientRobotStatus({
     requestedRunning,
     hasAccount: Boolean(account),
     hasEpic: Boolean(c.panel_epic),
     deskEntryRunning,
+    masterFanoutActive,
   });
   const robot_status = computed.robot_status;
   const status_reason = computed.status_reason;
@@ -368,7 +403,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     requested_status: requestedRunning ? 'RUNNING' : 'STOPPED',
     broker_status: health.broker_status,
     pipeline_healthy: true,
-    market_analyzed: deskEntryRunning,
+    market_analyzed: deskEntryRunning || masterFanoutActive,
     last_broker_ok_at: health.last_ok_at,
     broker_error: health.last_error || status_reason,
     status_reason,
@@ -380,6 +415,11 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
     master_owns_pipeline: masterOwnsPipeline(),
     start_blocked_reason: clientStartBlockedReason(),
+    run_mode: masterFanoutActive
+      ? 'master_fanout'
+      : deskEntryRunning
+        ? 'own_brain'
+        : null,
   };
 }
 
@@ -413,11 +453,93 @@ export async function saveClientConfig(
 }
 
 /**
- * Client START = this client's own desk brain (structure → setup → entry → best outcome).
+ * Subscribe this client to MASTER OPEN fanout (no own entry brain).
+ * Requires MASTER owns_pipeline and panel epic matching MASTER epic.
+ */
+export async function subscribeClientToMasterFanout(
+  clientId: number
+): Promise<ClientPanelStatus> {
+  if (!masterOwnsPipeline()) {
+    throw new Error('MASTER does not own_pipeline — turn Owns ON or use own-brain START');
+  }
+
+  const { rows } = await pool.query(
+    `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
+     FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  if (!rows.length) throw new Error('Client not found');
+  const c = rows[0] as {
+    panel_epic: string | null;
+    panel_display_name: string | null;
+    panel_lot_size: string | number | null;
+    enabled: boolean;
+    access_enabled: boolean;
+  };
+  if (!c.enabled) throw new Error('Client disabled');
+  if (!c.access_enabled) throw new Error('Client access disabled');
+  if (!c.panel_epic || c.panel_lot_size == null) {
+    throw new Error('Select market and lot size before START');
+  }
+
+  const masterEpic = String(masterRuntime.epic || '').trim();
+  if (!masterEpic) throw new Error('MASTER has no epic set');
+  if (!epicsMatch(c.panel_epic, masterEpic)) {
+    throw new Error(
+      `Client market ${c.panel_epic} must match MASTER epic ${masterEpic}`
+    );
+  }
+
+  const market = await loadMarketForClient(clientId, c.panel_epic);
+  if (!market) {
+    throw new Error(
+      `Market ${c.panel_epic} missing on this client broker — pull Capital markets first`
+    );
+  }
+  const lot = Number(c.panel_lot_size);
+  const lotErr = validateLotSize(lot, market.min_lot, market.max_lot, market.lot_step);
+  if (lotErr) throw new Error(lotErr);
+
+  const account = await resolveClientTradingAccount(clientId);
+  if (!account) throw new Error('No broker account linked to this client');
+
+  // Clear own-brain entry so fanout is not skipped as dual-brain
+  await stopEntryRobotsForAccount(account.account_id);
+  await stopFlatManageRobotsForAccount(account.account_id);
+
+  await activateSubscription({
+    clientId,
+    accountId: account.account_id,
+    instrumentId: market.instrument_id,
+    epic: market.epic,
+    displayName: market.display_name,
+    lotSize: lot,
+  });
+
+  const status = await getClientPanelStatus(clientId);
+  emitToClient(clientId, {
+    type: 'robot_started',
+    market: status.market,
+    display_name: status.display_name,
+    lot_size: status.lot_size,
+    robot_status: status.robot_status,
+    mode: 'master_fanout',
+  });
+  emitToClient(clientId, { type: 'client_status', ...status });
+  return status;
+}
+
+/**
+ * Client START:
+ * - MASTER owns_pipeline → subscribe to MASTER fanout (copies MASTER OPEN to this account).
+ * - Otherwise → own desk brain (structure → setup → entry).
  * Does NOT subscribe to shared Market Core fan-out — each client trades alone.
- * Refused while MASTER owns_pipeline (single authoritative pipeline).
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
+  if (masterOwnsPipeline()) {
+    return subscribeClientToMasterFanout(clientId);
+  }
+
   const gate = assertClientOwnBrainStartAllowed();
   if (!gate.ok) throw new Error(gate.detail);
 

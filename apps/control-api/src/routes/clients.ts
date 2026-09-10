@@ -6,6 +6,7 @@ import { revokeAllClientSessions } from '../security/clientSession.js';
 import {
   getClientPanelStatus,
   stopClientRobot,
+  subscribeClientToMasterFanout,
 } from '../services/clientPanel.js';
 
 async function hardDeleteClient(clientId: string): Promise<void> {
@@ -232,6 +233,18 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       return { success: true, status };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Stop failed';
+      return reply.code(400).send({ error: message, message });
+    }
+  });
+
+  app.post('/api/clients/:id/subscribe-fanout', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const status = await subscribeClientToMasterFanout(Number(id));
+      await logAudit('admin', 'client_fanout_subscribed', 'client', id, null, status);
+      return { success: true, status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Subscribe failed';
       return reply.code(400).send({ error: message, message });
     }
   });
