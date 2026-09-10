@@ -33,13 +33,13 @@ export type TradeStyle = 'LONG' | 'SCALP';
 const LONG_REGIMES = new Set<string>([
   'TREND_UP',
   'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
 ]);
 
 const SCALP_REGIMES = new Set<string>([
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
   'COMPRESSION',
@@ -73,8 +73,16 @@ export function styleFromClassification(
   setupType?: string | null
 ): TradeStyle | null {
   const setup = String(setupType || '').trim().toUpperCase();
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK') return 'LONG';
-  if (setup === 'BREAKOUT' || setup === 'FADE' || setup === 'REVERSAL') return 'SCALP';
+  // LONG = trend / breakout hold; SCALP = pullback / fade / range fast
+  if (setup === 'CONTINUATION' || setup === 'BREAKOUT') return 'LONG';
+  if (
+    setup === 'PULLBACK' ||
+    setup === 'FADE' ||
+    setup === 'FAILED_BREAK' ||
+    setup === 'REVERSAL'
+  ) {
+    return 'SCALP';
+  }
   const raw = String(regime || '').trim().toUpperCase();
   if (!raw) return null; // no classification yet — do not invent from empty
   const r = normalizeRegime(regime);

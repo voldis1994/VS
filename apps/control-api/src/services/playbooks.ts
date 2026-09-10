@@ -11,13 +11,18 @@ export type TradePlaybook = Exclude<Playbook, 'WAIT'>;
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * #314 base + user exit knobs:
- * - PeakProtect 75% retention for ALL regimes (max 25% MFE giveback)
- * - HardInv capped in absolute Gold points (pct alone ≈11pt → fat losses)
- * - TP floors ≫ SL caps so average win > average loss
+ * #314 base + user exit knobs by playbook:
+ * - LONG (trend / breakout): PeakProtect 75% (max 25% giveback), wider HardInv, hold the leg
+ * - SCALP (pullback / range): PeakProtect 90% (max 10% giveback), tighter HardInv, fast out
+ * - FADE: PeakProtect 90%, bounce/reject — quick bank
  */
-export const MAX_MFE_GIVEBACK = 0.25;
-export const MIN_MFE_RETENTION = 0.75;
+export const MAX_MFE_GIVEBACK_LONG = 0.25;
+export const MIN_MFE_RETENTION_LONG = 0.75;
+export const MAX_MFE_GIVEBACK_SCALP = 0.1;
+export const MIN_MFE_RETENTION_SCALP = 0.9;
+/** @deprecated use LONG/SCALP specific — kept for imports */
+export const MAX_MFE_GIVEBACK = MAX_MFE_GIVEBACK_LONG;
+export const MIN_MFE_RETENTION = MIN_MFE_RETENTION_LONG;
 /** Harvest field kept for API shape — unused by decide (same as peakRet). */
 export const HARVEST_MFE_RETENTION = MIN_MFE_RETENTION;
 
@@ -40,8 +45,7 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** PeakProtect 75%; HardInv ~1.35–1.45pt (BE covers flat scratches).
- * PeakProtect arms after ~2.5pt CONTINUATION / ~1.5pt FADE — not tick noise. */
+/** LONG 75% PeakProtect; SCALP/FADE 90%. HardInv capped in Gold points. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,
@@ -51,36 +55,36 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slCapAbs: 1.45,
     mfeFloorPct: 0.00045,
     mfeFloorAbs: 2.0,
-    peakRet: MIN_MFE_RETENTION,
-    harvestRet: HARVEST_MFE_RETENTION,
+    peakRet: MIN_MFE_RETENTION_LONG,
+    harvestRet: MIN_MFE_RETENTION_LONG,
     thesisMinHoldMs: 120_000,
     timeDecayMs: 480_000,
   },
   SCALP: {
-    tpPct: 0.0022,
-    tpFloor: 5.0,
-    slPct: 0.0003,
-    slFloor: 1.05,
-    slCapAbs: 1.35,
-    mfeFloorPct: 0.0004,
-    mfeFloorAbs: 1.8,
-    peakRet: MIN_MFE_RETENTION,
-    harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 90_000,
-    timeDecayMs: 480_000,
-  },
-  FADE: {
-    tpPct: 0.0018,
-    tpFloor: 4.0,
+    tpPct: 0.0016,
+    tpFloor: 3.5,
     slPct: 0.00028,
     slFloor: 0.95,
-    slCapAbs: 1.25,
-    mfeFloorPct: 0.00035,
-    mfeFloorAbs: 1.5,
-    peakRet: MIN_MFE_RETENTION,
-    harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 90_000,
+    slCapAbs: 1.2,
+    mfeFloorPct: 0.00028,
+    mfeFloorAbs: 1.2,
+    peakRet: MIN_MFE_RETENTION_SCALP,
+    harvestRet: MIN_MFE_RETENTION_SCALP,
+    thesisMinHoldMs: 60_000,
     timeDecayMs: 240_000,
+  },
+  FADE: {
+    tpPct: 0.0015,
+    tpFloor: 3.0,
+    slPct: 0.00026,
+    slFloor: 0.9,
+    slCapAbs: 1.15,
+    mfeFloorPct: 0.00028,
+    mfeFloorAbs: 1.2,
+    peakRet: MIN_MFE_RETENTION_SCALP,
+    harvestRet: MIN_MFE_RETENTION_SCALP,
+    thesisMinHoldMs: 60_000,
+    timeDecayMs: 180_000,
   },
 };
 
@@ -94,16 +98,17 @@ export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
 /**
  * Diagnostic only — LIVE entry uses playbookFromSetup (marketSetup).
  * COMPRESSION/quiet → null (NONE), never a WAIT "regime playbook".
+ * Trend/breakout → LONG; pullback/expansion/range → SCALP; failed break → FADE.
  */
 export function playbookFromRegime(regime?: string | null): Playbook {
   const r = normalizeRegime(regime);
   if (r === 'COMPRESSION') return 'WAIT'; // legacy alias = no book; desk treats as NONE
   if (r === 'TREND_UP' || r === 'TREND_DOWN') return 'LONG';
-  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'LONG';
-  if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'SCALP';
+  if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'LONG';
+  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'SCALP';
   if (r === 'EXPANSION' || r === 'REVERSAL_CANDIDATE') return 'SCALP';
   if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'FADE';
-  if (r === 'RANGE') return 'FADE';
+  if (r === 'RANGE') return 'SCALP';
   return 'WAIT';
 }
 
@@ -113,51 +118,53 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
-/** Manage exit — PeakProtect 75%; HardInv ~1.45pt (BE covers flat scratches); TP ≫ SL. */
+/** Manage exit — LONG 75% PeakProtect / SCALP·FADE 90%; HardInv by book; TP ≫ SL. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
   entrySetup?: string | null
 ): PlaybookExitParams {
-  const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — hold for the leg; PeakProtect after ~2.5pt MFE
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
+  // Trend / breakout leg — LONG hold: 75% PeakProtect after ~2.5pt MFE
+  if (setup === 'CONTINUATION' || setup === 'BREAKOUT') {
     return {
-      ...base,
+      ...PLAYBOOK_EXIT.LONG,
       tpPct: 0.0025,
       tpFloor: 6.5,
-      slPct: 0.00032,
-      slFloor: 1.15,
       slCapAbs: 1.45,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
-      peakRet: MIN_MFE_RETENTION,
-      harvestRet: HARVEST_MFE_RETENTION,
+      peakRet: MIN_MFE_RETENTION_LONG,
+      harvestRet: MIN_MFE_RETENTION_LONG,
       thesisMinHoldMs: 180_000,
       timeDecayMs: 600_000,
     };
   }
 
-  // FADE / failed-break bounce — still 75% PeakProtect, slightly wider HardInv
-  if (setup === 'FADE' || setup === 'FAILED_BREAK') {
+  // Pullback scalp — 90% PeakProtect, tighter HardInv, faster bank
+  if (setup === 'PULLBACK' || playbook === 'SCALP') {
     return {
-      ...base,
-      tpPct: 0.0018,
-      tpFloor: 4.0,
-      slPct: 0.0003,
-      slFloor: 1.05,
-      slCapAbs: 1.35,
-      mfeFloorPct: 0.00035,
-      mfeFloorAbs: 1.5,
-      peakRet: MIN_MFE_RETENTION,
-      harvestRet: HARVEST_MFE_RETENTION,
-      thesisMinHoldMs: 120_000,
-      timeDecayMs: 420_000,
+      ...PLAYBOOK_EXIT.SCALP,
+      peakRet: MIN_MFE_RETENTION_SCALP,
+      harvestRet: MIN_MFE_RETENTION_SCALP,
     };
   }
 
-  return base;
+  // FADE / failed-break — 90% PeakProtect, quick out
+  if (setup === 'FADE' || setup === 'FAILED_BREAK' || playbook === 'FADE') {
+    return {
+      ...PLAYBOOK_EXIT.FADE,
+      peakRet: MIN_MFE_RETENTION_SCALP,
+      harvestRet: MIN_MFE_RETENTION_SCALP,
+    };
+  }
+
+  // Bare LONG playbook (no setup tag)
+  if (playbook === 'LONG') {
+    return { ...PLAYBOOK_EXIT.LONG };
+  }
+
+  return PLAYBOOK_EXIT[playbook];
 }
 
 export function isLongFamily(regime?: string | null): boolean {
