@@ -126,11 +126,12 @@ call :upsert_env MASTER_OWNS_PIPELINE true
 call :upsert_env MASTER_AUTO_START true
 call :upsert_env MASTER_LIVE_ENABLED true
 call :upsert_env MASTER_LIVE_FEED public
+call :upsert_env MASTER_MICRO_ACCOUNT true
 call :upsert_env_if_absent MASTER_MODE PAPER
 call :upsert_env_if_absent MASTER_AI_MODE off
 call :upsert_env_if_absent MASTER_STATE_DIR ./.master-state
 call :upsert_env_if_absent MASTER_CAPITAL_CONNECTION_ID 900001
-echo [OK] MASTER env: OWNS_PIPELINE=true AUTO_START=true LIVE_ENABLED=true
+echo [OK] MASTER env: OWNS_PIPELINE=true AUTO_START=true LIVE_ENABLED=true MICRO_ACCOUNT=true
 
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
@@ -215,7 +216,7 @@ if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
 REM DOTENV_CONFIG_PATH → root .env (cwd ir apps\control-api). MASTER_* process env = owns + LIVE gate + auto-start.
-start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set DOTENV_CONFIG_PATH=%ROOT%\.env^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& set MASTER_OWNS_PIPELINE=true^& set MASTER_AUTO_START=true^& set MASTER_LIVE_ENABLED=true^& set MASTER_LIVE_FEED=public^& npm run dev
+start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set DOTENV_CONFIG_PATH=%ROOT%\.env^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& set MASTER_OWNS_PIPELINE=true^& set MASTER_AUTO_START=true^& set MASTER_LIVE_ENABLED=true^& set MASTER_LIVE_FEED=public^& set MASTER_MICRO_ACCOUNT=true^& npm run dev
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 echo [..] MASTER owns_pipeline + status...

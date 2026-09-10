@@ -44,6 +44,11 @@ import {
   type ManagedPosition,
   type ManageTickResult,
 } from './positionManager.js';
+import {
+  applyMicroAccountConfig,
+  isMicroAccountMode,
+  reseedMicroAccountGates,
+} from './microAccountRisk.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import { capitalLiveEntriesAllowed } from './liveFeed.js';
@@ -592,7 +597,26 @@ class MasterRuntime {
       require_positive_expectancy: mode === 'LIVE',
     };
     this.pipeline.mode = mode;
+    this.applyMicroAccountProfile();
     this.persistRuntimeGates();
+  }
+
+  /**
+   * Effective risk/sizing config — MASTER_MICRO_ACCOUNT disables % DD / streak
+   * and forces fixed min lot (micro Capital ~€40 cannot size from 1% equity).
+   */
+  private riskCfg(): MasterConfig {
+    return applyMicroAccountConfig(this.cfg);
+  }
+
+  /** Apply micro risk overrides + reseed stale paper peak/streak. */
+  private applyMicroAccountProfile(opts?: { persist?: boolean }): void {
+    if (!isMicroAccountMode()) return;
+    this.cfg = applyMicroAccountConfig(this.cfg);
+    const changed = reseedMicroAccountGates(this.account);
+    if (changed && opts?.persist !== false) {
+      this.persistRuntimeGates();
+    }
   }
 
   setKillSwitch(on: boolean) {
@@ -697,6 +721,7 @@ class MasterRuntime {
   hydrateManageConfig() {
     const saved = loadManageConfig();
     if (saved) this.cfg = applyManageConfigPatch(this.cfg, saved);
+    this.applyMicroAccountProfile({ persist: false });
   }
 
   /**
@@ -815,6 +840,8 @@ class MasterRuntime {
         Math.floor(gates.consecutive_losses)
       );
     }
+    // Micro: after gate hydrate, drop paper peak/streak that would re-block
+    this.applyMicroAccountProfile({ persist: false });
   }
 
   /**
@@ -2876,6 +2903,10 @@ class MasterRuntime {
             acct.equity
           );
         }
+        // Micro: drop paper-seed peak that Math.max would keep forever
+        if (isMicroAccountMode()) {
+          reseedMicroAccountGates(this.account);
+        }
         if (
           this.account.peak_equity !== prevPeak ||
           this.account.day_start_equity !== prevDayStart
@@ -3015,7 +3046,7 @@ class MasterRuntime {
         open_positions: this.positions.count(),
       },
       instrument,
-      cfg: this.cfg,
+      cfg: this.riskCfg(),
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
       // Preview uses live sticky SETUP so gate matches next real tick
@@ -3379,7 +3410,7 @@ class MasterRuntime {
         open_positions: this.positions.count(),
       },
       instrument,
-      cfg: this.cfg,
+      cfg: this.riskCfg(),
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
       relative_spread:
@@ -4527,6 +4558,7 @@ class MasterRuntime {
     else if (!this.broker) this.ensurePaperBroker();
     if (this.broker) await this.broker.connect();
     await this.recover();
+    this.applyMicroAccountProfile();
     this.running = true;
     this.desired_running = true;
     this.persistRuntimeGates();
