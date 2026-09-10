@@ -233,8 +233,8 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       entry_setup: 'CONTINUATION',
       entry_at: ago(20_000),
     });
-    expect(decideBestOutcomeExit(snapLoss, 4398.8, 'live_loss').reason).toMatch(/HardInvalidation/);
-    expect(decideBestOutcomeExit(snapLoss, 4398.8, 'closed_1m_profit').exit).toBe(false);
+    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'live_loss').reason).toMatch(/HardInvalidation/);
+    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'closed_1m_profit').exit).toBe(false);
   });
 
   it('closed_1m_profit gate fires PeakProtect; live_loss ignores green giveback', () => {
@@ -253,7 +253,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(decideBestOutcomeExit(snapGreen, 4377.84, 'live_loss').exit).toBe(false);
   });
 
-  it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
+  it('soft HardInv capped ~1.45pt on Gold CONTINUATION (wider now that BE exists)', () => {
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -263,7 +263,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4399.2
+      4398.8 // -1.2 — still inside new HardInv
     );
     expect(hold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
@@ -275,7 +275,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.8
+      4398.4 // -1.6 ≥ cap 1.45
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
