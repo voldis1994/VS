@@ -34,6 +34,7 @@ import {
   decideEntryFromClosed1m,
   emptySetup,
   emptyStructure,
+  isQualityEntrySetup,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -475,7 +476,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → ENTRY on Capital 1m CLOSE → LOCK setup. HardInv → opposite SCALP flip once. Manage @200ms LIVE. LONG=75% PeakProtect; SCALP=90%. No MASTER.',
+      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse. HardInv→opposite SCALP flip. Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
   };
 }
 
@@ -1663,7 +1664,25 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const entry = decideEntryFromClosed1m(setup, closed1mEntry, s.last_minute_candles);
+    // Quality gate: FADE / PULLBACK / FAILED_BREAK are watch-only (no junk entries)
+    if (!isQualityEntrySetup(setup.kind)) {
+      s.last_1m_entry_key = entryKey;
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · quality gate · skip ${setup.kind} · only CONTINUATION/BREAKOUT · ${setup.reason}`,
+      });
+      return;
+    }
+
+    const entry = decideEntryFromClosed1m(
+      setup,
+      closed1mEntry,
+      s.last_minute_candles,
+      st
+    );
 
     if (!entry) {
       // Consumed this closed minute — do not re-spam decide every quote until next close
