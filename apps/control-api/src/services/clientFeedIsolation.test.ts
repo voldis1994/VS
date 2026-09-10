@@ -79,15 +79,4 @@ describe('per-client robot + Capital feed contract', () => {
     );
     expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
   });
-
-  it('fanout subscription listing uses epicsMatch (Gold/GOLD/XAUUSD tolerant)', () => {
-    const src = readFileSync(
-      fileURLToPath(new URL('./clientSubscriptions.ts', import.meta.url)),
-      'utf8'
-    );
-    expect(src).toMatch(/epicsMatch/);
-    expect(src).toMatch(/capitalApiEpic/);
-    expect(src).toMatch(/countFanoutSubscribersForEpic/);
-  });
-
 });

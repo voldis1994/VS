@@ -1,4 +1,3 @@
-import { capitalApiEpic, epicsMatch } from '../master/broker.js';
 import { pool } from '../db/pool.js';
 
 export type ActiveSubscription = {
@@ -51,9 +50,7 @@ export async function listActiveSubscriptionsForEpic(
 ): Promise<ActiveSubscription[]> {
   const clean = epic.trim();
   if (!clean) return [];
-  const want = capitalApiEpic(clean);
 
-  // Case / XAUUSD↔GOLD tolerant: join + filter with epicsMatch (not exact SQL =)
   const { rows } = await pool.query(
     `SELECT c.id as client_id, c.name as client_name,
             c.panel_epic, c.panel_display_name, c.panel_lot_size,
@@ -63,19 +60,20 @@ export async function listActiveSubscriptionsForEpic(
      FROM clients c
      JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
      JOIN broker_accounts ba ON ba.broker_connection_id = bc.id AND ba.enabled = true
-     JOIN capital_markets cm ON cm.broker_connection_id = bc.id
+     JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = c.panel_epic
      LEFT JOIN account_instrument_settings ais
        ON ais.broker_account_id = ba.id AND ais.instrument_id = cm.id
      WHERE c.enabled = true
        AND c.access_enabled = true
        AND c.panel_robot_requested = 'RUNNING'
-       AND c.panel_epic IS NOT NULL
+       AND c.panel_epic = $1
        AND COALESCE(ais.trading_enabled, false) = true
        AND (
          c.preferred_broker_account_id IS NULL
          OR c.preferred_broker_account_id = ba.id
        )
-     ORDER BY c.id ASC, ba.id ASC`
+     ORDER BY c.id ASC, ba.id ASC`,
+    [clean]
   );
 
   const out: ActiveSubscription[] = [];
@@ -83,11 +81,8 @@ export async function listActiveSubscriptionsForEpic(
   for (const r of rows) {
     const clientId = Number(r.client_id);
     if (seenClients.has(clientId)) continue;
+    // Prefer preferred account row; query already filters, take first per client
     if (r.trading_enabled === false) continue;
-    const panelEpic = String(r.panel_epic || '');
-    const marketEpic = String(r.epic || '');
-    if (!epicsMatch(panelEpic, want) && !epicsMatch(panelEpic, clean)) continue;
-    if (!epicsMatch(marketEpic, panelEpic) && !epicsMatch(marketEpic, want)) continue;
     const lot =
       r.settings_lot != null
         ? Number(r.settings_lot)
@@ -99,7 +94,7 @@ export async function listActiveSubscriptionsForEpic(
       client_name: String(r.client_name),
       account_id: Number(r.account_id),
       connection_id: Number(r.connection_id),
-      epic: marketEpic,
+      epic: String(r.epic),
       display_name: String(r.display_name || r.panel_display_name || r.epic),
       lot_size: lot,
       instrument_id: Number(r.instrument_id),
@@ -107,12 +102,6 @@ export async function listActiveSubscriptionsForEpic(
     seenClients.add(clientId);
   }
   return out;
-}
-
-/** Live count of MASTER-fanout subscribers for an epic (status honesty). */
-export async function countFanoutSubscribersForEpic(epic: string): Promise<number> {
-  const subs = await listActiveSubscriptionsForEpic(epic);
-  return subs.length;
 }
 
 export async function activateSubscription(input: {

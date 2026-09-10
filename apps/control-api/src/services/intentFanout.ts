@@ -17,12 +17,6 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot, hasRunningEntryBrain } from './robotDesk.js';
-import { masterOwnsPipeline } from '../master/deskBridge.js';
-import { marketCoreEntryIntentsAllowed } from './marketCoreIntentGate.js';
-import {
-  fanoutOpportunityId,
-  masterIntentIdFromIdem,
-} from '../master/masterClientFanout.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -77,47 +71,8 @@ async function loadCreds(connectionId: number): Promise<Record<string, string>> 
 /**
  * ExecutionRouter equivalent (Node): EntryReady intent → subscribed RUNNING clients only.
  * Lot size from each subscription. No decision logic here.
- *
- * When MASTER owns the pipeline, Market Core must NOT dual-enter — use
- * {@link executeMasterOwnedFanout} after MASTER accepts an OPEN instead.
  */
 export async function executePipelineIntent(
-  intent: PipelineIntentInput
-): Promise<FanoutResult> {
-  // When MASTER owns the pipeline, Market Core fanout must not dual-enter
-  // (HTTP route also 409s — this is the in-process fail-closed).
-  if (!marketCoreEntryIntentsAllowed()) {
-    return emptyFanout(intent, 0);
-  }
-  return fanoutToActiveSubscribers(intent);
-}
-
-/**
- * MASTER-owns path: after MASTER accepts an OPEN, fan out the same EntryReady
- * to Client Panel RUNNING subscriptions (per-account lots). Market Core stays
- * blocked via {@link executePipelineIntent}.
- */
-export async function executeMasterOwnedFanout(
-  intent: PipelineIntentInput
-): Promise<FanoutResult> {
-  if (!masterOwnsPipeline()) {
-    return emptyFanout(intent, 0);
-  }
-  return fanoutToActiveSubscribers(intent);
-}
-
-function emptyFanout(intent: PipelineIntentInput, subscribers: number): FanoutResult {
-  return {
-    epic: String(intent.epic || '').trim(),
-    direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
-    setup_type: intent.setup_type ? String(intent.setup_type) : null,
-    regime: intent.regime ? String(intent.regime) : null,
-    subscribers,
-    executed: [],
-  };
-}
-
-async function fanoutToActiveSubscribers(
   intent: PipelineIntentInput
 ): Promise<FanoutResult> {
   const epic = String(intent.epic || '').trim();
@@ -414,7 +369,6 @@ async function executeForSubscription(
 
     // Manage-only robot: exits / health reads — no entry brain
     try {
-      const masterIntent = masterIntentIdFromIdem(idempotencyKey);
       await attachManageOnlyRobot({
         account_id: sub.account_id,
         epic: sub.epic,
@@ -425,9 +379,6 @@ async function executeForSubscription(
         deal_reference: result.deal_reference || null,
         regime,
         setup_type: setupType,
-        fanout_opportunity_id: masterIntent
-          ? fanoutOpportunityId(masterIntent, sub.account_id)
-          : null,
       });
     } catch {
       /* manage attach best-effort */
@@ -457,25 +408,7 @@ async function executeForSubscription(
 
 export async function ingestAndExecuteIntent(
   intent: PipelineIntentInput
-): Promise<{
-  intent_id: number | null;
-  fanout: FanoutResult;
-  deduped?: boolean;
-  refused?: boolean;
-  detail?: string;
-}> {
-  if (!marketCoreEntryIntentsAllowed()) {
-    const refusal = (
-      await import('./marketCoreIntentGate.js')
-    ).marketCoreEntryIntentRefusal();
-    return {
-      intent_id: null,
-      fanout: emptyFanout(intent, 0),
-      refused: true,
-      detail: refusal.message,
-    };
-  }
-
+): Promise<{ intent_id: number | null; fanout: FanoutResult; deduped?: boolean }> {
   const idem =
     intent.idempotency_key && String(intent.idempotency_key).trim()
       ? String(intent.idempotency_key).trim().slice(0, 190)

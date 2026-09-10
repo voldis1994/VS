@@ -142,40 +142,53 @@ describe('playbook exit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('LONG thesis only when underwater — never kill green on regime flicker', () => {
-    const green = decideBestOutcomeExit(
+  it('LONG thesis on TREND_DOWN after 120s only when UPL ≤ 0', () => {
+    const young = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(100_000),
+        entry_at: ago(30_000),
         mfe: 2,
         mae: 0,
         peak_retention: 0.9,
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001 // still green — must HOLD (was cutting +£0.27 winners)
+      1999.5
     );
-    expect(green.exit).toBe(false);
-
-    const red = decideBestOutcomeExit(
+    expect(young.exit).toBe(false);
+    const agedGreen = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(100_000),
-        mfe: 0.5,
-        mae: 1,
-        peak_retention: 0,
+        entry_at: ago(130_000),
+        mfe: 2,
+        mae: 0,
+        peak_retention: 0.9,
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      1999.5 // underwater
+      2001
     );
-    expect(red.exit).toBe(true);
-    expect(red.reason).toMatch(/ThesisFailure|LONG/);
+    expect(agedGreen.exit).toBe(false);
+    const agedRed = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(130_000),
+        mfe: 2,
+        mae: 0,
+        peak_retention: 0.9,
+        regime: 'TREND_DOWN',
+        playbook: 'LONG',
+      },
+      1999.5
+    );
+    expect(agedRed.exit).toBe(true);
+    expect(agedRed.reason).toMatch(/LONG/);
   });
 
-  it('PeakProtect: LONG/SCALP after real MFE leg', () => {
+  it('all books PeakProtect below 75% retention (unified 25% giveback)', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -219,20 +232,20 @@ describe('playbook exit', () => {
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003.5
+      2004
     );
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay at 5+ min when flat / below MFE floor', () => {
+  it('FADE TimeDecay at 4 min when non-negative', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(310_000),
-        mfe: 0,
+        entry_at: ago(250_000),
+        mfe: 2,
         mae: 0,
-        peak_retention: null,
+        peak_retention: 0.8,
         regime: 'RANGE',
         playbook: 'FADE',
       },
@@ -242,41 +255,23 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('FADE does not TimeDecay after a real MFE leg', () => {
-    const d = decideBestOutcomeExit(
-      {
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(310_000),
-        mfe: 2.5, // ≥ FADE mfeFloorAbs 2.2 — ride / peak path, not soft decay
-        mae: 0,
-        peak_retention: 0.85,
-        regime: 'RANGE',
-        playbook: 'FADE',
-      },
-      2000.5
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('exit params: PeakProtect 75% all books + tight loser cap', () => {
+  it('exit params: unified 25% giveback (= keep 75%)', () => {
     expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.75);
     expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.75);
     expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.75);
+    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
+    expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
+    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
     expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.0);
-    expect(PLAYBOOK_EXIT.LONG.tpFloor).toBeGreaterThan(PLAYBOOK_EXIT.LONG.slCapAbs);
-    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(90_000);
-    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(300_000);
+    expect(PLAYBOOK_EXIT.LONG.tpFloor).toBe(6.0);
   });
 
-  it('CONTINUATION PeakProtect 75% · SL cap 1.0pt · TP ≫ SL', () => {
+  it('CONTINUATION setup also uses 75% retention + TP ≫ SL', () => {
     const p = exitParamsForTrade('LONG', 'CONTINUATION');
     expect(p.peakRet).toBe(0.75);
     expect(p.harvestRet).toBe(0.75);
-    expect(p.mfeFloorAbs).toBe(2.5);
-    expect(p.slCapAbs).toBe(1.0);
     expect(p.tpFloor).toBe(6.5);
-    expect(p.tpFloor).toBeGreaterThan(p.slCapAbs * 4);
+    expect(p.slCapAbs).toBe(1.0);
   });
 });
 

@@ -8,28 +8,6 @@ export function capitalComBaseUrl(environment: string): string {
     : 'https://demo-api-capital.backend-capital.com';
 }
 
-/**
- * Hard ceiling so hung Capital REST cannot hold MASTER withLoginLock forever.
- * Outer Promise.race does not abort fetch — this does.
- * Override via CAPITAL_REST_TIMEOUT_MS (250..120000).
- */
-export function capitalRestTimeoutMs(): number {
-  const n = Number(process.env.CAPITAL_REST_TIMEOUT_MS);
-  if (Number.isFinite(n) && n >= 250 && n <= 120_000) return Math.floor(n);
-  return 12_000;
-}
-
-async function capitalFetch(
-  url: string,
-  init: RequestInit,
-  timeoutMs = capitalRestTimeoutMs()
-): Promise<Response> {
-  return fetch(url, {
-    ...init,
-    signal: init.signal ?? AbortSignal.timeout(timeoutMs),
-  });
-}
-
 export interface CapitalComSessionResult {
   ok: boolean;
   status: number;
@@ -45,10 +23,6 @@ export interface CapitalSession {
   securityToken: string;
   accountType?: string;
   currentAccountId?: string | null;
-  /** Pinned CFD sub-account — re-applied after every fresh CST (401 re-login). */
-  preferredAccountId?: string | null;
-  /** Pool connection id — mutators serialize on sharedLoginLockForConnection. */
-  connectionId?: number;
   close: () => Promise<void>;
   get: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
   post: (
@@ -132,7 +106,7 @@ async function createSession(
   password: string,
   encryptedPassword: boolean
 ): Promise<{ res: Response; text: string; json: Record<string, unknown> }> {
-  const res = await capitalFetch(`${base}/api/v1/session`, {
+  const res = await fetch(`${base}/api/v1/session`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -162,7 +136,7 @@ async function resolveLoginPassword(
 ): Promise<Array<{ encrypted: boolean; password: string; label: string }>> {
   const attempts: Array<{ encrypted: boolean; password: string; label: string }> = [];
   try {
-    const encRes = await capitalFetch(`${base}/api/v1/session/encryptionKey`, {
+    const encRes = await fetch(`${base}/api/v1/session/encryptionKey`, {
       method: 'GET',
       headers: { Accept: 'application/json', 'X-CAP-API-KEY': apiKey },
     });
@@ -283,138 +257,21 @@ export async function openCapitalSession(input: {
       continue;
     }
 
-    const tokens = { cst, securityToken: sec };
-    const authHeaders: Record<string, string> = {
+    const authHeaders = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-CAP-API-KEY': apiKey,
-      CST: tokens.cst,
-      'X-SECURITY-TOKEN': tokens.securityToken,
+      CST: cst,
+      'X-SECURITY-TOKEN': sec,
     };
 
-    const applyTokens = (nextCst: string, nextSec: string) => {
-      tokens.cst = nextCst;
-      tokens.securityToken = nextSec;
-      authHeaders.CST = nextCst;
-      authHeaders['X-SECURITY-TOKEN'] = nextSec;
-      if (sessionRef) {
-        sessionRef.cst = nextCst;
-        sessionRef.securityToken = nextSec;
-      }
-    };
-
-    // VS-System: 401/403 → one re-POST /session then retry (CST dies on idle / sibling login)
-    const relogin = async (): Promise<boolean> => {
-      try {
-        const again = await createSession(
-          base,
-          apiKey,
-          identifier,
-          attempt.password,
-          attempt.encrypted
-        );
-        if (!again.res.ok) return false;
-        const nc =
-          again.res.headers.get('CST') || again.res.headers.get('cst');
-        const ns =
-          again.res.headers.get('X-SECURITY-TOKEN') ||
-          again.res.headers.get('x-security-token');
-        if (!nc || !ns) return false;
-        applyTokens(nc, ns);
-        // Fresh CST lands on login-default CFD — clear stale pin so switch must PUT.
-        if (sessionRef) {
-          sessionRef.currentAccountId = null;
-          const pref = String(sessionRef.preferredAccountId || '').trim();
-          if (pref) {
-            // Direct PUT (bypass request 401 recursion while still inside relogin).
-            try {
-              const pinRes = await capitalFetch(`${base}/api/v1/session`, {
-                method: 'PUT',
-                headers: authHeaders,
-                body: JSON.stringify({ accountId: pref }),
-              });
-              const rotCst =
-                pinRes.headers.get('CST') || pinRes.headers.get('cst');
-              const rotSec =
-                pinRes.headers.get('X-SECURITY-TOKEN') ||
-                pinRes.headers.get('x-security-token');
-              if (rotCst && rotSec) applyTokens(rotCst, rotSec);
-              const pinText = await pinRes.text();
-              let pinCode = '';
-              try {
-                pinCode = String(JSON.parse(pinText)?.errorCode || '');
-              } catch {
-                pinCode = '';
-              }
-              if (
-                pinRes.ok ||
-                /not-different\.accountId/i.test(pinText) ||
-                /not-different\.accountId/i.test(pinCode)
-              ) {
-                sessionRef.currentAccountId = pref;
-              } else {
-                // Prefer fail over mutate-on-wrong-CFD after CST refresh
-                return false;
-              }
-            } catch {
-              return false;
-            }
-          }
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    const request = async (
-      method: string,
-      path: string,
-      body?: unknown,
-      retried = false
-    ): Promise<{ ok: boolean; status: number; json: any; text: string }> => {
+    const request = async (method: string, path: string, body?: unknown) => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
-      let r: Response;
-      try {
-        r = await capitalFetch(url, {
-          method,
-          headers: authHeaders,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const name = e instanceof Error ? e.name : '';
-        const timedOut =
-          name === 'TimeoutError' ||
-          name === 'AbortError' ||
-          /aborted|timeout/i.test(msg);
-        return {
-          ok: false,
-          status: 0,
-          json: {},
-          text: timedOut
-            ? 'capital_rest_timeout'
-            : `capital_rest_error:${msg.slice(0, 160)}`,
-        };
-      }
-      // Refresh tokens if Capital returns rotated headers
-      const rotCst = r.headers.get('CST') || r.headers.get('cst');
-      const rotSec =
-        r.headers.get('X-SECURITY-TOKEN') || r.headers.get('x-security-token');
-      if (rotCst && rotSec) applyTokens(rotCst, rotSec);
-
-      const isSessionPath =
-        path === '/api/v1/session' || path.endsWith('/api/v1/session');
-      if (
-        (r.status === 401 || r.status === 403) &&
-        !retried &&
-        !isSessionPath
-      ) {
-        if (await relogin()) {
-          return request(method, path, body, true);
-        }
-      }
-
+      const r = await fetch(url, {
+        method,
+        headers: authHeaders,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
       const t = await r.text();
       let j: any = {};
       try {
@@ -425,30 +282,26 @@ export async function openCapitalSession(input: {
       return { ok: r.ok, status: r.status, json: j, text: t };
     };
 
-    let sessionRef: CapitalSession | null = null;
-    const accountId =
-      typeof json.currentAccountId === 'string'
-        ? json.currentAccountId
-        : typeof json.accountId === 'string'
-          ? json.accountId
-          : null;
     const session: CapitalSession = {
       base,
       apiKey,
-      cst: tokens.cst,
-      securityToken: tokens.securityToken,
+      cst,
+      securityToken: sec,
       accountType: typeof json.accountType === 'string' ? json.accountType : undefined,
-      currentAccountId: accountId,
-      // Pin login-default CFD so 401 re-login re-PUTs the same account (not a sibling)
-      preferredAccountId: accountId,
+      currentAccountId:
+        typeof json.currentAccountId === 'string'
+          ? json.currentAccountId
+          : typeof json.accountId === 'string'
+            ? json.accountId
+            : null,
       async close() {
         try {
-          await capitalFetch(`${base}/api/v1/session`, {
+          await fetch(`${base}/api/v1/session`, {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,
-              CST: tokens.cst,
-              'X-SECURITY-TOKEN': tokens.securityToken,
+              CST: cst,
+              'X-SECURITY-TOKEN': sec,
             },
           });
         } catch {
@@ -460,7 +313,6 @@ export async function openCapitalSession(input: {
       put: (path: string, body?: unknown) => request('PUT', path, body ?? {}),
       del: (path: string) => request('DELETE', path),
     };
-    sessionRef = session;
 
     return { ok: true, session };
   }
@@ -478,9 +330,7 @@ export async function openCapitalSession(input: {
 
 type PooledCapital = {
   session: CapitalSession | null;
-  /** Same object as session — pool owns DELETE via ownedClose. */
   raw: CapitalSession | null;
-  ownedClose?: () => Promise<void>;
   expiresAt: number;
   cooldownUntil: number;
   activeCapitalAccountId: string | null;
@@ -491,36 +341,30 @@ let loginChain: Promise<void> = Promise.resolve();
 let lastLoginAt = 0;
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
-/** Soft TTL — extend via ping; never DELETE a still-live CST held by CapitalBroker. */
-function capitalPoolTtlMs(): number {
-  const fromEnv = Number(process.env.MASTER_CAPITAL_POOL_TTL_MS || '');
-  if (Number.isFinite(fromEnv) && fromEnv >= 20) return Math.floor(fromEnv);
-  return 8 * 60_000;
-}
 
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
 }
 
-/**
- * Serialize acquire/switch with the same CST lock CapitalBroker uses
- * (sharedLoginLockForConnection) so desk + MASTER cannot race account pin.
- */
-async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
-  const { sharedLoginLockForConnection, withLoginLock } = await import(
-    '../master/capitalLoginLock.js'
-  );
-  return withLoginLock(sharedLoginLockForConnection(connectionId), fn);
-}
+/** Serialize acquire/switch per connection so account A cannot place while session sits on B. */
+const connectionLocks = new Map<number, Promise<unknown>>();
 
-/** Desk/MASTER mutators — lock when session is pooled (connectionId set). */
-async function withSessionLock<T>(session: CapitalSession, fn: () => Promise<T>): Promise<T> {
-  const id = Number(session.connectionId);
-  if (Number.isFinite(id) && id > 0) {
-    return withConnectionLock(Math.floor(id), fn);
+async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+  const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const done = prev.then(() => gate);
+  connectionLocks.set(connectionId, done);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
   }
-  return fn();
 }
 
 async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
@@ -543,18 +387,7 @@ async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
 
 export async function listCapitalAccounts(
   session: CapitalSession
-): Promise<{
-  ok: boolean;
-  accounts: Array<{
-    accountId: string;
-    accountName: string;
-    accountType?: string;
-    balance?: number;
-    available?: number;
-    currency?: string;
-  }>;
-  detail: string;
-}> {
+): Promise<{ ok: boolean; accounts: Array<{ accountId: string; accountName: string; accountType?: string }>; detail: string }> {
   const res = await session.get('/api/v1/accounts');
   if (!res.ok) {
     return {
@@ -565,112 +398,35 @@ export async function listCapitalAccounts(
   }
   const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
   const accounts = raw
-    .map((a: any) => {
-      const bal = a.balance && typeof a.balance === 'object' ? a.balance : a;
-      return {
-        accountId: String(a.accountId || a.account_id || '').trim(),
-        accountName: String(a.accountName || a.name || a.accountId || '').trim(),
-        accountType: a.accountType ? String(a.accountType) : undefined,
-        balance: numOrNull(bal?.balance ?? a.balance),
-        available: numOrNull(bal?.available ?? a.available),
-        /** Floating PnL — required so equity ≠ cash balance while underwater */
-        profitLoss: numOrNull(
-          bal?.profitLoss ?? bal?.profit_loss ?? a.profitLoss ?? a.profit_loss
-        ),
-        equity: numOrNull(bal?.equity ?? a.equity),
-        currency: a.currency ? String(a.currency) : undefined,
-      };
-    })
+    .map((a: any) => ({
+      accountId: String(a.accountId || a.account_id || '').trim(),
+      accountName: String(a.accountName || a.name || a.accountId || '').trim(),
+      accountType: a.accountType ? String(a.accountType) : undefined,
+    }))
     .filter((a: { accountId: string }) => a.accountId);
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
-}
-
-/** Balance + floating PnL (or explicit equity) for LIVE risk gates. */
-export function capitalEquityFromAccountFields(hit: {
-  balance?: number | null;
-  available?: number | null;
-  profitLoss?: number | null;
-  equity?: number | null;
-}): { equity: number; balance: number } {
-  const balance = Number(hit.balance ?? hit.available ?? 0);
-  const pl = Number(hit.profitLoss ?? 0);
-  let equity =
-    hit.equity != null && Number.isFinite(Number(hit.equity)) && Number(hit.equity) > 0
-      ? Number(hit.equity)
-      : (Number.isFinite(balance) ? balance : 0) + (Number.isFinite(pl) ? pl : 0);
-  if (!(equity > 0) && Number.isFinite(Number(hit.available)) && Number(hit.available) > 0) {
-    equity = Number(hit.available);
-  }
-  return {
-    equity: Number.isFinite(equity) ? equity : 0,
-    balance: Number.isFinite(balance) && balance > 0 ? balance : Number.isFinite(equity) ? equity : 0,
-  };
-}
-
-/** Equity snapshot for MASTER sizing — equity = balance + floating profitLoss. */
-export async function fetchCapitalAccountEquity(
-  session: CapitalSession,
-  preferredAccountId?: string | null
-): Promise<{
-  equity: number;
-  balance: number;
-  available?: number | null;
-  currency: string;
-  detail: string;
-} | null> {
-  const listed = await listCapitalAccounts(session);
-  if (!listed.ok || !listed.accounts.length) return null;
-  const pref = (preferredAccountId || session.currentAccountId || '').trim();
-  // Fail-closed: never size from richest sibling — require an explicit CFD target
-  if (!pref) return null;
-  const hit = listed.accounts.find((a) => a.accountId === pref);
-  if (!hit) return null;
-  const scored = capitalEquityFromAccountFields(hit);
-  const pl = Number(hit.profitLoss ?? 0);
-  if (!(scored.equity > 0)) {
-    return { equity: 0, balance: 0, currency: hit.currency || 'GBP', detail: 'no_balance_on_account' };
-  }
-  return {
-    equity: scored.equity,
-    balance: scored.balance,
-    available: numOrNull(hit.available),
-    currency: hit.currency || 'GBP',
-    detail: `account=${hit.accountId}${Number.isFinite(pl) && pl !== 0 ? `;upl=${pl}` : ''}`,
-  };
 }
 
 export async function switchCapitalAccount(
   session: CapitalSession,
   capitalAccountId: string
 ): Promise<{ ok: boolean; detail: string }> {
-  return withSessionLock(session, async () => {
-    const id = capitalAccountId.trim();
-    if (!id) return { ok: false, detail: 'capital accountId required' };
-    session.preferredAccountId = id;
-    if (session.currentAccountId && session.currentAccountId === id) {
-      return { ok: true, detail: `Already on account ${id}` };
-    }
-    const res = await session.put('/api/v1/session', { accountId: id });
-    if (!res.ok) {
-      const code = String(res.json?.errorCode || '');
-      // Already on desired CFD (stale currentAccountId after re-login can miss this)
-      if (
-        /not-different\.accountId/i.test(code) ||
-        /not-different\.accountId/i.test(res.text)
-      ) {
-        session.currentAccountId = id;
-        return { ok: true, detail: `Already on account ${id}` };
-      }
-      return {
-        ok: false,
-        detail: `Switch account ${id} failed HTTP ${res.status}: ${
-          res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
-        }`,
-      };
-    }
-    session.currentAccountId = id;
-    return { ok: true, detail: `Switched to Capital account ${id}` };
-  });
+  const id = capitalAccountId.trim();
+  if (!id) return { ok: false, detail: 'capital accountId required' };
+  if (session.currentAccountId && session.currentAccountId === id) {
+    return { ok: true, detail: `Already on account ${id}` };
+  }
+  const res = await session.put('/api/v1/session', { accountId: id });
+  if (!res.ok) {
+    return {
+      ok: false,
+      detail: `Switch account ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+  session.currentAccountId = id;
+  return { ok: true, detail: `Switched to Capital account ${id}` };
 }
 
 /**
@@ -714,43 +470,20 @@ export async function acquireCapitalSession(input: {
 
     let session: CapitalSession | null = null;
     let raw: CapitalSession | null = null;
-    let ownedClose: (() => Promise<void>) | undefined;
 
     if (cached?.session && cached.expiresAt > now) {
       session = cached.session;
       raw = cached.raw;
-      ownedClose = cached.ownedClose;
-    } else if (cached?.session && cached.raw) {
-      // Soft TTL elapsed — ping to keep the same CST (CapitalBroker may still hold it).
-      // DELETE+relogin would invalidate LIVE holders still pointing at this object.
-      try {
-        const ping = await cached.session.get('/api/v1/session');
-        if (ping.ok) {
-          session = cached.session;
-          raw = cached.raw;
-          ownedClose = cached.ownedClose;
-        }
-      } catch {
-        /* fall through to reopen */
-      }
-      if (!session) {
+    } else {
+      if (cached?.raw) {
         try {
-          await (cached.ownedClose ?? cached.raw.close)();
+          await cached.raw.close();
         } catch {
           /* ignore */
         }
-        capitalSessionPool.delete(key);
-      }
-    } else if (cached?.raw) {
-      try {
-        await (cached.ownedClose ?? cached.raw.close)();
-      } catch {
-        /* ignore */
       }
       capitalSessionPool.delete(key);
-    }
 
-    if (!session) {
       const opened = await withLoginThrottle(() =>
         openCapitalSession({
           environment: input.environment,
@@ -776,21 +509,16 @@ export async function acquireCapitalSession(input: {
         return opened;
       }
 
-      // Same object identity — shallow copy forked currentAccountId from CST pin.
       raw = opened.session;
-      ownedClose = raw.close.bind(raw);
-      raw.close = async () => {
-        /* no-op — pool owns lifetime via ownedClose */
+      session = {
+        ...raw,
+        close: async () => {
+          /* no-op — pool owns lifetime */
+        },
       };
-      session = raw;
-    }
-
-    if (session) {
-      session.connectionId = connectionId;
     }
 
     if (wantedAccount && session) {
-      session.preferredAccountId = wantedAccount;
       const sw = await switchCapitalAccount(session, wantedAccount);
       if (!sw.ok) {
         return {
@@ -803,8 +531,7 @@ export async function acquireCapitalSession(input: {
     capitalSessionPool.set(key, {
       session,
       raw,
-      ownedClose,
-      expiresAt: Date.now() + capitalPoolTtlMs(),
+      expiresAt: Date.now() + 8 * 60_000,
       cooldownUntil: 0,
       activeCapitalAccountId: wantedAccount || session?.currentAccountId || null,
     });
@@ -817,8 +544,7 @@ export function invalidateCapitalSession(connectionId: number): void {
   const key = capitalPoolKey(connectionId);
   const cached = capitalSessionPool.get(key);
   if (!cached) return;
-  void (cached.ownedClose ?? (() => cached.raw?.close()))()
-    .catch(() => undefined);
+  void cached.raw?.close().catch(() => undefined);
   capitalSessionPool.delete(key);
 }
 
@@ -827,31 +553,14 @@ export async function testCapitalComSession(input: {
   apiKey: string;
   identifier: string;
   password: string;
-  /**
-   * CST pool id — always acquire into the shared pool.
-   * Defaults to MASTER 900001. Never bare open+DELETE (kills LIVE CST).
-   */
-  connectionId?: number;
 }): Promise<CapitalComSessionResult> {
-  const connectionId =
-    input.connectionId != null &&
-    Number.isFinite(Number(input.connectionId)) &&
-    Number(input.connectionId) > 0
-      ? Math.floor(Number(input.connectionId))
-      : 900001;
-  const opened = await acquireCapitalSession({
-    environment: input.environment,
-    apiKey: input.apiKey,
-    identifier: input.identifier,
-    password: input.password,
-    connectionId,
-  });
+  const opened = await openCapitalSession(input);
   if (!opened.ok) return opened.result;
-  // Leave pooled session warm — DELETE would invalidate MASTER LIVE CST
+  await opened.session.close();
   return {
     ok: true,
     status: 200,
-    detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK (pool=${connectionId})`,
+    detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK`,
     accountType: opened.session.accountType,
   };
 }
@@ -876,10 +585,6 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
-  /** Live dealingRules size constraints when present on markets payload */
-  min_deal_size?: number | null;
-  max_deal_size?: number | null;
-  deal_size_step?: number | null;
 }
 
 function inferPointSize(json: any, mid: number | null): number {
@@ -1003,13 +708,6 @@ export async function fetchCapitalMarketQuote(
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
-    const dealing = (res.json?.dealingRules || res.json?.dealing_rules || {}) as Record<
-      string,
-      any
-    >;
-    const minDeal = numOrNull(dealing.minDealSize?.value ?? dealing.minDealSize);
-    const maxDeal = numOrNull(dealing.maxDealSize?.value ?? dealing.maxDealSize);
-    const stepDeal = numOrNull(dealing.dealSizeStep?.value ?? dealing.dealSizeStep);
 
     return {
       epic: candidate,
@@ -1027,9 +725,6 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
-      min_deal_size: minDeal,
-      max_deal_size: maxDeal,
-      deal_size_step: stepDeal,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
@@ -1077,24 +772,18 @@ export async function resolveEpicViaSearch(
       score = 60;
     if (!best || score > best.score) best = { epic, score };
   }
-  return best && best.score >= 60 ? best.epic : null;
+  return best && best.score >= 60 ? best.epic : String(markets[0].epic || '') || null;
 }
 
 export type CapitalOpenPosition = {
   deal_id: string;
   deal_reference: string | null;
   epic: string;
-  /** null = Capital omitted/malformed direction — presence-only until proven */
-  direction: 'BUY' | 'SELL' | null;
+  direction: 'BUY' | 'SELL';
   size: number;
   open_level: number | null;
   upl: number | null;
   stop_level: number | null;
-  profit_level: number | null;
-  opened_at: string | null;
-  /** Mid from positions row market bid/offer — provisional entry when level missing */
-  market_mid?: number | null;
-  trailing_stop?: boolean | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -1120,23 +809,7 @@ export async function listCapitalOpenPositions(
     const epic = String(market.epic || pos.epic || '').trim();
     if (!dealId || !epic) continue;
     const dirRaw = String(pos.direction || '').toUpperCase();
-    // Fail closed: never invent BUY when Capital omits/malforms direction
-    const direction: 'BUY' | 'SELL' | null =
-      dirRaw === 'SELL' || dirRaw === 'S'
-        ? 'SELL'
-        : dirRaw === 'BUY' || dirRaw === 'B'
-          ? 'BUY'
-          : null;
-    const bid = numOrNull(market.bid);
-    const ask = numOrNull(market.offer ?? market.ask);
-    const market_mid =
-      bid != null && ask != null && bid > 0 && ask > 0
-        ? (bid + ask) / 2
-        : bid != null && bid > 0
-          ? bid
-          : ask != null && ask > 0
-            ? ask
-            : null;
+    const direction: 'BUY' | 'SELL' = dirRaw === 'SELL' ? 'SELL' : 'BUY';
     positions.push({
       deal_id: dealId,
       deal_reference: strOrNull(pos.dealReference),
@@ -1146,196 +819,62 @@ export async function listCapitalOpenPositions(
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
-      profit_level: numOrNull(pos.profitLevel ?? pos.profit_level),
-      trailing_stop:
-        typeof pos.trailingStop === 'boolean'
-          ? pos.trailingStop
-          : typeof pos.trailing_stop === 'boolean'
-            ? pos.trailing_stop
-            : null,
-      opened_at: (() => {
-        const raw = pos.createdDate ?? pos.created ?? pos.openDate ?? null;
-        if (raw == null || raw === '') return null;
-        const d = new Date(String(raw));
-        return Number.isFinite(d.getTime()) ? d.toISOString() : null;
-      })(),
-      market_mid,
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId + fill level after open (terminal poll helper for callers). */
+/** Resolve dealReference → dealId after open. */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{
-  ok: boolean;
-  deal_id?: string;
-  fill_level?: number;
-  /** Capital confirm.profit — account-currency realized PnL when present */
-  profit?: number;
-  deal_status?: string;
-  detail: string;
-  rejected?: boolean;
-  pending?: boolean;
-  /** Close confirm DELETED/CLOSED — not OPEN success; CLOSE waitConfirm may accept */
-  closed_gone?: boolean;
-  /** Raw confirm reason when REJECTED (empty ⇒ sibling empty-REJECTED match path) */
-  reject_reason?: string;
-}> {
-  const { parseCapitalConfirm, isCapitalConfirmTerminal, isCapitalConfirmAccepted, isCapitalConfirmClosedGone, formatCapitalConfirmRejection } =
-    await import('../master/capitalConfirm.js');
+): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
   if (!res.ok) {
     return {
       ok: false,
-      pending: res.status === 404,
       detail: `Confirm HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
     };
   }
-  const parsed = parseCapitalConfirm((res.json || {}) as Record<string, unknown>);
-  if (!isCapitalConfirmTerminal(parsed)) {
+  const dealId = String(
+    res.json?.dealId || res.json?.affectedDeals?.[0]?.dealId || ''
+  ).trim();
+  if (!dealId) {
+    return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
+  }
+  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+}
+
+/** Close one open position by dealId. */
+export async function closeCapitalPosition(
+  session: CapitalSession,
+  dealId: string
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  const id = dealId.trim();
+  if (!id) {
+    return { ok: false, status: 0, json: {}, detail: 'dealId required to close' };
+  }
+  const res = await session.del(`/api/v1/positions/${encodeURIComponent(id)}`);
+  if (!res.ok) {
     return {
       ok: false,
-      pending: true,
-      detail: `Confirm pending for ${ref}`,
-      deal_status: parsed.dealStatus || parsed.status,
-    };
-  }
-  if (isCapitalConfirmAccepted(parsed)) {
-    return {
-      ok: true,
-      deal_id: parsed.dealId,
-      fill_level: parsed.level,
-      profit: parsed.profit,
-      deal_status: parsed.dealStatus || parsed.status,
-      detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}${
-        parsed.profit != null ? ` pnl=${parsed.profit}` : ''
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com close ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
       }`,
     };
   }
-  // Close-only: DELETED/CLOSED — not OPEN/MODIFY success (caller opts.acceptClosedGone)
-  if (isCapitalConfirmClosedGone(parsed)) {
-    return {
-      ok: false,
-      closed_gone: true,
-      deal_id: parsed.dealId,
-      fill_level: parsed.level,
-      profit: parsed.profit,
-      deal_status: parsed.dealStatus || parsed.status,
-      detail: `confirm_closed_gone:${parsed.status || parsed.dealStatus}`,
-    };
-  }
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
   return {
-    ok: false,
-    rejected: true,
-    deal_id: parsed.dealId,
-    deal_status: parsed.dealStatus || parsed.status,
-    detail: formatCapitalConfirmRejection(parsed),
-    profit: parsed.profit,
-    fill_level: parsed.level,
-    reject_reason: parsed.reason,
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef ? `Closed dealId=${id} dealRef=${dealRef}` : `Closed dealId=${id}`,
   };
-}
-
-/** PUT /positions/{dealId} — attach/widen SL or TP (VS-System- modifyPosition). */
-export async function modifyCapitalPosition(
-  session: CapitalSession,
-  input: {
-    dealId: string;
-    stopLevel?: number | null;
-    profitLevel?: number | null;
-    stopDistance?: number | null;
-    /** Native Capital trailingStop (survives process death) */
-    trailingStop?: boolean;
-  }
-): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  return withSessionLock(session, async () => {
-    const id = input.dealId.trim();
-    if (!id) return { ok: false, status: 0, json: {}, detail: 'dealId required to modify' };
-    const body: Record<string, unknown> = {};
-    const dist = input.stopDistance != null ? Number(input.stopDistance) : NaN;
-    const hasDist = Number.isFinite(dist) && dist > 0;
-    const hasLevel = input.stopLevel !== undefined && input.stopLevel !== null;
-
-    if (input.trailingStop && hasDist) {
-      // Native Capital trail — chart SL walks with price
-      body.trailingStop = true;
-      body.stopDistance = dist;
-    } else if (hasDist && !hasLevel) {
-      body.stopDistance = dist;
-    } else if (hasLevel) {
-      // Absolute stopLevel ONLY — do NOT send trailingStop:false (VS-System)
-      body.stopLevel = input.stopLevel;
-    }
-    if (input.profitLevel !== undefined) {
-      body.profitLevel = input.profitLevel;
-    }
-    if (Object.keys(body).length === 0) {
-      return { ok: false, status: 0, json: {}, detail: 'Capital modify: empty body' };
-    }
-    const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, body);
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: res.status,
-        json: res.json,
-        detail: `Capital.com modify ${id} failed HTTP ${res.status}: ${
-          res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-        }`,
-      };
-    }
-    const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
-    return {
-      ok: true,
-      status: res.status,
-      json: res.json,
-      deal_reference: dealRef || undefined,
-      detail: dealRef ? `Modified dealId=${id} dealRef=${dealRef}` : `Modified dealId=${id}`,
-    };
-  });
-}
-
-/** Close one open position by dealId. Optional size = Capital partial close. */
-export async function closeCapitalPosition(
-  session: CapitalSession,
-  dealId: string,
-  size?: number
-): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  return withSessionLock(session, async () => {
-    const id = dealId.trim();
-    if (!id) {
-      return { ok: false, status: 0, json: {}, detail: 'dealId required to close' };
-    }
-    const qs =
-      size != null && Number.isFinite(size) && size > 0
-        ? `?size=${encodeURIComponent(String(size))}`
-        : '';
-    const res = await session.del(`/api/v1/positions/${encodeURIComponent(id)}${qs}`);
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: res.status,
-        json: res.json,
-        detail: `Capital.com close ${id} failed HTTP ${res.status}: ${
-          res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-        }`,
-      };
-    }
-    const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
-    return {
-      ok: true,
-      status: res.status,
-      json: res.json,
-      deal_reference: dealRef || undefined,
-      detail: dealRef
-        ? `Closed dealId=${id} dealRef=${dealRef}${qs ? ` size=${size}` : ''}`
-        : `Closed dealId=${id}`,
-    };
-  });
 }
 
 export async function createCapitalPosition(
@@ -1351,58 +890,56 @@ export async function createCapitalPosition(
     profitLevel?: number;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  return withSessionLock(session, async () => {
-    let epic = input.epic.trim();
-    const quote = await fetchCapitalMarketQuote(session, epic);
-    if (quote.raw_ok && quote.epic) epic = quote.epic;
-    else if (!quote.raw_ok) {
-      const resolved = await resolveEpicViaSearch(session, epic);
-      if (resolved) epic = resolved;
-    }
+  let epic = input.epic.trim();
+  const quote = await fetchCapitalMarketQuote(session, epic);
+  if (quote.raw_ok && quote.epic) epic = quote.epic;
+  else if (!quote.raw_ok) {
+    const resolved = await resolveEpicViaSearch(session, epic);
+    if (resolved) epic = resolved;
+  }
 
-    const body: Record<string, unknown> = {
-      epic,
-      direction: input.direction,
-      size: input.size,
-    };
-    // Capital accepts only one of stopLevel / stopDistance — prefer distance for min legal SL
-    if (input.stopDistance != null && Number.isFinite(input.stopDistance) && input.stopDistance > 0) {
-      body.stopDistance = input.stopDistance;
-    } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
-      body.stopLevel = input.stopLevel;
-    }
-    if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
-      body.profitLevel = input.profitLevel;
-    }
+  const body: Record<string, unknown> = {
+    epic,
+    direction: input.direction,
+    size: input.size,
+  };
+  // Capital accepts only one of stopLevel / stopDistance — prefer distance for min legal SL
+  if (input.stopDistance != null && Number.isFinite(input.stopDistance) && input.stopDistance > 0) {
+    body.stopDistance = input.stopDistance;
+  } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
+    body.stopLevel = input.stopLevel;
+  }
+  if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
+    body.profitLevel = input.profitLevel;
+  }
 
-    const res = await session.post('/api/v1/positions', body);
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: res.status,
-        json: res.json,
-        detail: `Capital.com open ${input.direction} ${epic} failed HTTP ${res.status}: ${
-          res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-        }`,
-      };
-    }
-    const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
-    const slNote =
-      input.stopDistance != null && Number.isFinite(input.stopDistance)
-        ? ` stopDist=${input.stopDistance}`
-        : input.stopLevel != null && Number.isFinite(input.stopLevel)
-          ? ` stop=${input.stopLevel}`
-          : '';
+  const res = await session.post('/api/v1/positions', body);
+  if (!res.ok) {
     return {
-      ok: true,
+      ok: false,
       status: res.status,
       json: res.json,
-      deal_reference: dealRef || undefined,
-      detail: dealRef
-        ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
-        : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
+      detail: `Capital.com open ${input.direction} ${epic} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
     };
-  });
+  }
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  const slNote =
+    input.stopDistance != null && Number.isFinite(input.stopDistance)
+      ? ` stopDist=${input.stopDistance}`
+      : input.stopLevel != null && Number.isFinite(input.stopLevel)
+        ? ` stop=${input.stopLevel}`
+        : '';
+  return {
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef
+      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
+      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
+  };
 }
 
 /** ~0.20% cushion stopLevel (≥2.5× broker min) — safety pillow, not min legal SL. */
@@ -1450,8 +987,6 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
-  /** ISO timestamp from Capital prices API when present */
-  snapshotTime?: string;
 };
 
 /** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
@@ -1485,13 +1020,7 @@ export async function fetchCapitalPrices(
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    const snapshotTime =
-      typeof p.snapshotTime === 'string'
-        ? p.snapshotTime
-        : typeof p.snapshotTimeUTC === 'string'
-          ? p.snapshotTimeUTC
-          : undefined;
-    candles.push({ open, high, low, close, snapshotTime });
+    candles.push({ open, high, low, close });
   }
   return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }

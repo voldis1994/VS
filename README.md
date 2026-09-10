@@ -53,12 +53,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 VS.bat
 ```
 
-Lejupielādē jaunāko `main`, palaiž **VS MASTER** (`MASTER_OWNS_PIPELINE` + auto PAPER), Docker/API/dashboard, un **šajā logā** rāda klienta `https://….trycloudflare.com` saiti.  
-Neaizver to logu.
-
-- **MASTER (operators):** http://localhost:5173/master  
-- **Admin (pārējais):** http://localhost:5173/  
-- **Klienta panelis:** http://127.0.0.1:18080 — **ne** `/robot` / B.O.S.S.
+Lejupielādē jaunāko `main`, palaiž sistēmu, **šajā logā** parāda klienta `https://….trycloudflare.com` saiti.  
+Neaizver to logu. Admin: http://localhost:5173/
 
 Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 

@@ -12,12 +12,6 @@ if /I "%~1"=="_INNER" (
 
 cd /d "%~dp0"
 set "ROOT=%CD%"
-REM VS_USE_LOCAL_BAT=1 → skip GitHub launcher (dev only)
-if /I "%VS_USE_LOCAL_BAT%"=="1" (
-  echo [0/5] VS_USE_LOCAL_BAT=1 — lokalais VS.bat
-  call "%~f0" _INNER "%ROOT%"
-  exit /b %ERRORLEVEL%
-)
 echo [0/5] Nemu jaunako VS.bat no GitHub...
 curl.exe -fsSL -o "%TEMP%\VS_from_github.bat" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.bat"
 if exist "%TEMP%\VS_from_github.bat" (
@@ -29,15 +23,13 @@ call "%~f0" _INNER "%ROOT%"
 exit /b %ERRORLEVEL%
 
 :body
-title VS MASTER - palaisana (NEAIZVER SO LOGU)
+title VS - palaisana (NEAIZVER SO LOGU)
 color 0A
 cd /d "%ROOT%"
 
 echo.
 echo ============================================================
-echo   VS MASTER  -  pipeline + Capital PAPER/LIVE
-echo   Admin MASTER:  http://localhost:5173/master
-echo   Klienta panelis: :18080  (NE Vite)
+echo   VS  -  KLIENTA PANELIS CAUR :18080  (NE VITE)
 echo ============================================================
 echo   Mape: %ROOT%
 echo.
@@ -60,10 +52,6 @@ for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5173 " ^| findstr LI
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5175 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":18080 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
-REM Vecais PC-Control / B.O.S.S. Flask (:5050) — lai nekonkure ar MASTER
-for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5050 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
-taskkill /F /FI "WINDOWTITLE eq VS SYSTEM*" >nul 2>&1
-taskkill /F /FI "WINDOWTITLE eq PC-Control*" >nul 2>&1
 echo [OK]
 echo.
 
@@ -121,17 +109,6 @@ if not exist "%ROOT%\.env" (
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
 call :upsert_env MARKET_CORE_BRIDGE 1
-REM VS MASTER — owns pipeline + LIVE gate on (Capital still needs Brokers/CAPITAL_* attach)
-call :upsert_env MASTER_OWNS_PIPELINE true
-call :upsert_env MASTER_AUTO_START true
-call :upsert_env MASTER_LIVE_ENABLED true
-call :upsert_env MASTER_LIVE_FEED public
-call :upsert_env MASTER_MICRO_ACCOUNT true
-call :upsert_env_if_absent MASTER_MODE PAPER
-call :upsert_env_if_absent MASTER_AI_MODE off
-call :upsert_env_if_absent MASTER_STATE_DIR ./.master-state
-call :upsert_env_if_absent MASTER_CAPITAL_CONNECTION_ID 900001
-echo [OK] MASTER env: OWNS_PIPELINE=true AUTO_START=true LIVE_ENABLED=true MICRO_ACCOUNT=true
 
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
@@ -215,18 +192,9 @@ set "EX=%ROOT%\build\windows-debug\apps\execution-service\execution-service.exe"
 if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\execution-service.exe"
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
-REM DOTENV_CONFIG_PATH → root .env (cwd ir apps\control-api). MASTER_* process env = owns + LIVE gate + auto-start.
-start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set DOTENV_CONFIG_PATH=%ROOT%\.env^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& set MASTER_OWNS_PIPELINE=true^& set MASTER_AUTO_START=true^& set MASTER_LIVE_ENABLED=true^& set MASTER_LIVE_FEED=public^& set MASTER_MICRO_ACCOUNT=true^& npm run dev
+start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& npm run dev
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
-echo [..] MASTER owns_pipeline + status...
-curl.exe -fsS -X POST "http://127.0.0.1:3000/api/master/control" -H "Content-Type: application/json" -d "{\"owns_pipeline\":true}" >nul 2>&1
-curl.exe -fsS "http://127.0.0.1:3000/api/master/status" >nul 2>&1
-if errorlevel 1 (
-  echo [WARN] MASTER status vel nav gatavs - atver /master pec briza
-) else (
-  echo [OK] MASTER API atbild
-)
 
 if exist "%ROOT%\tools\client-public.mjs" (
   start "MR-ClientPublic" /D "%ROOT%" cmd /k set CLIENT_PUBLIC_PORT=18080^& set CLIENT_DIST=%ROOT%\apps\dashboard\dist-client^& node tools\client-public.mjs
@@ -280,21 +248,17 @@ if not "!PUBLIC_OK!"=="1" (
 echo.
 
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
-echo [..] gaidu dashboard :5173 ...
-call :wait_port 5173 40
-start "" "http://localhost:5173/master"
 start "" "http://127.0.0.1:18080"
-echo [OK] VS MASTER   http://localhost:5173/master
-echo [OK] klientam    http://127.0.0.1:18080  (NESUTI :5173)
-echo [OK] LIVE gate ON — Master → CAPITAL PROBE → ATTACH CAPITAL → START LIVE
+start http://localhost:5173/clients
+echo [OK] lokali panelis http://127.0.0.1:18080
+echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)
 echo.
 echo ============================================================
 echo   NEAIZVER SO LOGU
-echo   MASTER:  http://localhost:5173/master
-echo   Klientam TIKAI: https://....trycloudflare.com
+echo   Suti klientam TIKAI so https://....trycloudflare.com
 echo ============================================================
 echo.
 
@@ -366,10 +330,6 @@ goto :wait_port_loop
 
 :upsert_env
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) ; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
-exit /b 0
-
-:upsert_env_if_absent
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) ; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { exit 0 }; if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\"); Set-Content -LiteralPath $p -Value $c -NoNewline"
 exit /b 0
 
 :try_build_core

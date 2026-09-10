@@ -4,7 +4,6 @@ import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
-import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -235,7 +234,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
-        connectionId: deskCapitalPoolConnectionId(conn.connection_id),
+        connectionId: conn.connection_id,
       });
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
@@ -471,13 +470,6 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
 
   /** Open a real Capital.com market order (BUY/SELL). */
   app.post('/api/trading/accounts/:accountId/orders', async (request, reply) => {
-    const { masterOwnsPipeline } = await import('../master/deskBridge.js');
-    if (masterOwnsPipeline()) {
-      return reply.code(409).send({
-        error: 'MASTER_OWNS_PIPELINE — manual Capital opens blocked; use VS MASTER runtime',
-        message: 'MASTER_OWNS_PIPELINE — manual Capital opens blocked; use VS MASTER runtime',
-      });
-    }
     const { accountId } = request.params as { accountId: string };
     const body = (request.body || {}) as {
       epic?: string;
@@ -540,7 +532,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
-        connectionId: deskCapitalPoolConnectionId(conn.connection_id),
+        connectionId: conn.connection_id,
         capitalAccountId: conn.external_account_id,
       });
       if (!opened.ok) {

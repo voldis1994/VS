@@ -18,7 +18,6 @@ import { registerRobotDeskRoutes } from './routes/robotDesk.js';
 import { registerClientAuthRoutes } from './routes/clientAuth.js';
 import { registerClientPanelRoutes } from './routes/clientPanel.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
-import { registerMasterRoutes } from './routes/master.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
@@ -63,19 +62,7 @@ async function main() {
     process.env.OPERATING_MODE = 'LIVE';
   }
 
-  if (process.env.MASTER_STANDALONE === 'true') {
-    console.warn('MASTER_STANDALONE=true — skipping DB migrations');
-  } else {
-    try {
-      await runMigrations();
-    } catch (err) {
-      if (process.env.MASTER_ALLOW_NO_DB === 'true') {
-        console.warn('DB migrations failed — continuing (MASTER_ALLOW_NO_DB=true)', err);
-      } else {
-        throw err;
-      }
-    }
-  }
+  await runMigrations();
 
   const app = Fastify({
     logger: true,
@@ -109,7 +96,6 @@ async function main() {
   await registerClientAuthRoutes(app);
   await registerClientPanelRoutes(app);
   await registerPipelineRoutes(app);
-  await registerMasterRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
   await registerClientPanelStatic(app);
@@ -179,40 +165,6 @@ async function main() {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
-
-  // Optional MASTER resume — recover durable opens + restart manage/feed after API boot.
-  // Off by default so desk/multi-tenant control-api does not surprise-trade.
-  if (process.env.MASTER_AUTO_START === 'true') {
-    try {
-      const { masterRuntime } = await import('./master/runtime.js');
-      const { resolveBrokerFromEnv } = await import('./master/envBroker.js');
-      const { ensureMasterPersist } = await import('./master/dualPersist.js');
-      ensureMasterPersist();
-      const resolved = await resolveBrokerFromEnv();
-      if (!resolved.ok && resolved.mode === 'LIVE') {
-        console.warn(
-          `MASTER_AUTO_START refused LIVE broker: ${resolved.detail}`
-        );
-      } else {
-        masterRuntime.attachBroker(resolved.broker);
-        masterRuntime.broker_detail = resolved.detail;
-        masterRuntime.setMode(resolved.mode);
-        const live_feed =
-          resolved.mode === 'PAPER' &&
-          resolved.broker.paper &&
-          (process.env.MASTER_LIVE_FEED || 'public') !== 'off';
-        await masterRuntime.start({
-          broker: resolved.broker,
-          live_feed,
-        });
-        console.log(
-          `MASTER_AUTO_START ok mode=${resolved.mode} detail=${resolved.detail} recovered=${masterRuntime.recovered}`
-        );
-      }
-    } catch (err) {
-      console.warn('MASTER_AUTO_START failed', err);
-    }
-  }
 
   setInterval(() => {
     telemetry.broadcast({

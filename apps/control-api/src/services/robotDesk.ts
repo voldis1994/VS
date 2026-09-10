@@ -21,7 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, decideHardProtectiveExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -29,6 +29,8 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
+  decideEntryFromSetup,
+  decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -37,7 +39,6 @@ import {
   type MarketSetup,
   type StructureBook,
 } from './marketSetup.js';
-import { resolveDeskEntryConfirm } from '../master/deskEntryConfirm.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -47,16 +48,6 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
-  deskCapitalPoolConnectionId,
-  ensureMasterCapitalBroker,
-  masterOwnsManageSafely,
-  resolveManageOwner,
-  syncMasterEntryOwnership,
-  masterOwnsPipeline,
-  runMasterFromDesk,
-} from '../master/deskBridge.js';
-import { masterRuntime } from '../master/runtime.js';
-import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
@@ -64,32 +55,6 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
-
-/** START wording + entry policy when MASTER owns the single pipeline. */
-export function deskSessionStartPolicy(entryRequested = true): {
-  entry_enabled: boolean;
-  brain_label: 'MASTER BRIDGE' | 'OWN BRAIN';
-  rules_detail: string;
-  owns_pipeline: boolean;
-} {
-  const owns = masterOwnsPipeline();
-  if (owns) {
-    const owner = resolveManageOwner(false);
-    return {
-      entry_enabled: false,
-      brain_label: 'MASTER BRIDGE',
-      owns_pipeline: true,
-      rules_detail: `MASTER owns_pipeline — Capital quote/bars → MASTER cycle · desk HARD manage if deferred (owner=${owner}) · entry OFF · never OWN BRAIN / Best Outcome entry`,
-    };
-  }
-  return {
-    entry_enabled: entryRequested,
-    brain_label: 'OWN BRAIN',
-    owns_pipeline: false,
-    rules_detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
-  };
-}
 
 export type RobotTick = {
   at: string;
@@ -187,8 +152,6 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
-  /** MASTER fanout opportunity id — close attaches journal → performance */
-  fanout_opportunity_id: string | null;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -208,8 +171,6 @@ type Internal = RobotSession & {
   marketSetup: MarketSetup;
   last_structure_fetch_ms: number;
   last_minute_candles: import('./capitalCom.js').CapitalPriceCandle[];
-  /** Capital 1h candles for structure hour_bias (MASTER desk path) */
-  last_hour_candles: import('./capitalCom.js').CapitalPriceCandle[];
   /** Debounce Capital order spam between attempts */
   last_entry_attempt_ms: number;
   /** Last flat mid — diagnostics only */
@@ -303,7 +264,6 @@ function publicSession(s: Internal): RobotSession {
     marketSetup: _marketSetup,
     last_structure_fetch_ms: _structAt,
     last_minute_candles: _mins,
-    last_hour_candles: _hours,
     last_entry_attempt_ms: _entryAt,
     last_flat_mid: _flatMid,
     last_entry_side: _entrySide,
@@ -407,9 +367,6 @@ async function refreshStructureAndSetup(
     return;
   }
   s.last_minute_candles = hist.candles;
-  if (hours.ok && hours.candles.length) {
-    s.last_hour_candles = hours.candles;
-  }
   s.structureBook = buildStructure({
     minutes: hist.candles,
     hours: hours.ok ? hours.candles : null,
@@ -444,23 +401,15 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     0
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
-  const owns = masterOwnsPipeline();
-  const manageOwner = masterRuntime.resolveManageOwnerStatus();
   return {
     regimes: setupCatalog().map((x) => x.name),
     trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP', 'BUY FADE', 'SELL FADE'],
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    owns_pipeline: owns,
-    manage_owner: manageOwner,
-    kicker: owns ? 'VS · MASTER PIPELINE BRIDGE' : 'VS · OWN BRAIN PER CLIENT',
-    chain: owns
-      ? 'Capital quote/bars → MASTER pipeline (validate→…→journal) · desk HARD exit if deferred'
-      : 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
-    note: owns
-      ? `MASTER owns ON · manage_owner=${manageOwner} · desk START = bridge (entry OFF)`
-      : 'No impulse starve — ARMED with flow/1m always. Soft 10s confirm. BO: keep green · SL≈1.5 · Peak≥3.5.',
+    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    note:
+      'Setup-first. Max 25% MFE giveback everywhere (keep ≥75%). HardInv ~1pt; TP ≫ SL. CONTINUATION/PULLBACK/FADE ride the leg. Entry on closed 10s confirm.',
   };
 }
 
@@ -510,38 +459,7 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.playbook = null;
   s.entry_setup = null;
-  s.fanout_opportunity_id = null;
   s.mode = 'FLAT';
-}
-
-/** Book Client fanout close into MASTER journal when owns + fanout opp id set. */
-function journalFanoutClientCloseIfNeeded(
-  s: Internal,
-  dealId: string | null,
-  quote: { mid: number | null },
-  reason: string,
-  ok: boolean,
-  detail?: string | null
-) {
-  if (!masterOwnsPipeline() || !s.fanout_opportunity_id) return;
-  const holdMs = s.entry_at
-    ? Math.max(0, Date.now() - Date.parse(s.entry_at))
-    : 0;
-  masterRuntime.recordFanoutClientClose({
-    opportunity_id: s.fanout_opportunity_id,
-    position_id: dealId || s.deal_id,
-    epic: s.epic,
-    side: s.open_side,
-    volume: s.lot_size,
-    entry: s.entry_price,
-    exit: quote.mid,
-    reason,
-    ok,
-    detail: detail || null,
-    mae: s.mae,
-    mfe: s.mfe,
-    hold_ms: holdMs,
-  });
 }
 
 /**
@@ -678,8 +596,6 @@ export function listRobotSessions(): RobotSession[] {
 
 /** True when this account already runs its own entry brain (not manage-only / not fanout). */
 export function hasRunningEntryBrain(accountId: number, epic?: string | null): boolean {
-  // MASTER owns entry — stale desk entry_enabled must not starve Client fanout
-  if (masterOwnsPipeline()) return false;
   const want = epic ? String(epic).trim().toLowerCase() : null;
   for (const s of sessions.values()) {
     if (!s.running || !s.entry_enabled || s.account_id !== accountId) continue;
@@ -687,29 +603,6 @@ export function hasRunningEntryBrain(accountId: number, epic?: string | null): b
     return true;
   }
   return false;
-}
-
-/**
- * When MASTER owns_pipeline flips ON: force every desk session off OWN BRAIN entry
- * so Client fanout is not skipped and dual-entry cannot race.
- */
-export function disableDeskEntryBrainsWhileOwns(): number {
-  if (!masterOwnsPipeline()) return 0;
-  let n = 0;
-  for (const s of sessions.values()) {
-    if (!s.running || !s.entry_enabled) continue;
-    s.entry_enabled = false;
-    n += 1;
-    pushTick(s, {
-      phase: 'INFO',
-      bid: null,
-      ask: null,
-      mid: s.last_mid,
-      detail:
-        'MASTER owns_pipeline ON — OWN BRAIN entry disabled · manage/fanout only',
-    });
-  }
-  return n;
 }
 
 /** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
@@ -838,20 +731,6 @@ async function exitTrade(
       mid: quote.mid,
       detail: `CLOSE FAIL: ${result.detail}`,
     });
-    if (s.fanout_opportunity_id) {
-      journalFanoutClientCloseIfNeeded(s, dealId, quote, reason, false, result.detail);
-    } else if (masterOwnsPipeline()) {
-      masterRuntime.recordDeskOwnedClose({
-        position_id: dealId,
-        epic: s.epic,
-        side: s.open_side,
-        volume: s.lot_size,
-        exit: quote.mid,
-        reason,
-        ok: false,
-        detail: result.detail,
-      });
-    }
     return;
   }
 
@@ -882,22 +761,6 @@ async function exitTrade(
     });
   }
 
-  // MASTER owns: fanout Client closes attach journal; else desk-hard books local MASTER pos
-  if (s.fanout_opportunity_id) {
-    journalFanoutClientCloseIfNeeded(s, dealId, quote, reason, true, result.detail);
-  } else if (masterOwnsPipeline()) {
-    masterRuntime.recordDeskOwnedClose({
-      position_id: dealId,
-      epic: s.epic,
-      side: s.open_side,
-      volume: s.lot_size,
-      exit: quote.mid,
-      reason,
-      ok: true,
-      detail: result.detail,
-    });
-  }
-
   try {
     await pool.query(
       `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
@@ -923,17 +786,6 @@ async function enterTrade(
   setupType?: string | null,
   playbook?: TradePlaybook | null
 ) {
-  if (masterOwnsPipeline()) {
-    s.entry_enabled = false;
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: 'ENTRY blocked — MASTER owns_pipeline (no OWN BRAIN / Best Outcome entry)',
-    });
-    return;
-  }
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
@@ -1226,15 +1078,12 @@ async function robotCycle(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  // When MASTER owns pipeline, share MASTER CST pool (900001) — never fork on DB id
-  const capitalPoolId = deskCapitalPoolConnectionId(s.connection_id);
-
   const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
     password: creds.password || '',
-    connectionId: capitalPoolId,
+    connectionId: s.connection_id,
     capitalAccountId,
   });
   if (!opened.ok) {
@@ -1307,7 +1156,6 @@ async function robotCycle(s: Internal) {
       try {
         s.multiFeed = await readMultiFeedPrice(s.epic, {
           anchorMid: quote.mid,
-          // DB connection id for credential/sender lookup (pool remapped inside getCapitalSession)
           connectionId: s.connection_id,
         });
       } catch {
@@ -1355,18 +1203,9 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT',
+          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
-        // Don't stamp hard-exit here — that permanently starved re-entry (75s+120s locks)
-        journalFanoutClientCloseIfNeeded(
-          s,
-          s.deal_id,
-          quote,
-          'external_flat',
-          true,
-          'broker_flat'
-        );
-        if (!s.closed_at_ms) s.closed_at_ms = Date.now();
+        s.closed_at_ms = Date.now();
         clearTradeState(s);
       }
     } else {
@@ -1404,96 +1243,12 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // VS MASTER owns manage+entry when MASTER_OWNS_PIPELINE=true (no dual-brain exits)
-    // — but only if MASTER actually has a broker that can manage live Capital risk.
-    if (masterOwnsPipeline()) {
-      if (s.entry_enabled) {
-        s.entry_enabled = false;
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: 'OWN BRAIN entry cleared — MASTER owns_pipeline',
-        });
-      }
-      await refreshStructureAndSetup(
-        opened.session,
-        s,
-        quote.mid,
-        !s.structureBook.ready || s.ohlcState.just_closed
-      );
-      const ensured = await ensureMasterCapitalBroker({
-        environment: conn.environment,
-        apiKey: creds.api_key || '',
-        identifier: (conn.identifier || '').trim(),
-        password: creds.password || '',
-        connectionId: capitalPoolId,
-        capitalAccountId,
-      });
-      syncMasterEntryOwnership(!!brokerOpen);
-      if (masterOwnsManageSafely(!!brokerOpen)) {
-        masterRuntime.setDeskManageOwnerHint('MASTER');
-        const master = await runMasterFromDesk({
-          epic: s.epic,
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          update_time: quote.update_time,
-          minuteCandles: s.last_minute_candles,
-          hourCandles: s.last_hour_candles,
-          closed10s: s.ohlcState.last_closed,
-        });
-        // Keep desk local state aligned with broker so UI still shows side
-        if (brokerOpen) {
-          s.mode = 'MANAGE';
-        } else {
-          s.mode = 'FLAT';
-          if (s.open_side) clearTradeState(s);
-        }
-        pushTick(s, {
-          phase: master.executed ? 'ORDER' : brokerOpen ? 'MANAGE' : 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: master.detail || 'MASTER cycle',
-        });
-        return;
-      }
-      // Fall through to desk HARD-protective manage — MASTER cannot safely own live exits.
-      // Soft BestOutcome / PeakProtect / TimeDecay stay OFF (single exit brain honesty).
-      masterRuntime.preferDeskMarketFeed();
-      masterRuntime.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
-      pushTick(s, {
-        phase: brokerOpen ? 'MANAGE' : 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `MASTER owns-pipeline deferred · ${ensured.detail || 'no live broker'} · desk HARD manage · owner=${resolveManageOwner(!!brokerOpen)}`,
-      });
-      if (!brokerOpen && !s.open_side) {
-        // No open risk — still skip legacy entry while owns-pipeline flag is on
-        return;
-      }
-    }
-
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const deferredHard =
-        masterOwnsPipeline() && !masterOwnsManageSafely(!!brokerOpen);
-      if (deferredHard) {
-        masterRuntime.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
-      } else if (!masterOwnsPipeline()) {
-        masterRuntime.setDeskManageOwnerHint('DESK');
-      } else {
-        masterRuntime.setDeskManageOwnerHint('MASTER');
-      }
-      const decision = deferredHard
-        ? decideHardProtectiveExit(s, quote.mid)
-        : decideBestOutcomeExit(s, quote.mid);
+      const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
@@ -1504,15 +1259,11 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: deferredHard
-          ? `ONE TRADE · DESK_DEFERRED_HARD · ${s.open_side} · hard SL only · no soft BestOutcome · UPL ${
-              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-            }`
-          : `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
-              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-            } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
-              s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-            } · no new orders`,
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
+          s.unrealized != null ? s.unrealized.toFixed(5) : '—'
+        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
+          s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+        } · no new orders`,
       });
       return;
     }
@@ -1533,9 +1284,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Brief pause after close — only HardInv gets a longer lock (was 45–75s starving every move)
+    // After close: 1×10s bar pause; after HardInv — brief lock
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 120_000 ? 20_000 : 8_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1544,7 +1295,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 120_000 ? ' · hard-exit lock' : ''
+          hardAgo < 180_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1628,39 +1379,62 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Single entry path shared with MASTER pipeline (setup confirm → else MOVE)
-    const confirm = resolveDeskEntryConfirm({
-      setup,
-      structure: st,
-      closed_10s: bar,
-      minutes: s.last_minute_candles,
-    });
-    const entry = confirm
-      ? {
-          direction: confirm.side,
-          setup: confirm.setup_kind,
-          playbook: (confirm.playbook || 'LONG') as TradePlaybook,
-          reason: confirm.reason,
-          source: confirm.source,
-        }
-      : null;
+    let entry =
+      setup.kind !== 'NONE' && setup.status === 'ARMED'
+        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
+        : null;
 
-    if (!entry) {
+    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
+    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
+      if (!entry) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · NONE · ${setup.reason}`,
+        });
+        return;
+      }
+    }
+
+    if (setup.status === 'FORMING' && !entry) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · wait next 10s move · ${setup.reason}`,
+        detail: `${ohlcLine} · FORMING · ${setup.reason}`,
       });
       return;
     }
 
-    // Side-lock only after HardInvalidation — normal with-trend flips must open
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 120_000;
-    const SIDE_LOCK_MS = hardRecent ? 25_000 : 0;
+    if (!entry) {
+      const tipNote =
+        setup.side &&
+        ((setup.side === 'BUY' &&
+          st.ready &&
+          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          (setup.side === 'SELL' &&
+            st.ready &&
+            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+          ? ' · blocked tip-chase'
+          : '';
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+      });
+      return;
+    }
+
+    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
+    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
     if (
-      SIDE_LOCK_MS > 0 &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
@@ -1672,7 +1446,7 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
           (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · after hard exit`,
+        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
       });
       return;
     }
@@ -1680,7 +1454,7 @@ async function robotCycle(s: Internal) {
     const direction = entry.direction;
     const setupType = entry.setup;
     const entryPlaybook = entry.playbook;
-    const reason = `${entry.source}:${entry.reason}`;
+    const reason = entry.reason;
     s.playbook = entryPlaybook;
     s.entry_setup = setupType;
 
@@ -1766,8 +1540,6 @@ export async function startRobotSession(input: {
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');
 
-  const startPolicy = deskSessionStartPolicy(input.entry_enabled !== false);
-
   const id = robotIdFor(acc.id, epic);
   const existing = sessions.get(id);
   if (existing?.running) {
@@ -1809,7 +1581,7 @@ export async function startRobotSession(input: {
     open_side: null,
     safety_sl: null,
     error: null,
-    entry_enabled: startPolicy.entry_enabled,
+    entry_enabled: input.entry_enabled !== false,
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
@@ -1836,13 +1608,11 @@ export async function startRobotSession(input: {
     marketSetup: emptySetup('awaiting structure'),
     last_structure_fetch_ms: 0,
     last_minute_candles: [],
-    last_hour_candles: [],
     last_entry_attempt_ms: 0,
     last_flat_mid: null,
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
-    fanout_opportunity_id: null,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1853,14 +1623,15 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ${startPolicy.brain_label} · entry=${session.entry_enabled ? 'ON' : 'OFF'} · client=${acc.client_name} · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: startPolicy.rules_detail,
+    detail:
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);
@@ -1902,8 +1673,6 @@ export async function attachManageOnlyRobot(input: {
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
-  /** MASTER fanout opp id — close path attaches journal → performance */
-  fanout_opportunity_id?: string | null;
 }): Promise<RobotSession> {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
@@ -1921,9 +1690,6 @@ export async function attachManageOnlyRobot(input: {
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
-    if (input.fanout_opportunity_id) {
-      existing.fanout_opportunity_id = String(input.fanout_opportunity_id).slice(0, 80);
-    }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -1957,9 +1723,6 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
-    if (input.fanout_opportunity_id) {
-      internal.fanout_opportunity_id = String(input.fanout_opportunity_id).slice(0, 80);
-    }
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,

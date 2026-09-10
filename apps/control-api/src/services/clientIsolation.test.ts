@@ -34,40 +34,12 @@ describe('multi-client isolation invariants', () => {
     expect(bGold).toContain('18');
   });
 
-  it('Client Panel START: own desk brain when Owns OFF; MASTER fanout subscribe when Owns ON', () => {
+  it('Client Panel START uses own desk brain — not Market Core fanout subscription', () => {
     const src = readFileSync(fileURLToPath(new URL('./clientPanel.ts', import.meta.url)), 'utf8');
     expect(src).toMatch(/startRobotSession/);
     expect(src).toMatch(/mode: 'own_brain'/);
-    expect(src).toMatch(/mode: 'master_fanout'/);
     expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
-    expect(src).toMatch(/assertClientOwnBrainStartAllowed/);
-    expect(src).toMatch(/masterOwnsPipeline/);
-    expect(src).toMatch(/subscribeClientToMasterFanout/);
-    expect(src).toMatch(/\bactivateSubscription\b/);
-  });
-
-  it('refuses Client own-brain START while MASTER owns_pipeline', async () => {
-    const { assertClientOwnBrainStartAllowed } = await import('./clientPanel.js');
-    const { masterRuntime } = await import('../master/runtime.js');
-    const prevPref = masterRuntime.owns_pipeline_pref;
-    const prevEnv = process.env.MASTER_OWNS_PIPELINE;
-    try {
-      masterRuntime.owns_pipeline_pref = null;
-      delete process.env.MASTER_OWNS_PIPELINE;
-      expect(assertClientOwnBrainStartAllowed().ok).toBe(true);
-
-      masterRuntime.setOwnsPipeline(true);
-      const blocked = assertClientOwnBrainStartAllowed();
-      expect(blocked.ok).toBe(false);
-      if (!blocked.ok) expect(blocked.detail).toMatch(/owns_pipeline/);
-
-      masterRuntime.setOwnsPipeline(false);
-      expect(assertClientOwnBrainStartAllowed().ok).toBe(true);
-    } finally {
-      masterRuntime.owns_pipeline_pref = prevPref;
-      if (prevEnv === undefined) delete process.env.MASTER_OWNS_PIPELINE;
-      else process.env.MASTER_OWNS_PIPELINE = prevEnv;
-    }
+    expect(src).not.toMatch(/\bactivateSubscription\b/);
   });
 
   it('own-brain status ignores Market Core heartbeat', () => {

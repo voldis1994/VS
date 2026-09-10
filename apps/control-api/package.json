@@ -8,15 +8,7 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx src/db/migrate.ts",
-    "test": "vitest run",
-    "master:standalone": "tsx src/master/scripts/standaloneServer.ts",
-    "master:paper-demo": "tsx src/master/scripts/paperDemo.ts",
-    "master:live-smoke": "tsx src/master/scripts/liveSmoke.ts",
-    "master:live-paper": "tsx src/master/scripts/livePaperDemo.ts",
-    "master:audit": "tsx src/master/scripts/systemAudit.ts",
-    "master:mt4-live": "tsx src/master/scripts/mt4LiveDemo.ts",
-    "master:restart-check": "tsx src/master/scripts/restartContinuity.ts",
-    "master:verify": "tsx src/master/scripts/verify.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

@@ -3,7 +3,6 @@ import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
-import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
@@ -220,7 +219,6 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         apiKey,
         identifier,
         password,
-        connectionId: deskCapitalPoolConnectionId(conn.id),
       });
 
       if (!result.ok) {
@@ -241,7 +239,7 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
           apiKey,
           identifier,
           password,
-          connectionId: deskCapitalPoolConnectionId(conn.id),
+          connectionId: conn.id,
         });
         if (opened.ok) {
           const listed = await listCapitalAccounts(opened.session);

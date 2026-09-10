@@ -20,9 +20,7 @@ interface ClientRow {
   panel_epic?: string | null;
   panel_display_name?: string | null;
   panel_lot_size?: number | null;
-  robot_status?: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
-  status_reason?: string | null;
-  run_mode?: string | null;
+  robot_status?: 'RUNNING' | 'STOPPED';
   live_trade?: LiveTrade | null;
   account_id?: number | null;
   last_seen_at?: string | null;
@@ -43,7 +41,6 @@ export function ClientsPage() {
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [busySubscribeId, setBusySubscribeId] = useState<number | null>(null);
   const [issuedCode, setIssuedCode] = useState<{ client_id: number; code: string } | null>(null);
 
   useEffect(() => {
@@ -119,31 +116,6 @@ export function ClientsPage() {
     refresh();
   };
 
-  const handleSubscribeFanout = async (client: ClientRow) => {
-    setMsg(null);
-    setBusySubscribeId(client.id);
-    try {
-      const res = await apiFetch<{ success: boolean; status?: { robot_status?: string; run_mode?: string; status_reason?: string } }>(
-        `/api/clients/${client.id}/subscribe-fanout`,
-        {
-          method: 'POST',
-          body: JSON.stringify({}),
-        }
-      );
-      const st = res.status;
-      const okMsg = `Subscribed #${client.id} · ${st?.robot_status || 'ok'}${st?.run_mode ? ` · ${st.run_mode}` : ''}`;
-      setMsg(okMsg);
-      window.alert(okMsg);
-      refresh();
-    } catch (e) {
-      const err = e instanceof Error ? e.message : 'Subscribe fanout failed';
-      setMsg(err);
-      window.alert(`SUBSCRIBE FANOUT failed for #${client.id}:\n${err}`);
-    } finally {
-      setBusySubscribeId(null);
-    }
-  };
-
   const handlePreferredAccount = async (client: ClientRow, accountId: number | '') => {
     await apiFetch(`/api/clients/${client.id}`, {
       method: 'PUT',
@@ -175,25 +147,8 @@ export function ClientsPage() {
   return (
     <div>
       <h1 className="page-title">Clients</h1>
-      {msg && (
-        <div
-          className="error-state"
-          style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 20,
-            marginBottom: 12,
-            padding: '12px 14px',
-            color: msg.toLowerCase().includes('fail') || msg.toLowerCase().includes('missing') || msg.toLowerCase().includes('must')
-              ? 'var(--danger, #f66)'
-              : 'var(--accent)',
-          }}
-        >
-          {msg}
-        </div>
-      )}
       <p className="page-subtitle">
-        Client desks + access codes. MASTER Owns ON → use SUBSCRIBE FANOUT (same epic as MASTER). Send clients this link (not the admin desk):
+        Client desks + access codes. Send clients this link (not the admin desk):
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
@@ -266,14 +221,10 @@ export function ClientsPage() {
                     <td>
                       <span
                         className={`badge ${
-                          c.access_enabled ? 'badge-healthy' : 'badge-unhealthy'
+                          c.access_enabled && c.has_access_code ? 'badge-healthy' : 'badge-unhealthy'
                         }`}
                       >
-                        {c.access_enabled
-                          ? c.has_access_code
-                            ? 'PANEL'
-                            : 'ACCESS ON'
-                          : 'NO ACCESS'}
+                        {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
                       </span>
                     </td>
                     <td>
@@ -307,28 +258,7 @@ export function ClientsPage() {
                         }`}
                       >
                         {c.robot_status || 'STOPPED'}
-                        {c.run_mode ? ` · ${c.run_mode}` : ''}
                       </span>
-                      {c.status_reason && (
-                        <div className="mono" style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
-                          {c.status_reason}
-                        </div>
-                      )}
-                      {c.run_mode !== 'master_fanout' && c.robot_status !== 'RUNNING' && (
-                        <button
-                          type="button"
-                          className="btn btn-go"
-                          style={{ marginTop: 8, width: '100%' }}
-                          disabled={busySubscribeId === c.id}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            void handleSubscribeFanout(c);
-                          }}
-                        >
-                          {busySubscribeId === c.id ? 'SUBSCRIBING…' : 'SUBSCRIBE FANOUT'}
-                        </button>
-                      )}
                     </td>
                     <td className="mono">
                       {c.live_trade
@@ -354,27 +284,10 @@ export function ClientsPage() {
                         </button>
                         <button
                           className="btn btn-stop"
-                          disabled={
-                            c.robot_status !== 'RUNNING' &&
-                            c.robot_status !== 'STARTING' &&
-                            c.robot_status !== 'ERROR'
-                          }
+                          disabled={c.robot_status !== 'RUNNING'}
                           onClick={() => void handleAdminStop(c)}
                         >
                           STOP
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-go"
-                          disabled={busySubscribeId === c.id}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            void handleSubscribeFanout(c);
-                          }}
-                          title="Subscribe to MASTER OPEN fanout (same epic as MASTER)"
-                        >
-                          {busySubscribeId === c.id ? '…' : 'SUBSCRIBE FANOUT'}
                         </button>
                         <button className="btn btn-danger" onClick={() => void handleDelete(c)}>
                           Delete

@@ -50,10 +50,7 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
- * Order matters for R:R:
- * 1) Cut losers (HardInv) first
- * 2) Never Thesis-kill a green trade (regime flicker was cutting +£0.27 winners)
- * 3) PeakProtect / Target only after a real MFE leg
+ * Order: HardInv (capped) → thesis only when red → PeakProtect 75% → Target.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -72,7 +69,7 @@ export function decideBestOutcomeExit(
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
-  // 1) Losers first — tight capped SL
+  // 1) Losers first — tight capped HardInv
   if (fav <= -sl) {
     return {
       exit: true,
@@ -80,13 +77,13 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // 2) Thesis only when underwater — never scratch a green trade on 10s regime flicker
+  // 2) Thesis only when underwater — never scratch a green trade on regime flicker
   const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
   if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
 
-  // 3) PeakProtect — only after real leg
+  // 3) PeakProtect — only after real leg (75% retention)
   if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
     return {
       exit: true,
@@ -114,41 +111,12 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // TimeDecay: trade never made the leg (stale / flat) and not deep red
-  // Inverted gate was mfe >= floor*0.5 which SKIPPED flat mfe=0 holds until hard TIME_STOP
   if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe < mfeFloor) {
     return {
       exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · MFE ${s.mfe.toFixed(5)}`,
+      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
     };
   }
 
-  return { exit: false, reason: '' };
-}
-
-/**
- * Hard-protective exit only (broker SL cushion + HardInvalidation).
- * Used when MASTER owns-pipeline but cannot safely own manage — desk must
- * NOT soft BestOutcome / PeakProtect / TimeDecay / harvest (dual soft-brain).
- */
-export function decideHardProtectiveExit(
-  s: ExitSnapshot,
-  mid: number
-): { exit: boolean; reason: string } {
-  if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
-
-  const book = resolvePlaybook(s);
-  const p = exitParamsForTrade(book, s.entry_setup);
-  const entry = s.entry_price;
-  const fav = favorableMove(s.open_side, entry, mid);
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
-
-  if (fav <= -sl) {
-    return {
-      exit: true,
-      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
-    };
-  }
   return { exit: false, reason: '' };
 }

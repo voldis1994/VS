@@ -1,6 +1,6 @@
 exit_policy:
   horizon_ms: 10000
-  # PeakProtect 75% retention (#198 / all regimes) — max 25% MFE giveback
+  # PeakProtect 75% retention — max 25% MFE giveback (all regimes)
   peak_retention_threshold: 0.75
   remaining_rr_threshold: 0.5
   time_decay_seconds: 1.0

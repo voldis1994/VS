@@ -1,10 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { fanoutEntryIntent, routeIntentToSubscriptions } from '../services/intentFanout.js';
-import {
-  marketCoreEntryIntentRefusal,
-  marketCoreEntryIntentsAllowed,
-} from '../services/marketCoreIntentGate.js';
 import { parseRegimeFromExplanation } from '../services/regimes.js';
 import {
   authorizePipelineRequest,
@@ -67,13 +63,6 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
   app.post('/api/pipeline/intents', async (request, reply) => {
     // Auth FIRST — never reach fanout without valid service token
     if (!requirePipelineAuth(request, reply)) return;
-
-    // Single authoritative pipeline: refuse Market Core EntryReady while MASTER owns
-    if (!marketCoreEntryIntentsAllowed()) {
-      const refusal = marketCoreEntryIntentRefusal();
-      return reply.code(409).send(refusal);
-    }
-
     const body = (request.body || {}) as {
       epic?: string;
       direction?: string;

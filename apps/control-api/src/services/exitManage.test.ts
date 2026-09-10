@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
-  decideHardProtectiveExit,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
@@ -76,7 +75,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         open_side: 'BUY',
         entry_price: 2000,
         mfe: 8,
-        peak_retention: 0.76,
+        peak_retention: 0.8,
         playbook: 'LONG',
       }),
       2004
@@ -84,83 +83,32 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('holds while retention high and below Target', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.85,
-        playbook: 'LONG',
-      }),
-      2003.5
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('soft HardInv is capped (~1.0pt) — not Gold×%≈8pt', () => {
-    const stillHold = decideBestOutcomeExit(
+  it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
+    const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4400,
-        mfe: 0,
-        peak_retention: null,
         playbook: 'LONG',
         entry_setup: 'CONTINUATION',
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4399.2 // −0.8pt — inside 1.0 cap
+      4399.2
     );
-    expect(stillHold.exit).toBe(false);
+    expect(hold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4400,
-        mfe: 0,
-        peak_retention: null,
         playbook: 'LONG',
         entry_setup: 'CONTINUATION',
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.8 // −1.2pt — beyond 1.0 cap
+      4398.8
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
-  });
-
-  it('never thesis-kills a green CONTINUATION on TREND_DOWN flicker', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4400,
-        entry_at: ago(120_000),
-        mfe: 1.2,
-        peak_retention: 0.9,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        regime: 'TREND_DOWN',
-      }),
-      4400.9
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('CONTINUATION does not PeakProtect on tiny +1.5pt MFE (was +£0.17 scalp)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4419,
-        entry_at: ago(120_000),
-        mfe: 1.5,
-        peak_retention: 0.5,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4419.7
-    );
-    expect(d.exit).toBe(false);
   });
 
   it('target uses playbook TP', () => {
@@ -217,105 +165,5 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       4420.68
     );
     expect(d.exit).toBe(false);
-  });
-
-  it('SCALP TimeDecay exits flat mfe=0 after timeDecayMs', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(500_000),
-        mfe: 0,
-        peak_retention: null,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      2000.1
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay/);
-  });
-
-  it('SCALP holds when MFE already made the leg (no soft TimeDecay)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(500_000),
-        mfe: 3.0, // ≥ SCALP mfeFloorAbs 2.8
-        peak_retention: 0.9,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      2002.5
-    );
-    expect(d.exit).toBe(false);
-  });
-});
-
-describe('decideHardProtectiveExit (desk deferred owns-pipeline)', () => {
-  it('cuts HardInvalidation losers only', () => {
-    const cut = decideHardProtectiveExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(60_000),
-        mfe: 0,
-        mae: 50,
-        peak_retention: null,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      1980 // deep red
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/HardInvalidation/);
-  });
-
-  it('does not PeakProtect / TimeDecay / Target (soft brain off)', () => {
-    // PeakProtect-shaped: big MFE, poor retention
-    const peak = decideHardProtectiveExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(120_000),
-        mfe: 10,
-        peak_retention: 0.2,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      2002
-    );
-    expect(peak.exit).toBe(false);
-
-    // TimeDecay-shaped: flat long hold
-    const decay = decideHardProtectiveExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(500_000),
-        mfe: 0,
-        peak_retention: null,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      2000.1
-    );
-    expect(decay.exit).toBe(false);
-
-    // Target-shaped: green to TP
-    const target = decideHardProtectiveExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(60_000),
-        mfe: 20,
-        peak_retention: 1,
-        playbook: 'SCALP',
-        regime: 'RANGE',
-      }),
-      2040
-    );
-    expect(target.exit).toBe(false);
   });
 });

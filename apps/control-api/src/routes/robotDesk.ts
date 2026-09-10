@@ -25,13 +25,10 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       epic: q.epic,
     });
     const senders = await listDataSenders().catch(() => []);
-    const board = robotBoardMeta(sessions);
     return {
       active: resolved,
       sessions,
-      board,
-      owns_pipeline: board.owns_pipeline,
-      manage_owner: board.manage_owner,
+      board: robotBoardMeta(sessions),
       senders: senders
         .filter((s) => s.kind !== 'catalog_pulse')
         .map((s) => ({
