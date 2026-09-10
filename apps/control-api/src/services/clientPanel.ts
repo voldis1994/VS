@@ -23,7 +23,7 @@ import {
 } from './capitalCom.js';
 import { deskCapitalPoolConnectionId, masterOwnsPipeline } from '../master/deskBridge.js';
 import { masterRuntime } from '../master/runtime.js';
-import { epicsMatch } from '../master/broker.js';
+import { capitalApiEpic, epicsMatch } from '../master/broker.js';
 import { decrypt } from '../security/encryption.js';
 
 export type ClientMarket = {
@@ -497,17 +497,17 @@ export async function subscribeClientToMasterFanout(
     );
   }
 
-  const masterEpic = String(masterRuntime.epic || '').trim();
+  const masterEpic = capitalApiEpic(String(masterRuntime.epic || '').trim());
   if (!masterEpic) throw new Error('MASTER has no epic set');
 
   // Admin SUBSCRIBE FANOUT: default to MASTER epic + min lot when panel unset
-  let epic = (c.panel_epic || '').trim() || masterEpic;
+  let epic = capitalApiEpic((c.panel_epic || '').trim() || masterEpic);
   if (!epicsMatch(epic, masterEpic)) {
     throw new Error(
       `Client market ${epic} must match MASTER epic ${masterEpic} — set GOLD on Client Control or clear panel market`
     );
   }
-  epic = masterEpic; // canonical MASTER spelling
+  epic = masterEpic; // canonical Capital epic (GOLD not Gold/XAUUSD)
 
   const market = await loadMarketForClient(clientId, epic);
   if (!market) {

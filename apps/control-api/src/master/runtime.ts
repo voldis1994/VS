@@ -148,6 +148,8 @@ export type MasterStatus = {
     detail: string;
     journaled_count?: number;
   } | null;
+  /** Live Clients with MASTER fanout subscription for current epic (not last OPEN). */
+  fanout_subscribers_live: number;
   /** Last manage close failure (broker refused / AI veto) — dashboard honesty */
   last_close_failed: {
     position_id: string;
@@ -2913,7 +2915,16 @@ class MasterRuntime {
       await this.hydrateBookFromDisk();
     }
     await this.refreshCapitalVenueOpens();
-    return this.status();
+    const base = this.status();
+    try {
+      const { countFanoutSubscribersForEpic } = await import(
+        '../services/clientSubscriptions.js'
+      );
+      const n = await countFanoutSubscribersForEpic(this.epic);
+      return { ...base, fanout_subscribers_live: n };
+    } catch {
+      return { ...base, fanout_subscribers_live: base.fanout_subscribers_live ?? 0 };
+    }
   }
 
   /** Stop Capital stream then switch to paper (caller must pass refuseDetachCapitalWithOpens). */
@@ -5776,6 +5787,7 @@ class MasterRuntime {
       last_execution_detail: this.last_execution_detail,
       last_exit_reason: this.last_exit_reason,
       last_client_fanout: this.last_client_fanout,
+      fanout_subscribers_live: 0,
       last_close_failed: this.last_close_failed,
       last_ai_allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
