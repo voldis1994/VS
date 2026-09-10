@@ -21,7 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, favorableMove, BE_ZONE_ABS, PROFIT_HOLD_ABS } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -88,6 +88,10 @@ export type RobotSession = {
   mfe: number;
   mae: number;
   peak_retention: number | null;
+  /** Saw fav in BE / +£0.00…+£0.01 zone */
+  be_seen: boolean;
+  /** Saw real profit — hold; no post-BE scratch */
+  profit_seen: boolean;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime: RegimeName;
@@ -466,6 +470,8 @@ function clearTradeState(s: Internal) {
   s.mae = 0;
   s.peak_favorable = 0;
   s.peak_retention = null;
+  s.be_seen = false;
+  s.profit_seen = false;
   s.unrealized = null;
   s.safety_sl = null;
   s.playbook = null;
@@ -569,6 +575,9 @@ function updateExcursion(s: Internal, mark: number) {
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+  // Precise BE / profit arms for post-BE early exit
+  if (fav >= 0 && fav <= BE_ZONE_ABS) s.be_seen = true;
+  if (fav >= PROFIT_HOLD_ABS || s.mfe >= PROFIT_HOLD_ABS) s.profit_seen = true;
 }
 
 /** Exit-realistic mark: BUY closes on bid, SELL on ask (matches Capital floating P&L). */
@@ -762,7 +771,7 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  if (/HardInvalidation|ThesisFailure|thesis|PeakProtection/i.test(reason)) {
+  if (/HardInvalidation|ThesisFailure|thesis|PeakProtection|BreakevenFail/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
   s.error = null;
@@ -1008,6 +1017,8 @@ async function enterTrade(
   s.mae = 0;
   s.peak_favorable = fillMark;
   s.peak_retention = null;
+  s.be_seen = false;
+  s.profit_seen = false;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
@@ -1347,7 +1358,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · no new orders`,
       });
       return;
     }
@@ -1671,6 +1682,8 @@ export async function startRobotSession(input: {
     mfe: 0,
     mae: 0,
     peak_retention: null,
+    be_seen: false,
+    profit_seen: false,
     unrealized: null,
     mode: 'FLAT',
     orders_placed: 0,

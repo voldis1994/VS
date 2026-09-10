@@ -9,6 +9,17 @@ import {
 
 export type ExitSide = 'BUY' | 'SELL';
 
+/**
+ * Post-BE early exit (price points, not account currency):
+ * - BE zone ≈ Capital floating +£0.00…+£0.01 on ~0.27 Gold (~0.05–0.08pt) → cap 0.12pt
+ * - Real profit ≥ 0.45pt → HOLD (PeakProtect/Target); never post-BE scratch
+ * - After BE-only, exit at −0.35pt — before HardInv ~0.85–1.0pt
+ */
+export const BE_ZONE_ABS = 0.12;
+export const PROFIT_HOLD_ABS = 0.45;
+export const BE_EARLY_EXIT_ABS = 0.35;
+export const BE_EARLY_MIN_HOLD_MS = 8_000;
+
 export type ExitSnapshot = {
   open_side: ExitSide | null;
   entry_price: number | null;
@@ -16,6 +27,10 @@ export type ExitSnapshot = {
   mfe: number;
   mae: number;
   peak_retention: number | null;
+  /** Ever saw fav in [0, BE_ZONE_ABS] — flat / +£0.00…+£0.01 class */
+  be_seen?: boolean;
+  /** Ever saw fav ≥ PROFIT_HOLD_ABS — real green; hold the position */
+  profit_seen?: boolean;
   /** Live diagnostic 10s label — NOT used for thesis while entry_regime is locked */
   regime?: string | null;
   /** Regime frozen at fill — only thesis input (no flicker scratches) */
@@ -53,8 +68,13 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
- * Order: HardInv → thesis (locked entry_regime, red only) → Target → PeakProtect 75%.
- * Target before PeakProtect so runners that hit TP bank the target instead of giveback-exit.
+ * Order:
+ * 0) Post-BE early exit (BE-only then red → out before HardInv)
+ * 1) HardInv
+ * 2) thesis (locked entry_regime, red only)
+ * 3) Target
+ * 4) PeakProtect 75%
+ * 5) TimeDecay
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -74,6 +94,23 @@ export function decideBestOutcomeExit(
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention = mfe > 0 ? Math.max(0, fav / mfe) : null;
+
+  const beSeen = Boolean(s.be_seen) || (mfe > 0 && mfe <= BE_ZONE_ABS);
+  const profitSeen = Boolean(s.profit_seen) || mfe >= PROFIT_HOLD_ABS;
+
+  // 0) Was only BE / +£0.00…+£0.01, then turned red → exit before full HardInv
+  //    If price ever went to real profit → HOLD (skip this rule).
+  if (
+    beSeen &&
+    !profitSeen &&
+    fav <= -BE_EARLY_EXIT_ABS &&
+    heldMs >= BE_EARLY_MIN_HOLD_MS
+  ) {
+    return {
+      exit: true,
+      reason: `BreakevenFail · ${book} · was BE/flat then UPL ${fav.toFixed(5)} ≤ -${BE_EARLY_EXIT_ABS} (before HardInv ${sl.toFixed(5)})`,
+    };
+  }
 
   // 1) Losers first — tight capped HardInv
   if (fav <= -sl) {
