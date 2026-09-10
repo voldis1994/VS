@@ -91,6 +91,8 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
         created_at: row.created_at,
         updated_at: row.updated_at,
         robot_status: panel?.robot_status ?? 'STOPPED',
+        status_reason: panel?.status_reason ?? null,
+        run_mode: panel?.run_mode ?? null,
         live_trade: panel?.live_trade ?? null,
         account_id: panel?.account_id ?? null,
       });

@@ -584,13 +584,17 @@ export function MasterPage() {
         },
         {
           k: 'Client fanout',
-          v: status.last_client_fanout
-            ? `${cyclePending ? 'hydrated · ' : ''}${
-                status.last_client_fanout.attempted
-                  ? status.last_client_fanout.detail || '—'
-                  : 'idle'
-              }`
-            : '—',
+          v: (() => {
+            if (!status.last_client_fanout) return '—';
+            const prefix = cyclePending ? 'hydrated · ' : '';
+            if (!status.last_client_fanout.attempted) return `${prefix}idle`;
+            const detail = status.last_client_fanout.detail || '—';
+            // Status card is not a button — point operator to Clients subscribe
+            if (detail === 'no_subscribers' || detail.includes('no_subscribers')) {
+              return `${prefix}no_subscribers → Clients → SUBSCRIBE FANOUT`;
+            }
+            return `${prefix}${detail}`;
+          })(),
           ok:
             !cyclePending &&
             !!status.last_client_fanout?.attempted &&
@@ -600,7 +604,10 @@ export function MasterPage() {
             !!status.last_client_fanout?.attempted &&
             (status.last_client_fanout.fail_count ?? 0) > 0 &&
             !(status.last_client_fanout.ok_count > 0),
-          warn: cyclePending && !!status.last_client_fanout,
+          warn:
+            (cyclePending && !!status.last_client_fanout) ||
+            (!!status.last_client_fanout?.attempted &&
+              (status.last_client_fanout.detail || '').includes('no_subscribers')),
         },
         {
           k: 'Cycles by epic',
