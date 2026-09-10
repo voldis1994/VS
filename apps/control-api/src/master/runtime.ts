@@ -4681,7 +4681,7 @@ class MasterRuntime {
         }
         lastMid = q.mid;
         const quote =
-          frozenPolls >= 24 ? { ...q, ts_ms: Date.now() - 60_000 } : q;
+          frozenPolls >= 24 ? { ...q, ts_ms: Date.now() - 120_000 } : q;
         if (frozenPolls >= 24 && frozenPolls % 24 === 0) {
           this.broker_detail = `${this.broker_detail || ''};frozen_mid:${frozenPolls}`.slice(
             -400
@@ -4896,7 +4896,7 @@ class MasterRuntime {
         // Frozen consensus mid (~60s): stamp quote stale so entries gate; exits still run
         const quote =
           frozenPolls >= 24
-            ? { ...snap.quote, ts_ms: Date.now() - 60_000 }
+            ? { ...snap.quote, ts_ms: Date.now() - 120_000 }
             : snap.quote;
         if (!seeded) {
           const seedDetail = await builder.seedFromPublic(this.epic, snap.quote.mid, 50);

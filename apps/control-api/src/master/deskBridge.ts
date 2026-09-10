@@ -73,8 +73,8 @@ export function quoteFromCapital(input: {
     ask: input.ask,
     mid: input.mid,
     spread: input.ask - input.bid,
-    // Never forge Date.now() — desk owns-pipeline must age like broker REST
-    ts_ms: capitalQuoteTsMs(input.update_time),
+    // Live desk push — receive time when update_time omitted (same as Capital REST/WS)
+    ts_ms: capitalQuoteTsMs(input.update_time, Date.now(), { onMissing: 'receive' }),
   };
 }
 

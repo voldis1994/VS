@@ -333,9 +333,9 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   // GOLD-first: Capital XAU often 0.5–2.5; FX-era 1.5 false-blocked ARMED setups
   max_spread_abs: 3,
   max_spread_pct: 0.001,
-  // Capital LIVE: venue quote ts often ages 15–30s between polls while still tradable.
-  // 15s FX-era default hard-BLOCKED ARMED setups (Stage·validate age=17s).
-  stale_quote_ms: 45_000,  min_score: 0.55,
+  // Capital LIVE: venue lag + slow cycles (cycle_ms≈15s) — 45s still false-BLOCKED.
+  stale_quote_ms: 90_000,
+  min_score: 0.55,
   min_expectancy_samples: 20,
   require_positive_expectancy: false,
   reward_ratio: 2.5,

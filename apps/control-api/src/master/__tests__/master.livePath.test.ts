@@ -179,13 +179,15 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.stop();
   });
 
-  it('capitalQuoteTsMs prefers update_time and fails closed when missing', () => {
+  it('capitalQuoteTsMs prefers update_time; missing is stale by default, receive on live wire', () => {
     const now = Date.UTC(2026, 8, 8, 12, 0, 0);
     expect(capitalQuoteTsMs('2026-09-08T11:59:30.000Z', now)).toBe(
       Date.parse('2026-09-08T11:59:30.000Z')
     );
     expect(capitalQuoteTsMs(null, now)).toBe(now - 60_000);
     expect(capitalQuoteTsMs('not-a-time', now)).toBe(now - 60_000);
+    expect(capitalQuoteTsMs(null, now, { onMissing: 'receive' })).toBe(now);
+    expect(capitalQuoteTsMs('bad', now, { onMissing: 'receive' })).toBe(now);
   });
 
   it('REST getQuote stamps ts_ms from update_time (not Date.now)', async () => {
@@ -212,6 +214,33 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(q).not.toBeNull();
     expect(q!.ts_ms).toBe(Date.parse(updateIso));
     expect(Date.now() - q!.ts_ms).toBeGreaterThan(30_000);
+  });
+
+  it('REST getQuote without update_time uses receive time (not permanent stale)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-ts2' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [] }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    const before = Date.now();
+    const q = await broker.getQuote('GOLD');
+    const after = Date.now();
+    expect(q).not.toBeNull();
+    expect(q!.ts_ms).toBeGreaterThanOrEqual(before - 50);
+    expect(q!.ts_ms).toBeLessThanOrEqual(after + 50);
+    expect(after - q!.ts_ms).toBeLessThan(5_000);
   });
 
   it('blocks LIVE execution without MASTER_LIVE_ENABLED', async () => {

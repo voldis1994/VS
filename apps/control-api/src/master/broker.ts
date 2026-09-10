@@ -1151,8 +1151,10 @@ export class CapitalBroker implements MasterBroker {
       this.cacheSet(this.minStopByEpic, q.epic || apiEpic, minStop);
     }
     this.noteMarketStatus(q.epic || apiEpic, q.market_status);
-    // Prefer Capital snapshot update_time — Date.now() would hide stale REST marks
-    const ts_ms = capitalQuoteTsMs(q.update_time);
+    // Prefer Capital snapshot update_time; if omitted, receive time (live wire)
+    const ts_ms = capitalQuoteTsMs(q.update_time, Date.now(), {
+      onMissing: 'receive',
+    });
     return {
       bid: q.bid,
       ask: q.ask,

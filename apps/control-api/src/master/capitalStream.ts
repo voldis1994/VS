@@ -56,7 +56,9 @@ export function parseCapitalStreamQuote(raw: string): CapitalStreamQuote | null 
     bid: bidN,
     offer: ofrN,
     mid: (bidN + ofrN) / 2,
-    ts_ms: capitalQuoteTsMs(venueTs as string | number | null | undefined),
+    ts_ms: capitalQuoteTsMs(venueTs as string | number | null | undefined, Date.now(), {
+      onMissing: 'receive',
+    }),
   };
 }
 

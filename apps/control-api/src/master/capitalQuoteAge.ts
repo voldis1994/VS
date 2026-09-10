@@ -1,32 +1,43 @@
 /**
  * Capital quote timestamp → quote ts_ms.
- * Fail-closed when missing/unparseable: stamp older than typical stale_quote_ms
- * so DATA_STALE gates fire (never forge Date.now() freshness).
- * Shared by REST markets, streaming WS, and desk bridge.
+ *
+ * When update_time is present, use it (never hide a truly aged venue mark).
+ * When missing/unparseable:
+ * - onMissing:'stale' (default) → age 60s so disk/cache / unknown sources fail DATA_STALE
+ * - onMissing:'receive' → live wire tick just arrived (REST/WS/desk) — use receive time
+ *   so Capital omitting update_time does not permanent-BLOCK ARMED setups
  */
+export type CapitalQuoteTsOpts = {
+  onMissing?: 'stale' | 'receive';
+};
+
 export function capitalQuoteTsMs(
   updateTime: string | number | null | undefined,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  opts?: CapitalQuoteTsOpts
 ): number {
+  const missingStamp =
+    opts?.onMissing === 'receive' ? nowMs : nowMs - 60_000;
+
   if (updateTime == null || updateTime === '') {
-    return nowMs - 60_000;
+    return missingStamp;
   }
   if (typeof updateTime === 'number' && Number.isFinite(updateTime)) {
     const n = updateTime > 1e12 ? updateTime : updateTime * 1000;
-    return n > 0 && n <= nowMs + 5_000 ? n : nowMs - 60_000;
+    return n > 0 && n <= nowMs + 5_000 ? n : missingStamp;
   }
   const s = String(updateTime).trim();
-  if (!s) return nowMs - 60_000;
+  if (!s) return missingStamp;
   if (/^\d+(\.\d+)?$/.test(s)) {
     const n = Number(s);
     if (Number.isFinite(n)) {
       const ms = n > 1e12 ? n : n * 1000;
-      return ms > 0 && ms <= nowMs + 5_000 ? ms : nowMs - 60_000;
+      return ms > 0 && ms <= nowMs + 5_000 ? ms : missingStamp;
     }
   }
   const parsed = Date.parse(s);
   if (Number.isFinite(parsed) && parsed > 0 && parsed <= nowMs + 5_000) {
     return parsed;
   }
-  return nowMs - 60_000;
+  return missingStamp;
 }
