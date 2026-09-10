@@ -69,6 +69,21 @@ export function hardInvOppositeScalpSide(
   return closedSide === 'BUY' ? 'SELL' : 'BUY';
 }
 
+/**
+ * After HardInv close Capital often still lists the old leg for a few hundred ms.
+ * Flip must not re-adopt that ghost (would block opposite SCALP) and must not
+ * wait for a 1m candle — only for broker clear / opposite fill.
+ */
+export function hardInvFlipBrokerAction(
+  pendingSide: ExitSide | null | undefined,
+  brokerSide: ExitSide | null | undefined
+): 'enter' | 'wait_clear' | 'adopt_flip' | 'none' {
+  if (!pendingSide) return 'none';
+  if (!brokerSide) return 'enter';
+  if (brokerSide === pendingSide) return 'adopt_flip';
+  return 'wait_clear';
+}
+
 /** Legacy helper — SCALP-style list; prefer thesisFailureForPlaybook. */
 export function thesisFailureReason(
   side: ExitSide,
