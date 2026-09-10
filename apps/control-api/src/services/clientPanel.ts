@@ -386,8 +386,20 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     deskEntryRunning,
     masterFanoutActive,
   });
-  const robot_status = computed.robot_status;
-  const status_reason = computed.status_reason;
+  let robot_status = computed.robot_status;
+  let status_reason = computed.status_reason;
+  // Stuck STARTING after failed own-brain / never subscribed while MASTER owns
+  if (
+    masterOwnsPipeline() &&
+    requestedRunning &&
+    !masterFanoutActive &&
+    !deskEntryRunning &&
+    robot_status === 'STARTING'
+  ) {
+    robot_status = 'ERROR';
+    status_reason =
+      'Not subscribed to MASTER fanout — press SUBSCRIBE FANOUT (or Client Control START)';
+  }
 
   let connection_status: ClientPanelStatus['connection_status'] = 'ONLINE';
   if (robot_status === 'ERROR' || health.broker_status === 'DEGRADED' || health.last_error) {
@@ -476,27 +488,37 @@ export async function subscribeClientToMasterFanout(
     enabled: boolean;
     access_enabled: boolean;
   };
-  if (!c.enabled) throw new Error('Client disabled');
-  if (!c.access_enabled) throw new Error('Client access disabled');
-  if (!c.panel_epic || c.panel_lot_size == null) {
-    throw new Error('Select market and lot size before START');
+  if (!c.enabled) throw new Error('Client disabled — press Enable first');
+  // Admin SUBSCRIBE FANOUT enables panel access so listActiveSubscriptionsForEpic matches
+  if (!c.access_enabled) {
+    await pool.query(
+      `UPDATE clients SET access_enabled = true, updated_at = NOW() WHERE id = $1`,
+      [clientId]
+    );
   }
 
   const masterEpic = String(masterRuntime.epic || '').trim();
   if (!masterEpic) throw new Error('MASTER has no epic set');
-  if (!epicsMatch(c.panel_epic, masterEpic)) {
+
+  // Admin SUBSCRIBE FANOUT: default to MASTER epic + min lot when panel unset
+  let epic = (c.panel_epic || '').trim() || masterEpic;
+  if (!epicsMatch(epic, masterEpic)) {
     throw new Error(
-      `Client market ${c.panel_epic} must match MASTER epic ${masterEpic}`
+      `Client market ${epic} must match MASTER epic ${masterEpic} — set GOLD on Client Control or clear panel market`
     );
   }
+  epic = masterEpic; // canonical MASTER spelling
 
-  const market = await loadMarketForClient(clientId, c.panel_epic);
+  const market = await loadMarketForClient(clientId, epic);
   if (!market) {
     throw new Error(
-      `Market ${c.panel_epic} missing on this client broker — pull Capital markets first`
+      `Market ${epic} missing on this client broker — Brokers → Pull Capital markets for this client`
     );
   }
-  const lot = Number(c.panel_lot_size);
+  const lot =
+    c.panel_lot_size != null && Number.isFinite(Number(c.panel_lot_size))
+      ? Number(c.panel_lot_size)
+      : Number(market.min_lot);
   const lotErr = validateLotSize(lot, market.min_lot, market.max_lot, market.lot_step);
   if (lotErr) throw new Error(lotErr);
 
