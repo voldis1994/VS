@@ -24,18 +24,11 @@ Dubultklikšķis uz **`VS.bat`** (VS mapes saknē).
 ## PAPER vs LIVE
 
 - **PAPER:** automātiski pēc VS.bat (`MASTER_AUTO_START=true`, `MASTER_MODE=PAPER`)
-- **LIVE:** `.env` iestati:
+- **LIVE gate:** VS.bat iestata `MASTER_LIVE_ENABLED=true` (vairs nav “LIVE blocked”)
+- **LIVE fills:** Master → **CAPITAL PROBE** → **ATTACH CAPITAL** → **START LIVE**
+  (vajag Brokers `capital_com` vai `CAPITAL_*` `.env`)
 
-```env
-MASTER_LIVE_ENABLED=true
-MASTER_MODE=LIVE
-CAPITAL_API_KEY=...
-CAPITAL_IDENTIFIER=...
-CAPITAL_API_PASSWORD=...
-CAPITAL_ENVIRONMENT=demo
-```
-
-Tad Master lapā → **Start LIVE (Capital)** (vai restartē VS.bat pēc `.env` izmaiņām).
+Ja vecajā `.env` vēl ir `MASTER_LIVE_ENABLED=false`, VS.bat to **pārraksta uz true**.
 
 ## Piezīme
 
