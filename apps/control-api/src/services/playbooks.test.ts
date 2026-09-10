@@ -272,6 +272,7 @@ describe('playbook exit', () => {
     expect(p.harvestRet).toBe(0.75);
     expect(p.tpFloor).toBe(6.5);
     expect(p.slCapAbs).toBe(1.0);
+    expect(p.mfeFloorAbs).toBe(2.5);
   });
 });
 

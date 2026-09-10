@@ -648,7 +648,7 @@ function rawSetupFromStructure(
 }
 
 /**
- * Sticky setup update — impulse FLIPS instantly (BUY↔SELL).
+ * Sticky setup update — candidate may flip immediately; ARMED after sticky confirm.
  * Dual watch always attached so desk sees both sides.
  */
 export function updateSetupSticky(
@@ -779,7 +779,7 @@ export function updateSetupSticky(
  */
 /**
  * Tip-chase: do not buy the swing high / sell the swing low.
- * BREAKOUT may still enter when close is through the level (handled in decideEntryFromSetup).
+ * BREAKOUT always exempt. CONTINUATION exempt when close is clearly THROUGH the level.
  */
 export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
   if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT') {
@@ -796,6 +796,11 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   if (!(hi > lo)) return false;
+  // Through-level CONTINUATION is a real break — not tip-chase
+  if (setup.kind === 'CONTINUATION') {
+    if (setup.side === 'BUY' && bar.close > hi) return false;
+    if (setup.side === 'SELL' && bar.close < lo) return false;
+  }
   const eps = edgeEps(bar.close, hi - lo);
   const band = setup.kind === 'CONTINUATION' ? 0.45 : 0.35;
   if (setup.side === 'BUY' && bar.close >= hi - eps * band) return true;

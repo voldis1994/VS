@@ -93,6 +93,8 @@ export type RobotSession = {
   regime: RegimeName;
   playbook: Playbook | null;
   entry_setup: string | null;
+  /** Regime frozen at fill — thesis uses this, not live 10s flicker */
+  entry_regime: string | null;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -179,6 +181,10 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
+  /** Prevent overlapping robotCycle (double entry/exit) */
+  cycle_busy: boolean;
+  /** Consecutive broker-empty reads before treating as external close */
+  broker_flat_streak: number;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -270,6 +276,8 @@ function publicSession(s: Internal): RobotSession {
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
     last_hard_exit_ms: _hardExit,
+    cycle_busy: _busy,
+    broker_flat_streak: _flatStreak,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -410,12 +418,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. No NONE 10s chase. Impulse FORMING→sticky ARMED. Max 25% MFE giveback (keep ≥75%). HardInv ~1pt; TP ≫ SL.',
+      'One path: sticky ARMED setup → closed 10s → fill mark. Manage: broker fill + ask/bid · Target then PeakProtect 75% · HardInv ~1pt. No NONE chase. No dual brain.',
   };
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
-  // Diagnostic 10s label only — NEVER drives playbook/setup/entry
+  // Diagnostic 10s label — never drives entry. Thesis uses entry_regime locked at fill.
+  // Skip updates while in a trade so manage ticks do not flicker the live label either.
+  if (s.open_side) return;
   const incoming = bars?.length
     ? bars
     : s.ohlcState.last_closed
@@ -460,7 +470,9 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.playbook = null;
   s.entry_setup = null;
+  s.entry_regime = null;
   s.mode = 'FLAT';
+  s.broker_flat_streak = 0;
 }
 
 /**
@@ -750,7 +762,7 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
+  if (/HardInvalidation|ThesisFailure|thesis|PeakProtection/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
   s.error = null;
@@ -803,12 +815,17 @@ async function enterTrade(
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
     const existing = matchOpenOnEpic(listed.positions, s.epic);
-    if (existing) {
+      if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
-      s.entry_price = existing.open_level ?? quote.mid;
+      if (existing.open_level != null && Number.isFinite(existing.open_level)) {
+        s.entry_price = existing.open_level;
+      } else if (s.entry_price == null) {
+        s.entry_price = quote.mid;
+      }
       s.entry_at = s.entry_at || new Date().toISOString();
-      if (!s.playbook || s.playbook === 'WAIT') {
+      if (!s.entry_regime) s.entry_regime = s.regime;
+      if ((!s.playbook || s.playbook === 'WAIT') && !s.entry_setup) {
         s.playbook = playbookFromRegime(s.regime);
         if (s.playbook === 'WAIT') s.playbook = 'SCALP';
       }
@@ -977,26 +994,40 @@ async function enterTrade(
   s.playbook = playbook || playbookFromRegime(s.regime);
   if (s.playbook === 'WAIT') s.playbook = 'SCALP';
   s.entry_setup = setupType || null;
+  s.entry_regime = s.regime; // freeze thesis input at fill
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
-  s.entry_price = mid;
+  // Prefer fill-side mark until broker open_level arrives
+  const fillMark =
+    direction === 'BUY'
+      ? quote.ask ?? mid
+      : quote.bid ?? mid;
+  s.entry_price = fillMark;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
-  s.peak_favorable = mid;
+  s.peak_favorable = fillMark;
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
+  s.broker_flat_streak = 0;
+  // Side-lock only after accepted order
+  s.last_entry_side = direction;
+  s.last_entry_side_ms = Date.now();
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel when available
+  // Prefer broker-reported fill + stopLevel when available
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
       const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      if (pos?.open_level != null && Number.isFinite(pos.open_level)) {
+        s.entry_price = pos.open_level;
+        s.peak_favorable = pos.open_level;
+      }
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
@@ -1054,6 +1085,17 @@ async function enterTrade(
 
 
 async function robotCycle(s: Internal) {
+  if (!s.running) return;
+  if (s.cycle_busy) return;
+  s.cycle_busy = true;
+  try {
+    await robotCycleBody(s);
+  } finally {
+    s.cycle_busy = false;
+  }
+}
+
+async function robotCycleBody(s: Internal) {
   if (!s.running) return;
 
   const { rows } = await pool.query(
@@ -1199,27 +1241,52 @@ async function robotCycle(s: Internal) {
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
+        s.broker_flat_streak = 0;
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
-        if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
+        // Always prefer broker fill when present (manage math = Capital P&L)
+        if (brokerOpen.open_level != null && Number.isFinite(brokerOpen.open_level)) {
+          s.entry_price = brokerOpen.open_level;
+        } else if (s.entry_price == null) {
+          s.entry_price = quote.mid;
+        }
         if (!s.entry_at) s.entry_at = new Date().toISOString();
-        if (!s.playbook || s.playbook === 'WAIT') {
+        if (!s.entry_regime) s.entry_regime = s.regime;
+        // Never invent playbook from flickering 10s regime when setup was locked
+        if ((!s.playbook || s.playbook === 'WAIT') && !s.entry_setup) {
           s.playbook = playbookFromRegime(s.regime);
           if (s.playbook === 'WAIT') s.playbook = 'SCALP';
         }
         s.mode = 'MANAGE';
-        if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
       } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
-        });
-        s.closed_at_ms = Date.now();
-        clearTradeState(s);
+        s.broker_flat_streak += 1;
+        const graceMs = Date.now() - (s.last_entry_side_ms || 0);
+        // Capital positions list often lags right after open — need 3 empty reads
+        // and ≥4s since last entry stamp before treating as external close
+        if (s.broker_flat_streak >= 3 && graceMs >= 4_000) {
+          const lookedHard = s.mae <= -0.7;
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker flat ×${s.broker_flat_streak} — trade closed externally · FLAT${
+              lookedHard ? ' · hard-exit lock' : ''
+            }`,
+          });
+          s.closed_at_ms = Date.now();
+          if (lookedHard) s.last_hard_exit_ms = Date.now();
+          clearTradeState(s);
+        } else {
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker list empty (${s.broker_flat_streak}/3) — holding open state (Capital lag guard)`,
+          });
+        }
       }
     } else {
       pushTick(s, {
@@ -1320,8 +1387,12 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed SECOND→10s when multi-feed does not own OHLC
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    // Seed SECOND→10s only when tick OHLC has no closed bar yet (never overwrite fresher tick bar)
+    if (
+      !s.ohlcState.last_closed &&
+      !multiFeedOwnsOhlc(s.multiFeed) &&
+      Date.now() - s.last_second_fetch_ms >= 8_000
+    ) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
@@ -1378,8 +1449,10 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
-    if (!s.ohlcState.just_closed || !bar) {
+    // Need a closed 10s bar for entry — allow fresh last_closed ≤15s (side-lock may eat just_closed tick)
+    const barAgeMs = bar ? Date.now() - (bar.open_time_ms + 10_000) : Infinity;
+    const barUsable = Boolean(bar && (s.ohlcState.just_closed || barAgeMs < 15_000));
+    if (!barUsable || !bar) {
       const waitNote =
         setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`
@@ -1445,6 +1518,20 @@ async function robotCycle(s: Internal) {
       return;
     }
 
+    // Debounce Capital order spam (field was written but never enforced)
+    if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < 5_000) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · entry debounce ${Math.ceil(
+          (5_000 - (Date.now() - s.last_entry_attempt_ms)) / 1000
+        )}s`,
+      });
+      return;
+    }
+
     // Opposite-side lock: 1m normal; 3m after HardInv (stops LONG↔SHORT spam)
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
     const SIDE_LOCK_MS = hardRecent ? 180_000 : 60_000;
@@ -1473,8 +1560,6 @@ async function robotCycle(s: Internal) {
     s.entry_setup = setupType;
 
     s.last_entry_attempt_ms = Date.now();
-    s.last_entry_side = direction;
-    s.last_entry_side_ms = Date.now();
     pushTick(s, {
       phase: 'ORDER',
       bid: quote.bid,
@@ -1614,6 +1699,7 @@ export async function startRobotSession(input: {
     regime: 'RANGE',
     playbook: null,
     entry_setup: null,
+    entry_regime: null,
     previous_regime: 'RANGE',
     regime_age_bars: 0,
     playbook_age_bars: 0,
@@ -1627,6 +1713,8 @@ export async function startRobotSession(input: {
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
+    cycle_busy: false,
+    broker_flat_streak: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1669,7 +1757,7 @@ export async function startRobotSession(input: {
     robot_status: 'RUNNING',
   });
   void robotCycle(session);
-  // 6s when TRADEABLE; auto-slows to 90s when market closed
+  // 2s when TRADEABLE (flat); 750ms while managing; auto-slows to 90s when market closed
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
   return publicSession(session);
@@ -1691,19 +1779,39 @@ export async function attachManageOnlyRobot(input: {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
   if (existing?.running) {
-    existing.entry_enabled = false;
+    // Never disable an OWN entry brain — refuse to hijack
+    if (existing.entry_enabled) {
+      pushTick(existing, {
+        phase: 'INFO',
+        bid: null,
+        ask: null,
+        mid: input.entry_price,
+        detail: `attachManageOnly ignored — entry brain already owns ${existing.id}`,
+      });
+      return publicSession(existing);
+    }
     existing.trading_enabled = true;
     existing.open_side = input.side;
-    existing.playbook =
-      (input as { playbook?: TradePlaybook | null }).playbook ||
-      playbookFromRegime(input.regime) ||
-      'SCALP';
     if (input.setup_type) existing.entry_setup = String(input.setup_type);
+    if (
+      (input as { playbook?: TradePlaybook | null }).playbook === 'LONG' ||
+      (input as { playbook?: TradePlaybook | null }).playbook === 'SCALP' ||
+      (input as { playbook?: TradePlaybook | null }).playbook === 'FADE'
+    ) {
+      existing.playbook = (input as { playbook?: TradePlaybook }).playbook!;
+    } else if (!existing.playbook || existing.playbook === 'WAIT') {
+      existing.playbook = playbookFromRegime(input.regime) || 'SCALP';
+      if (existing.playbook === 'WAIT') existing.playbook = 'SCALP';
+    }
     existing.mode = 'MANAGE';
-    if (existing.entry_price == null) existing.entry_price = input.entry_price;
+    if (input.entry_price != null && Number.isFinite(input.entry_price)) {
+      existing.entry_price = input.entry_price;
+    } else if (existing.entry_price == null) {
+      existing.entry_price = input.entry_price;
+    }
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
+    if (!existing.entry_regime) existing.entry_regime = input.regime || existing.regime;
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
-    if (input.regime) existing.regime = normalizeRegime(input.regime);
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -1728,11 +1836,12 @@ export async function attachManageOnlyRobot(input: {
   const internal = sessions.get(session.id);
   if (internal) {
     internal.open_side = input.side;
+    if (input.setup_type) internal.entry_setup = String(input.setup_type);
     internal.playbook = playbookFromRegime(input.regime);
     if (internal.playbook === 'WAIT') internal.playbook = 'SCALP';
-    if (input.setup_type) internal.entry_setup = String(input.setup_type);
     internal.entry_price = input.entry_price;
     internal.entry_at = new Date().toISOString();
+    internal.entry_regime = input.regime ? normalizeRegime(input.regime) : internal.regime;
     internal.mode = 'MANAGE';
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
