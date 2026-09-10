@@ -11,7 +11,9 @@ export type ExitSide = 'BUY' | 'SELL';
 
 /**
  * Soft loss exits use HardInv only (no BreakevenFail scratch path).
- * PeakProtect / Target bank green on live mark.
+ * Profit side (Target / PeakProtect / TimeDecay): Capital 1m CLOSE only.
+ * If that 1m continues with the trade → PeakProtect may bank giveback.
+ * If the next 1m flips against the trade → close (DirectionFlip).
  */
 export const BE_ZONE_ABS = 0.12; // diagnostic only — no longer triggers early exit
 export const PROFIT_HOLD_ABS = 0.45;
@@ -20,12 +22,61 @@ export const BE_EARLY_EXIT_ABS = 0.35;
 export const BE_EARLY_MIN_HOLD_MS = 8_000;
 
 /**
- * - live_loss: BE fail / HardInv / red thesis — fire on live mark
- * - live_profit: Target / PeakProtect / TimeDecay — fire on live mark (bank green before giveback)
- * - closed_1m_profit: alias of live_profit (legacy desk/tests)
+ * - live_loss: HardInv / red thesis — fire on live mark
+ * - live_profit: Target / PeakProtect / TimeDecay (legacy alias)
+ * - closed_1m_profit: Target / PeakProtect / TimeDecay — desk uses on Capital 1m CLOSE
  * - all: both
  */
 export type ExitDecideGate = 'all' | 'live_loss' | 'live_profit' | 'closed_1m_profit';
+
+export type CandleOHLC = { open: number; close: number };
+
+export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
+
+export function minuteCandleDir(c: CandleOHLC): MinuteDir {
+  if (!Number.isFinite(c.open) || !Number.isFinite(c.close)) return 'FLAT';
+  if (c.close > c.open) return 'UP';
+  if (c.close < c.open) return 'DOWN';
+  return 'FLAT';
+}
+
+/** Closed 1m still moves with our side (BUY+green / SELL+red). */
+export function minuteContinuesWithSide(side: ExitSide, c: CandleOHLC): boolean {
+  const d = minuteCandleDir(c);
+  if (d === 'FLAT') return false;
+  return (side === 'BUY' && d === 'UP') || (side === 'SELL' && d === 'DOWN');
+}
+
+/** Closed 1m prints against our side (BUY+red / SELL+green). */
+export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
+  const d = minuteCandleDir(c);
+  if (d === 'FLAT') return false;
+  return (side === 'BUY' && d === 'DOWN') || (side === 'SELL' && d === 'UP');
+}
+
+/**
+ * Profit-side policy on a newly closed Capital 1m:
+ * - continue: direction still with trade → PeakProtect/Target may work (no force flip)
+ * - reverse: next candle flipped vs prior with-trade (or against side) → force close path
+ * - wait: doji / no clear signal
+ */
+export function closed1mProfitPolicy(
+  side: ExitSide,
+  closed: CandleOHLC,
+  prevClosed?: CandleOHLC | null
+): 'continue' | 'reverse' | 'wait' {
+  if (minuteContinuesWithSide(side, closed)) return 'continue';
+  if (!minuteReversesSide(side, closed)) return 'wait';
+  // Next candle against us — prefer prior was with us / flat (true "nakamā maina")
+  if (prevClosed) {
+    const prevDir = minuteCandleDir(prevClosed);
+    if (prevDir === 'FLAT') return 'reverse';
+    if (minuteContinuesWithSide(side, prevClosed)) return 'reverse';
+    // Two against in a row — still reverse (already flipped)
+    return 'reverse';
+  }
+  return 'reverse';
+}
 
 export type ExitSnapshot = {
   open_side: ExitSide | null;
@@ -103,8 +154,8 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  *
- * Desk wiring: every manage tick uses live mark for BOTH loss and profit
- * (PeakProtect must bank green before the move flips to red).
+ * Desk: loss (HardInv) LIVE; profit (Target/PeakProtect/TimeDecay) on Capital 1m CLOSE.
+ * Continuation 1m → PeakProtect may bank; reverse 1m → DirectionFlip close.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -150,19 +201,19 @@ export function decideBestOutcomeExit(
   }
 
   if (wantProfit) {
-    // 3) Target — bank TP on LIVE mark
+    // 3) Target — bank TP on closed-1m mark (desk) / mid
     if (fav >= tp) {
       return {
         exit: true,
-        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · live`,
+        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · 1m`,
       };
     }
 
-    // 4) PeakProtect — LIVE so giveback cannot ride to red
+    // 4) PeakProtect — giveback of MFE (desk: only when 1m continues or on reverse path)
     if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
       return {
         exit: true,
-        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · 1m`,
       };
     }
 
@@ -170,10 +221,20 @@ export function decideBestOutcomeExit(
     if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
       return {
         exit: true,
-        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · live`,
+        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · 1m`,
       };
     }
   }
 
   return { exit: false, reason: '' };
+}
+
+/** Force bank when the next Capital 1m flips against the open side. */
+export function directionFlipExitReason(
+  side: ExitSide,
+  book: TradePlaybook | string,
+  closed: CandleOHLC
+): string {
+  const d = minuteCandleDir(closed);
+  return `DirectionFlip · ${book} · 1m ${d} against ${side} · next candle changed`;
 }

@@ -4,6 +4,8 @@ import {
   favorableMove,
   hardInvOppositeScalpSide,
   hardInvFlipBrokerAction,
+  closed1mProfitPolicy,
+  directionFlipExitReason,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -384,5 +386,35 @@ describe('hardInvFlipBrokerAction', () => {
 
   it('none without pending flip', () => {
     expect(hardInvFlipBrokerAction(null, 'BUY')).toBe('none');
+  });
+});
+
+describe('closed1mProfitPolicy', () => {
+  it('continues when BUY still gets green 1m — PeakProtect may work', () => {
+    expect(
+      closed1mProfitPolicy('BUY', { open: 2000, close: 2003 }, { open: 1998, close: 2000 })
+    ).toBe('continue');
+  });
+
+  it('reverses when next 1m flips against BUY', () => {
+    expect(
+      closed1mProfitPolicy('BUY', { open: 2003, close: 2000 }, { open: 2000, close: 2003 })
+    ).toBe('reverse');
+  });
+
+  it('reverses when next 1m flips against SELL', () => {
+    expect(
+      closed1mProfitPolicy('SELL', { open: 2000, close: 2003 }, { open: 2003, close: 2000 })
+    ).toBe('reverse');
+  });
+
+  it('wait on doji', () => {
+    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2000 }, null)).toBe('wait');
+  });
+
+  it('directionFlipExitReason names the against candle', () => {
+    expect(directionFlipExitReason('BUY', 'LONG', { open: 2003, close: 2000 })).toMatch(
+      /DirectionFlip · LONG · 1m DOWN against BUY/
+    );
   });
 });

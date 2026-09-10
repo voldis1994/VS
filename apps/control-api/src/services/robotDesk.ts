@@ -12,6 +12,7 @@ import {
   listCapitalOpenPositions,
   capitalMinuteCandleKey,
   lastClosedCapitalMinute,
+  prevClosedCapitalMinute,
   aggregateMinutesToFifteen,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -31,6 +32,8 @@ import {
   PROFIT_HOLD_ABS,
   hardInvOppositeScalpSide,
   hardInvFlipBrokerAction,
+  closed1mProfitPolicy,
+  directionFlipExitReason,
 } from './exitManage.js';
 import {
   playbookFromRegime,
@@ -489,7 +492,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv→opposite SCALP flip NOW (no 1m wait). Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
+      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv LIVE + flip NOW. Profit: 1m CLOSE — continue→PeakProtect, reverse→DirectionFlip. LONG=75%; SCALP=90%.',
   };
 }
 
@@ -1575,16 +1578,75 @@ async function robotCycleBody(s: Internal) {
         ? manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid)
         : quote.mid;
 
-      // LIVE everything: loss (BE/HardInv) + profit (PeakProtect/Target) on this mark.
-      // Waiting for 1m close let green ride to red before exit.
-      const dec = decideBestOutcomeExit(s, mark, 'all');
-      if (dec.exit) {
-        await exitTrade(opened.session, s, quote, dec.reason);
+      // LIVE loss: HardInv / thesis — wrong side out immediately
+      const lossDec = decideBestOutcomeExit(s, mark, 'live_loss');
+      if (lossDec.exit) {
+        await exitTrade(opened.session, s, quote, lossDec.reason);
         // HardInv flip: same cycle, no 1m candle wait
         if (s.pending_hardinv_flip && !s.open_side) {
           await tryExecuteHardInvFlip(opened.session, s, quote);
         }
         return;
+      }
+
+      // PROFIT: only on Capital 1m CLOSE.
+      // Continue with trade → PeakProtect/Target may bank; reverse next 1m → DirectionFlip.
+      if (Date.now() - s.last_manage_minute_fetch_ms >= 8_000) {
+        s.last_manage_minute_fetch_ms = Date.now();
+        try {
+          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
+          if (mins.ok && mins.candles.length) {
+            s.last_minute_candles = mins.candles;
+          }
+        } catch {
+          /* keep previous minutes */
+        }
+      }
+
+      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+      if (closed1m && s.open_side && s.entry_price != null) {
+        const key = capitalMinuteCandleKey(closed1m);
+        if (key !== s.last_1m_profit_exit_key) {
+          const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+          const policy = closed1mProfitPolicy(s.open_side, closed1m, prev1m);
+          // Always mark this minute evaluated (one shot per close)
+          s.last_1m_profit_exit_key = key;
+
+          if (policy === 'continue' || policy === 'wait') {
+            // Direction continues (or doji) — PeakProtect % may bank giveback; no force flip
+            const profitDec = decideBestOutcomeExit(
+              s,
+              closed1m.close,
+              'closed_1m_profit'
+            );
+            if (profitDec.exit) {
+              await exitTrade(opened.session, s, quote, profitDec.reason);
+              return;
+            }
+          } else if (policy === 'reverse') {
+            // Next 1m changed direction against us — close (PeakProtect first if giveback)
+            const profitDec = decideBestOutcomeExit(
+              s,
+              closed1m.close,
+              'closed_1m_profit'
+            );
+            if (profitDec.exit) {
+              await exitTrade(opened.session, s, quote, profitDec.reason);
+              return;
+            }
+            const favAtClose = favorableMove(s.open_side, s.entry_price, closed1m.close);
+            if (favAtClose >= 0 || s.mfe > 0) {
+              const book = s.playbook || 'SCALP';
+              await exitTrade(
+                opened.session,
+                s,
+                quote,
+                directionFlipExitReason(s.open_side, book, closed1m)
+              );
+              return;
+            }
+          }
+        }
       }
 
       pushTick(s, {
@@ -1598,7 +1660,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · exit=live@${MANAGE_CADENCE_MS}ms · setup LOCKED · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose(continue→Peak·reverse→Flip) · setup LOCKED · no new orders`,
       });
       return;
     }
