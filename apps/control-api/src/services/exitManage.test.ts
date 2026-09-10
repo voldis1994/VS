@@ -3,6 +3,7 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   hardInvOppositeScalpSide,
+  hardInvFlipBrokerAction,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -365,5 +366,23 @@ describe('hardInvOppositeScalpSide', () => {
     expect(
       hardInvOppositeScalpSide('HardInvalidation · SCALP', 'BUY', 'HARDINV_FLIP')
     ).toBeNull();
+  });
+});
+
+describe('hardInvFlipBrokerAction', () => {
+  it('enters when broker flat', () => {
+    expect(hardInvFlipBrokerAction('SELL', null)).toBe('enter');
+  });
+
+  it('waits while old HardInv leg still listed', () => {
+    expect(hardInvFlipBrokerAction('SELL', 'BUY')).toBe('wait_clear');
+  });
+
+  it('adopts when opposite SCALP already live', () => {
+    expect(hardInvFlipBrokerAction('SELL', 'SELL')).toBe('adopt_flip');
+  });
+
+  it('none without pending flip', () => {
+    expect(hardInvFlipBrokerAction(null, 'BUY')).toBe('none');
   });
 });

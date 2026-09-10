@@ -24,7 +24,14 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove, BE_ZONE_ABS, PROFIT_HOLD_ABS, hardInvOppositeScalpSide } from './exitManage.js';
+import {
+  decideBestOutcomeExit,
+  favorableMove,
+  BE_ZONE_ABS,
+  PROFIT_HOLD_ABS,
+  hardInvOppositeScalpSide,
+  hardInvFlipBrokerAction,
+} from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -482,7 +489,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv→opposite SCALP flip. Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
+      'Quality gate: CONTINUATION/BREAKOUT only + Capital 1m body≥2.5pt + impulse + 15m context. HardInv→opposite SCALP flip NOW (no 1m wait). Manage @200ms. LONG=75% PeakProtect; SCALP=90%. No FADE/PULLBACK spam.',
   };
 }
 
@@ -833,7 +840,6 @@ async function exitTrade(
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
   const closedSide = s.open_side;
-  const wasHardInvFlip = String(s.entry_setup || '').toUpperCase() === 'HARDINV_FLIP';
   // Only true loss exits get hard lock — NOT PeakProtect/Target
   if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
@@ -850,7 +856,7 @@ async function exitTrade(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `HARDINV FLIP armed · next ${flipSide} SCALP (catch the move)`,
+      detail: `HARDINV FLIP armed · ${flipSide} SCALP NOW (no 1m wait)`,
     });
   } else {
     s.pending_hardinv_flip = null;
@@ -900,35 +906,78 @@ async function enterTrade(
   reason: string,
   setupType?: string | null,
   playbook?: TradePlaybook | null
-) {
+): Promise<boolean> {
+  const isHardInvFlip = String(setupType || '').toUpperCase() === 'HARDINV_FLIP';
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
     const existing = matchOpenOnEpic(listed.positions, s.epic);
-      if (existing) {
-      s.open_side = existing.direction;
-      s.deal_id = existing.deal_id;
-      if (existing.open_level != null && Number.isFinite(existing.open_level)) {
-        s.entry_price = existing.open_level;
-      } else if (s.entry_price == null) {
-        s.entry_price = quote.mid;
+    if (existing) {
+      if (isHardInvFlip) {
+        const action = hardInvFlipBrokerAction(direction, existing.direction);
+        if (action === 'wait_clear') {
+          // Old HardInv leg still listed — do NOT re-adopt (would block flip forever)
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HARDINV FLIP · broker still ${existing.direction} · waiting clear before ${direction} SCALP`,
+          });
+          return false;
+        }
+        // adopt_flip: opposite already live — sync local state, treat as success
+        if (action === 'adopt_flip') {
+          s.open_side = existing.direction;
+          s.deal_id = existing.deal_id;
+          if (existing.open_level != null && Number.isFinite(existing.open_level)) {
+            s.entry_price = existing.open_level;
+          } else if (s.entry_price == null) {
+            s.entry_price = quote.mid;
+          }
+          s.entry_at = s.entry_at || new Date().toISOString();
+          s.playbook = 'SCALP';
+          s.entry_setup = 'HARDINV_FLIP';
+          s.entry_regime = s.entry_regime || s.regime;
+          s.mode = 'MANAGE';
+          if (existing.stop_level != null) s.safety_sl = existing.stop_level;
+          s.last_entry_side = existing.direction;
+          s.last_entry_side_ms = Date.now();
+          pushTick(s, {
+            phase: 'ORDER',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HARDINV FLIP already live ${existing.direction} dealId=${existing.deal_id} · adopt`,
+          });
+          return true;
+        }
+        return false;
+      } else {
+        s.open_side = existing.direction;
+        s.deal_id = existing.deal_id;
+        if (existing.open_level != null && Number.isFinite(existing.open_level)) {
+          s.entry_price = existing.open_level;
+        } else if (s.entry_price == null) {
+          s.entry_price = quote.mid;
+        }
+        s.entry_at = s.entry_at || new Date().toISOString();
+        if (!s.entry_regime) s.entry_regime = s.regime;
+        if ((!s.playbook || s.playbook === 'WAIT') && !s.entry_setup) {
+          s.playbook = playbookFromRegime(s.regime);
+          if (s.playbook === 'WAIT') s.playbook = 'SCALP';
+        }
+        s.mode = 'MANAGE';
+        if (existing.stop_level != null) s.safety_sl = existing.stop_level;
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+        });
+        return false;
       }
-      s.entry_at = s.entry_at || new Date().toISOString();
-      if (!s.entry_regime) s.entry_regime = s.regime;
-      if ((!s.playbook || s.playbook === 'WAIT') && !s.entry_setup) {
-        s.playbook = playbookFromRegime(s.regime);
-        if (s.playbook === 'WAIT') s.playbook = 'SCALP';
-      }
-      s.mode = 'MANAGE';
-      if (existing.stop_level != null) s.safety_sl = existing.stop_level;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
-      });
-      return;
     }
   }
 
@@ -949,7 +998,7 @@ async function enterTrade(
       mid: quote.mid,
       detail: 'ENTRY blocked — no mid for safety SL',
     });
-    return;
+    return false;
   }
 
   // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
@@ -1076,7 +1125,7 @@ async function enterTrade(
       mid: quote.mid,
       detail: `ORDER FAIL ${direction}: ${result.detail}`,
     });
-    return;
+    return false;
   }
 
   s.orders_placed += 1;
@@ -1191,6 +1240,66 @@ async function enterTrade(
   } catch {
     /* Capital order already live */
   }
+  return true;
+}
+
+
+/**
+ * Fire HardInv opposite SCALP immediately — no 1m candle, no entry debounce.
+ * Keeps pending until fill succeeds (Capital often lags the closed leg).
+ */
+async function tryExecuteHardInvFlip(
+  session: CapitalSession,
+  s: Internal,
+  quote: CapitalMarketQuote
+): Promise<boolean> {
+  const flip = s.pending_hardinv_flip;
+  if (!flip) return false;
+  if (Date.now() - flip.armed_at_ms > HARDINV_FLIP_EXPIRE_MS) {
+    s.pending_hardinv_flip = null;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'HARDINV FLIP expired · back to normal setup wait',
+    });
+    return false;
+  }
+  if (quote.mid == null) return false;
+
+  const flipSide = flip.side;
+  const reason = `HARDINV FLIP · ${flipSide} SCALP · catch move after HardInv`;
+  pushTick(s, {
+    phase: 'ORDER',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `OPEN ${flipSide} · ${reason} · immediate (no 1m close)`,
+  });
+  s.last_entry_attempt_ms = Date.now();
+  const ok = await enterTrade(
+    session,
+    s,
+    flipSide,
+    quote,
+    reason,
+    'HARDINV_FLIP',
+    'SCALP'
+  );
+  if (ok) {
+    s.pending_hardinv_flip = null;
+    return true;
+  }
+  // Keep pending — broker lag or transient order fail; retry next tick
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `HARDINV FLIP ${flipSide} SCALP deferred · retry next tick (no candle wait)`,
+  });
+  return false;
 }
 
 
@@ -1311,8 +1420,11 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Restore cadence: faster while managing so LIVE loss (BE/HardInv) reacts; profit waits 1m close
-    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
+    // Restore cadence: fast while managing OR while HardInv flip pending (catch move NOW)
+    setRobotCadence(
+      s,
+      s.open_side || s.pending_hardinv_flip ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS
+    );
     s.last_mid = quote.mid;
 
     // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
@@ -1350,6 +1462,26 @@ async function robotCycleBody(s: Internal) {
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+      if (brokerOpen && s.pending_hardinv_flip) {
+        const action = hardInvFlipBrokerAction(
+          s.pending_hardinv_flip.side,
+          brokerOpen.direction
+        );
+        if (action === 'wait_clear') {
+          // Ghost of just-closed HardInv leg — do not re-adopt into MANAGE
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HARDINV FLIP · waiting broker clear of ${brokerOpen.direction} before ${s.pending_hardinv_flip.side} SCALP`,
+          });
+          brokerOpen = null;
+        } else if (action === 'adopt_flip') {
+          // Flip already live on broker
+          s.pending_hardinv_flip = null;
+        }
+      }
       if (brokerOpen) {
         s.broker_flat_streak = 0;
         s.open_side = brokerOpen.direction;
@@ -1448,6 +1580,10 @@ async function robotCycleBody(s: Internal) {
       const dec = decideBestOutcomeExit(s, mark, 'all');
       if (dec.exit) {
         await exitTrade(opened.session, s, quote, dec.reason);
+        // HardInv flip: same cycle, no 1m candle wait
+        if (s.pending_hardinv_flip && !s.open_side) {
+          await tryExecuteHardInvFlip(opened.session, s, quote);
+        }
         return;
       }
 
@@ -1483,58 +1619,10 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // ——— HardInv flip: opposite SCALP immediately (bypass cooldown / side-lock / 1m wait) ———
+    // ——— HardInv flip: opposite SCALP NOW (bypass cooldown / side-lock / 1m / debounce) ———
     if (s.pending_hardinv_flip) {
-      const flip = s.pending_hardinv_flip;
-      if (Date.now() - flip.armed_at_ms > HARDINV_FLIP_EXPIRE_MS) {
-        s.pending_hardinv_flip = null;
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: 'HARDINV FLIP expired · back to normal setup wait',
-        });
-      } else if (quote.mid == null) {
-        return;
-      } else {
-        if (
-          s.last_entry_attempt_ms > 0 &&
-          Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS
-        ) {
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `HARDINV FLIP ${flip.side} SCALP · debounce ${Math.ceil(
-              (ENTRY_DEBOUNCE_MS - (Date.now() - s.last_entry_attempt_ms)) / 1000
-            )}s`,
-          });
-          return;
-        }
-        const flipSide = flip.side;
-        s.pending_hardinv_flip = null; // one shot
-        s.last_entry_attempt_ms = Date.now();
-        const reason = `HARDINV FLIP · ${flipSide} SCALP · catch move after HardInv`;
-        pushTick(s, {
-          phase: 'ORDER',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `OPEN ${flipSide} · ${reason}`,
-        });
-        await enterTrade(
-          opened.session,
-          s,
-          flipSide,
-          quote,
-          reason,
-          'HARDINV_FLIP',
-          'SCALP'
-        );
-        return;
-      }
+      await tryExecuteHardInvFlip(opened.session, s, quote);
+      return;
     }
 
     // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief
