@@ -72,6 +72,18 @@ describe('per-client robot + Capital feed contract', () => {
     expect(src).toMatch(/skipped — client runs own entry brain/);
   });
 
+  it('fanout executes all subscribers in parallel (Promise.all), not a serial for-await queue', () => {
+    const src = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/Promise\.all\s*\(\s*subs\.map/);
+    expect(src).toMatch(/All clients in parallel/);
+  });
+
+  it('each robot has its own setInterval cadence (concurrent clients)', () => {
+    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(desk).toMatch(/setInterval\(\(\) => void robotCycle\(s\), ms\)/);
+    expect(desk).toMatch(/One timer per robot/);
+  });
+
   it('active fanout subscriptions require ais.trading_enabled', () => {
     const src = readFileSync(
       fileURLToPath(new URL('./clientSubscriptions.ts', import.meta.url)),

@@ -249,6 +249,7 @@ function setRobotCadence(s: Internal, ms: number) {
   if (s.timer && s.cadence_ms === ms) return;
   if (s.timer) clearInterval(s.timer);
   s.cadence_ms = ms;
+  // One timer per robot — all clients tick concurrently (not a global queue)
   s.timer = setInterval(() => void robotCycle(s), ms);
 }
 
@@ -492,7 +493,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'Multi-client: robot=account+epic; Capital pool per connection + account bind on list/order/close; own-brain disables fanout. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
+      'Multi-client PARALLEL: each robot own timer; fanout Promise.all. Capital lock only same connection. Own-brain disables fanout. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
   };
 }
 
