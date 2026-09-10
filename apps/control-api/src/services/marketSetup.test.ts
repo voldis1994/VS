@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
+  decideEntryFromArmedLive,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
@@ -320,9 +321,49 @@ describe('marketSetup', () => {
       swing_low: st.swing_low,
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
+    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars)).toBeNull();
     // Setup itself should prefer SELL not FADE BUY at low while dumping
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
+  });
+
+  it('decideEntryFromArmedLive enters CONTINUATION on mid without waiting for 10s body', () => {
+    const minutes = rangeMinutes();
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 2000,
+      reason: 'CONTINUATION up',
+    };
+    const e = decideEntryFromArmedLive(contBuy, 2005, minutes);
+    expect(e?.direction).toBe('BUY');
+    expect(e?.reason).toMatch(/live/);
+  });
+
+  it('decideEntryFromArmedLive refuses BUY into dump flow', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4436, 4438, 4434, 4436));
+    for (let i = 0; i < 8; i++) {
+      const o = 4436 - i * 0.55;
+      bars.push(candle(o, o + 0.25, o - 0.7, o - 0.5));
+    }
+    expect(priceFlowBias(bars)).toBe('DOWN');
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 4440,
+      swing_low: 4428,
+    };
+    expect(decideEntryFromArmedLive(contBuy, 4433, bars)).toBeNull();
   });
 });

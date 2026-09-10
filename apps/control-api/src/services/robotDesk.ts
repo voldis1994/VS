@@ -31,6 +31,7 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
+  decideEntryFromArmedLive,
   decideEntryFromSetup,
   emptySetup,
   emptyStructure,
@@ -438,7 +439,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → 10s entry → fill. LIVE loss: BE/HardInv/thesis. PLUS: Capital 1m CLOSE only (Target/PeakProtect/TimeDecay). No MASTER. No NONE chase.',
+      'ONE desk path: sticky ARMED → LIVE mid entry (10s optional extra). LIVE loss: BE/HardInv. PLUS: Capital 1m CLOSE (Target/PeakProtect). No MASTER.',
   };
 }
 
@@ -1511,44 +1512,19 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // Need a closed 10s bar for entry — allow fresh last_closed ≤15s (side-lock may eat just_closed tick)
-    const barAgeMs = bar ? Date.now() - (bar.open_time_ms + 10_000) : Infinity;
-    const barUsable = Boolean(bar && (s.ohlcState.just_closed || barAgeMs < 15_000));
-    if (!barUsable || !bar) {
-      const waitNote =
-        setup.kind === 'NONE' || setup.status === 'NONE'
-          ? `NONE · ${setup.reason}`
-          : setup.status === 'FORMING'
-            ? `FORMING · ${setup.reason}`
-            : `ARMED · waiting closed 10s confirm`;
+    // ARMED + live mid is primary. Closed 10s is EXTRA confirm only (not a late gate).
+    if (setup.kind === 'NONE' || setup.status === 'NONE') {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${waitNote}`,
+        detail: `${ohlcLine} · NONE · waiting setup · ${setup.reason}`,
       });
       return;
     }
 
-    let entry =
-      setup.kind !== 'NONE' && setup.status === 'ARMED'
-        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
-        : null;
-
-    // NONE mid-swing chase DISABLED — wait for sticky ARMED setup (structure data)
-    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · NONE · waiting setup (no 10s chase) · ${setup.reason}`,
-      });
-      return;
-    }
-
-    if (setup.status === 'FORMING' && !entry) {
+    if (setup.status === 'FORMING') {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1559,15 +1535,34 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    if (quote.mid == null) return;
+
+    const barAgeMs = bar ? Date.now() - (bar.open_time_ms + 10_000) : Infinity;
+    const barFresh = Boolean(bar && (s.ohlcState.just_closed || barAgeMs < 15_000));
+
+    // Extra: if a fresh closed 10s still confirms the ARMED setup, take it
+    let entry =
+      barFresh && bar
+        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
+        : null;
+    if (entry) {
+      entry = {
+        ...entry,
+        reason: `${entry.reason} · 10s extra confirm`,
+      };
+    } else {
+      entry = decideEntryFromArmedLive(setup, quote.mid, s.last_minute_candles);
+    }
+
     if (!entry) {
       const tipNote =
         setup.side &&
         ((setup.side === 'BUY' &&
           st.ready &&
-          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          quote.mid >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
           (setup.side === 'SELL' &&
             st.ready &&
-            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+            quote.mid <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
           ? ' · blocked tip-chase'
           : '';
       pushTick(s, {
@@ -1575,7 +1570,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no live entry yet${tipNote} · ${setup.reason}`,
       });
       return;
     }

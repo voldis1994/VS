@@ -808,6 +808,10 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
   return false;
 }
 
+/**
+ * Optional EXTRA confirm on a closed 10s bar — never the only gate.
+ * Prefer decideEntryFromArmedLive so entries are not late after the move is done.
+ */
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
@@ -927,6 +931,126 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION SELL · ${setup.reason}`,
       };
     }
+  }
+
+  return null;
+}
+
+/**
+ * Primary live entry when sticky setup is ARMED — uses Capital 1m flow + mid, NOT a late 10s body.
+ * Closed 10s confirm is optional EXTRA (see decideEntryFromSetup) when it still agrees.
+ */
+export function decideEntryFromArmedLive(
+  setup: MarketSetup,
+  mid: number,
+  minutes?: CapitalPriceCandle[] | null
+): SetupEntry | null {
+  if (
+    setup.kind === 'NONE' ||
+    setup.status !== 'ARMED' ||
+    !setup.side ||
+    !setup.playbook ||
+    !Number.isFinite(mid)
+  ) {
+    return null;
+  }
+
+  const book = setup.playbook;
+  const hi = setup.swing_high;
+  const lo = setup.swing_low;
+  if (!(hi > lo)) return null;
+  const eps = edgeEps(mid, Math.max(hi - lo, 1));
+  const flow = priceFlowBias(minutes);
+
+  if (setup.side === 'BUY' && flow === 'DOWN') return null;
+  if (setup.side === 'SELL' && flow === 'UP') return null;
+
+  const tipProbe: TenSecBar = {
+    open_time_ms: 0,
+    open: mid,
+    high: mid,
+    low: mid,
+    close: mid,
+    ticks: 1,
+  };
+  if (isTipChaseEntry(setup, tipProbe)) return null;
+
+  if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
+    if (setup.side === 'BUY' && mid <= lo + eps * 1.25) {
+      return {
+        direction: 'BUY',
+        setup: setup.kind,
+        playbook: book,
+        reason: `ENTRY · ${setup.kind} BUY live @ L${lo.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    if (setup.side === 'SELL' && mid >= hi - eps * 1.25) {
+      return {
+        direction: 'SELL',
+        setup: setup.kind,
+        playbook: book,
+        reason: `ENTRY · ${setup.kind} SELL live @ H${hi.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    return null;
+  }
+
+  if (setup.kind === 'BREAKOUT') {
+    if (setup.side === 'BUY' && mid > hi) {
+      return {
+        direction: 'BUY',
+        setup: 'BREAKOUT',
+        playbook: book,
+        reason: `ENTRY · BREAKOUT BUY live through H${hi.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    if (setup.side === 'SELL' && mid < lo) {
+      return {
+        direction: 'SELL',
+        setup: 'BREAKOUT',
+        playbook: book,
+        reason: `ENTRY · BREAKOUT SELL live through L${lo.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    return null;
+  }
+
+  if (setup.kind === 'PULLBACK') {
+    if (setup.side === 'BUY' && mid < hi - eps && mid > lo - eps) {
+      return {
+        direction: 'BUY',
+        setup: 'PULLBACK',
+        playbook: book,
+        reason: `ENTRY · PULLBACK BUY live · ${setup.reason}`,
+      };
+    }
+    if (setup.side === 'SELL' && mid > lo + eps && mid < hi + eps) {
+      return {
+        direction: 'SELL',
+        setup: 'PULLBACK',
+        playbook: book,
+        reason: `ENTRY · PULLBACK SELL live · ${setup.reason}`,
+      };
+    }
+    return null;
+  }
+
+  if (setup.kind === 'CONTINUATION') {
+    // ARMED continuation already has structure/impulse — enter on live mid (don't wait for late 10s)
+    if (setup.side === 'BUY') {
+      return {
+        direction: 'BUY',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION BUY live · ${setup.reason}`,
+      };
+    }
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: book,
+      reason: `ENTRY · CONTINUATION SELL live · ${setup.reason}`,
+    };
   }
 
   return null;
