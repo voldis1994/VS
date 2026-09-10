@@ -262,7 +262,7 @@ describe('playbook exit', () => {
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
-    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.0);
+    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.45);
     expect(PLAYBOOK_EXIT.LONG.tpFloor).toBe(6.0);
   });
 
@@ -271,7 +271,7 @@ describe('playbook exit', () => {
     expect(p.peakRet).toBe(0.75);
     expect(p.harvestRet).toBe(0.75);
     expect(p.tpFloor).toBe(6.5);
-    expect(p.slCapAbs).toBe(1.0);
+    expect(p.slCapAbs).toBe(1.45);
     expect(p.mfeFloorAbs).toBe(2.5);
   });
 });

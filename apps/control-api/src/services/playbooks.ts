@@ -40,15 +40,15 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** PeakProtect 75% all books; HardInv ≈1.0pt; TP ≫ SL.
+/** PeakProtect 75% all books; HardInv ~1.35–1.45pt (BE early-exit covers flat scratches).
  * PeakProtect arms after a real leg (~2pt CONTINUATION / ~1.5pt FADE) — not 0.3pt noise. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,
     tpFloor: 6.0,
-    slPct: 0.00028,
-    slFloor: 0.85,
-    slCapAbs: 1.0,
+    slPct: 0.00032,
+    slFloor: 1.15,
+    slCapAbs: 1.45,
     mfeFloorPct: 0.00045,
     mfeFloorAbs: 2.0,
     peakRet: MIN_MFE_RETENTION,
@@ -59,9 +59,9 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   SCALP: {
     tpPct: 0.0022,
     tpFloor: 5.0,
-    slPct: 0.00025,
-    slFloor: 0.8,
-    slCapAbs: 0.95,
+    slPct: 0.0003,
+    slFloor: 1.05,
+    slCapAbs: 1.35,
     mfeFloorPct: 0.0004,
     mfeFloorAbs: 1.8,
     peakRet: MIN_MFE_RETENTION,
@@ -72,9 +72,9 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   FADE: {
     tpPct: 0.0018,
     tpFloor: 4.0,
-    slPct: 0.00022,
-    slFloor: 0.7,
-    slCapAbs: 0.9,
+    slPct: 0.00028,
+    slFloor: 0.95,
+    slCapAbs: 1.25,
     mfeFloorPct: 0.00035,
     mfeFloorAbs: 1.5,
     peakRet: MIN_MFE_RETENTION,
@@ -113,7 +113,7 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
-/** Manage exit — PeakProtect 75% all setups; HardInv ≈1.0pt; TP ≫ SL. */
+/** Manage exit — PeakProtect 75%; HardInv ~1.45pt (BE covers flat scratches); TP ≫ SL. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
   entrySetup?: string | null
@@ -127,9 +127,9 @@ export function exitParamsForTrade(
       ...base,
       tpPct: 0.0025,
       tpFloor: 6.5,
-      slPct: 0.00028,
-      slFloor: 0.85,
-      slCapAbs: 1.0,
+      slPct: 0.00032,
+      slFloor: 1.15,
+      slCapAbs: 1.45,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
       peakRet: MIN_MFE_RETENTION,
@@ -139,15 +139,15 @@ export function exitParamsForTrade(
     };
   }
 
-  // FADE / failed-break bounce — still 75% PeakProtect, tight HardInv
+  // FADE / failed-break bounce — still 75% PeakProtect, slightly wider HardInv
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
       tpPct: 0.0018,
       tpFloor: 4.0,
-      slPct: 0.00025,
-      slFloor: 0.8,
-      slCapAbs: 1.0,
+      slPct: 0.0003,
+      slFloor: 1.05,
+      slCapAbs: 1.35,
       mfeFloorPct: 0.00035,
       mfeFloorAbs: 1.5,
       peakRet: MIN_MFE_RETENTION,
