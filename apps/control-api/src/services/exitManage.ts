@@ -13,7 +13,7 @@ export type ExitSide = 'BUY' | 'SELL';
  * Post-BE early exit (price points, not account currency):
  * - BE zone ≈ Capital floating +£0.00…+£0.01 on ~0.27 Gold (~0.05–0.08pt) → cap 0.12pt
  * - Real profit ≥ 0.45pt → HOLD until PeakProtect/Target on LIVE mark; never post-BE scratch
- * - After BE-only, exit at −0.35pt — before HardInv ~1.45pt (CONTINUATION)
+ * - After BE-only, exit at −0.35pt — before HardInv ~2.5pt (CONTINUATION)
  */
 export const BE_ZONE_ABS = 0.12;
 export const PROFIT_HOLD_ABS = 0.45;

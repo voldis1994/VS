@@ -45,14 +45,14 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** LONG 75% PeakProtect; SCALP/FADE 90%. HardInv capped in Gold points. */
+/** LONG 75% PeakProtect; SCALP/FADE 90%. HardInv wider — stop ±£0.30 noise scratches. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,
     tpFloor: 6.0,
-    slPct: 0.00032,
-    slFloor: 1.15,
-    slCapAbs: 1.45,
+    slPct: 0.0006,
+    slFloor: 2.5,
+    slCapAbs: 2.5,
     mfeFloorPct: 0.00045,
     mfeFloorAbs: 2.0,
     peakRet: MIN_MFE_RETENTION_LONG,
@@ -63,9 +63,9 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   SCALP: {
     tpPct: 0.0016,
     tpFloor: 3.5,
-    slPct: 0.00028,
-    slFloor: 0.95,
-    slCapAbs: 1.2,
+    slPct: 0.0005,
+    slFloor: 2.0,
+    slCapAbs: 2.0,
     mfeFloorPct: 0.00028,
     mfeFloorAbs: 1.2,
     peakRet: MIN_MFE_RETENTION_SCALP,
@@ -76,9 +76,9 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   FADE: {
     tpPct: 0.0015,
     tpFloor: 3.0,
-    slPct: 0.00026,
-    slFloor: 0.9,
-    slCapAbs: 1.15,
+    slPct: 0.00045,
+    slFloor: 1.8,
+    slCapAbs: 1.8,
     mfeFloorPct: 0.00028,
     mfeFloorAbs: 1.2,
     peakRet: MIN_MFE_RETENTION_SCALP,
@@ -131,7 +131,9 @@ export function exitParamsForTrade(
       ...PLAYBOOK_EXIT.LONG,
       tpPct: 0.0025,
       tpFloor: 6.5,
-      slCapAbs: 1.45,
+      slPct: 0.0006,
+      slFloor: 2.5,
+      slCapAbs: 2.5,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
       peakRet: MIN_MFE_RETENTION_LONG,
