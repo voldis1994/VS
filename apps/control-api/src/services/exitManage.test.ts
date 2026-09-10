@@ -55,7 +55,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('LONG peak protect below 65% retention (max 35% giveback)', () => {
+  it('LONG peak protect below 75% retention (max 25% giveback)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -68,6 +68,20 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('holds while retention still ≥75%', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        peak_retention: 0.76,
+        playbook: 'LONG',
+      }),
+      2004
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('holds while retention high and below Target', () => {
@@ -84,7 +98,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('soft HardInv is capped (~1.5pt) — not Gold×%≈8pt', () => {
+  it('soft HardInv is capped (~1.0pt) — not Gold×%≈8pt', () => {
     const stillHold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -96,7 +110,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4399 // −1.0pt — inside 1.5 cap
+      4399.2 // −0.8pt — inside 1.0 cap
     );
     expect(stillHold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
@@ -110,7 +124,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.2 // −1.8pt — beyond 1.5 cap
+      4398.8 // −1.2pt — beyond 1.0 cap
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);

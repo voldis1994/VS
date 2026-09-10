@@ -259,22 +259,24 @@ describe('playbook exit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('exit params: ride winners + tight loser cap', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
-    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.6);
-    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.6);
-    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.6);
+  it('exit params: PeakProtect 75% all books + tight loser cap', () => {
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.75);
+    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.75);
+    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.75);
+    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.0);
+    expect(PLAYBOOK_EXIT.LONG.tpFloor).toBeGreaterThan(PLAYBOOK_EXIT.LONG.slCapAbs);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(90_000);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(300_000);
   });
 
-  it('CONTINUATION PeakProtect after ~3.5pt · SL cap 1.5pt', () => {
+  it('CONTINUATION PeakProtect 75% · SL cap 1.0pt · TP ≫ SL', () => {
     const p = exitParamsForTrade('LONG', 'CONTINUATION');
-    expect(p.peakRet).toBe(0.55);
-    expect(p.harvestRet).toBe(0.68);
-    expect(p.mfeFloorAbs).toBe(3.5);
-    expect(p.slCapAbs).toBe(1.5);
-    expect(p.tpFloor).toBe(5.5);
+    expect(p.peakRet).toBe(0.75);
+    expect(p.harvestRet).toBe(0.75);
+    expect(p.mfeFloorAbs).toBe(2.5);
+    expect(p.slCapAbs).toBe(1.0);
+    expect(p.tpFloor).toBe(6.5);
+    expect(p.tpFloor).toBeGreaterThan(p.slCapAbs * 4);
   });
 });
 
