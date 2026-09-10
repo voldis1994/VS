@@ -3,6 +3,7 @@ import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
   decideEntryFromArmedLive,
+  decideEntryFromClosed1m,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
@@ -322,13 +323,15 @@ describe('marketSetup', () => {
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
     expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars)).toBeNull();
+    const dump1m = candle(4433.5, 4434.3, 4430.5, 4431.0);
+    expect(decideEntryFromClosed1m(fadeBuy, dump1m, bars)).toBeNull();
     // Setup itself should prefer SELL not FADE BUY at low while dumping
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
   });
 
-  it('decideEntryFromArmedLive enters CONTINUATION on mid without waiting for 10s body', () => {
+  it('decideEntryFromArmedLive is disabled (no live-mid chase)', () => {
     const minutes = rangeMinutes();
     const contBuy = {
       ...emptySetup(),
@@ -341,12 +344,45 @@ describe('marketSetup', () => {
       swing_low: 2000,
       reason: 'CONTINUATION up',
     };
-    const e = decideEntryFromArmedLive(contBuy, 2005, minutes);
-    expect(e?.direction).toBe('BUY');
-    expect(e?.reason).toMatch(/live/);
+    expect(decideEntryFromArmedLive(contBuy, 2005, minutes)).toBeNull();
   });
 
-  it('decideEntryFromArmedLive refuses BUY into dump flow', () => {
+  it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body', () => {
+    const minutes = rangeMinutes();
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 2000,
+      reason: 'CONTINUATION up',
+    };
+    const green1m = candle(2004, 2006.5, 2003.8, 2006.2); // ~1.1pt body
+    const e = decideEntryFromClosed1m(contBuy, green1m, minutes);
+    expect(e?.direction).toBe('BUY');
+    expect(e?.reason).toMatch(/Capital 1m/);
+  });
+
+  it('decideEntryFromClosed1m refuses red 1m for BUY CONTINUATION', () => {
+    const minutes = rangeMinutes();
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 2000,
+    };
+    const red1m = candle(2006, 2006.2, 2003.5, 2003.8);
+    expect(decideEntryFromClosed1m(contBuy, red1m, minutes)).toBeNull();
+  });
+
+  it('decideEntryFromClosed1m refuses BUY into dump flow', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) bars.push(candle(4436, 4438, 4434, 4436));
     for (let i = 0; i < 8; i++) {
@@ -364,6 +400,8 @@ describe('marketSetup', () => {
       swing_high: 4440,
       swing_low: 4428,
     };
-    expect(decideEntryFromArmedLive(contBuy, 4433, bars)).toBeNull();
+    // Green blip 1m mid-dump must still be blocked by flow
+    const greenBlip1m = candle(4433.5, 4434.5, 4433.2, 4434.2);
+    expect(decideEntryFromClosed1m(contBuy, greenBlip1m, bars)).toBeNull();
   });
 });

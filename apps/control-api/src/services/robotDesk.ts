@@ -31,8 +31,7 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
-  decideEntryFromArmedLive,
-  decideEntryFromSetup,
+  decideEntryFromClosed1m,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -194,6 +193,8 @@ type Internal = RobotSession & {
   broker_flat_streak: number;
   /** Last Capital 1m close key used for profit-side exit (Target/PeakProtect) */
   last_1m_profit_exit_key: string;
+  /** Last Capital 1m close key already used for an entry attempt (one shot per minute) */
+  last_1m_entry_key: string;
   /** Throttle Capital MINUTE fetch while managing */
   last_manage_minute_fetch_ms: number;
 };
@@ -298,6 +299,7 @@ function publicSession(s: Internal): RobotSession {
     cycle_busy: _busy,
     broker_flat_streak: _flatStreak,
     last_1m_profit_exit_key: _1mExit,
+    last_1m_entry_key: _1mEntry,
     last_manage_minute_fetch_ms: _1mFetch,
     ...rest
   } = s;
@@ -397,6 +399,11 @@ async function refreshStructureAndSetup(
     return;
   }
   s.last_minute_candles = hist.candles;
+  // First hydrate: do not enter on a Capital 1m that closed before this robot started
+  if (!s.last_1m_entry_key) {
+    const closed = lastClosedCapitalMinute(hist.candles);
+    if (closed) s.last_1m_entry_key = capitalMinuteCandleKey(closed);
+  }
   s.structureBook = buildStructure({
     minutes: hist.candles,
     hours: hours.ok ? hours.candles : null,
@@ -437,9 +444,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    chain: 'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'ONE desk path: sticky ARMED → LIVE mid entry (10s optional extra). LIVE loss: BE/HardInv. PLUS: Capital 1m CLOSE (Target/PeakProtect). No MASTER.',
+      'ONE desk path: sticky ARMED → ENTRY only on Capital 1m CLOSE. LIVE loss: BE/HardInv. PLUS: Capital 1m CLOSE (Target/PeakProtect). No live-mid / 10s chase. No MASTER.',
   };
 }
 
@@ -1537,43 +1544,62 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    const barAgeMs = bar ? Date.now() - (bar.open_time_ms + 10_000) : Infinity;
-    const barFresh = Boolean(bar && (s.ohlcState.just_closed || barAgeMs < 15_000));
-
-    // Extra: if a fresh closed 10s still confirms the ARMED setup, take it
-    let entry =
-      barFresh && bar
-        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
-        : null;
-    if (entry) {
-      entry = {
-        ...entry,
-        reason: `${entry.reason} · 10s extra confirm`,
-      };
-    } else {
-      entry = decideEntryFromArmedLive(setup, quote.mid, s.last_minute_candles);
-    }
-
-    if (!entry) {
-      const tipNote =
-        setup.side &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          quote.mid >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            quote.mid <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
-          ? ' · blocked tip-chase'
-          : '';
+    // PRIMARY: Capital.com closed 1m candle confirms ARMED setup (not live mid / not 10s)
+    const closed1mEntry = lastClosedCapitalMinute(s.last_minute_candles);
+    if (!closed1mEntry) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no live entry yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · waiting Capital 1m · ${setup.reason}`,
       });
       return;
     }
+
+    const entryKey = capitalMinuteCandleKey(closed1mEntry);
+    if (entryKey === s.last_1m_entry_key) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ARMED · wait next Capital 1m close · ${setup.reason}`,
+      });
+      return;
+    }
+
+    const entry = decideEntryFromClosed1m(setup, closed1mEntry, s.last_minute_candles);
+
+    if (!entry) {
+      // Consumed this closed minute — do not re-spam decide every quote until next close
+      s.last_1m_entry_key = entryKey;
+      const tipNote =
+        setup.side &&
+        ((setup.side === 'BUY' &&
+          st.ready &&
+          closed1mEntry.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          (setup.side === 'SELL' &&
+            st.ready &&
+            closed1mEntry.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+          ? ' · blocked tip-chase'
+          : '';
+      const bodyNote =
+        closed1mEntry.close >= closed1mEntry.open
+          ? `1m green ${closed1mEntry.open.toFixed(2)}→${closed1mEntry.close.toFixed(2)}`
+          : `1m red ${closed1mEntry.open.toFixed(2)}→${closed1mEntry.close.toFixed(2)}`;
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ARMED · ${bodyNote} no entry${tipNote} · ${setup.reason}`,
+      });
+      return;
+    }
+
+    // Mark this Capital 1m as used before order attempt (one shot per minute)
+    s.last_1m_entry_key = entryKey;
 
     // Debounce Capital order spam
     if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS) {
@@ -1776,6 +1802,7 @@ export async function startRobotSession(input: {
     cycle_busy: false,
     broker_flat_streak: 0,
     last_1m_profit_exit_key: '',
+    last_1m_entry_key: '',
     last_manage_minute_fetch_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
@@ -1795,7 +1822,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → Capital 1m CLOSE entry → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);
