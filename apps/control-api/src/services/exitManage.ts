@@ -30,6 +30,67 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
+export type CandleOHLC = { open: number; close: number };
+
+export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
+
+/**
+ * Desk gates:
+ * - live_loss: HardInv / red thesis — fire on live mark
+ * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
+ * - closed_1m_profit / live_profit: legacy full profit suite (not used by desk manage)
+ * - all: both loss + full profit (tests / fallback)
+ */
+export type ExitDecideGate =
+  | 'all'
+  | 'live_loss'
+  | 'live_profit'
+  | 'closed_1m_profit'
+  | 'peak_protect_only';
+
+export function minuteCandleDir(c: CandleOHLC): MinuteDir {
+  if (!Number.isFinite(c.open) || !Number.isFinite(c.close)) return 'FLAT';
+  if (c.close > c.open) return 'UP';
+  if (c.close < c.open) return 'DOWN';
+  return 'FLAT';
+}
+
+/** Closed 1m still moves with our side (BUY+green / SELL+red). */
+export function minuteContinuesWithSide(side: ExitSide, c: CandleOHLC): boolean {
+  const d = minuteCandleDir(c);
+  if (d === 'FLAT') return false;
+  return (side === 'BUY' && d === 'UP') || (side === 'SELL' && d === 'DOWN');
+}
+
+/** Closed 1m prints against our side (BUY+red / SELL+green). */
+export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
+  const d = minuteCandleDir(c);
+  if (d === 'FLAT') return false;
+  return (side === 'BUY' && d === 'DOWN') || (side === 'SELL' && d === 'UP');
+}
+
+/**
+ * Profit-side policy on a newly closed Capital 1m (ALL playbooks / exits):
+ * - continue: same direction → HOLD profit (PeakProtect stays OFF)
+ * - reverse: flipped against side → PeakProtect % ARMS (live trail)
+ * - wait: doji / no clear signal
+ */
+export function closed1mProfitPolicy(
+  side: ExitSide,
+  closed: CandleOHLC,
+  prevClosed?: CandleOHLC | null
+): 'continue' | 'reverse' | 'wait' {
+  if (minuteContinuesWithSide(side, closed)) return 'continue';
+  if (!minuteReversesSide(side, closed)) return 'wait';
+  if (prevClosed) {
+    const prevDir = minuteCandleDir(prevClosed);
+    if (prevDir === 'FLAT') return 'reverse';
+    if (minuteContinuesWithSide(side, prevClosed)) return 'reverse';
+    return 'reverse';
+  }
+  return 'reverse';
+}
+
 /**
  * After HardInvalidation: opposite side for a one-shot SCALP (catch the move).
  * No chain: if the closed trade was already HARDINV_FLIP, return null.
@@ -58,7 +119,6 @@ export function hardInvFlipBrokerAction(
   return 'wait_clear';
 }
 
-
 /** Legacy helper — SCALP-style list; prefer thesisFailureForPlaybook. */
 export function thesisFailureReason(
   side: ExitSide,
@@ -76,14 +136,20 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 }
 
 /**
- * Manage exit divided by playbook (LONG / SCALP / FADE).
+ * Manage exit divided by playbook (LONG / SCALP / FADE) — same rules for ALL exits.
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
- * Order: HardInv (capped) → thesis only when red → PeakProtect 75% → Target.
+ * Desk wiring:
+ * - live_loss: HardInv + red thesis on live mark
+ * - peak_protect_only: PeakProtect 75% only (armed after reverse 1m; trails live)
+ * - all: full suite (tests)
+ *
+ * Profit path on desk: HOLD until reverse 1m arms PeakProtect — no Target scratch on continue.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  mid: number
+  mid: number,
+  gate: ExitDecideGate = 'all'
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
@@ -97,54 +163,81 @@ export function decideBestOutcomeExit(
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+  const mfe = Math.max(s.mfe, Math.max(0, fav));
+  const retention =
+    s.peak_retention != null
+      ? s.peak_retention
+      : mfe > 0
+        ? Math.max(0, fav / mfe)
+        : null;
 
-  // 1) Losers first — tight capped HardInv
-  if (fav <= -sl) {
-    return {
-      exit: true,
-      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
-    };
+  const wantLoss = gate === 'all' || gate === 'live_loss';
+  const wantPeakOnly = gate === 'peak_protect_only';
+  const wantProfit =
+    gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
+
+  if (wantLoss) {
+    // 1) Losers first — tight capped HardInv (1.5pt all books)
+    if (fav <= -sl) {
+      return {
+        exit: true,
+        reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
+      };
+    }
+
+    // 2) Thesis only when underwater — never scratch a green trade on regime flicker
+    const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+    if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
+      return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+    }
   }
 
-  // 2) Thesis only when underwater — never scratch a green trade on regime flicker
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-  if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
-    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+  // Armed after reverse 1m — PeakProtect giveback only (no Target / TimeDecay)
+  if (wantPeakOnly) {
+    if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
+      return {
+        exit: true,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
+      };
+    }
+    return { exit: false, reason: '' };
   }
 
-  // 3) PeakProtect — only after real leg (75% retention)
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
-    return {
-      exit: true,
-      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}`,
-    };
-  }
+  if (wantProfit) {
+    // 3) PeakProtect — only after real leg (75% retention)
+    if (mfe >= mfeFloor && retention != null && retention < p.peakRet) {
+      return {
+        exit: true,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
+      };
+    }
 
-  if (fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
-  }
+    if (fav >= tp) {
+      return {
+        exit: true,
+        reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+      };
+    }
 
-  if (
-    s.mfe >= mfeFloor &&
-    fav > 0 &&
-    s.peak_retention != null &&
-    s.peak_retention < p.harvestRet &&
-    s.peak_retention >= p.peakRet
-  ) {
-    return {
-      exit: true,
-      reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
-    };
-  }
+    if (
+      mfe >= mfeFloor &&
+      fav > 0 &&
+      retention != null &&
+      retention < p.harvestRet &&
+      retention >= p.peakRet
+    ) {
+      return {
+        exit: true,
+        reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`,
+      };
+    }
 
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe < mfeFloor) {
-    return {
-      exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
-    };
+    if (heldMs > p.timeDecayMs && fav >= 0 && mfe < mfeFloor) {
+      return {
+        exit: true,
+        reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
+      };
+    }
   }
 
   return { exit: false, reason: '' };
