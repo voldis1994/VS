@@ -207,6 +207,8 @@ type Internal = RobotSession & {
   cycle_busy: boolean;
   /** Consecutive broker-empty reads before treating as external close */
   broker_flat_streak: number;
+  /** Consecutive failed Capital position-list reads while locally open */
+  broker_sync_fail_streak: number;
   /** Last Capital 1m close key used for profit-side exit (Target/PeakProtect) */
   last_1m_profit_exit_key: string;
   /** After reverse 1m — PeakProtect % is ON and trails live until exit */
@@ -313,6 +315,7 @@ function publicSession(s: Internal): RobotSession {
     pending_hardinv_flip: _hardFlip,
     cycle_busy: _busy,
     broker_flat_streak: _flatStreak,
+    broker_sync_fail_streak: _syncFail,
     last_1m_profit_exit_key: _1mExit,
     peak_protect_armed: _peakArmed,
     last_1m_entry_key: _1mEntry,
@@ -528,6 +531,33 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
+/** Capital list empty → drop local ghost (desk must not show IN TRADE when broker is flat). */
+export function shouldClearBrokerGhost(input: {
+  broker_flat_streak: number;
+  ms_since_entry: number;
+  deal_id: string | null | undefined;
+  list_ok: boolean;
+  sync_fail_streak?: number;
+}): boolean {
+  const {
+    broker_flat_streak,
+    ms_since_entry,
+    deal_id,
+    list_ok,
+    sync_fail_streak = 0,
+  } = input;
+  // Confirmed empty list: fast clear if never got a broker dealId; else short lag guard
+  if (list_ok) {
+    if (!deal_id && broker_flat_streak >= 1 && ms_since_entry >= 1_500) return true;
+    if (broker_flat_streak >= 2 && ms_since_entry >= 2_000) return true;
+    if (broker_flat_streak >= 3 && ms_since_entry >= 3_000) return true;
+    return false;
+  }
+  // List failing: only clear unconfirmed ghosts (never invent flat if list is broken with a live dealId)
+  if (!deal_id && sync_fail_streak >= 4 && ms_since_entry >= 3_000) return true;
+  return false;
+}
+
 function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
@@ -546,8 +576,21 @@ function clearTradeState(s: Internal) {
   s.entry_regime = null;
   s.mode = 'FLAT';
   s.broker_flat_streak = 0;
+  s.broker_sync_fail_streak = 0;
   s.last_1m_profit_exit_key = '';
   s.peak_protect_armed = false;
+  // Unlock sticky LOCKED / IN TRADE setup labels so panel stops looking live
+  if (s.marketSetup && /LOCKED|IN TRADE/i.test(String(s.marketSetup.reason || ''))) {
+    s.marketSetup = {
+      ...s.marketSetup,
+      status: s.marketSetup.kind === 'NONE' ? 'NONE' : 'FORMING',
+      confirm: 0,
+      reason: 'broker flat · setup unlocked · re-arm',
+      watch_buy: null,
+      watch_sell: null,
+      updated_at: new Date().toISOString(),
+    };
+  }
 }
 
 /**
@@ -1580,6 +1623,7 @@ async function robotCycleBody(s: Internal) {
       }
       if (brokerOpen) {
         s.broker_flat_streak = 0;
+        s.broker_sync_fail_streak = 0;
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
         // Always prefer broker fill when present (manage math = Capital P&L)
@@ -1599,17 +1643,23 @@ async function robotCycleBody(s: Internal) {
         if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
       } else if (s.open_side) {
         s.broker_flat_streak += 1;
+        s.broker_sync_fail_streak = 0;
         const graceMs = Date.now() - (s.last_entry_side_ms || 0);
-        // Capital positions list often lags right after open — need 3 empty reads
-        // and ≥4s since last entry stamp before treating as external close
-        if (s.broker_flat_streak >= 3 && graceMs >= 4_000) {
+        if (
+          shouldClearBrokerGhost({
+            broker_flat_streak: s.broker_flat_streak,
+            ms_since_entry: graceMs,
+            deal_id: s.deal_id,
+            list_ok: true,
+          })
+        ) {
           const lookedHard = s.mae <= -0.7;
           pushTick(s, {
             phase: 'INFO',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `Broker flat ×${s.broker_flat_streak} — trade closed externally · FLAT${
+            detail: `Broker flat ×${s.broker_flat_streak} — Capital has no trade · FLAT (cleared ghost)${
               lookedHard ? ' · hard-exit lock' : ''
             }`,
           });
@@ -1622,11 +1672,36 @@ async function robotCycleBody(s: Internal) {
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `Broker list empty (${s.broker_flat_streak}/3) — holding open state (Capital lag guard)`,
+            detail: `Broker list empty (${s.broker_flat_streak}) — Capital lag guard · not managing ghost`,
           });
+          return; // do NOT manage a position Capital does not list
         }
       }
     } else {
+      if (s.open_side) {
+        s.broker_sync_fail_streak += 1;
+        const graceMs = Date.now() - (s.last_entry_side_ms || 0);
+        if (
+          shouldClearBrokerGhost({
+            broker_flat_streak: s.broker_flat_streak,
+            ms_since_entry: graceMs,
+            deal_id: s.deal_id,
+            list_ok: false,
+            sync_fail_streak: s.broker_sync_fail_streak,
+          })
+        ) {
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Position sync fail ×${s.broker_sync_fail_streak} · no dealId · cleared unconfirmed ghost · FLAT`,
+          });
+          s.closed_at_ms = Date.now();
+          clearTradeState(s);
+          return;
+        }
+      }
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1634,6 +1709,8 @@ async function robotCycleBody(s: Internal) {
         mid: quote.mid,
         detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
       });
+      // Locally open without broker dealId + broken list → stop fake UPL manage
+      if (s.open_side && !s.deal_id) return;
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
@@ -2073,6 +2150,7 @@ export async function startRobotSession(input: {
     pending_hardinv_flip: null,
     cycle_busy: false,
     broker_flat_streak: 0,
+    broker_sync_fail_streak: 0,
     last_1m_profit_exit_key: '',
     peak_protect_armed: false,
     last_1m_entry_key: '',
