@@ -33,7 +33,6 @@ import {
   hardInvOppositeScalpSide,
   hardInvFlipBrokerAction,
   closed1mProfitPolicy,
-  directionFlipExitReason,
 } from './exitManage.js';
 import {
   playbookFromRegime,
@@ -210,6 +209,8 @@ type Internal = RobotSession & {
   broker_flat_streak: number;
   /** Last Capital 1m close key used for profit-side exit (Target/PeakProtect) */
   last_1m_profit_exit_key: string;
+  /** After reverse 1m — PeakProtect % is ON and trails live until exit */
+  peak_protect_armed: boolean;
   /** Last Capital 1m close key already used for an entry attempt (one shot per minute) */
   last_1m_entry_key: string;
   /** Throttle Capital MINUTE fetch while managing */
@@ -320,6 +321,7 @@ function publicSession(s: Internal): RobotSession {
     cycle_busy: _busy,
     broker_flat_streak: _flatStreak,
     last_1m_profit_exit_key: _1mExit,
+    peak_protect_armed: _peakArmed,
     last_1m_entry_key: _1mEntry,
     last_manage_minute_fetch_ms: _1mFetch,
     ...rest
@@ -552,6 +554,7 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.broker_flat_streak = 0;
   s.last_1m_profit_exit_key = '';
+  s.peak_protect_armed = false;
 }
 
 /**
@@ -1217,7 +1220,10 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
   s.broker_flat_streak = 0;
-  s.last_1m_profit_exit_key = '';
+  // Seed so the entry-minute close is not misread as a reverse on first manage
+  const seed1m = lastClosedCapitalMinute(s.last_minute_candles);
+  s.last_1m_profit_exit_key = seed1m ? capitalMinuteCandleKey(seed1m) : '';
+  s.peak_protect_armed = false;
   // Side-lock only after accepted order
   s.last_entry_side = direction;
   s.last_entry_side_ms = Date.now();
@@ -1683,9 +1689,11 @@ async function robotCycleBody(s: Internal) {
         return;
       }
 
-      // PROFIT: only on Capital 1m CLOSE.
-      // Same-direction 1m → HOLD profit; reverse 1m → PeakProtect % (then DirectionFlip if needed).
-      if (Date.now() - s.last_manage_minute_fetch_ms >= 8_000) {
+      // PROFIT rules (user):
+      // 1) Hold green until Capital 1m CLOSES
+      // 2) Next 1m same direction → HOLD + PeakProtect OFF
+      // 3) Direction CHANGES → PeakProtect % ARMS and trails LIVE (no DirectionFlip)
+      if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
         s.last_manage_minute_fetch_ms = Date.now();
         try {
           const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
@@ -1703,41 +1711,55 @@ async function robotCycleBody(s: Internal) {
         if (key !== s.last_1m_profit_exit_key) {
           const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
           const policy = closed1mProfitPolicy(s.open_side, closed1m, prev1m);
-          // Always mark this minute evaluated (one shot per close)
           s.last_1m_profit_exit_key = key;
 
-          if (policy === 'continue' || policy === 'wait') {
-            // Same direction (or doji) — HOLD profit. No PeakProtect / Target while move continues.
+          if (policy === 'continue') {
+            // Same direction — HOLD. PeakProtect armed only on reverse.
+            s.peak_protect_armed = false;
             pushTick(s, {
               phase: 'MANAGE',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `1m ${policy} · HOLD profit · PeakProtect armed only on reverse`,
+              detail: `1m continue · HOLD profit · PeakProtect OFF`,
+            });
+          } else if (policy === 'wait') {
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m wait · HOLD profit · PeakProtect ${s.peak_protect_armed ? 'ON (live trail)' : 'OFF'}`,
             });
           } else if (policy === 'reverse') {
-            // Direction changed — PeakProtect % ON (bank giveback). Else DirectionFlip if still had edge.
-            const profitDec = decideBestOutcomeExit(
+            // Direction changed — ARM PeakProtect % (trails live; no instant DirectionFlip)
+            s.peak_protect_armed = true;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m reverse · PeakProtect ARMED · trailing live giveback %`,
+            });
+            const peakAtClose = decideBestOutcomeExit(
               s,
               closed1m.close,
-              'closed_1m_profit'
+              'peak_protect_only'
             );
-            if (profitDec.exit) {
-              await exitTrade(opened.session, s, quote, profitDec.reason);
-              return;
-            }
-            const favAtClose = favorableMove(s.open_side, s.entry_price, closed1m.close);
-            if (favAtClose >= 0 || s.mfe > 0) {
-              const book = s.playbook || 'SCALP';
-              await exitTrade(
-                opened.session,
-                s,
-                quote,
-                directionFlipExitReason(s.open_side, book, closed1m)
-              );
+            if (peakAtClose.exit) {
+              await exitTrade(opened.session, s, quote, peakAtClose.reason);
               return;
             }
           }
+        }
+      }
+
+      // Once armed by reverse — PeakProtect-only on LIVE mark (no Target/TimeDecay)
+      if (s.peak_protect_armed && s.open_side && mark != null) {
+        const peakDec = decideBestOutcomeExit(s, mark, 'peak_protect_only');
+        if (peakDec.exit) {
+          await exitTrade(opened.session, s, quote, peakDec.reason);
+          return;
         }
       }
 
@@ -1752,7 +1774,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose(continue→HOLD·reverse→Peak) · setup LOCKED · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose(continue→HOLD·reverse→PeakARM)·peakLive · setup LOCKED · no new orders`,
       });
       return;
     }
@@ -2104,6 +2126,7 @@ export async function startRobotSession(input: {
     cycle_busy: false,
     broker_flat_streak: 0,
     last_1m_profit_exit_key: '',
+    peak_protect_armed: false,
     last_1m_entry_key: '',
     last_manage_minute_fetch_ms: 0,
 

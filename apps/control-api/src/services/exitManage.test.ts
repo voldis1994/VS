@@ -418,3 +418,50 @@ describe('closed1mProfitPolicy', () => {
     );
   });
 });
+
+describe('peak_protect_only gate', () => {
+  it('fires PeakProtect on giveback but ignores Target and TimeDecay', () => {
+    const peak = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(120_000),
+        mfe: 4,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      2002.5, // 62.5% retention of 4 — below 75% LONG PeakProtect
+      'peak_protect_only'
+    );
+    expect(peak.exit).toBe(true);
+    expect(peak.reason).toMatch(/PeakProtection/);
+
+    const noTarget = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(120_000),
+        mfe: 20,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      2025, // deep green ≥ TP — peak_protect_only must NOT Target
+      'peak_protect_only'
+    );
+    expect(noTarget.exit).toBe(false);
+
+    const noDecay = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(600_000),
+        mfe: 0.2, // below MFE floor
+        playbook: 'SCALP',
+        entry_setup: 'PULLBACK',
+      }),
+      2000.1,
+      'peak_protect_only'
+    );
+    expect(noDecay.exit).toBe(false);
+  });
+});
