@@ -22,11 +22,12 @@ import {
   type RegimeName,
 } from './regimes.js';
 import {
-  closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
   hardInvFlipBrokerAction,
   hardInvOppositeScalpSide,
+  PEAK_PROTECT_ARM_MFE,
+  shouldArmPeakProtect,
 } from './exitManage.js';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
@@ -193,11 +194,11 @@ type Internal = RobotSession & {
    */
   pending_hardinv_flip: { side: 'BUY' | 'SELL'; armed_at_ms: number } | null;
   /**
-   * After reverse Capital 1m: PeakProtect % is ON and trails live until exit.
-   * Cleared on continue 1m / flat clear.
+   * PeakProtect ON after live MFE ≥ 1.5pt — trails 75% giveback until exit.
+   * Cleared on flat clear.
    */
   peak_protect_armed: boolean;
-  /** Last Capital 1m close key already evaluated for profit policy */
+  /** Legacy field (unused) — kept for hydrate shape compatibility */
   last_1m_profit_exit_key: string;
   /** Throttle Capital MINUTE fetch while managing */
   last_manage_minute_fetch_ms: number;
@@ -436,7 +437,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis scratch) + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms after 1.5 MFE + live trail. Same for ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis) + opposite SCALP flip. PeakProtect ARMS live at +1.5pt MFE (all books) · trail 75%. Same for ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -1495,71 +1496,19 @@ async function robotCycle(s: Internal) {
       }
 
       // PROFIT (ALL exits / playbooks):
-      // 1) Hold green until Capital 1m CLOSES
-      // 2) Next 1m same direction → HOLD + PeakProtect OFF
-      // 3) Direction CHANGES → PeakProtect 75% ARMS and trails LIVE
-      if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
-        s.last_manage_minute_fetch_ms = Date.now();
-        try {
-          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
-          if (mins.ok && mins.candles.length) {
-            s.last_minute_candles = mins.candles;
-          }
-        } catch {
-          /* keep previous minutes */
-        }
+      // PeakProtect ARMS live at MFE ≥ 1.5pt — protect profit immediately (no 1m wait).
+      // Once armed: trail 75% giveback LIVE. HardInv still cuts losers at -1.5 live.
+      if (shouldArmPeakProtect(s.mfe, s.peak_protect_armed)) {
+        s.peak_protect_armed = true;
+        pushTick(s, {
+          phase: 'MANAGE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `PeakProtect ARMED · MFE ${s.mfe.toFixed(2)} ≥ ${PEAK_PROTECT_ARM_MFE}pt · trail 75% live`,
+        });
       }
 
-      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
-      if (closed1m && s.open_side && s.entry_price != null) {
-        const key = capitalMinuteCandleKey(closed1m);
-        if (key !== s.last_1m_profit_exit_key) {
-          const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
-          const policy = closed1mProfitPolicy(s.open_side, closed1m, prev1m);
-          s.last_1m_profit_exit_key = key;
-
-          if (policy === 'continue') {
-            s.peak_protect_armed = false;
-            pushTick(s, {
-              phase: 'MANAGE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `1m continue · HOLD profit · PeakProtect OFF`,
-            });
-          } else if (policy === 'wait') {
-            pushTick(s, {
-              phase: 'MANAGE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `1m wait · HOLD profit · PeakProtect ${
-                s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
-              }`,
-            });
-          } else if (policy === 'reverse') {
-            s.peak_protect_armed = true;
-            pushTick(s, {
-              phase: 'MANAGE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `1m reverse · PeakProtect ARMED · trailing live giveback %`,
-            });
-            const peakAtClose = decideBestOutcomeExit(
-              s,
-              closed1m.close,
-              'peak_protect_only'
-            );
-            if (peakAtClose.exit) {
-              await exitTrade(opened.session, s, quote, peakAtClose.reason);
-              return;
-            }
-          }
-        }
-      }
-
-      // Once armed by reverse — PeakProtect-only on LIVE mark (no Target/TimeDecay)
       if (s.peak_protect_armed && s.open_side) {
         const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
         if (peakDec.exit) {
@@ -1579,7 +1528,7 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · loss=live · plus=1mClose(continue→HOLD·reverse→PeakARM)·peakLive=${
+        } · loss=HardInv1.5 · peak=live@+1.5MFE·peakLive=${
           s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });
@@ -1960,7 +1909,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → HardInv 1.5 live (no thesis) · profit 1mClose(continue→HOLD·reverse→Peak75% live) · never shared Market Core fanout',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → HardInv 1.5 live (no thesis) · PeakProtect live from +1.5pt MFE · trail 75% · never shared Market Core fanout',
   });
 
   sessions.set(id, session);

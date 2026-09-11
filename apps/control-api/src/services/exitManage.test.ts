@@ -5,6 +5,8 @@ import {
   favorableMove,
   hardInvFlipBrokerAction,
   hardInvOppositeScalpSide,
+  PEAK_PROTECT_ARM_MFE,
+  shouldArmPeakProtect,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -283,6 +285,36 @@ describe('peak_protect_only gate', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('holds peak_protect_only until MFE floor 1.5 even if retention low', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 1.2,
+        peak_retention: 0.4,
+        playbook: 'SCALP',
+      }),
+      4400.5,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(false);
+  });
+});
+
+describe('PeakProtect arms live at +1.5 MFE (no 1m wait)', () => {
+  it('arms at exactly 1.5 MFE', () => {
+    expect(PEAK_PROTECT_ARM_MFE).toBe(1.5);
+    expect(shouldArmPeakProtect(1.5, false)).toBe(true);
+  });
+
+  it('does not arm below 1.5', () => {
+    expect(shouldArmPeakProtect(1.49, false)).toBe(false);
+  });
+
+  it('does not re-arm when already ON', () => {
+    expect(shouldArmPeakProtect(5, true)).toBe(false);
   });
 });
 
