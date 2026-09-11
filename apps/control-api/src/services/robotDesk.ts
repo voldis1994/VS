@@ -441,7 +441,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → immediate opposite SCALP flip (no cooldown). PeakProtect ARMS live at +1.5pt MFE · trail 75%. Same for ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → immediate opposite SCALP flip (no cooldown). PeakProtect ARMS @ +1.5 MFE · trail 75% (giveback cut even if UPL flips red). HardInv -1.5 only if never armed. Same ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -1550,8 +1550,8 @@ async function robotCycle(s: Internal) {
       }
 
       // PROFIT (ALL exits / playbooks):
-      // PeakProtect ARMS live at MFE ≥ 1.5pt — protect profit immediately (no 1m wait).
-      // Once armed: trail 75% giveback LIVE. HardInv still cuts losers at -1.5 live.
+      // PeakProtect ARMS live at MFE ≥ 1.5pt ABSOLUTE (same floor as HardInv — not Gold %).
+      // Once armed: trail 75% giveback LIVE even into small red — never hand off to HardInv -1.5.
       if (shouldArmPeakProtect(s.mfe, s.peak_protect_armed)) {
         s.peak_protect_armed = true;
         pushTick(s, {

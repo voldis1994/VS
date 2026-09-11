@@ -339,6 +339,56 @@ describe('peak_protect_only gate', () => {
     );
     expect(d.exit).toBe(false);
   });
+
+  it('giveback into red still PeakProtect — never wait for HardInv -1.5', () => {
+    // Had +2.0 MFE, now slightly red — retention < 75%, fav <= 0
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 2.0,
+        peak_retention: -0.1, // fav negative / mfe
+        playbook: 'SCALP',
+      }),
+      4399.8, // -0.2 UPL after being +2
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('Gold: PeakProtect trails from absolute +1.5 MFE (pct must NOT raise floor to ~2.4)', () => {
+    // 4400 × 0.00055 ≈ 2.42 — old Math.max(pct, abs) blocked PeakProtect until 2.42
+    // while HardInv already cut at -1.5 → losses taken, profits ignored
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 1.5,
+        peak_retention: 0.5,
+        playbook: 'LONG',
+      }),
+      4400.75, // still green but 50% of MFE
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('symmetric floors: Soft HardInv does NOT cut at -0.20 (needs ~1.5)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'SCALP',
+        entry_setup: 'CONTINUATION',
+      }),
+      4399.8, // -0.2
+      'live_loss'
+    );
+    expect(d.exit).toBe(false);
+  });
+
 });
 
 describe('PeakProtect arms live at +1.5 MFE (no 1m wait)', () => {

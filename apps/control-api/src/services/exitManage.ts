@@ -211,13 +211,16 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
-  const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+  // PeakProtect floor = absolute 1.5pt (same as HardInv). NEVER let mfeFloorPct
+  // raise it on Gold (4400×0.00055≈2.42) — that armed at +1.5 but refused to
+  // trail-exit until ~2.42, so giveback fell through to HardInv -1.5.
+  const mfeFloor = p.mfeFloorAbs;
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
       ? s.peak_retention
       : mfe > 0
-        ? Math.max(0, fav / mfe)
+        ? fav / mfe // can be ≤0 after giveback through green — still PeakProtect
         : null;
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
@@ -236,9 +239,11 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Armed at MFE ≥ 1.5 — PeakProtect giveback only (no Target / TimeDecay)
+  // Armed at MFE ≥ 1.5 — PeakProtect giveback (no Target / TimeDecay).
+  // CRITICAL: do NOT require fav > 0. If MFE was ≥1.5 and price gives back through
+  // green into red, still PeakProtect NOW — never wait for HardInv -1.5 to steal the book.
   if (wantPeakOnly) {
-    if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
+    if (mfe >= mfeFloor && retention != null && retention < p.peakRet) {
       return {
         exit: true,
         reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
