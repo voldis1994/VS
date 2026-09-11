@@ -27,6 +27,7 @@ import {
   hardInvFlipBrokerAction,
   hardInvOppositeScalpSide,
   PEAK_PROTECT_ARM_MFE,
+  shouldArmHardInvFlipFromMae,
   shouldArmPeakProtect,
 } from './exitManage.js';
 import type { CapitalPriceCandle } from './capitalCom.js';
@@ -210,7 +211,7 @@ const STRUCTURE_HOUR_BARS = 24;
 
 const ACTIVE_CADENCE_MS = 2_000;
 /** HardInv → opposite SCALP must fire quickly or expire */
-const HARDINV_FLIP_EXPIRE_MS = 60_000;
+const HARDINV_FLIP_EXPIRE_MS = 120_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -437,7 +438,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis) + opposite SCALP flip. PeakProtect ARMS live at +1.5pt MFE (all books) · trail 75%. Same for ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → immediate opposite SCALP flip (no cooldown). PeakProtect ARMS live at +1.5pt MFE · trail 75%. Same for ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -799,12 +800,15 @@ async function exitTrade(
       side: flipSide,
       armed_at_ms: Date.now(),
     };
+    // HardInv means we WANT opposite — do not side-lock the flip direction
+    s.last_entry_side = null;
+    s.last_entry_side_ms = 0;
     pushTick(s, {
       phase: 'INFO',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `HARDINV FLIP armed · ${flipSide} SCALP NOW (no 1m wait)`,
+      detail: `HARDINV FLIP armed · ${flipSide} SCALP NOW (no cooldown)`,
     });
   } else {
     s.pending_hardinv_flip = null;
@@ -936,6 +940,12 @@ async function enterTrade(
             detail: `HARDINV FLIP already live ${existing.direction} dealId=${existing.deal_id} · adopt`,
           });
           return true;
+        }
+        // Unknown broker state — force-close ghost and retry flip next tick (never cooldown)
+        try {
+          if (existing.deal_id) await closeCapitalPosition(session, existing.deal_id);
+        } catch {
+          /* next tick */
         }
         return false;
       }
@@ -1434,14 +1444,35 @@ async function robotCycle(s: Internal) {
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed
+        const closedSide = s.open_side;
+        const closedSetup = s.entry_setup;
+        const flipSide = shouldArmHardInvFlipFromMae(s.mae, closedSide, closedSetup);
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: flipSide
+            ? `Broker flat — HardInv-class close (MAE ${s.mae.toFixed(2)}) · FLAT · arm ${flipSide} SCALP`
+            : 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
         s.closed_at_ms = Date.now();
+        if (flipSide) {
+          s.last_hard_exit_ms = Date.now();
+          s.pending_hardinv_flip = {
+            side: flipSide,
+            armed_at_ms: Date.now(),
+          };
+          s.last_entry_side = null;
+          s.last_entry_side_ms = 0;
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HARDINV FLIP armed · ${flipSide} SCALP NOW (broker close, no cooldown)`,
+          });
+        }
         clearTradeState(s);
       }
     } else {
@@ -1558,19 +1589,23 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: 1×10s bar pause; after HardInv — brief lock (HardInv flip bypasses above)
+    // After normal close: short pause. After HardInv: NEVER cooldown — flip already handled above.
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    const afterHardInv = hardAgo < 180_000;
+    const POST_CLOSE_COOLDOWN_MS = 10_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS && !s.pending_hardinv_flip) {
+    if (
+      !afterHardInv &&
+      s.closed_at_ms > 0 &&
+      sinceClose < POST_CLOSE_COOLDOWN_MS &&
+      !s.pending_hardinv_flip
+    ) {
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
-        }`,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close`,
       });
       return;
     }
@@ -1705,10 +1740,11 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    // Opposite-side lock: brief for 10s V-flips. After HardInv — no side-lock (flip direction is desired).
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    const SIDE_LOCK_MS = 20_000;
     if (
+      !hardRecent &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS

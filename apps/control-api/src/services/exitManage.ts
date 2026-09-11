@@ -101,8 +101,24 @@ export function closed1mProfitPolicy(
   return 'reverse';
 }
 
+/** Live adverse excursion (pts) that counts as HardInv for flip arming. */
+export const HARDINV_FLIP_MAE = 1.5;
+
 /**
- * After HardInvalidation: opposite side for a one-shot SCALP (catch the move).
+ * Opposite SCALP side after a HardInv-class close (soft or broker SL).
+ * No chain: if the closed trade was already HARDINV_FLIP, return null.
+ */
+export function hardInvFlipSide(
+  closedSide: ExitSide | null | undefined,
+  entrySetup?: string | null
+): ExitSide | null {
+  if (!closedSide) return null;
+  if (String(entrySetup || '').toUpperCase() === 'HARDINV_FLIP') return null;
+  return closedSide === 'BUY' ? 'SELL' : 'BUY';
+}
+
+/**
+ * After HardInvalidation reason: opposite side for a one-shot SCALP.
  * No chain: if the closed trade was already HARDINV_FLIP, return null.
  */
 export function hardInvOppositeScalpSide(
@@ -111,8 +127,18 @@ export function hardInvOppositeScalpSide(
   entrySetup?: string | null
 ): ExitSide | null {
   if (!closedSide || !/HardInvalidation/i.test(reason)) return null;
-  if (String(entrySetup || '').toUpperCase() === 'HARDINV_FLIP') return null;
-  return closedSide === 'BUY' ? 'SELL' : 'BUY';
+  return hardInvFlipSide(closedSide, entrySetup);
+}
+
+/** Broker/external close that already ate ≥1.5pt MAE — treat as HardInv for flip. */
+export function shouldArmHardInvFlipFromMae(
+  mae: number,
+  closedSide: ExitSide | null | undefined,
+  entrySetup?: string | null,
+  floor = HARDINV_FLIP_MAE
+): ExitSide | null {
+  if (!Number.isFinite(mae) || mae > -floor) return null;
+  return hardInvFlipSide(closedSide, entrySetup);
 }
 
 /**
