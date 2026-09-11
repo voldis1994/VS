@@ -608,8 +608,8 @@ export async function acquireCapitalSession(input: {
 
 /**
  * Hold the connection lock for the whole trading critical section (quote → list →
- * order/close). Prevents sibling accounts on the same login from stealing the CST mid-cycle.
- * Nested acquires on this connection re-enter (no deadlock with multi-feed).
+ * order/close). ALS stays active until `release()` so nested list/order/close
+ * re-enter — otherwise desk deadlocks (lease held, positions wait on same lock).
  */
 export async function acquireCapitalSessionLease(input: {
   environment: string;
@@ -630,44 +630,47 @@ export async function acquireCapitalSessionLease(input: {
     };
   }
 
-  let releaseGate!: () => void;
-  const gate = new Promise<void>((r) => {
-    releaseGate = r;
-  });
   const held = connectionLockDepth.getStore();
   if (held?.has(connectionId)) {
-    // Already inside this connection's lock (nested) — acquire and no-op release
     const opened = await acquireCapitalSession(input);
     if (!opened.ok) return opened;
     return { ok: true, session: opened.session, release: () => undefined };
   }
 
-  const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
-  const done = prev.then(() => gate);
-  connectionLocks.set(connectionId, done);
-  await prev;
-
-  const nextHeld = new Set(held);
-  nextHeld.add(connectionId);
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    releaseGate();
-    if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
-  };
-
-  try {
-    const opened = await connectionLockDepth.run(nextHeld, () => acquireCapitalSession(input));
-    if (!opened.ok) {
-      release();
-      return opened;
-    }
-    return { ok: true, session: opened.session, release };
-  } catch (err) {
-    release();
-    throw err;
-  }
+  return new Promise((resolve, reject) => {
+    void withConnectionLock(connectionId, async () => {
+      let finishLease!: () => void;
+      const untilRelease = new Promise<void>((r) => {
+        finishLease = r;
+      });
+      // Safety: never hold the connection forever if caller forgets release()
+      const safety = setTimeout(() => finishLease(), 90_000);
+      try {
+        const opened = await acquireCapitalSession(input);
+        if (!opened.ok) {
+          clearTimeout(safety);
+          resolve(opened);
+          return;
+        }
+        let released = false;
+        resolve({
+          ok: true,
+          session: opened.session,
+          release: () => {
+            if (released) return;
+            released = true;
+            clearTimeout(safety);
+            finishLease();
+          },
+        });
+        // Keep ALS + connection lock until caller releases (desk cycle / fanout)
+        await untilRelease;
+      } catch (err) {
+        clearTimeout(safety);
+        reject(err);
+      }
+    }).catch(reject);
+  });
 }
 
 /** Drop a pooled session for one broker connection (e.g. after HTTP 401). */
@@ -677,6 +680,32 @@ export function invalidateCapitalSession(connectionId: number): void {
   if (!cached) return;
   void cached.raw?.close().catch(() => undefined);
   capitalSessionPool.delete(key);
+}
+
+/**
+ * Regression: while a lease holds the connection lock, nested withConnectionLock
+ * must re-enter (ALS still active). The #500 bug dropped ALS after acquire and
+ * deadlocked list/order — Capital quotes froze and VS.bat looked "stuck".
+ * @internal test helper
+ */
+export async function capitalLeaseNestedLockSmokeTest(
+  connectionId = 424242
+): Promise<'ok' | 'deadlock'> {
+  return new Promise((resolve) => {
+    const fail = setTimeout(() => resolve('deadlock'), 400);
+    void withConnectionLock(connectionId, async () => {
+      let done!: () => void;
+      const hold = new Promise<void>((r) => {
+        done = r;
+      });
+      // Mimic desk: after "acquire", still inside lease ALS, take nested lock
+      const nested = await withConnectionLock(connectionId, async () => 'nested-ok');
+      clearTimeout(fail);
+      resolve(nested === 'nested-ok' ? 'ok' : 'deadlock');
+      done();
+      await hold;
+    });
+  });
 }
 
 export async function testCapitalComSession(input: {

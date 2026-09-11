@@ -92,9 +92,10 @@ describe('per-client robot + Capital feed contract', () => {
     expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
   });
 
-  it('Capital trading lease + account bind prevents CST mix on list/order/close', () => {
+  it('Capital trading lease keeps ALS until release (no list/order self-deadlock)', () => {
     const capital = readFileSync(fileURLToPath(new URL('./capitalCom.ts', import.meta.url)), 'utf8');
     expect(capital).toMatch(/acquireCapitalSessionLease/);
+    expect(capital).toMatch(/Keep ALS \+ connection lock until caller releases/);
     expect(capital).toMatch(/withBoundCapitalAccount/);
     expect(capital).toMatch(/bindCapitalSession/);
     expect(capital).toMatch(/AsyncLocalStorage/);
