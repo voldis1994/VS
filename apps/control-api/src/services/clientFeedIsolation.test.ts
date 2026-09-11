@@ -119,6 +119,7 @@ describe('per-client robot + Capital feed contract', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/pending_hardinv_flip/);
     expect(desk).toMatch(/HOLD profit/);
+    expect(desk).toMatch(/no Capital 1m close confirmation/);
     expect(desk).toMatch(/PeakProtect armed only on reverse/);
     expect(desk).toMatch(/force-close ghost/);
     expect(desk).toMatch(/HARDINV_FLIP_EXPIRE_MS = 60_000/);

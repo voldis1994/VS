@@ -817,7 +817,7 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
 
 /**
  * Optional EXTRA confirm on a closed 10s bar — desk does NOT open on this alone.
- * Live path uses decideEntryFromClosed1m (Capital 1m close).
+ * Live path uses decideEntryFromArmedLive (no 1m close wait).
  */
 export function decideEntryFromSetup(
   setup: MarketSetup,
@@ -1042,15 +1042,29 @@ export function decideEntryFromClosed1m(
 }
 
 /**
- * DISABLED on live desk — live mid chase caused LONG↔SHORT flip spam after HardInv.
- * Kept as null stub so callers/tests stay typed; use decideEntryFromClosed1m.
+ * LIVE entry — ARMED setup fires on quote mid (no Capital 1m close wait).
+ * Profit exits still use 1m close elsewhere.
  */
 export function decideEntryFromArmedLive(
-  _setup: MarketSetup,
-  _mid: number,
+  setup: MarketSetup,
+  mid: number,
   _minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
-  return null;
+  if (
+    setup.kind === 'NONE' ||
+    setup.status !== 'ARMED' ||
+    !setup.side ||
+    !setup.playbook ||
+    !Number.isFinite(mid)
+  ) {
+    return null;
+  }
+  return {
+    direction: setup.side,
+    setup: setup.kind,
+    playbook: setup.playbook,
+    reason: `ENTRY · ${setup.kind} ${setup.side} live mid ${mid.toFixed(2)} · no 1m wait · ${setup.reason}`,
+  };
 }
 
 /**

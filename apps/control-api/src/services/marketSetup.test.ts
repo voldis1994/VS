@@ -325,8 +325,10 @@ describe('marketSetup', () => {
       swing_low: st.swing_low,
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
-    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars)).toBeNull();
+    // live mid entry has no candle/flow confirm — ARMED FADE BUY may fire
+    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars)?.direction).toBe('BUY');
     const dump1m = candle(4433.5, 4434.3, 4430.5, 4431.0);
+    // closed-1m path still needs green body for BUY — red dump candle refuses
     expect(decideEntryFromClosed1m(fadeBuy, dump1m, bars)).toBeNull();
     // Setup itself should prefer SELL not FADE BUY at low while dumping
     let setup = emptySetup();
@@ -334,9 +336,8 @@ describe('marketSetup', () => {
     expect(setup.side).not.toBe('BUY');
   });
 
-  it('decideEntryFromArmedLive is disabled (no live-mid chase)', () => {
-    const minutes = rangeMinutes();
-    const contBuy = {
+  it('decideEntryFromArmedLive enters on ARMED live mid (no 1m wait)', () => {
+    const armed = {
       ...emptySetup(),
       kind: 'CONTINUATION' as const,
       side: 'BUY' as const,
@@ -344,10 +345,12 @@ describe('marketSetup', () => {
       status: 'ARMED' as const,
       confirm: 3,
       swing_high: 2010,
-      swing_low: 2000,
-      reason: 'CONTINUATION up',
+      swing_low: 1995,
+      reason: 'live',
     };
-    expect(decideEntryFromArmedLive(contBuy, 2005, minutes)).toBeNull();
+    const e = decideEntryFromArmedLive(armed, 2005);
+    expect(e?.direction).toBe('BUY');
+    expect(e?.reason).toMatch(/no 1m wait/);
   });
 
   it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body + UP impulse', () => {

@@ -42,6 +42,7 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
+  decideEntryFromArmedLive,
   decideEntryFromClosed1m,
   emptySetup,
   emptyStructure,
@@ -490,7 +491,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
+    chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(live mid · no 1m wait) → BEST OUTCOME',
     note:
       'With-trend: TREND_UP→BUY only, TREND_DOWN→SELL only. Multi-client PARALLEL. HardInv LIVE+flip; profit 1m continue→HOLD / reverse→PeakProtect.',
   };
@@ -1862,7 +1863,7 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // ARMED waits for Capital 1m CLOSE — live mid / 10s never open alone
+    // ARMED → live mid entry (candle confirm removed)
     if (setup.kind === 'NONE' || setup.status === 'NONE') {
       pushTick(s, {
         phase: 'DECIDE',
@@ -1887,84 +1888,20 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // PRIMARY: Capital.com closed 1m candle confirms ARMED setup (not live mid / not 10s)
-    const closed1mEntry = lastClosedCapitalMinute(s.last_minute_candles);
-    if (!closed1mEntry) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · waiting Capital 1m · ${setup.reason}`,
-      });
-      return;
-    }
-
-    const entryKey = capitalMinuteCandleKey(closed1mEntry);
-    if (entryKey === s.last_1m_entry_key) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · wait next Capital 1m close · ${setup.reason}`,
-      });
-      return;
-    }
-
-    const entry = decideEntryFromClosed1m(
-      setup,
-      closed1mEntry,
-      s.last_minute_candles,
-      st,
-      s.regime
-    );
-
+    // ARMED → enter on live mid (no Capital 1m close confirmation)
+    const entry = decideEntryFromArmedLive(setup, quote.mid, s.last_minute_candles);
     if (!entry) {
-      // Consumed this closed minute — do not re-spam decide every quote until next close
-      s.last_1m_entry_key = entryKey;
-      const trendSide =
-        s.regime === 'TREND_UP' ||
-        s.regime === 'BREAKOUT_UP' ||
-        s.regime === 'PULLBACK_UPTREND'
-          ? 'BUY'
-          : s.regime === 'TREND_DOWN' ||
-              s.regime === 'BREAKOUT_DOWN' ||
-              s.regime === 'PULLBACK_DOWNTREND'
-            ? 'SELL'
-            : null;
-      const trendNote =
-        trendSide && setup.side && setup.side !== trendSide
-          ? ` · blocked ${setup.side} vs ${s.regime} (with-trend=${trendSide})`
-          : '';
-      const tipNote =
-        setup.side &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          closed1mEntry.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            closed1mEntry.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
-          ? ' · blocked tip-chase'
-          : '';
-      const bodyNote =
-        closed1mEntry.close >= closed1mEntry.open
-          ? `1m green ${closed1mEntry.open.toFixed(2)}→${closed1mEntry.close.toFixed(2)}`
-          : `1m red ${closed1mEntry.open.toFixed(2)}→${closed1mEntry.close.toFixed(2)}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · ${bodyNote} no entry${trendNote}${tipNote} · regime ${s.regime} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no live entry · regime ${s.regime} · ${setup.reason}`,
       });
       return;
     }
 
-    // Mark this Capital 1m as used before order attempt (one shot per minute)
-    s.last_1m_entry_key = entryKey;
-
-    // Debounce Capital order spam
+    // Debounce Capital order spam (replaces one-shot-per-1m gate)
     if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS) {
       pushTick(s, {
         phase: 'INFO',
@@ -2187,7 +2124,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(15m+1m) → sticky SETUP → Capital 1m CLOSE entry → BEST OUTCOME · never shared Market Core fanout',
+      'Rules: this client alone — structure(15m+1m) → sticky SETUP → live mid entry (no 1m wait) → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);
