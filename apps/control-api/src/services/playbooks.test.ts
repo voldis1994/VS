@@ -243,7 +243,7 @@ describe('playbook exit', () => {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(250_000),
-        mfe: 2,
+        mfe: 1.0, // below Peak MFE floor 1.5 → TimeDecay still applies
         mae: 0,
         peak_retention: 0.8,
         regime: 'RANGE',
@@ -263,6 +263,9 @@ describe('playbook exit', () => {
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
     expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.5);
+    expect(PLAYBOOK_EXIT.LONG.mfeFloorAbs).toBe(1.5);
+    expect(PLAYBOOK_EXIT.SCALP.mfeFloorAbs).toBe(1.5);
+    expect(PLAYBOOK_EXIT.FADE.mfeFloorAbs).toBe(1.5);
     expect(PLAYBOOK_EXIT.LONG.tpFloor).toBe(6.0);
   });
 
@@ -272,6 +275,7 @@ describe('playbook exit', () => {
     expect(p.harvestRet).toBe(0.75);
     expect(p.tpFloor).toBe(6.5);
     expect(p.slCapAbs).toBe(1.5);
+    expect(p.mfeFloorAbs).toBe(1.5);
   });
 });
 
