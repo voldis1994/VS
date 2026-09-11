@@ -92,10 +92,9 @@ describe('per-client robot + Capital feed contract', () => {
     expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
   });
 
-  it('Capital trading lease keeps ALS until release (no list/order self-deadlock)', () => {
+  it('Capital desk/fanout use short acquire (no full-cycle lease freeze)', () => {
     const capital = readFileSync(fileURLToPath(new URL('./capitalCom.ts', import.meta.url)), 'utf8');
-    expect(capital).toMatch(/acquireCapitalSessionLease/);
-    expect(capital).toMatch(/Keep ALS \+ connection lock until caller releases/);
+    expect(capital).toMatch(/acquireCapitalSession/);
     expect(capital).toMatch(/capitalFetch/);
     expect(capital).toMatch(/CAPITAL_HTTP_TIMEOUT_MS/);
     expect(capital).toMatch(/withBoundCapitalAccount/);
@@ -103,15 +102,17 @@ describe('per-client robot + Capital feed contract', () => {
     expect(capital).toMatch(/AsyncLocalStorage/);
 
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/acquireCapitalSessionLease/);
-    expect(desk).toMatch(/opened\.release\(\)/);
+    expect(desk).toMatch(/acquireCapitalSession\(/);
+    expect(desk).not.toMatch(/acquireCapitalSessionLease/);
+    expect(desk).not.toMatch(/opened\.release\(\)/);
     expect(desk).toMatch(/Connecting Capital\.com/);
     expect(desk).toMatch(/CYCLE WATCHDOG/);
     expect(desk).toMatch(/external_account_id required \(multi-account connection\)/);
 
     const fanout = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
-    expect(fanout).toMatch(/acquireCapitalSessionLease/);
-    expect(fanout).toMatch(/opened\.release\(\)/);
+    expect(fanout).toMatch(/acquireCapitalSession\(/);
+    expect(fanout).not.toMatch(/acquireCapitalSessionLease/);
+    expect(fanout).not.toMatch(/opened\.release\(\)/);
   });
 
   it('HardInv flip + 1m profit keys live on per-robot Internal (not shared)', () => {
