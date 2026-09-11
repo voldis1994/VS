@@ -36,7 +36,7 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
 
 /**
  * Desk gates:
- * - live_loss: HardInv / red thesis — fire on live mark
+ * - live_loss: HardInv 1.5pt ONLY — fire on live mark (NO thesis scratch)
  * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
  * - closed_1m_profit / live_profit: legacy full profit suite (not used by desk manage)
  * - all: both loss + full profit (tests / fallback)
@@ -140,7 +140,7 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
  * Desk wiring:
- * - live_loss: HardInv + red thesis on live mark
+ * - live_loss: HardInv 1.5pt ONLY on live mark (never thesis / micro-red scratch)
  * - peak_protect_only: PeakProtect 75% only (armed after reverse 1m; trails live)
  * - all: full suite (tests)
  *
@@ -177,18 +177,13 @@ export function decideBestOutcomeExit(
     gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
 
   if (wantLoss) {
-    // 1) Losers first — tight capped HardInv (1.5pt all books)
+    // HardInv ONLY at 1.5pt (all books). NO thesis / micro-red scratch.
+    // User: do not exit -0.19 noise — next 1m can still make the profit.
     if (fav <= -sl) {
       return {
         exit: true,
         reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
       };
-    }
-
-    // 2) Thesis only when underwater — never scratch a green trade on regime flicker
-    const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-    if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
-      return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
     }
   }
 

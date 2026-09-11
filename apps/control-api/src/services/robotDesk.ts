@@ -436,7 +436,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live all + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms + live trail. Same for ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis scratch) + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms + live trail. Same for ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -1483,7 +1483,7 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // LIVE loss: HardInv / thesis — wrong side out immediately (ALL exits)
+      // LIVE loss: HardInv 1.5pt ONLY — no thesis scratch (ALL exits)
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
       if (lossDec.exit) {
         await exitTrade(opened.session, s, quote, lossDec.reason);
@@ -1960,7 +1960,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → HardInv live · profit 1mClose(continue→HOLD·reverse→Peak75% live) · never shared Market Core fanout',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → HardInv 1.5 live (no thesis) · profit 1mClose(continue→HOLD·reverse→Peak75% live) · never shared Market Core fanout',
   });
 
   sessions.set(id, session);
