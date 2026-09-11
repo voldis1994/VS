@@ -436,7 +436,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis scratch) + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms + live trail. Same for ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis scratch) + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms after 1.5 MFE + live trail. Same for ALL exits. Entry on closed 10s confirm.',
   };
 }
 
