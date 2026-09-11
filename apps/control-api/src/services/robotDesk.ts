@@ -23,6 +23,7 @@ import {
 } from './regimes.js';
 import {
   decideBestOutcomeExit,
+  adverseMark,
   favorableMove,
   hardInvFlipBrokerAction,
   hardInvOppositeScalpSide,
@@ -1487,6 +1488,11 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
       updateExcursion(s, quote.mid);
+      // MAE on adverse bid/ask so HardInv sees real loss before broker SL
+      const adv = adverseMark(s.open_side, quote.bid, quote.ask, quote.mid);
+      const advFav = favorableMove(s.open_side, s.entry_price, adv);
+      if (advFav < s.mae) s.mae = advFav;
+      if (s.unrealized == null || advFav < s.unrealized) s.unrealized = advFav;
     }
 
     pushTick(s, {
@@ -1515,8 +1521,9 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // LIVE loss: HardInv 1.5pt ONLY — no thesis scratch (ALL exits)
-      const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+      // LIVE loss: HardInv 1.5pt on adverse mark (bid/ask) — MUST beat broker safety SL
+      const hardMark = adverseMark(s.open_side, quote.bid, quote.ask, quote.mid);
+      const lossDec = decideBestOutcomeExit(s, hardMark, 'live_loss');
       if (lossDec.exit) {
         await exitTrade(opened.session, s, quote, lossDec.reason);
         // HardInv flip: same cycle, no 1m candle wait

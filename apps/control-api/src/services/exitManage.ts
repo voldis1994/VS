@@ -30,6 +30,19 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
+/** Mark for HardInv: BUY uses bid, SELL uses ask — fire before broker SL. */
+export function adverseMark(
+  side: ExitSide,
+  bid: number | null | undefined,
+  ask: number | null | undefined,
+  mid: number
+): number {
+  if (side === 'BUY' && bid != null && Number.isFinite(bid)) return bid;
+  if (side === 'SELL' && ask != null && Number.isFinite(ask)) return ask;
+  return mid;
+}
+
+
 export type CandleOHLC = { open: number; close: number };
 
 export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
