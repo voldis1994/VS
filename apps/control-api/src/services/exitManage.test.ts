@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adverseMark,
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
@@ -184,6 +185,20 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       4420.68
     );
     expect(d.exit).toBe(false);
+  });
+});
+
+
+describe('adverseMark — HardInv before broker SL', () => {
+  it('BUY uses bid (worse fill)', () => {
+    expect(adverseMark('BUY', 1999.5, 2000.5, 2000)).toBe(1999.5);
+  });
+  it('SELL uses ask (worse fill)', () => {
+    expect(adverseMark('SELL', 1999.5, 2000.5, 2000)).toBe(2000.5);
+  });
+  it('falls back to mid when side quote missing', () => {
+    expect(adverseMark('BUY', null, 2000.5, 2000)).toBe(2000);
+    expect(adverseMark('SELL', 1999.5, null, 2000)).toBe(2000);
   });
 });
 
