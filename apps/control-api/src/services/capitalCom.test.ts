@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateMinutesToFifteen,
   capitalComBaseUrl,
+  capitalLeaseNestedLockSmokeTest,
   encryptCapitalPassword,
   lastClosedCapitalMinute,
   prevClosedCapitalMinute,
@@ -86,5 +87,11 @@ describe('prevClosedCapitalMinute', () => {
     ];
     expect(lastClosedCapitalMinute(candles, now)!.close).toBe(2.6);
     expect(prevClosedCapitalMinute(candles, now)!.close).toBe(2.8);
+  });
+});
+
+describe('Capital lease nested lock (no quote freeze)', () => {
+  it('nested connection lock re-enters while lease ALS is held', async () => {
+    await expect(capitalLeaseNestedLockSmokeTest(9_101_001)).resolves.toBe('ok');
   });
 });
