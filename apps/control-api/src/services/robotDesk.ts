@@ -1865,7 +1865,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Quality gate: FADE / PULLBACK / FAILED_BREAK are watch-only (no junk entries)
+    // Quality gate: FADE / FAILED_BREAK are watch-only; CONTINUATION/BREAKOUT/PULLBACK may enter
     if (!isQualityEntrySetup(setup.kind)) {
       s.last_1m_entry_key = entryKey;
       pushTick(s, {
@@ -1873,7 +1873,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · quality gate · skip ${setup.kind} · only CONTINUATION/BREAKOUT · ${setup.reason}`,
+        detail: `${ohlcLine} · quality gate · skip ${setup.kind} · only CONTINUATION/BREAKOUT/PULLBACK · ${setup.reason}`,
       });
       return;
     }
