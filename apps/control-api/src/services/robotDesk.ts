@@ -33,7 +33,6 @@ import {
   hardInvOppositeScalpSide,
   hardInvFlipBrokerAction,
   closed1mProfitPolicy,
-  directionFlipExitReason,
 } from './exitManage.js';
 import {
   playbookFromRegime,
