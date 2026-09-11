@@ -2,18 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
-  decideEntryFromArmedLive,
-  decideEntryFromClosed1m,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
-  emptyStructure,
-  isQualityEntrySetup,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
-import { withTrendSideFromRegime } from './playbooks.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function candle(o: number, h: number, l: number, c: number): CapitalPriceCandle {
@@ -214,7 +209,7 @@ describe('marketSetup', () => {
     );
   });
 
-  it('impulse UP flips sticky SELL to BUY FORMING (sticky must confirm before ARMED)', () => {
+  it('impulse UP flips sticky SELL to BUY immediately (through swing high)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) {
       bars.push(candle(4430, 4432, 4428, 4430));
@@ -239,15 +234,12 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).toBe('BUY');
-    expect(setup.status).toBe('FORMING');
-    expect(setup.reason).toMatch(/IMPULSE UP|BREAKOUT|flipped|forming/i);
-    expect(setup.watch_buy).toBeTruthy();
-    // Second sticky tick on same side → ARMED
-    setup = updateSetupSticky(setup, st, bars);
     expect(setup.status).toBe('ARMED');
+    expect(setup.reason).toMatch(/IMPULSE UP|BREAKOUT|flipped/i);
+    expect(setup.watch_buy).toBeTruthy();
   });
 
-  it('local dump impulse forms CONTINUATION SELL — arms on sticky confirm', () => {
+  it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
     const bars: CapitalPriceCandle[] = [];
     // Quiet base then hard dump ~8 minutes
     for (let i = 0; i < 25; i++) {
@@ -263,8 +255,6 @@ describe('marketSetup', () => {
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.kind).not.toBe('NONE');
     expect(setup.side).toBe('SELL');
-    expect(setup.status).toBe('FORMING');
-    setup = updateSetupSticky(setup, st, bars);
     expect(setup.status).toBe('ARMED');
   });
 
@@ -281,17 +271,20 @@ describe('marketSetup', () => {
     expect(recentImpulse(bars, 'flip')).toBe('UP');
   });
 
-  it('decideEntryFromTenSecMove is disabled (no mid-NONE chase)', () => {
+  it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2005 });
     expect(st.ready).toBe(true);
     const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
-    expect(decideEntryFromTenSecMove(st, buyBar, minutes)).toBeNull();
+    const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
+    expect(buy?.direction).toBe('BUY');
+    expect(buy?.setup).toBe('CONTINUATION');
     const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
-    expect(decideEntryFromTenSecMove(st, sellBar, minutes)).toBeNull();
+    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
+    expect(sell?.direction).toBe('SELL');
   });
 
-  it('decideEntryFromTenSecMove still null at swing tip', () => {
+  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
@@ -325,238 +318,9 @@ describe('marketSetup', () => {
       swing_low: st.swing_low,
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
-    // live path: FADE is watch-only (no leftover fade entry)
-    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars, 'TREND_DOWN')).toBeNull();
-    const dump1m = candle(4433.5, 4434.3, 4430.5, 4431.0);
-    // closed-1m path still needs green body for BUY — red dump candle refuses
-    expect(decideEntryFromClosed1m(fadeBuy, dump1m, bars)).toBeNull();
     // Setup itself should prefer SELL not FADE BUY at low while dumping
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
-  });
-
-  it('decideEntryFromArmedLive enters on ARMED live mid (no 1m wait)', () => {
-    const armed = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-      reason: 'live',
-    };
-    const e = decideEntryFromArmedLive(armed, 2005, null, 'TREND_UP');
-    expect(e?.direction).toBe('BUY');
-    expect(e?.reason).toMatch(/no 1m wait/);
-    expect(decideEntryFromArmedLive(armed, 2005, null, 'TREND_DOWN')).toBeNull();
-  });
-
-  it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body + UP impulse', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
-    // Impulse UP last minutes
-    bars.push(candle(2000, 2002, 1999.5, 2001.5));
-    bars.push(candle(2001.5, 2004, 2001, 2003.5));
-    bars.push(candle(2003.5, 2007, 2003, 2006.5));
-    expect(recentImpulse(bars, 'flip') || recentImpulse(bars)).toBe('UP');
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-      reason: 'CONTINUATION up',
-    };
-    const green1m = candle(2004, 2008, 2003.8, 2007.2); // ~3.2pt body
-    const st = buildStructure({ minutes: bars, mid: 2007 });
-    const e = decideEntryFromClosed1m(contBuy, green1m, bars, st);
-    expect(e?.direction).toBe('BUY');
-    expect(e?.reason).toMatch(/Capital 1m/);
-  });
-
-  it('decideEntryFromClosed1m: no trend filter — BUY allowed on TREND_DOWN and TREND_UP', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
-    bars.push(candle(2000, 2002, 1999.5, 2001.5));
-    bars.push(candle(2001.5, 2004, 2001, 2003.5));
-    bars.push(candle(2003.5, 2007, 2003, 2006.5));
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-      reason: 'CONTINUATION up',
-    };
-    const green1m = candle(2004, 2008, 2003.8, 2007.2);
-    const st = buildStructure({ minutes: bars, mid: 2007 });
-    expect(withTrendSideFromRegime('TREND_DOWN')).toBe('SELL');
-    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_DOWN')?.direction).toBe(
-      'BUY'
-    );
-    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_UP')?.direction).toBe(
-      'BUY'
-    );
-  });
-
-  it('decideEntryFromClosed1m: no trend filter — SELL allowed on TREND_UP', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(2010, 2012, 2008, 2010));
-    bars.push(candle(2010, 2010.5, 2006, 2006.5));
-    bars.push(candle(2006.5, 2007, 2003, 2003.5));
-    bars.push(candle(2003.5, 2004, 2000, 2000.5));
-    const contSell = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'SELL' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2015,
-      swing_low: 1995,
-      reason: 'CONTINUATION down',
-    };
-    const red1m = candle(2004, 2004.2, 2000, 2000.5);
-    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_UP')?.direction).toBe(
-      'SELL'
-    );
-    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_DOWN')?.direction).toBe(
-      'SELL'
-    );
-  });
-
-  it('decideEntryFromClosed1m refuses flat doji only (<0.5pt)', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
-    bars.push(candle(2000, 2002, 1999.5, 2001.5));
-    bars.push(candle(2001.5, 2004, 2001, 2003.5));
-    bars.push(candle(2003.5, 2007, 2003, 2006.5));
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-    };
-    const micro = candle(2005, 2005.2, 2004.9, 2005.2); // 0.2pt doji
-    expect(decideEntryFromClosed1m(contBuy, micro, bars)).toBeNull();
-    const smallOk = candle(2005, 2006.2, 2004.8, 2005.9); // 0.9pt — allowed (no quality floor)
-    expect(decideEntryFromClosed1m(contBuy, smallOk, bars)?.direction).toBe('BUY');
-  });
-
-  it('decideEntryFromClosed1m allows FADE / PULLBACK / FAILED_BREAK (no kind filter)', () => {
-    const minutes = rangeMinutes();
-    const fadeBuy = {
-      ...emptySetup(),
-      kind: 'FADE' as const,
-      side: 'BUY' as const,
-      playbook: 'FADE' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 2000,
-    };
-    const bigGreen = candle(2001, 2005, 2000.5, 2004.5);
-    expect(decideEntryFromClosed1m(fadeBuy, bigGreen, minutes)?.direction).toBe('BUY');
-    expect(isQualityEntrySetup('FADE')).toBe(true);
-    expect(isQualityEntrySetup('FAILED_BREAK')).toBe(true);
-    expect(isQualityEntrySetup('PULLBACK')).toBe(true);
-    expect(isQualityEntrySetup('CONTINUATION')).toBe(true);
-    expect(isQualityEntrySetup('BREAKOUT')).toBe(true);
-  });
-
-  it('decideEntryFromClosed1m allows CONTINUATION when impulse is quiet (body confirms)', () => {
-    // Flat/quiet minutes — no impulse — but Capital 1m body is real
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 24; i++) bars.push(candle(2000, 2000.4, 1999.7, 2000.1));
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-    };
-    const green1m = candle(2000, 2004, 1999.8, 2003.5); // 3.5pt body
-    const e = decideEntryFromClosed1m(contBuy, green1m, bars);
-    expect(e?.direction).toBe('BUY');
-    expect(e?.setup).toBe('CONTINUATION');
-  });
-
-  it('decideEntryFromClosed1m allows ARMED PULLBACK BUY on green Capital 1m', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 20; i++) bars.push(candle(2000 + i * 0.15, 2000.5 + i * 0.15, 1999.5 + i * 0.15, 2000.2 + i * 0.15));
-    bars.push(candle(2003, 2004, 2002.5, 2003.6));
-    bars.push(candle(2003.6, 2005, 2003.4, 2004.8));
-    const pbBuy = {
-      ...emptySetup(),
-      kind: 'PULLBACK' as const,
-      side: 'BUY' as const,
-      playbook: 'SCALP' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-    };
-    const green1m = candle(2003.5, 2006.5, 2003.2, 2006.2); // ~2.7pt
-    const e = decideEntryFromClosed1m(pbBuy, green1m, bars);
-    expect(e?.direction).toBe('BUY');
-    expect(e?.setup).toBe('PULLBACK');
-  });
-
-  it('decideEntryFromClosed1m refuses red 1m for BUY CONTINUATION', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
-    bars.push(candle(2000, 2002, 1999.5, 2001.5));
-    bars.push(candle(2001.5, 2004, 2001, 2003.5));
-    bars.push(candle(2003.5, 2007, 2003, 2006.5));
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 2010,
-      swing_low: 1995,
-    };
-    const red1m = candle(2007, 2007.2, 2003.5, 2003.8);
-    expect(decideEntryFromClosed1m(contBuy, red1m, bars)).toBeNull();
-  });
-
-  it('decideEntryFromClosed1m allows BUY even into dump flow (no flow filter)', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(4436, 4438, 4434, 4436));
-    for (let i = 0; i < 8; i++) {
-      const o = 4436 - i * 0.55;
-      bars.push(candle(o, o + 0.25, o - 0.7, o - 0.5));
-    }
-    expect(priceFlowBias(bars)).toBe('DOWN');
-    const contBuy = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: 4440,
-      swing_low: 4428,
-    };
-    const greenBlip1m = candle(4433.5, 4437, 4433.2, 4436.5); // big body but dump flow
-    expect(decideEntryFromClosed1m(contBuy, greenBlip1m, bars)?.direction).toBe('BUY');
   });
 });

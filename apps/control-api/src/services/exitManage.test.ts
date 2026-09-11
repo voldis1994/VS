@@ -2,10 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
   favorableMove,
-  hardInvOppositeScalpSide,
-  hardInvFlipBrokerAction,
-  closed1mProfitPolicy,
-  directionFlipExitReason,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -78,185 +74,16 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 7,
-        peak_retention: 0.5, // stale — live fav at 2005.3 is ~76% of MFE, below TP
+        mfe: 8,
+        peak_retention: 0.8,
         playbook: 'LONG',
       }),
-      2005.3
+      2004
     );
     expect(d.exit).toBe(false);
   });
 
-  it('user Gold SELL example: PeakProtect at ~55% giveback (entry 4380.22 → peak ~4.3pt → close 4377.84)', () => {
-    // Capital: SELL 4380.22, floating +£0.86 (~4.3pt), closed 4377.84 (+2.38pt / ~55% of MFE)
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380.22,
-        mfe: 4.3,
-        peak_retention: 0.9,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(40_000),
-      }),
-      4380.22 - 4.3 * 0.8 // still 80% retention
-    );
-    expect(hold.exit).toBe(false);
-    const cut = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380.22,
-        mfe: 4.3,
-        peak_retention: 0.9, // stale snapshot — live fav must win
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(60_000),
-      }),
-      4377.84
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakProtection/);
-  });
-
-  it('PeakProtect arms after ~2.5pt MFE on CONTINUATION (not 1.2 noise)', () => {
-    const early = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380,
-        mfe: 1.5,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4379.2 // fav 0.8 — below CONTINUATION floor
-    );
-    expect(early.exit).toBe(false);
-    const armed = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380,
-        mfe: 3.0,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4378.5 // fav 1.5 → ret 50%
-    );
-    expect(armed.exit).toBe(true);
-    expect(armed.reason).toMatch(/PeakProtection/);
-  });
-
-  it('Target beats PeakProtect when fav ≥ TP', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        mfe: 20,
-        peak_retention: 0.5,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      2007 // fav 7 ≥ tpFloor 6.5 (pct×2000=5 → floor wins)
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
-  });
-
-  it('thesis uses entry_regime not live flicker', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4400,
-        mfe: 0.5,
-        entry_at: ago(200_000),
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_regime: 'TREND_UP', // locked at fill — still valid
-        regime: 'TREND_DOWN', // live flicker must not scratch
-      }),
-      4399.5 // slightly red
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('BreakevenFail disabled — BE→red holds until HardInv', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380.22,
-        mfe: 0.05, // only BE / +£0.01 class
-        be_seen: true,
-        profit_seen: false,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(30_000),
-      }),
-      4380.22 + 0.4 // SELL: price up → fav -0.4 — must NOT scratch-exit
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('post-BE with real profit still holds until HardInv', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4380.22,
-        mfe: 2.0,
-        be_seen: true,
-        profit_seen: true,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(30_000),
-      }),
-      4380.22 + 0.4 // fav -0.4 — still hold until HardInv ~1.5pt
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('never touched BE → no early exit at −0.4 (wait HardInv)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4380,
-        mfe: 0,
-        be_seen: false,
-        profit_seen: false,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(30_000),
-      }),
-      4379.6 // fav -0.4
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('live_loss gate fires HardInv; closed_1m_profit gate ignores live red', () => {
-    const snapLoss = snap({
-      open_side: 'BUY',
-      entry_price: 4400,
-      playbook: 'LONG',
-      entry_setup: 'CONTINUATION',
-      entry_at: ago(20_000),
-    });
-    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'live_loss').reason).toMatch(/HardInvalidation/);
-    expect(decideBestOutcomeExit(snapLoss, 4398.4, 'closed_1m_profit').exit).toBe(false);
-  });
-
-  it('closed_1m_profit gate fires PeakProtect; live_loss ignores green giveback', () => {
-    const snapGreen = snap({
-      open_side: 'SELL',
-      entry_price: 4380.22,
-      mfe: 4.3,
-      profit_seen: true,
-      playbook: 'LONG',
-      entry_setup: 'CONTINUATION',
-      entry_at: ago(60_000),
-    });
-    expect(decideBestOutcomeExit(snapGreen, 4377.84, 'closed_1m_profit').reason).toMatch(
-      /PeakProtection/
-    );
-    expect(decideBestOutcomeExit(snapGreen, 4377.84, 'live_loss').exit).toBe(false);
-  });
-
-  it('soft HardInv capped ~1.5pt on Gold CONTINUATION (tight for flip SCALP)', () => {
+  it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -266,21 +93,9 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.7 // -1.3 — still inside 1.5
+      4399.2
     );
     expect(hold.exit).toBe(false);
-    const stillHold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4400,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        entry_at: ago(10_000),
-        regime: 'TREND_UP',
-      }),
-      4398.55 // -1.45 — just inside 1.5
-    );
-    expect(stillHold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -290,7 +105,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.4 // -1.6 ≥ cap 1.5
+      4398.8
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
@@ -350,118 +165,5 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       4420.68
     );
     expect(d.exit).toBe(false);
-  });
-});
-
-describe('hardInvOppositeScalpSide', () => {
-  it('arms opposite after HardInv', () => {
-    expect(hardInvOppositeScalpSide('HardInvalidation · LONG · UPL', 'BUY')).toBe('SELL');
-    expect(hardInvOppositeScalpSide('HardInvalidation · SCALP', 'SELL')).toBe('BUY');
-  });
-
-  it('does not arm on PeakProtect / BreakevenFail', () => {
-    expect(hardInvOppositeScalpSide('PeakProtection · LONG · live', 'BUY')).toBeNull();
-    expect(hardInvOppositeScalpSide('BreakevenFail · SCALP', 'SELL')).toBeNull();
-  });
-
-  it('does not chain — no flip of a HARDINV_FLIP scalp', () => {
-    expect(
-      hardInvOppositeScalpSide('HardInvalidation · SCALP', 'BUY', 'HARDINV_FLIP')
-    ).toBeNull();
-  });
-});
-
-describe('hardInvFlipBrokerAction', () => {
-  it('enters when broker flat', () => {
-    expect(hardInvFlipBrokerAction('SELL', null)).toBe('enter');
-  });
-
-  it('waits while old HardInv leg still listed', () => {
-    expect(hardInvFlipBrokerAction('SELL', 'BUY')).toBe('wait_clear');
-  });
-
-  it('adopts when opposite SCALP already live', () => {
-    expect(hardInvFlipBrokerAction('SELL', 'SELL')).toBe('adopt_flip');
-  });
-
-  it('none without pending flip', () => {
-    expect(hardInvFlipBrokerAction(null, 'BUY')).toBe('none');
-  });
-});
-
-describe('closed1mProfitPolicy', () => {
-  it('continues when BUY still gets green 1m — desk HOLDs (PeakProtect off)', () => {
-    expect(
-      closed1mProfitPolicy('BUY', { open: 2000, close: 2003 }, { open: 1998, close: 2000 })
-    ).toBe('continue');
-  });
-
-  it('reverses when next 1m flips against BUY', () => {
-    expect(
-      closed1mProfitPolicy('BUY', { open: 2003, close: 2000 }, { open: 2000, close: 2003 })
-    ).toBe('reverse');
-  });
-
-  it('reverses when next 1m flips against SELL', () => {
-    expect(
-      closed1mProfitPolicy('SELL', { open: 2000, close: 2003 }, { open: 2003, close: 2000 })
-    ).toBe('reverse');
-  });
-
-  it('wait on doji', () => {
-    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2000 }, null)).toBe('wait');
-  });
-
-  it('directionFlipExitReason names the against candle', () => {
-    expect(directionFlipExitReason('BUY', 'LONG', { open: 2003, close: 2000 })).toMatch(
-      /DirectionFlip · LONG · 1m DOWN against BUY/
-    );
-  });
-});
-
-describe('peak_protect_only gate', () => {
-  it('fires PeakProtect on giveback but ignores Target and TimeDecay', () => {
-    const peak = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(120_000),
-        mfe: 4,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      2002.5, // 62.5% retention of 4 — below 75% LONG PeakProtect
-      'peak_protect_only'
-    );
-    expect(peak.exit).toBe(true);
-    expect(peak.reason).toMatch(/PeakProtection/);
-
-    const noTarget = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(120_000),
-        mfe: 20,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      2025, // deep green ≥ TP — peak_protect_only must NOT Target
-      'peak_protect_only'
-    );
-    expect(noTarget.exit).toBe(false);
-
-    const noDecay = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(600_000),
-        mfe: 0.2, // below MFE floor
-        playbook: 'SCALP',
-        entry_setup: 'PULLBACK',
-      }),
-      2000.1,
-      'peak_protect_only'
-    );
-    expect(noDecay.exit).toBe(false);
   });
 });

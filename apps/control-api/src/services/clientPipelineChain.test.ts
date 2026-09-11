@@ -144,9 +144,6 @@ beforeEach(() => {
     if (s.includes('external_account_id')) {
       return { rows: [{ external_account_id: 'XYZ' }] };
     }
-    if (s.includes('COUNT(*)') && s.includes('broker_accounts')) {
-      return { rows: [{ n: 1 }] };
-    }
     if (s.includes('INSERT INTO trade_intents')) return { rows: [{ id: 42 }] };
     if (s.includes('UPDATE trade_intents') || s.includes('INSERT INTO positions')) {
       return { rows: [] };
@@ -154,10 +151,7 @@ beforeEach(() => {
     return { rows: [{ id: 1 }] };
   });
 
-  acquireCapitalSession.mockResolvedValue({
-    ok: true,
-    session: { token: 't' },
-  });
+  acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',
@@ -304,34 +298,6 @@ describe('Idempotency', () => {
     await Promise.all([p1, p2]);
 
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
-  });
-
-  it('two clients on same intent execute Capital in parallel (not A-then-B)', async () => {
-    const { fanoutEntryIntent } = await import('./intentFanout.js');
-    listActiveSubscriptionsForEpic.mockResolvedValue([
-      sub({ client_id: 1, account_id: 10, epic: 'XAUUSD', lot_size: 0.1 }),
-      sub({ client_id: 2, account_id: 20, epic: 'XAUUSD', lot_size: 0.2 }),
-    ]);
-
-    let inFlight = 0;
-    let maxInFlight = 0;
-    createCapitalPosition.mockImplementation(async () => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 30));
-      inFlight -= 1;
-      return { ok: true, detail: 'filled', deal_reference: 'DR-x' };
-    });
-
-    await fanoutEntryIntent({
-      epic: 'XAUUSD',
-      direction: 'BUY',
-      decision: 'ENTRY_READY',
-      idempotency_key: 'mc-parallel-clients',
-    });
-
-    expect(createCapitalPosition).toHaveBeenCalledTimes(2);
-    expect(maxInFlight).toBeGreaterThanOrEqual(2);
   });
 });
 

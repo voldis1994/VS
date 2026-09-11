@@ -237,24 +237,6 @@ export function decideEntryFrom10sRegime(
         reason: `LONG · ${r} resume · ${candle}`,
       };
     }
-    if (r === 'BREAKOUT_UP') {
-      if (!rallyFor(bar, 'LONG')) return null;
-      return {
-        direction: 'BUY',
-        setup: 'BREAKOUT',
-        playbook: 'LONG',
-        reason: `LONG · ${r} follow · ${candle}`,
-      };
-    }
-    if (r === 'BREAKOUT_DOWN') {
-      if (!dipFor(bar, 'LONG')) return null;
-      return {
-        direction: 'SELL',
-        setup: 'BREAKOUT',
-        playbook: 'LONG',
-        reason: `LONG · ${r} follow · ${candle}`,
-      };
-    }
     return null;
   }
 
@@ -312,39 +294,6 @@ export function decideEntryFrom10sRegime(
         return {
           direction: 'BUY',
           setup: 'REVERSAL',
-          playbook: 'SCALP',
-          reason: `SCALP · ${r} · ${candle}`,
-        };
-      }
-      return null;
-    }
-    // Range / pullback scalp — edge only (fast in/out)
-    if (r === 'RANGE' || r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') {
-      if (r === 'RANGE' && wasTrend(ctx?.previousRegime) && (ctx?.regimeAgeBars ?? 0) <= 1) {
-        return null;
-      }
-      const zones = ctx?.zones;
-      const prior = ctx?.priorBars || [];
-      const lowOk = zones?.ready
-        ? nearRealZoneEdge(zones, 'low')
-        : nearRangeEdge(bar, prior, 'low');
-      const highOk = zones?.ready
-        ? nearRealZoneEdge(zones, 'high')
-        : nearRangeEdge(bar, prior, 'high');
-      if (dipFor(bar, 'SCALP')) {
-        if (r === 'RANGE' && !lowOk) return null;
-        return {
-          direction: 'BUY',
-          setup: 'PULLBACK',
-          playbook: 'SCALP',
-          reason: `SCALP · ${r} · ${candle}`,
-        };
-      }
-      if (rallyFor(bar, 'SCALP')) {
-        if (r === 'RANGE' && !highOk) return null;
-        return {
-          direction: 'SELL',
-          setup: 'PULLBACK',
           playbook: 'SCALP',
           reason: `SCALP · ${r} · ${candle}`,
         };

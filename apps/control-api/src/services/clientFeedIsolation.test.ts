@@ -72,71 +72,11 @@ describe('per-client robot + Capital feed contract', () => {
     expect(src).toMatch(/skipped — client runs own entry brain/);
   });
 
-  it('fanout executes all subscribers in parallel (Promise.all), not a serial for-await queue', () => {
-    const src = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
-    expect(src).toMatch(/Promise\.all\s*\(\s*subs\.map/);
-    expect(src).toMatch(/All clients in parallel/);
-  });
-
-  it('each robot has its own setInterval cadence (concurrent clients)', () => {
-    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/setInterval\(\(\) => void robotCycle\(s\), ms\)/);
-    expect(desk).toMatch(/One timer per robot/);
-  });
-
   it('active fanout subscriptions require ais.trading_enabled', () => {
     const src = readFileSync(
       fileURLToPath(new URL('./clientSubscriptions.ts', import.meta.url)),
       'utf8'
     );
     expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
-  });
-
-  it('Capital desk/fanout use short acquire (no full-cycle lease freeze)', () => {
-    const capital = readFileSync(fileURLToPath(new URL('./capitalCom.ts', import.meta.url)), 'utf8');
-    expect(capital).toMatch(/acquireCapitalSession/);
-    expect(capital).toMatch(/capitalFetch/);
-    expect(capital).toMatch(/CAPITAL_HTTP_TIMEOUT_MS/);
-    expect(capital).toMatch(/withBoundCapitalAccount/);
-    expect(capital).toMatch(/bindCapitalSession/);
-    expect(capital).toMatch(/AsyncLocalStorage/);
-
-    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/acquireCapitalSession\(/);
-    expect(desk).not.toMatch(/acquireCapitalSessionLease/);
-    expect(desk).not.toMatch(/opened\.release\(\)/);
-    expect(desk).toMatch(/Connecting Capital\.com/);
-    expect(desk).toMatch(/CYCLE WATCHDOG/);
-    expect(desk).toMatch(/external_account_id required \(multi-account connection\)/);
-
-    const fanout = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
-    expect(fanout).toMatch(/acquireCapitalSession\(/);
-    expect(fanout).not.toMatch(/acquireCapitalSessionLease/);
-    expect(fanout).not.toMatch(/opened\.release\(\)/);
-  });
-
-  it('HardInv flip + 1m profit keys live on per-robot Internal (not shared)', () => {
-    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/pending_hardinv_flip/);
-    expect(desk).toMatch(/shouldClearBrokerGhost/);
-    expect(desk).toMatch(/not managing ghost/);
-    expect(desk).toMatch(/HOLD profit/);
-    expect(desk).toMatch(/with-trend live mid \(no 1m wait\)/);
-    expect(desk).toMatch(/PeakProtect armed only on reverse/);
-    expect(desk).toMatch(/peak_protect_armed/);
-    expect(desk).toMatch(/peak_protect_only/);
-    expect(desk).toMatch(/force-close ghost/);
-    expect(desk).toMatch(/No entry debounce \/ side-lock/);
-    expect(desk).toMatch(/HARDINV_FLIP_EXPIRE_MS = 60_000/);
-    expect(desk).toMatch(/HardInv flip FIRST/);
-    expect(desk).toMatch(/last_1m_profit_exit_key/);
-    expect(desk).toMatch(/last_1m_entry_key/);
-    expect(desk).toMatch(/robotIdFor\(accountId, epic\)/);
-    expect(desk).toMatch(/HARDINV FLIP armed/);  });
-
-  it('WS trade events emit only to owning client_id', () => {
-    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/emitToClient\(s\.client_id/);
-    expect(desk).toMatch(/emitToClient\(acc\.client_id/);
   });
 });

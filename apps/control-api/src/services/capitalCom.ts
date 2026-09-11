@@ -1,5 +1,4 @@
 import { createPublicKey, publicEncrypt, constants } from 'crypto';
-import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -100,28 +99,6 @@ function explainCapitalError(input: {
   return parts.join(' ');
 }
 
-/** Capital HTTP must never hang forever — that froze the desk after ROBOT START. */
-export const CAPITAL_HTTP_TIMEOUT_MS = 15_000;
-
-export async function capitalFetch(
-  url: string,
-  init?: RequestInit,
-  timeoutMs = CAPITAL_HTTP_TIMEOUT_MS
-): Promise<Response> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error(`Capital.com HTTP timeout after ${timeoutMs}ms · ${url}`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function createSession(
   base: string,
   apiKey: string,
@@ -129,7 +106,7 @@ async function createSession(
   password: string,
   encryptedPassword: boolean
 ): Promise<{ res: Response; text: string; json: Record<string, unknown> }> {
-  const res = await capitalFetch(`${base}/api/v1/session`, {
+  const res = await fetch(`${base}/api/v1/session`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -159,7 +136,7 @@ async function resolveLoginPassword(
 ): Promise<Array<{ encrypted: boolean; password: string; label: string }>> {
   const attempts: Array<{ encrypted: boolean; password: string; label: string }> = [];
   try {
-    const encRes = await capitalFetch(`${base}/api/v1/session/encryptionKey`, {
+    const encRes = await fetch(`${base}/api/v1/session/encryptionKey`, {
       method: 'GET',
       headers: { Accept: 'application/json', 'X-CAP-API-KEY': apiKey },
     });
@@ -290,7 +267,7 @@ export async function openCapitalSession(input: {
 
     const request = async (method: string, path: string, body?: unknown) => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
-      const r = await capitalFetch(url, {
+      const r = await fetch(url, {
         method,
         headers: authHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -319,7 +296,7 @@ export async function openCapitalSession(input: {
             : null,
       async close() {
         try {
-          await capitalFetch(`${base}/api/v1/session`, {
+          await fetch(`${base}/api/v1/session`, {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,
@@ -370,20 +347,10 @@ function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
 }
 
-/**
- * Serialize acquire/switch/trade per connection so account A cannot place while
- * the pooled CST sits on B. Re-entrant via AsyncLocalStorage so desk cycle +
- * nested multi-feed acquire on the same connection do not deadlock.
- */
+/** Serialize acquire/switch per connection so account A cannot place while session sits on B. */
 const connectionLocks = new Map<number, Promise<unknown>>();
-const connectionLockDepth = new AsyncLocalStorage<Set<number>>();
 
 async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
-  const held = connectionLockDepth.getStore();
-  if (held?.has(connectionId)) {
-    return fn();
-  }
-
   const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((r) => {
@@ -392,65 +359,12 @@ async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>)
   const done = prev.then(() => gate);
   connectionLocks.set(connectionId, done);
   await prev;
-
-  const nextHeld = new Set(held);
-  nextHeld.add(connectionId);
   try {
-    return await connectionLockDepth.run(nextHeld, fn);
+    return await fn();
   } finally {
     release();
     if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
   }
-}
-
-type SessionBind = {
-  connectionId: number;
-  capitalAccountId: string | null;
-};
-
-/** Tracks which Capital account a pooled session must stay on for list/order/close. */
-const capitalSessionBind = new WeakMap<object, SessionBind>();
-
-function bindCapitalSession(
-  session: CapitalSession,
-  connectionId: number,
-  capitalAccountId: string | null
-): void {
-  capitalSessionBind.set(session, {
-    connectionId,
-    capitalAccountId: (capitalAccountId || '').trim() || null,
-  });
-}
-
-/** @internal test/audit helper */
-export function capitalSessionBindingForTest(
-  session: CapitalSession
-): SessionBind | null {
-  return capitalSessionBind.get(session) ?? null;
-}
-
-/**
- * Before list/order/close: hold connection lock and re-switch to the bound account
- * so a sibling robot cannot leave the CST on the wrong Capital account.
- */
-async function withBoundCapitalAccount<T>(
-  session: CapitalSession,
-  fn: () => Promise<T>
-): Promise<T> {
-  const bind = capitalSessionBind.get(session);
-  if (!bind) return fn();
-  return withConnectionLock(bind.connectionId, async () => {
-    const wanted = (bind.capitalAccountId || '').trim();
-    if (wanted) {
-      const sw = await switchCapitalAccount(session, wanted);
-      if (!sw.ok) throw new Error(sw.detail);
-    }
-    const pooled = capitalSessionPool.get(capitalPoolKey(bind.connectionId));
-    if (pooled) {
-      pooled.activeCapitalAccountId = wanted || session.currentAccountId || null;
-    }
-    return fn();
-  });
 }
 
 async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
@@ -518,7 +432,6 @@ export async function switchCapitalAccount(
 /**
  * Reuse Capital.com session per broker connection (multi-client safe).
  * Optionally switches to the correct Capital accountId for that desk account.
- * Returned session is bound so list/order/close re-assert that account under the connection lock.
  */
 export async function acquireCapitalSession(input: {
   environment: string;
@@ -615,8 +528,6 @@ export async function acquireCapitalSession(input: {
       }
     }
 
-    bindCapitalSession(session!, connectionId, wantedAccount);
-
     capitalSessionPool.set(key, {
       session,
       raw,
@@ -628,73 +539,6 @@ export async function acquireCapitalSession(input: {
   });
 }
 
-/**
- * Hold the connection lock for the whole trading critical section (quote → list →
- * order/close). ALS stays active until `release()` so nested list/order/close
- * re-enter — otherwise desk deadlocks (lease held, positions wait on same lock).
- */
-export async function acquireCapitalSessionLease(input: {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-  password: string;
-  connectionId: number;
-  capitalAccountId?: string | null;
-}): Promise<
-  | { ok: true; session: CapitalSession; release: () => void }
-  | { ok: false; result: CapitalComSessionResult }
-> {
-  const connectionId = Number(input.connectionId);
-  if (!Number.isFinite(connectionId) || connectionId <= 0) {
-    return {
-      ok: false,
-      result: { ok: false, status: 0, detail: 'connectionId required for multi-account session pool' },
-    };
-  }
-
-  const held = connectionLockDepth.getStore();
-  if (held?.has(connectionId)) {
-    const opened = await acquireCapitalSession(input);
-    if (!opened.ok) return opened;
-    return { ok: true, session: opened.session, release: () => undefined };
-  }
-
-  return new Promise((resolve, reject) => {
-    void withConnectionLock(connectionId, async () => {
-      let finishLease!: () => void;
-      const untilRelease = new Promise<void>((r) => {
-        finishLease = r;
-      });
-      // Safety: never hold the connection forever if caller forgets release()
-      const safety = setTimeout(() => finishLease(), 90_000);
-      try {
-        const opened = await acquireCapitalSession(input);
-        if (!opened.ok) {
-          clearTimeout(safety);
-          resolve(opened);
-          return;
-        }
-        let released = false;
-        resolve({
-          ok: true,
-          session: opened.session,
-          release: () => {
-            if (released) return;
-            released = true;
-            clearTimeout(safety);
-            finishLease();
-          },
-        });
-        // Keep ALS + connection lock until caller releases (desk cycle / fanout)
-        await untilRelease;
-      } catch (err) {
-        clearTimeout(safety);
-        reject(err);
-      }
-    }).catch(reject);
-  });
-}
-
 /** Drop a pooled session for one broker connection (e.g. after HTTP 401). */
 export function invalidateCapitalSession(connectionId: number): void {
   const key = capitalPoolKey(connectionId);
@@ -702,32 +546,6 @@ export function invalidateCapitalSession(connectionId: number): void {
   if (!cached) return;
   void cached.raw?.close().catch(() => undefined);
   capitalSessionPool.delete(key);
-}
-
-/**
- * Regression: while a lease holds the connection lock, nested withConnectionLock
- * must re-enter (ALS still active). The #500 bug dropped ALS after acquire and
- * deadlocked list/order — Capital quotes froze and VS.bat looked "stuck".
- * @internal test helper
- */
-export async function capitalLeaseNestedLockSmokeTest(
-  connectionId = 424242
-): Promise<'ok' | 'deadlock'> {
-  return new Promise((resolve) => {
-    const fail = setTimeout(() => resolve('deadlock'), 400);
-    void withConnectionLock(connectionId, async () => {
-      let done!: () => void;
-      const hold = new Promise<void>((r) => {
-        done = r;
-      });
-      // Mimic desk: after "acquire", still inside lease ALS, take nested lock
-      const nested = await withConnectionLock(connectionId, async () => 'nested-ok');
-      clearTimeout(fail);
-      resolve(nested === 'nested-ok' ? 'ok' : 'deadlock');
-      done();
-      await hold;
-    });
-  });
 }
 
 export async function testCapitalComSession(input: {
@@ -972,17 +790,6 @@ export type CapitalOpenPosition = {
 export async function listCapitalOpenPositions(
   session: CapitalSession
 ): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
-  try {
-    return await withBoundCapitalAccount(session, () => listCapitalOpenPositionsRaw(session));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, positions: [], detail: `Capital account bind: ${detail}` };
-  }
-}
-
-async function listCapitalOpenPositionsRaw(
-  session: CapitalSession
-): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
   const res = await session.get('/api/v1/positions');
   if (!res.ok) {
     return {
@@ -1022,20 +829,6 @@ export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
 ): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
-  try {
-    return await withBoundCapitalAccount(session, () =>
-      confirmCapitalDealRaw(session, dealReference)
-    );
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, detail: `Capital account bind: ${detail}` };
-  }
-}
-
-async function confirmCapitalDealRaw(
-  session: CapitalSession,
-  dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -1056,18 +849,6 @@ async function confirmCapitalDealRaw(
 
 /** Close one open position by dealId. */
 export async function closeCapitalPosition(
-  session: CapitalSession,
-  dealId: string
-): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  try {
-    return await withBoundCapitalAccount(session, () => closeCapitalPositionRaw(session, dealId));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 0, json: {}, detail: `Capital account bind: ${detail}` };
-  }
-}
-
-async function closeCapitalPositionRaw(
   session: CapitalSession,
   dealId: string
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
@@ -1105,25 +886,6 @@ export async function createCapitalPosition(
     /** Absolute price stop (Capital stopLevel) */
     stopLevel?: number;
     /** Distance in Capital POINTS — preferred for tightest legal SL */
-    stopDistance?: number;
-    profitLevel?: number;
-  }
-): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  try {
-    return await withBoundCapitalAccount(session, () => createCapitalPositionRaw(session, input));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 0, json: {}, detail: `Capital account bind: ${detail}` };
-  }
-}
-
-async function createCapitalPositionRaw(
-  session: CapitalSession,
-  input: {
-    epic: string;
-    direction: 'BUY' | 'SELL';
-    size: number;
-    stopLevel?: number;
     stopDistance?: number;
     profitLevel?: number;
   }
@@ -1225,80 +987,17 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
-  /** Candle start (ms) from Capital snapshotTime when present */
-  snapshot_time_ms?: number | null;
 };
 
-/**
- * Last fully closed Capital 1m candle (not the forming minute).
- * Prefer candles whose snapshot start + 60s ≤ now; else second-to-last.
- */
-export function lastClosedCapitalMinute(
-  candles: CapitalPriceCandle[],
-  nowMs = Date.now()
-): CapitalPriceCandle | null {
-  if (!candles.length) return null;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    const c = candles[i]!;
-    if (c.snapshot_time_ms != null && Number.isFinite(c.snapshot_time_ms)) {
-      if (c.snapshot_time_ms + 60_000 <= nowMs) return c;
-      continue;
-    }
-  }
-  if (candles.length >= 2) return candles[candles.length - 2]!;
-  return null;
-}
-
-/** Closed Capital 1m immediately before `lastClosedCapitalMinute` (for direction-change). */
-export function prevClosedCapitalMinute(
-  candles: CapitalPriceCandle[],
-  nowMs = Date.now()
-): CapitalPriceCandle | null {
-  if (!candles.length) return null;
-  const closed: CapitalPriceCandle[] = [];
-  for (const c of candles) {
-    if (c.snapshot_time_ms != null && Number.isFinite(c.snapshot_time_ms)) {
-      if (c.snapshot_time_ms + 60_000 <= nowMs) closed.push(c);
-    }
-  }
-  if (closed.length >= 2) return closed[closed.length - 2]!;
-  // No usable timestamps: lastClosed = second-to-last raw → prev = third-to-last
-  if (candles.length >= 3) return candles[candles.length - 3]!;
-  return null;
-}
-
-export function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
-  const t = c.snapshot_time_ms != null ? String(c.snapshot_time_ms) : 'x';
-  return `${t}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
-}
-
-/** Capital OHLC — SECOND (10s), MINUTE (swing/entry), MINUTE_15 (context), HOUR (legacy). */
-export type CapitalPriceResolution =
-  | 'SECOND'
-  | 'MINUTE'
-  | 'MINUTE_5'
-  | 'MINUTE_15'
-  | 'MINUTE_30'
-  | 'HOUR'
-  | 'HOUR_4'
-  | 'DAY'
-  | 'WEEK';
-
+/** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: CapitalPriceResolution = 'MINUTE',
+  resolution: 'SECOND' | 'MINUTE' | 'HOUR' = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap =
-    resolution === 'SECOND'
-      ? 50
-      : resolution === 'HOUR' || resolution === 'HOUR_4'
-        ? 48
-        : resolution === 'MINUTE_15' || resolution === 'MINUTE_5'
-          ? 96
-          : 120;
+  const cap = resolution === 'SECOND' ? 50 : resolution === 'HOUR' ? 48 : 120;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),
@@ -1321,15 +1020,7 @@ export async function fetchCapitalPrices(
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    const snapRaw = p.snapshotTimeUTC || p.snapshotTime || p.from || p.time;
-    let snapshot_time_ms: number | null = null;
-    if (typeof snapRaw === 'string' && snapRaw.trim()) {
-      const ms = Date.parse(snapRaw.includes('T') ? snapRaw : snapRaw.replace(' ', 'T') + 'Z');
-      if (Number.isFinite(ms)) snapshot_time_ms = ms;
-    } else if (typeof snapRaw === 'number' && Number.isFinite(snapRaw)) {
-      snapshot_time_ms = snapRaw < 1e12 ? snapRaw * 1000 : snapRaw;
-    }
-    candles.push({ open, high, low, close, snapshot_time_ms });
+    candles.push({ open, high, low, close });
   }
   return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }
@@ -1342,68 +1033,12 @@ export async function fetchCapitalMinutePrices(
   return fetchCapitalPrices(session, epic, 'MINUTE', max);
 }
 
-/** Context TF for desk bias — 15m (not 1h; entries are on 1m). */
-export async function fetchCapitalFifteenMinutePrices(
-  session: CapitalSession,
-  epic: string,
-  max = 48
-): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
-  return fetchCapitalPrices(session, epic, 'MINUTE_15', max);
-}
-
 export async function fetchCapitalHourPrices(
   session: CapitalSession,
   epic: string,
   max = 24
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   return fetchCapitalPrices(session, epic, 'HOUR', max);
-}
-
-/**
- * Fallback: build 15m OHLC from Capital 1m bars when MINUTE_15 API is unavailable.
- */
-export function aggregateMinutesToFifteen(
-  minutes: CapitalPriceCandle[]
-): CapitalPriceCandle[] {
-  if (minutes.length < 15) return [];
-  const out: CapitalPriceCandle[] = [];
-  const bucketMs = 15 * 60_000;
-  let bucket: CapitalPriceCandle[] = [];
-  let bucketKey: number | null = null;
-
-  const flush = () => {
-    if (!bucket.length) return;
-    const first = bucket[0]!;
-    const last = bucket[bucket.length - 1]!;
-    out.push({
-      open: first.open,
-      high: Math.max(...bucket.map((c) => c.high)),
-      low: Math.min(...bucket.map((c) => c.low)),
-      close: last.close,
-      snapshot_time_ms: first.snapshot_time_ms ?? null,
-    });
-    bucket = [];
-  };
-
-  for (const c of minutes) {
-    const t = c.snapshot_time_ms;
-    if (t != null && Number.isFinite(t)) {
-      const key = Math.floor(t / bucketMs);
-      if (bucketKey != null && key !== bucketKey) flush();
-      bucketKey = key;
-      bucket.push(c);
-    } else {
-      // No timestamps — pack sequential groups of 15
-      bucket.push(c);
-      if (bucket.length >= 15) {
-        flush();
-        bucketKey = null;
-      }
-    }
-  }
-  // Only flush complete buckets when using time keys mid-stream; at end include partial if ≥8 bars
-  if (bucket.length >= 8) flush();
-  return out;
 }
 
 /**

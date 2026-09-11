@@ -1,18 +1,17 @@
 /**
  * Setup-first market model (LIVE desk brain).
  *
- * Capital quote + 1m (+ 15m context) + 10s → STRUCTURE → SETUP → ENTRY → BEST OUTCOME
+ * Capital quote + 1m (+ optional 1h) + 10s → STRUCTURE → SETUP → ENTRY → BEST OUTCOME
  *
  * Hard rules:
  * - Setup changes only on structure refresh / closed bars — never on every quote tick
  * - NONE = no tradeable setup (not a "WAIT regime")
- * - ARMED = setup ready; ENTRY only on closed Capital 1m candle that confirms the side
+ * - ARMED = setup ready; entry only on closed 10s confirm at the level
  * - Open trade freezes setup; manage = best outcome only
- * - Live mid / 10s never open a trade (diagnostics / optional extra only)
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
 import type { TradePlaybook } from './playbooks.js';
-import { PLAYBOOK_ENTRY_BODY, withTrendSideFromRegime } from './playbooks.js';
+import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
 export const SETUP_KINDS = [
@@ -36,7 +35,6 @@ export type StructureBook = {
   bias: 'ABOVE' | 'BELOW' | 'INSIDE';
   near_high: boolean;
   near_low: boolean;
-  /** Context TF bias from Capital 15m (field name legacy; was 1h) */
   hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN';
   bar_count: number;
   detail: string;
@@ -69,7 +67,7 @@ export type SetupEntry = {
 const MIN_SWING_BARS = 20;
 const PIVOT_LEFT = 3;
 const PIVOT_RIGHT = 3;
-const SETUP_CONFIRM = 1;
+const SETUP_CONFIRM = 2;
 /** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
 const FRESH_SWING_BARS = 12;
 
@@ -180,10 +178,9 @@ export function detectSwingLevels(minutes: CapitalPriceCandle[]): {
   return { high, low, ok: true };
 }
 
-/** Bias from Capital 15m context candles (replaces slow 1h). */
-function contextBiasFrom(bars: CapitalPriceCandle[] | null | undefined): StructureBook['hour_bias'] {
-  if (!bars || bars.length < 3) return 'UNKNOWN';
-  const last = bars.slice(-6);
+function hourBiasFrom(hours: CapitalPriceCandle[] | null | undefined): StructureBook['hour_bias'] {
+  if (!hours || hours.length < 3) return 'UNKNOWN';
+  const last = hours.slice(-6);
   const bodies = last.map((c) => (c.close - c.open) / Math.max(Math.abs(c.open), 1e-9));
   const p = mean(bodies.map((v) => (v > 0.0002 ? 1 : v < -0.0002 ? -1 : 0)));
   if (p > 0.35) return 'UP';
@@ -192,20 +189,16 @@ function contextBiasFrom(bars: CapitalPriceCandle[] | null | undefined): Structu
 }
 
 /**
- * Build durable structure from Capital minutes (+ optional 15m context).
+ * Build durable structure from Capital minutes (+ optional hours).
  * Optional prevSwing keeps levels sticky across refreshes until clearly broken.
  */
 export function buildStructure(input: {
   minutes: CapitalPriceCandle[];
-  /** @deprecated use context15 — kept for callers */
   hours?: CapitalPriceCandle[] | null;
-  /** Capital 15m candles for context bias */
-  context15?: CapitalPriceCandle[] | null;
   mid?: number | null;
   prev?: StructureBook | null;
 }): StructureBook {
-  const { minutes, mid: lastMid, prev } = input;
-  const context = input.context15 ?? input.hours;
+  const { minutes, hours, mid: lastMid, prev } = input;
   if (!minutes.length || minutes.length < MIN_SWING_BARS) {
     return emptyStructure(`need ≥${MIN_SWING_BARS} minute bars · have ${minutes.length}`);
   }
@@ -249,7 +242,7 @@ export function buildStructure(input: {
   if (px > midZ + span * 0.1) bias = 'ABOVE';
   else if (px < midZ - span * 0.1) bias = 'BELOW';
 
-  const hb = contextBiasFrom(context);
+  const hb = hourBiasFrom(hours);
 
   return {
     ready: true,
@@ -262,7 +255,7 @@ export function buildStructure(input: {
     near_low,
     hour_bias: hb,
     bar_count: minutes.length,
-    detail: `swing H${hi.toFixed(2)} L${lo.toFixed(2)} · ${bias} · 15m ${hb} · 1m×${minutes.length}`,
+    detail: `swing H${hi.toFixed(2)} L${lo.toFixed(2)} · ${bias} · 1h ${hb} · 1m×${minutes.length}`,
     updated_at: new Date().toISOString(),
   };
 }
@@ -409,27 +402,27 @@ function rawSetupFromStructure(
   const freshHi = isFreshSwingHigh(minutes, hi, eps);
   const freshLo = isFreshSwingLow(minutes, lo, eps);
 
-  // ——— IMPULSE FIRST — flip candidate side, but FORMING (sticky must confirm before entry) ———
+  // ——— IMPULSE FIRST — instant flip side, do not wait for sticky opposite to die ———
   if (imp === 'UP') {
     if (closedAbove || last.close >= hi - eps * 0.5) {
       return {
         kind: 'BREAKOUT',
         side: 'BUY',
-        playbook: 'LONG',
-        status: 'FORMING',
+        playbook: 'SCALP',
+        status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY forming`,
+        reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
       };
     }
     return {
       kind: 'CONTINUATION',
       side: 'BUY',
       playbook: 'LONG',
-      status: 'FORMING',
+      status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `IMPULSE UP → BUY forming · mid ${structure.mid.toFixed(2)}`,
+      reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
     };
   }
   if (imp === 'DOWN') {
@@ -437,21 +430,21 @@ function rawSetupFromStructure(
       return {
         kind: 'BREAKOUT',
         side: 'SELL',
-        playbook: 'LONG',
-        status: 'FORMING',
+        playbook: 'SCALP',
+        status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL forming`,
+        reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
       };
     }
     return {
       kind: 'CONTINUATION',
       side: 'SELL',
       playbook: 'LONG',
-      status: 'FORMING',
+      status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `IMPULSE DOWN → SELL forming · mid ${structure.mid.toFixed(2)}`,
+      reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
     };
   }
 
@@ -496,7 +489,7 @@ function rawSetupFromStructure(
     return {
       kind: 'BREAKOUT',
       side: 'BUY',
-      playbook: 'LONG',
+      playbook: 'SCALP',
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
@@ -507,7 +500,7 @@ function rawSetupFromStructure(
     return {
       kind: 'BREAKOUT',
       side: 'SELL',
-      playbook: 'LONG',
+      playbook: 'SCALP',
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
@@ -563,7 +556,7 @@ function rawSetupFromStructure(
     };
   }
 
-  // CONTINUATION / PULLBACK in trend (15m + minute persistence) — mid/pullback only
+  // CONTINUATION / PULLBACK in trend (hour + minute persistence) — mid/pullback only
   const trendUp =
     pers > 0.35 || structure.hour_bias === 'UP' || structure.bias === 'ABOVE';
   const trendDown =
@@ -574,7 +567,7 @@ function rawSetupFromStructure(
       return {
         kind: 'PULLBACK',
         side: 'BUY',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
@@ -599,7 +592,7 @@ function rawSetupFromStructure(
       return {
         kind: 'PULLBACK',
         side: 'SELL',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'FORMING',
         swing_high: hi,
         swing_low: lo,
@@ -655,7 +648,7 @@ function rawSetupFromStructure(
 }
 
 /**
- * Sticky setup update — candidate may flip immediately; ARMED after sticky confirm.
+ * Sticky setup update — impulse FLIPS instantly (BUY↔SELL).
  * Dual watch always attached so desk sees both sides.
  */
 export function updateSetupSticky(
@@ -683,9 +676,14 @@ export function updateSetupSticky(
 
   if (same) {
     const confirm = Math.min(prevSafe.confirm + 1, SETUP_CONFIRM + 2);
-    // Sticky confirm → ARMED (PULLBACK included — no forever-FORMING agent block)
     const status: SetupStatus =
-      raw.kind === 'NONE' ? 'NONE' : confirm >= SETUP_CONFIRM ? 'ARMED' : 'FORMING';
+      raw.kind === 'NONE'
+        ? 'NONE'
+        : confirm >= SETUP_CONFIRM
+          ? raw.status === 'FORMING'
+            ? 'FORMING'
+            : 'ARMED'
+          : 'FORMING';
     return withWatch({
       ...raw,
       status: raw.kind === 'NONE' ? 'NONE' : status,
@@ -696,29 +694,31 @@ export function updateSetupSticky(
     });
   }
 
-  // Impulse / breakout / continuation — start FORMING (no instant flip-entry)
+  // Impulse / breakout / continuation — INSTANT arm (flip without waiting sticky)
   if (
     raw.side &&
     (String(raw.reason).includes('IMPULSE') ||
       raw.kind === 'BREAKOUT' ||
       raw.kind === 'CONTINUATION')
   ) {
-    const flipped = Boolean(prevSafe.side && prevSafe.side !== raw.side);
     return withWatch({
       ...raw,
-      status: 'FORMING',
-      confirm: 1,
-      reason: flipped ? `${raw.reason} · flipped from ${prevSafe.side}` : raw.reason,
+      status: 'ARMED',
+      confirm: SETUP_CONFIRM,
+      reason:
+        prevSafe.side && prevSafe.side !== raw.side
+          ? `${raw.reason} · flipped from ${prevSafe.side}`
+          : raw.reason,
       updated_at: now,
     });
   }
 
-  // Leaving NONE — FORMING first tick; sticky confirm arms (no chase on first print)
+  // Leaving NONE for a real setup is instant
   if (prevSafe.kind === 'NONE' && raw.kind !== 'NONE' && raw.side) {
     return withWatch({
       ...raw,
-      status: 'FORMING',
-      confirm: 1,
+      status: raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      confirm: SETUP_CONFIRM,
       updated_at: now,
     });
   }
@@ -742,8 +742,8 @@ export function updateSetupSticky(
   if (stickyBuyDead || stickySellDead) {
     return withWatch({
       ...raw,
-      status: raw.kind === 'NONE' ? 'NONE' : 'FORMING',
-      confirm: raw.kind === 'NONE' ? 0 : 1,
+      status: raw.kind === 'NONE' ? 'NONE' : raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      confirm: raw.kind === 'NONE' ? 0 : SETUP_CONFIRM,
       reason:
         raw.reason +
         (stickyBuyDead ? ' · flipped off sticky BUY' : ' · flipped off sticky SELL'),
@@ -778,41 +778,24 @@ export function updateSetupSticky(
  * Entry trigger on CLOSED 10s only — confirms an ARMED setup.
  * Rejection/bounce at swing for FADE/FAILED_BREAK; impulse for BREAKOUT/CONTINUATION.
  */
-/**
- * Tip-chase: do not buy the swing high / sell the swing low.
- * BREAKOUT always exempt. CONTINUATION exempt when close is clearly THROUGH the level.
- */
+/** Block tip-chase only for FADE/PULLBACK at the extreme tip — not CONTINUATION/BREAKOUT. */
 export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
-  if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT') {
+  if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT' || setup.kind === 'CONTINUATION') {
     return false;
   }
-  if (
-    setup.kind !== 'FADE' &&
-    setup.kind !== 'FAILED_BREAK' &&
-    setup.kind !== 'PULLBACK' &&
-    setup.kind !== 'CONTINUATION'
-  ) {
+  if (setup.kind !== 'FADE' && setup.kind !== 'FAILED_BREAK' && setup.kind !== 'PULLBACK') {
     return false;
   }
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   if (!(hi > lo)) return false;
-  // Through-level CONTINUATION is a real break — not tip-chase
-  if (setup.kind === 'CONTINUATION') {
-    if (setup.side === 'BUY' && bar.close > hi) return false;
-    if (setup.side === 'SELL' && bar.close < lo) return false;
-  }
   const eps = edgeEps(bar.close, hi - lo);
-  const band = setup.kind === 'CONTINUATION' ? 0.45 : 0.35;
-  if (setup.side === 'BUY' && bar.close >= hi - eps * band) return true;
-  if (setup.side === 'SELL' && bar.close <= lo + eps * band) return true;
+  // Narrower band — was 0.65 (blocked too many valid 10s entries)
+  if (setup.side === 'BUY' && bar.close >= hi - eps * 0.3) return true;
+  if (setup.side === 'SELL' && bar.close <= lo + eps * 0.3) return true;
   return false;
 }
 
-/**
- * Optional EXTRA confirm on a closed 10s bar — desk does NOT open on this alone.
- * Live path uses decideEntryFromArmedLive (no 1m close wait).
- */
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
@@ -843,7 +826,7 @@ export function decideEntryFromSetup(
       const touched = bar.low <= lo + eps;
       // Only block if bar is clearly dumping through the floor
       const stillDumping = bar.close < bar.open && bar.low < lo - eps * 0.5;
-      if (touched && !stillDumping && body >= thr * 0.85 && bar.close > bar.open) {
+      if (touched && !stillDumping && body >= thr * 0.55 && bar.close > bar.open) {
         return {
           direction: 'BUY',
           setup: setup.kind,
@@ -855,7 +838,7 @@ export function decideEntryFromSetup(
     }
     const touched = bar.high >= hi - eps;
     const stillRallying = bar.close > bar.open && bar.high > hi + eps * 0.5;
-    if (touched && !stillRallying && body <= -thr * 0.85 && bar.close < bar.open) {
+    if (touched && !stillRallying && body <= -thr * 0.55 && bar.close < bar.open) {
       return {
         direction: 'SELL',
         setup: setup.kind,
@@ -867,7 +850,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'BREAKOUT') {
-    if (setup.side === 'BUY' && body >= thr * 0.85 && bar.close > hi) {
+    if (setup.side === 'BUY' && body >= thr * 0.6 && bar.close > hi - eps) {
       return {
         direction: 'BUY',
         setup: 'BREAKOUT',
@@ -875,7 +858,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · BREAKOUT BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.85 && bar.close < lo) {
+    if (setup.side === 'SELL' && body <= -thr * 0.6 && bar.close < lo + eps) {
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
@@ -889,7 +872,7 @@ export function decideEntryFromSetup(
   if (setup.kind === 'PULLBACK') {
     if (
       setup.side === 'BUY' &&
-      body >= thr * 0.85 &&
+      body >= thr * 0.6 &&
       (bar.low <= lo + eps * 1.5 || bar.close < setup.swing_high)
     ) {
       return {
@@ -901,7 +884,7 @@ export function decideEntryFromSetup(
     }
     if (
       setup.side === 'SELL' &&
-      body <= -thr * 0.85 &&
+      body <= -thr * 0.6 &&
       (bar.high >= hi - eps * 1.5 || bar.close > setup.swing_low)
     ) {
       return {
@@ -915,8 +898,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
-    // Full body confirm — no ×0.55 looseners that chased every 10s blip
-    if (setup.side === 'BUY' && body >= thr) {
+    if (setup.side === 'BUY' && body >= thr * 0.55) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
@@ -924,7 +906,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr) {
+    if (setup.side === 'SELL' && body <= -thr * 0.55) {
       return {
         direction: 'SELL',
         setup: 'CONTINUATION',
@@ -937,152 +919,46 @@ export function decideEntryFromSetup(
   return null;
 }
 
-/** Map Capital 1m OHLC into the tip-chase probe shape (same open/high/low/close). */
-export function capitalMinuteAsBar(c: CapitalPriceCandle): TenSecBar {
-  return {
-    open_time_ms: c.snapshot_time_ms ?? 0,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-    ticks: 1,
-  };
-}
-
-/** All armed setups may enter — no watch-only kind filter. */
-export const QUALITY_ENTRY_KINDS = new Set<SetupKind>(['CONTINUATION', 'BREAKOUT', 'PULLBACK', 'FADE', 'FAILED_BREAK']);
-/** Capital 1m body floor in price points (Gold) — blips below this are noise */
-export const QUALITY_1M_BODY_ABS = 2.0;
-
-export function isQualityEntrySetup(kind: string | null | undefined): boolean {
-  return QUALITY_ENTRY_KINDS.has(String(kind || '').toUpperCase() as SetupKind);
-}
-
 /**
- * PRIMARY live entry — sticky ARMED CONTINUATION/BREAKOUT/PULLBACK + closed Capital 1m.
- * Quality: real 1m body, impulse must not fight the side (quiet OK), 15m not against,
- * TREND_UP→BUY only / TREND_DOWN→SELL only. FADE/FAILED_BREAK stay watch-only.
+ * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
+ * enter CONTINUATION in the bar direction — do not sit out every V-leg as "NONE".
+ * Still refuse tip-chase and refuse BUY into dump / SELL into rally.
  */
-export function decideEntryFromClosed1m(
-  setup: MarketSetup,
-  closed1m: CapitalPriceCandle,
-  minutes?: CapitalPriceCandle[] | null,
-  _structure?: StructureBook | null,
-  _regime?: string | null
+export function decideEntryFromTenSecMove(
+  structure: StructureBook,
+  bar: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
-  if (
-    setup.kind === 'NONE' ||
-    setup.status !== 'ARMED' ||
-    !setup.side ||
-    !setup.playbook ||
-    !Number.isFinite(closed1m.close) ||
-    !Number.isFinite(closed1m.open)
-  ) {
-    return null;
-  }
-
-  // No blocking filters (quality / impulse / tip-chase / trend / 15m / late-move).
-  // ARMED setup + closed Capital 1m body in the setup direction → entry.
-  const bodyAbs = Math.abs(closed1m.close - closed1m.open);
-  if (bodyAbs < 0.5) return null; // only skip flat doji (not a "quality" gate)
-
-  const book = setup.playbook;
-  const thr = PLAYBOOK_ENTRY_BODY[book];
-  const bar = capitalMinuteAsBar(closed1m);
+  if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
+  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
   const body = bodyPct(bar);
-  const hi = setup.swing_high;
-  const lo = setup.swing_low;
-  if (!(hi > lo)) return null;
+  const hi = structure.swing_high;
+  const lo = structure.swing_low;
+  const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
+  const need = thr * 0.65;
+  const flow = priceFlowBias(minutes);
 
-  if (setup.kind === 'BREAKOUT') {
-    if (setup.side === 'BUY' && body >= thr * 0.85 && bar.close > hi) {
-      return {
-        direction: 'BUY',
-        setup: 'BREAKOUT',
-        playbook: book,
-        reason: `ENTRY · BREAKOUT BUY Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
-      };
-    }
-    if (setup.side === 'SELL' && body <= -thr * 0.85 && bar.close < lo) {
-      return {
-        direction: 'SELL',
-        setup: 'BREAKOUT',
-        playbook: book,
-        reason: `ENTRY · BREAKOUT SELL Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
-      };
-    }
-    return null;
-  }
-
-  // CONTINUATION / PULLBACK / FADE / FAILED_BREAK — side + 1m body only
-  if (setup.side === 'BUY' && body >= thr * 0.85 && bar.close > bar.open) {
+  if (body >= need) {
+    if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
+    // Tip-chase: green bar parked at swing high — skip
+    if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     return {
       direction: 'BUY',
-      setup: setup.kind,
-      playbook: book,
-      reason: `ENTRY · ${setup.kind} BUY Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
+      setup: 'CONTINUATION',
+      playbook: 'SCALP',
+      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
-  if (setup.side === 'SELL' && body <= -thr * 0.85 && bar.close < bar.open) {
+  if (body <= -need) {
+    if (flow === 'UP' || structure.bias === 'ABOVE') return null;
+    if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
       direction: 'SELL',
-      setup: setup.kind,
-      playbook: book,
-      reason: `ENTRY · ${setup.kind} SELL Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
+      setup: 'CONTINUATION',
+      playbook: 'SCALP',
+      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
-
-  return null;
-}
-
-/**
- * LIVE entry — ARMED with-trend setup fires on quote mid (no Capital 1m close wait).
- * FADE/FAILED_BREAK = watch-only here (not live leftovers against the move).
- * Wrong-entry correction stays HardInv → opposite SCALP flip on the desk.
- * Profit exits still use 1m close elsewhere.
- */
-export function decideEntryFromArmedLive(
-  setup: MarketSetup,
-  mid: number,
-  minutes?: CapitalPriceCandle[] | null,
-  regime?: string | null
-): SetupEntry | null {
-  if (
-    setup.kind === 'NONE' ||
-    setup.status !== 'ARMED' ||
-    !setup.side ||
-    !setup.playbook ||
-    !Number.isFinite(mid)
-  ) {
-    return null;
-  }
-  // Watch-only on live path — do not fade/reject into a finished move
-  if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
-    return null;
-  }
-  // With-trend lock when regime is directional
-  const trendSide = withTrendSideFromRegime(regime);
-  if (trendSide && setup.side !== trendSide) {
-    return null;
-  }
-  // Never BUY into a dump / SELL into a rally (leftover chase)
-  const flow = priceFlowBias(minutes);
-  if (setup.side === 'BUY' && flow === 'DOWN') return null;
-  if (setup.side === 'SELL' && flow === 'UP') return null;
-
-  return {
-    direction: setup.side,
-    setup: setup.kind,
-    playbook: setup.playbook,
-    reason: `ENTRY · ${setup.kind} ${setup.side} live mid ${mid.toFixed(2)} · no 1m wait · with-trend · ${setup.reason}`,
-  };
-}
-
-export function decideEntryFromTenSecMove(
-  _structure: StructureBook,
-  _bar: TenSecBar,
-  _minutes?: CapitalPriceCandle[] | null
-): SetupEntry | null {
   return null;
 }
 

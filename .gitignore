@@ -56,6 +56,3 @@ coverage/
 *.pem
 *.key
 credentials.json
-
-# leftover MASTER runtime (do not commit)
-apps/control-api/.master-state/
