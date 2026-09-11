@@ -69,7 +69,7 @@ export type SetupEntry = {
 const MIN_SWING_BARS = 20;
 const PIVOT_LEFT = 3;
 const PIVOT_RIGHT = 3;
-const SETUP_CONFIRM = 2;
+const SETUP_CONFIRM = 1;
 /** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
 const FRESH_SWING_BARS = 12;
 
@@ -683,15 +683,9 @@ export function updateSetupSticky(
 
   if (same) {
     const confirm = Math.min(prevSafe.confirm + 1, SETUP_CONFIRM + 2);
-    // PULLBACK may stay FORMING until structure upgrades; everything else arms after sticky confirm
+    // Sticky confirm → ARMED (PULLBACK included — no forever-FORMING agent block)
     const status: SetupStatus =
-      raw.kind === 'NONE'
-        ? 'NONE'
-        : confirm >= SETUP_CONFIRM
-          ? raw.kind === 'PULLBACK' && raw.status === 'FORMING'
-            ? 'FORMING'
-            : 'ARMED'
-          : 'FORMING';
+      raw.kind === 'NONE' ? 'NONE' : confirm >= SETUP_CONFIRM ? 'ARMED' : 'FORMING';
     return withWatch({
       ...raw,
       status: raw.kind === 'NONE' ? 'NONE' : status,

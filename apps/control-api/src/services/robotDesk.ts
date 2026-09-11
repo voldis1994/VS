@@ -224,13 +224,9 @@ const STRUCTURE_15M_BARS = 48;
 const ACTIVE_CADENCE_MS = 500;
 /** Manage must be ms-fast — PeakProtect/HardInv cannot wait 750ms–2s on Gold */
 const MANAGE_CADENCE_MS = 200;
-/** No post-close cooldown — user: enter when setup is ready (HardInv flip already immediate) */
-const SIDE_LOCK_AFTER_HARD_MS = 75_000;
-const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
-const HARD_RECENT_WINDOW_MS = 180_000;
+/** No post-close cooldown / side-lock / entry debounce — user: enter when ARMED (HardInv flip already immediate) */
 /** HardInv → opposite SCALP must fire quickly or expire */
 const HARDINV_FLIP_EXPIRE_MS = 60_000;
-const ENTRY_DEBOUNCE_MS = 3_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -1903,40 +1899,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Debounce Capital order spam (replaces one-shot-per-1m gate)
-    if (s.last_entry_attempt_ms > 0 && Date.now() - s.last_entry_attempt_ms < ENTRY_DEBOUNCE_MS) {
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · entry debounce ${Math.ceil(
-          (ENTRY_DEBOUNCE_MS - (Date.now() - s.last_entry_attempt_ms)) / 1000
-        )}s`,
-      });
-      return;
-    }
-
-    // Opposite-side lock: short after win; longer only after HardInv/BE
-    const hardRecent =
-      s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < HARD_RECENT_WINDOW_MS;
-    const SIDE_LOCK_MS = hardRecent ? SIDE_LOCK_AFTER_HARD_MS : SIDE_LOCK_AFTER_SOFT_MS;
-    if (
-      s.last_entry_side &&
-      s.last_entry_side !== entry.direction &&
-      Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
-    ) {
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
-          (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
-      });
-      return;
-    }
+    // No entry debounce / side-lock — user: ARMED → enter (HardInv flip already bypasses these)
 
     const direction = entry.direction;
     const setupType = entry.setup;
