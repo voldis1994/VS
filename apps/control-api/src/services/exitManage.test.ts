@@ -285,3 +285,62 @@ describe('peak_protect_only gate', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 });
+
+describe('HardInv only — no micro-red / thesis scratch', () => {
+  it('does NOT exit at -0.19 noise (next 1m can still profit)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(130_000),
+        regime: 'TREND_DOWN', // would have been thesis before
+      }),
+      4399.81, // -0.19
+      'live_loss'
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('HardInv fires only at ~1.5pt live loss', () => {
+    const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'SCALP',
+        entry_setup: 'CONTINUATION',
+      }),
+      4398.6, // -1.4
+      'live_loss'
+    );
+    expect(hold.exit).toBe(false);
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'SCALP',
+        entry_setup: 'CONTINUATION',
+      }),
+      4398.4, // -1.6
+      'live_loss'
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('regime flip while slightly red does NOT thesis-scratch', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        playbook: 'LONG',
+        entry_at: ago(200_000),
+        regime: 'TREND_DOWN',
+      }),
+      1999.7,
+      'live_loss'
+    );
+    expect(d.exit).toBe(false);
+  });
+});

@@ -142,7 +142,7 @@ describe('playbook exit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('LONG thesis on TREND_DOWN after 120s only when UPL ≤ 0', () => {
+  it('LONG: regime TREND_DOWN does NOT thesis-scratch micro-red (HardInv 1.5 only)', () => {
     const young = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -171,6 +171,7 @@ describe('playbook exit', () => {
       2001
     );
     expect(agedGreen.exit).toBe(false);
+    // Thesis scratch DISABLED — micro-red (-0.5) must HOLD; only HardInv 1.5 cuts losers
     const agedRed = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -184,8 +185,7 @@ describe('playbook exit', () => {
       },
       1999.5
     );
-    expect(agedRed.exit).toBe(true);
-    expect(agedRed.reason).toMatch(/LONG/);
+    expect(agedRed.exit).toBe(false);
   });
 
   it('all books PeakProtect below 75% retention (unified 25% giveback)', () => {
