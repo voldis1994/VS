@@ -11,9 +11,9 @@ export type ExitSide = 'BUY' | 'SELL';
 
 /**
  * Soft loss exits use HardInv only (no BreakevenFail scratch path).
- * Profit side (Target / PeakProtect / TimeDecay): Capital 1m CLOSE only.
- * If that 1m continues with the trade → HOLD (no PeakProtect yet).
- * If the next 1m flips against the trade → PeakProtect % ON (DirectionFlip fallback).
+ * Profit side: hold green until Capital 1m CLOSE.
+ * Continue 1m → HOLD (PeakProtect OFF). Reverse 1m → PeakProtect % ARMS + live trail.
+ * No instant DirectionFlip on reverse — only PeakProtect giveback %.
  */
 export const BE_ZONE_ABS = 0.12; // diagnostic only — no longer triggers early exit
 export const PROFIT_HOLD_ABS = 0.45;
@@ -24,10 +24,16 @@ export const BE_EARLY_MIN_HOLD_MS = 8_000;
 /**
  * - live_loss: HardInv / red thesis — fire on live mark
  * - live_profit: Target / PeakProtect / TimeDecay (legacy alias)
- * - closed_1m_profit: Target / PeakProtect / TimeDecay — desk uses on Capital 1m CLOSE
+ * - closed_1m_profit: Target / PeakProtect / TimeDecay — Capital 1m CLOSE
+ * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
  * - all: both
  */
-export type ExitDecideGate = 'all' | 'live_loss' | 'live_profit' | 'closed_1m_profit';
+export type ExitDecideGate =
+  | 'all'
+  | 'live_loss'
+  | 'live_profit'
+  | 'closed_1m_profit'
+  | 'peak_protect_only';
 
 export type CandleOHLC = { open: number; close: number };
 
@@ -57,7 +63,7 @@ export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
 /**
  * Profit-side policy on a newly closed Capital 1m:
  * - continue: direction still with trade → HOLD profit (PeakProtect stays off)
- * - reverse: next candle flipped against side → PeakProtect % ON / DirectionFlip
+ * - reverse: next candle flipped against side → PeakProtect % ARMS (live trail)
  * - wait: doji / no clear signal
  */
 export function closed1mProfitPolicy(
@@ -154,8 +160,8 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  *
- * Desk: loss (HardInv) LIVE; profit (Target/PeakProtect/TimeDecay) on Capital 1m CLOSE.
- * Continuation 1m → HOLD; reverse 1m → PeakProtect % ON.
+ * Desk: loss (HardInv) LIVE; profit HOLD until reverse 1m arms PeakProtect live trail.
+ * Continuation 1m → HOLD (PeakProtect off); reverse → peak_protect_only (no Target/TimeDecay).
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -178,6 +184,7 @@ export function decideBestOutcomeExit(
   const retention = mfe > 0 ? Math.max(0, fav / mfe) : null;
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
+  const wantPeakOnly = gate === 'peak_protect_only';
   const wantProfit =
     gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
 
@@ -200,6 +207,17 @@ export function decideBestOutcomeExit(
     }
   }
 
+  // Armed after reverse 1m — PeakProtect giveback only (no Target / TimeDecay scratch)
+  if (wantPeakOnly) {
+    if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
+      return {
+        exit: true,
+        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
+      };
+    }
+    return { exit: false, reason: '' };
+  }
+
   if (wantProfit) {
     // 3) Target — bank TP on closed-1m mark (desk) / mid
     if (fav >= tp) {
@@ -209,7 +227,7 @@ export function decideBestOutcomeExit(
       };
     }
 
-    // 4) PeakProtect — giveback of MFE (desk: only on reverse 1m path)
+    // 4) PeakProtect — giveback of MFE
     if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
       return {
         exit: true,
