@@ -1312,9 +1312,23 @@ async function robotCycle(s: Internal) {
   if (!s.running) return;
   if (s.cycle_busy) return;
   s.cycle_busy = true;
+  // If Capital HTTP hangs despite timeouts, unlock so next ticks can run
+  const watchdog = setTimeout(() => {
+    if (s.cycle_busy) {
+      s.cycle_busy = false;
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: null,
+        ask: null,
+        mid: null,
+        detail: 'CYCLE WATCHDOG — Capital call stuck >45s · unlocked for next tick',
+      });
+    }
+  }, 45_000);
   try {
     await robotCycleBody(s);
   } finally {
+    clearTimeout(watchdog);
     s.cycle_busy = false;
   }
 }
@@ -1375,6 +1389,14 @@ async function robotCycleBody(s: Internal) {
     });
     return;
   }
+
+  pushTick(s, {
+    phase: 'INFO',
+    bid: null,
+    ask: null,
+    mid: null,
+    detail: `Connecting Capital.com · ${s.display_name} (${s.epic}) · ${String(conn.environment || '').toUpperCase()}…`,
+  });
 
   const opened = await acquireCapitalSessionLease({
     environment: conn.environment,

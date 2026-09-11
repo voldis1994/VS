@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   aggregateMinutesToFifteen,
   capitalComBaseUrl,
+  capitalFetch,
+  CAPITAL_HTTP_TIMEOUT_MS,
   capitalLeaseNestedLockSmokeTest,
   encryptCapitalPassword,
   lastClosedCapitalMinute,
@@ -93,5 +95,37 @@ describe('prevClosedCapitalMinute', () => {
 describe('Capital lease nested lock (no quote freeze)', () => {
   it('nested connection lock re-enters while lease ALS is held', async () => {
     await expect(capitalLeaseNestedLockSmokeTest(9_101_001)).resolves.toBe('ok');
+  });
+});
+
+describe('capitalFetch timeout', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('exports 15s default timeout', () => {
+    expect(CAPITAL_HTTP_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it('aborts hung HTTP and throws timeout error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal) {
+            signal.addEventListener('abort', () => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }
+        });
+      })
+    );
+    await expect(capitalFetch('https://example.test/hang', {}, 50)).rejects.toThrow(
+      /Capital\.com HTTP timeout after 50ms/
+    );
   });
 });
