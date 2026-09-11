@@ -224,10 +224,7 @@ const STRUCTURE_15M_BARS = 48;
 const ACTIVE_CADENCE_MS = 500;
 /** Manage must be ms-fast — PeakProtect/HardInv cannot wait 750ms–2s on Gold */
 const MANAGE_CADENCE_MS = 200;
-/** After HardInv/BE/thesis — short pause (was 75s — too sticky after losses) */
-const COOLDOWN_AFTER_HARD_MS = 40_000;
-/** After Target/PeakProtect/TimeDecay — short pause */
-const COOLDOWN_AFTER_SOFT_MS = 10_000;
+/** No post-close cooldown — user: enter when setup is ready (HardInv flip already immediate) */
 const SIDE_LOCK_AFTER_HARD_MS = 75_000;
 const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
 const HARD_RECENT_WINDOW_MS = 180_000;
@@ -1802,24 +1799,7 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief
-    // (skipped above when HardInv flip is armed)
-    const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS =
-      hardAgo < HARD_RECENT_WINDOW_MS ? COOLDOWN_AFTER_HARD_MS : COOLDOWN_AFTER_SOFT_MS;
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < HARD_RECENT_WINDOW_MS ? ' · after loss' : ' · after win/soft'
-        }`,
-      });
-      return;
-    }
+    // No post-close cooldown (user): HardInv flip is immediate above; next setup enters when ready
 
     if (quote.mid == null) return;
 
