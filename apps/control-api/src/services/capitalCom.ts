@@ -100,6 +100,28 @@ function explainCapitalError(input: {
   return parts.join(' ');
 }
 
+/** Capital HTTP must never hang forever — that froze the desk after ROBOT START. */
+export const CAPITAL_HTTP_TIMEOUT_MS = 15_000;
+
+export async function capitalFetch(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = CAPITAL_HTTP_TIMEOUT_MS
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`Capital.com HTTP timeout after ${timeoutMs}ms · ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function createSession(
   base: string,
   apiKey: string,
@@ -107,7 +129,7 @@ async function createSession(
   password: string,
   encryptedPassword: boolean
 ): Promise<{ res: Response; text: string; json: Record<string, unknown> }> {
-  const res = await fetch(`${base}/api/v1/session`, {
+  const res = await capitalFetch(`${base}/api/v1/session`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -137,7 +159,7 @@ async function resolveLoginPassword(
 ): Promise<Array<{ encrypted: boolean; password: string; label: string }>> {
   const attempts: Array<{ encrypted: boolean; password: string; label: string }> = [];
   try {
-    const encRes = await fetch(`${base}/api/v1/session/encryptionKey`, {
+    const encRes = await capitalFetch(`${base}/api/v1/session/encryptionKey`, {
       method: 'GET',
       headers: { Accept: 'application/json', 'X-CAP-API-KEY': apiKey },
     });
@@ -268,7 +290,7 @@ export async function openCapitalSession(input: {
 
     const request = async (method: string, path: string, body?: unknown) => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
-      const r = await fetch(url, {
+      const r = await capitalFetch(url, {
         method,
         headers: authHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -297,7 +319,7 @@ export async function openCapitalSession(input: {
             : null,
       async close() {
         try {
-          await fetch(`${base}/api/v1/session`, {
+          await capitalFetch(`${base}/api/v1/session`, {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,

@@ -96,6 +96,8 @@ describe('per-client robot + Capital feed contract', () => {
     const capital = readFileSync(fileURLToPath(new URL('./capitalCom.ts', import.meta.url)), 'utf8');
     expect(capital).toMatch(/acquireCapitalSessionLease/);
     expect(capital).toMatch(/Keep ALS \+ connection lock until caller releases/);
+    expect(capital).toMatch(/capitalFetch/);
+    expect(capital).toMatch(/CAPITAL_HTTP_TIMEOUT_MS/);
     expect(capital).toMatch(/withBoundCapitalAccount/);
     expect(capital).toMatch(/bindCapitalSession/);
     expect(capital).toMatch(/AsyncLocalStorage/);
@@ -103,6 +105,8 @@ describe('per-client robot + Capital feed contract', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/acquireCapitalSessionLease/);
     expect(desk).toMatch(/opened\.release\(\)/);
+    expect(desk).toMatch(/Connecting Capital\.com/);
+    expect(desk).toMatch(/CYCLE WATCHDOG/);
     expect(desk).toMatch(/external_account_id required \(multi-account connection\)/);
 
     const fanout = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
