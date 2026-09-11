@@ -45,7 +45,6 @@ import {
   decideEntryFromClosed1m,
   emptySetup,
   emptyStructure,
-  isQualityEntrySetup,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -1911,19 +1910,6 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ARMED · wait next Capital 1m close · ${setup.reason}`,
-      });
-      return;
-    }
-
-    // Quality gate: FADE / FAILED_BREAK are watch-only; CONTINUATION/BREAKOUT/PULLBACK may enter
-    if (!isQualityEntrySetup(setup.kind)) {
-      s.last_1m_entry_key = entryKey;
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · quality gate · skip ${setup.kind} · only CONTINUATION/BREAKOUT/PULLBACK · ${setup.reason}`,
       });
       return;
     }
