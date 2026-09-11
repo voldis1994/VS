@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSessionLease,
+  acquireCapitalSession,
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
@@ -261,7 +261,9 @@ async function executeForSubscription(
         entry_price: null,
       });
     }
-    const opened = await acquireCapitalSessionLease({
+    // Short acquire — full-cycle lease + CYCLE WATCHDOG left Capital lock stuck
+    // (Connecting… forever). list/order/close already use withBoundCapitalAccount.
+    const opened = await acquireCapitalSession({
       environment: connRow.rows[0].environment as string,
       apiKey: creds.api_key || '',
       identifier: String(connRow.rows[0].identifier || '').trim(),
@@ -286,7 +288,6 @@ async function executeForSubscription(
       });
     }
 
-    try {
     const listed = await listCapitalOpenPositions(opened.session);
     if (listed.ok) {
       const existing = listed.positions.find(
@@ -409,9 +410,6 @@ async function executeForSubscription(
       detail: result.detail,
       entry_price: entry,
     });
-    } finally {
-      opened.release();
-    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);

@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSessionLease,
+  acquireCapitalSession,
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
@@ -1398,7 +1398,9 @@ async function robotCycleBody(s: Internal) {
     detail: `Connecting Capital.com · ${s.display_name} (${s.epic}) · ${String(conn.environment || '').toUpperCase()}…`,
   });
 
-  const opened = await acquireCapitalSessionLease({
+  // Short acquire only — do NOT hold connection lease for the whole cycle
+  // (lease + watchdog left Capital lock stuck → Connecting/WATCHDOG loop).
+  const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -1985,10 +1987,9 @@ async function robotCycleBody(s: Internal) {
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
-  } finally {
-    opened.release();
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
+  // Do NOT hold a full-cycle connection lease — watchdog cannot release it → Connecting loop
 }
 
 export async function startRobotSession(input: {
