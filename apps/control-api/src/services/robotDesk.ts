@@ -215,6 +215,17 @@ const ACTIVE_CADENCE_MS = 2_000;
 const MANAGE_CADENCE_MS = 750;
 /** HardInv → opposite SCALP must fire quickly or expire */
 const HARDINV_FLIP_EXPIRE_MS = 120_000;
+
+/** Post-close wait before next SETUP entry. HardInv flip bypasses via pending_hardinv_flip. */
+export function postCloseSetupCooldownMs(
+  lastHardExitMs: number,
+  nowMs = Date.now()
+): number {
+  const afterHardInv = lastHardExitMs > 0 && nowMs - lastHardExitMs < 180_000;
+  return afterHardInv ? 45_000 : 10_000;
+}
+
+
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -441,7 +452,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → immediate opposite SCALP flip (no cooldown). PeakProtect ARMS @ +1.5 MFE · trail 75% (giveback cut even if UPL flips red). HardInv -1.5 only if never armed. Same ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → one opposite SCALP flip, then 45s lock (no re-entry spam). PeakProtect ARMS @ +1.5 MFE · trail 75% (giveback cut even if UPL flips red). HardInv -1.5 only if never armed. Same ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -1612,13 +1623,14 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After normal close: short pause. After HardInv: NEVER cooldown — flip already handled above.
+        // Flip bypasses via pending_hardinv_flip ABOVE. After that — ALWAYS cooldown
+    // before next setup entry (was: afterHardInv skipped cooldown for 180s → spam
+    // HardInv→flip→HardInv→entry every few seconds, £0.15 losses stacked).
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
     const afterHardInv = hardAgo < 180_000;
-    const POST_CLOSE_COOLDOWN_MS = 10_000;
+    const POST_CLOSE_COOLDOWN_MS = postCloseSetupCooldownMs(s.last_hard_exit_ms);
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (
-      !afterHardInv &&
       s.closed_at_ms > 0 &&
       sinceClose < POST_CLOSE_COOLDOWN_MS &&
       !s.pending_hardinv_flip
@@ -1628,7 +1640,9 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close`,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
+          afterHardInv ? ' · post-HardInv lock (flip already done)' : ''
+        }`,
       });
       return;
     }
@@ -1763,11 +1777,11 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips. After HardInv — no side-lock (flip direction is desired).
+        // Opposite-side lock for setup entries. HardInv flip already fired via pending path —
+    // do NOT disable side-lock after HardInv (that re-opened spam the other way).
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = 20_000;
+    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
     if (
-      !hardRecent &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
