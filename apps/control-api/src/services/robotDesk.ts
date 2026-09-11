@@ -518,11 +518,10 @@ function clearTradeState(s: Internal) {
 
 /**
  * SAFETY SL as a true cushion — NOT dealing-rules minimum.
- * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
+ * Soft HardInv is the real cut at 1.5pt — broker SL is backup only (~2pt),
  * so noise does not stop every trade (slightly tighter than 0.25%).
  */
 /** Soft HardInv cuts at 1.5pt — broker SL is backup ONLY, just past that. */
-const HARDINV_SOFT_PTS = 1.5;
 const BROKER_SL_BACKUP_PTS = 2.0; // Soft HardInv 1.5 + 0.5 — never ~9pt 0.2% cushion
 
 /** Distance (price pts) for broker backup SL — must stay just past Soft HardInv 1.5. */
@@ -573,19 +572,19 @@ function safetyStopLevel(
 }
 
 
-/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
-function safetyStopDistancePts(
+/**
+ * Capital stopDistance in POINTS — backup just past Soft HardInv 1.5.
+ * NEVER use 0.2% of price (~9pt on Gold); that let broker SL beat Soft HardInv.
+ */
+export function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
-  const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
-  let fromPct = minPts * 2.5;
-  if (pointSize != null && pointSize > 0) {
-    fromPct = Math.max(fromPct, pct / pointSize);
-  }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  const ps = pointSize != null && pointSize > 0 ? pointSize : 1;
+  // BROKER_SL_BACKUP_PTS (2.0 price) → Capital points
+  const backupPts = BROKER_SL_BACKUP_PTS / ps;
+  const distPts = Math.max(backupPts, minPts * 1.05, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -1004,7 +1003,7 @@ async function enterTrade(
     return false;
   }
 
-  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
+  // SAFETY SL backup (~2pt past Soft HardInv 1.5) — not 0.2% / dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
@@ -1018,7 +1017,8 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 3);
+      // Keep near HardInv backup — only loosen if Capital rejects
+      const distPts = Math.max(basePts * loosen, minPts! * 1.05);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -1034,7 +1034,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
+        detail: `Capital SAFETY SL backup stopDistance=${stopDistance} pts (HardInv+0.5 · min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
