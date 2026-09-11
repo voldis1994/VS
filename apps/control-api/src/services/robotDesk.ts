@@ -231,7 +231,7 @@ const SIDE_LOCK_AFTER_HARD_MS = 75_000;
 const SIDE_LOCK_AFTER_SOFT_MS = 20_000;
 const HARD_RECENT_WINDOW_MS = 180_000;
 /** HardInv → opposite SCALP must fire quickly or expire */
-const HARDINV_FLIP_EXPIRE_MS = 25_000;
+const HARDINV_FLIP_EXPIRE_MS = 60_000;
 const ENTRY_DEBOUNCE_MS = 3_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
@@ -921,15 +921,57 @@ async function enterTrade(
       if (isHardInvFlip) {
         const action = hardInvFlipBrokerAction(direction, existing.direction);
         if (action === 'wait_clear') {
-          // Old HardInv leg still listed — do NOT re-adopt (would block flip forever)
+          // Old HardInv leg still listed — force-close ghost so opposite SCALP can fire
           pushTick(s, {
             phase: 'WAIT',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `HARDINV FLIP · broker still ${existing.direction} · waiting clear before ${direction} SCALP`,
+            detail: `HARDINV FLIP · broker still ${existing.direction} · force-close ghost before ${direction} SCALP`,
           });
-          return false;
+          try {
+            if (existing.deal_id) {
+              await closeCapitalPosition(session, existing.deal_id);
+            }
+          } catch {
+            /* retry next tick */
+          }
+          const relisted = await listCapitalOpenPositions(session);
+          if (relisted.ok) {
+            const still = matchOpenOnEpic(relisted.positions, s.epic);
+            if (still && still.direction !== direction) {
+              return false; // still blocked — retry next tick
+            }
+            if (still && still.direction === direction) {
+              // opposite already live
+              s.open_side = still.direction;
+              s.deal_id = still.deal_id;
+              if (still.open_level != null && Number.isFinite(still.open_level)) {
+                s.entry_price = still.open_level;
+              } else if (s.entry_price == null) {
+                s.entry_price = quote.mid;
+              }
+              s.entry_at = s.entry_at || new Date().toISOString();
+              s.playbook = 'SCALP';
+              s.entry_setup = 'HARDINV_FLIP';
+              s.entry_regime = s.entry_regime || s.regime;
+              s.mode = 'MANAGE';
+              if (still.stop_level != null) s.safety_sl = still.stop_level;
+              s.last_entry_side = still.direction;
+              s.last_entry_side_ms = Date.now();
+              pushTick(s, {
+                phase: 'ORDER',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `HARDINV FLIP already live ${still.direction} dealId=${still.deal_id} · adopt`,
+              });
+              return true;
+            }
+            // cleared — fall through to place opposite order
+          } else {
+            return false;
+          }
         }
         // adopt_flip: opposite already live — sync local state, treat as success
         if (action === 'adopt_flip') {
@@ -1516,14 +1558,21 @@ async function robotCycleBody(s: Internal) {
           brokerOpen.direction
         );
         if (action === 'wait_clear') {
-          // Ghost of just-closed HardInv leg — do not re-adopt into MANAGE
+          // Ghost of just-closed HardInv leg — force-close, do not re-adopt into MANAGE
           pushTick(s, {
             phase: 'WAIT',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `HARDINV FLIP · waiting broker clear of ${brokerOpen.direction} before ${s.pending_hardinv_flip.side} SCALP`,
+            detail: `HARDINV FLIP · force-close ghost ${brokerOpen.direction} before ${s.pending_hardinv_flip.side} SCALP`,
           });
+          try {
+            if (brokerOpen.deal_id) {
+              await closeCapitalPosition(opened.session, brokerOpen.deal_id);
+            }
+          } catch {
+            /* next tick */
+          }
           brokerOpen = null;
         } else if (action === 'adopt_flip') {
           // Flip already live on broker
@@ -1710,6 +1759,13 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    // ——— HardInv flip FIRST — exit continuation, not a setup entry (ignore entry_enabled) ———
+    if (s.pending_hardinv_flip) {
+      s.mode = 'ENTRY';
+      await tryExecuteHardInvFlip(opened.session, s, quote);
+      return;
+    }
+
     // ——— FLAT: entry only after close (and only if entry_enabled) ———
     if (!s.entry_enabled) {
       s.mode = s.open_side ? 'MANAGE' : 'FLAT';
@@ -1725,12 +1781,6 @@ async function robotCycleBody(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-
-    // ——— HardInv flip: opposite SCALP NOW (bypass cooldown / side-lock / 1m / debounce) ———
-    if (s.pending_hardinv_flip) {
-      await tryExecuteHardInvFlip(opened.session, s, quote);
-      return;
-    }
 
     // After close: short pause. Hard loss → slightly longer; win/PeakProtect → brief
     // (skipped above when HardInv flip is armed)

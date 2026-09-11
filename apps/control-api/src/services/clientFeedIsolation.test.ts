@@ -118,6 +118,9 @@ describe('per-client robot + Capital feed contract', () => {
   it('HardInv flip + 1m profit keys live on per-robot Internal (not shared)', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/pending_hardinv_flip/);
+    expect(desk).toMatch(/force-close ghost/);
+    expect(desk).toMatch(/HARDINV_FLIP_EXPIRE_MS = 60_000/);
+    expect(desk).toMatch(/HardInv flip FIRST/);
     expect(desk).toMatch(/last_1m_profit_exit_key/);
     expect(desk).toMatch(/last_1m_entry_key/);
     expect(desk).toMatch(/robotIdFor\(accountId, epic\)/);
