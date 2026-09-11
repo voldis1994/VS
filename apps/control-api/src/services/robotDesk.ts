@@ -196,7 +196,7 @@ type Internal = RobotSession & {
   /** Last opened side — block opposite flip spam */
   last_entry_side: 'BUY' | 'SELL' | null;
   last_entry_side_ms: number;
-  /** After HardInvalidation / thesis fail — longer flip lock */
+  /** Last HardInvalidation time (diagnostic; post-close side-lock removed) */
   last_hard_exit_ms: number;
   /**
    * After HardInv close: arm opposite SCALP entry once (catch the move that killed us).
@@ -842,7 +842,7 @@ async function exitTrade(
   s.closed_at_ms = Date.now();
   const closedSide = s.open_side;
   // Only true loss exits get hard lock — NOT PeakProtect/Target
-  if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
+  if (/HardInvalidation/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
   // HardInv only → arm opposite SCALP once (skip if this close was already a flip scalp)
@@ -1671,7 +1671,7 @@ async function robotCycleBody(s: Internal) {
         ? manageMarkPrice(s.open_side, quote.bid, quote.ask, quote.mid)
         : quote.mid;
 
-      // LIVE loss: HardInv / thesis — wrong side out immediately
+      // LIVE loss: HardInv only — wrong side out immediately (Thesis disabled)
       const lossDec = decideBestOutcomeExit(s, mark, 'live_loss');
       if (lossDec.exit) {
         await exitTrade(opened.session, s, quote, lossDec.reason);
