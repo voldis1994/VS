@@ -211,6 +211,8 @@ const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
 const ACTIVE_CADENCE_MS = 2_000;
+/** Open trade — Soft HardInv must beat spikes before broker SL */
+const MANAGE_CADENCE_MS = 750;
 /** HardInv → opposite SCALP must fire quickly or expire */
 const HARDINV_FLIP_EXPIRE_MS = 120_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
@@ -519,6 +521,30 @@ function clearTradeState(s: Internal) {
  * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
  * so noise does not stop every trade (slightly tighter than 0.25%).
  */
+/** Soft HardInv cuts at 1.5pt — broker SL is backup ONLY, just past that. */
+const HARDINV_SOFT_PTS = 1.5;
+const BROKER_SL_BACKUP_PTS = 2.0; // Soft HardInv 1.5 + 0.5 — never ~9pt 0.2% cushion
+
+/** Distance (price pts) for broker backup SL — must stay just past Soft HardInv 1.5. */
+export function brokerSafetyStopDistance(
+  mid: number,
+  spread: number | null,
+  minStopDistance: number | null,
+  loosen = 1
+): number {
+  const abs = Math.max(Math.abs(mid), 1e-9);
+  const spr =
+    spread != null && Number.isFinite(spread) && spread > 0
+      ? spread
+      : abs * 0.00005;
+  const brokerMin =
+    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
+      ? minStopDistance
+      : 0;
+  const floor = abs >= 1000 ? 0.3 : abs >= 100 ? 0.2 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  return Math.max(BROKER_SL_BACKUP_PTS, brokerMin * 1.05, spr * 3, floor) * Math.max(loosen, 1);
+}
+
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -537,28 +563,15 @@ function safetyStopLevel(
         ? ask
         : mid;
   const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    spread != null && Number.isFinite(spread) && spread > 0
-      ? spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-
-  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
-  const brokerMin =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
-  const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+  const dist = brokerSafetyStopDistance(ref, spread, minStopDistance, loosen);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  return raw;
 }
+
 
 /** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
 function safetyStopDistancePts(
@@ -1519,18 +1532,21 @@ async function robotCycle(s: Internal) {
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
+      setRobotCadence(s, MANAGE_CADENCE_MS);
       if (quote.mid == null) return;
 
       // LIVE loss: HardInv 1.5pt on adverse mark (bid/ask) — MUST beat broker safety SL
-      const hardMark = adverseMark(s.open_side, quote.bid, quote.ask, quote.mid);
-      const lossDec = decideBestOutcomeExit(s, hardMark, 'live_loss');
-      if (lossDec.exit) {
-        await exitTrade(opened.session, s, quote, lossDec.reason);
-        // HardInv flip: same cycle, no 1m candle wait
-        if (s.pending_hardinv_flip && !s.open_side) {
-          await tryExecuteHardInvFlip(opened.session, s, quote);
+      if (s.open_side) {
+        const hardMark = adverseMark(s.open_side, quote.bid, quote.ask, quote.mid);
+        const lossDec = decideBestOutcomeExit(s, hardMark, 'live_loss');
+        if (lossDec.exit) {
+          await exitTrade(opened.session, s, quote, lossDec.reason);
+          // HardInv flip: same cycle, no 1m candle wait
+          if (s.pending_hardinv_flip && !s.open_side) {
+            await tryExecuteHardInvFlip(opened.session, s, quote);
+          }
+          return;
         }
-        return;
       }
 
       // PROFIT (ALL exits / playbooks):
