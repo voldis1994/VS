@@ -390,7 +390,7 @@ describe('hardInvFlipBrokerAction', () => {
 });
 
 describe('closed1mProfitPolicy', () => {
-  it('continues when BUY still gets green 1m — PeakProtect may work', () => {
+  it('continues when BUY still gets green 1m — desk HOLDs (PeakProtect off)', () => {
     expect(
       closed1mProfitPolicy('BUY', { open: 2000, close: 2003 }, { open: 1998, close: 2000 })
     ).toBe('continue');

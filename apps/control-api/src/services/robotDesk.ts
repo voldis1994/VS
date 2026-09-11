@@ -492,7 +492,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(Capital 1m CLOSE) → BEST OUTCOME',
     note:
-      'With-trend: TREND_UP→BUY only, TREND_DOWN→SELL only. Multi-client PARALLEL. HardInv LIVE+flip; profit 1m continue→Peak / reverse→Flip.',
+      'With-trend: TREND_UP→BUY only, TREND_DOWN→SELL only. Multi-client PARALLEL. HardInv LIVE+flip; profit 1m continue→HOLD / reverse→PeakProtect.',
   };
 }
 
@@ -1683,7 +1683,7 @@ async function robotCycleBody(s: Internal) {
       }
 
       // PROFIT: only on Capital 1m CLOSE.
-      // Continue with trade → PeakProtect/Target may bank; reverse next 1m → DirectionFlip.
+      // Same-direction 1m → HOLD profit; reverse 1m → PeakProtect % (then DirectionFlip if needed).
       if (Date.now() - s.last_manage_minute_fetch_ms >= 8_000) {
         s.last_manage_minute_fetch_ms = Date.now();
         try {
@@ -1706,18 +1706,16 @@ async function robotCycleBody(s: Internal) {
           s.last_1m_profit_exit_key = key;
 
           if (policy === 'continue' || policy === 'wait') {
-            // Direction continues (or doji) — PeakProtect % may bank giveback; no force flip
-            const profitDec = decideBestOutcomeExit(
-              s,
-              closed1m.close,
-              'closed_1m_profit'
-            );
-            if (profitDec.exit) {
-              await exitTrade(opened.session, s, quote, profitDec.reason);
-              return;
-            }
+            // Same direction (or doji) — HOLD profit. No PeakProtect / Target while move continues.
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m ${policy} · HOLD profit · PeakProtect armed only on reverse`,
+            });
           } else if (policy === 'reverse') {
-            // Next 1m changed direction against us — close (PeakProtect first if giveback)
+            // Direction changed — PeakProtect % ON (bank giveback). Else DirectionFlip if still had edge.
             const profitDec = decideBestOutcomeExit(
               s,
               closed1m.close,
@@ -1753,7 +1751,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose(continue→Peak·reverse→Flip) · setup LOCKED · no new orders`,
+        } · BE=${s.be_seen ? '1' : '0'} profit=${s.profit_seen ? '1' : '0'} · loss=live · plus=1mClose(continue→HOLD·reverse→Peak) · setup LOCKED · no new orders`,
       });
       return;
     }
