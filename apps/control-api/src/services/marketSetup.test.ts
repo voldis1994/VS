@@ -376,7 +376,7 @@ describe('marketSetup', () => {
     expect(e?.reason).toMatch(/Capital 1m/);
   });
 
-  it('decideEntryFromClosed1m: TREND_DOWN blocks BUY; TREND_UP allows BUY', () => {
+  it('decideEntryFromClosed1m: no trend filter — BUY allowed on TREND_DOWN and TREND_UP', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
     bars.push(candle(2000, 2002, 1999.5, 2001.5));
@@ -396,13 +396,15 @@ describe('marketSetup', () => {
     const green1m = candle(2004, 2008, 2003.8, 2007.2);
     const st = buildStructure({ minutes: bars, mid: 2007 });
     expect(withTrendSideFromRegime('TREND_DOWN')).toBe('SELL');
-    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_DOWN')).toBeNull();
+    expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_DOWN')?.direction).toBe(
+      'BUY'
+    );
     expect(decideEntryFromClosed1m(contBuy, green1m, bars, st, 'TREND_UP')?.direction).toBe(
       'BUY'
     );
   });
 
-  it('decideEntryFromClosed1m: TREND_UP blocks SELL', () => {
+  it('decideEntryFromClosed1m: no trend filter — SELL allowed on TREND_UP', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) bars.push(candle(2010, 2012, 2008, 2010));
     bars.push(candle(2010, 2010.5, 2006, 2006.5));
@@ -420,13 +422,15 @@ describe('marketSetup', () => {
       reason: 'CONTINUATION down',
     };
     const red1m = candle(2004, 2004.2, 2000, 2000.5);
-    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_UP')).toBeNull();
+    expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_UP')?.direction).toBe(
+      'SELL'
+    );
     expect(decideEntryFromClosed1m(contSell, red1m, bars, null, 'TREND_DOWN')?.direction).toBe(
       'SELL'
     );
   });
 
-  it('decideEntryFromClosed1m refuses small 1m body as noise', () => {
+  it('decideEntryFromClosed1m refuses flat doji only (<0.5pt)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) bars.push(candle(2000, 2002, 1998, 2000));
     bars.push(candle(2000, 2002, 1999.5, 2001.5));
@@ -442,11 +446,13 @@ describe('marketSetup', () => {
       swing_high: 2010,
       swing_low: 1995,
     };
-    const micro = candle(2005, 2006, 2004.8, 2005.8); // 0.8pt — noise
+    const micro = candle(2005, 2005.2, 2004.9, 2005.2); // 0.2pt doji
     expect(decideEntryFromClosed1m(contBuy, micro, bars)).toBeNull();
+    const smallOk = candle(2005, 2006.2, 2004.8, 2005.9); // 0.9pt — allowed (no quality floor)
+    expect(decideEntryFromClosed1m(contBuy, smallOk, bars)?.direction).toBe('BUY');
   });
 
-  it('decideEntryFromClosed1m refuses FADE / FAILED_BREAK (quality gate); PULLBACK allowed', () => {
+  it('decideEntryFromClosed1m allows FADE / PULLBACK / FAILED_BREAK (no kind filter)', () => {
     const minutes = rangeMinutes();
     const fadeBuy = {
       ...emptySetup(),
@@ -459,9 +465,9 @@ describe('marketSetup', () => {
       swing_low: 2000,
     };
     const bigGreen = candle(2001, 2005, 2000.5, 2004.5);
-    expect(decideEntryFromClosed1m(fadeBuy, bigGreen, minutes)).toBeNull();
-    expect(isQualityEntrySetup('FADE')).toBe(false);
-    expect(isQualityEntrySetup('FAILED_BREAK')).toBe(false);
+    expect(decideEntryFromClosed1m(fadeBuy, bigGreen, minutes)?.direction).toBe('BUY');
+    expect(isQualityEntrySetup('FADE')).toBe(true);
+    expect(isQualityEntrySetup('FAILED_BREAK')).toBe(true);
     expect(isQualityEntrySetup('PULLBACK')).toBe(true);
     expect(isQualityEntrySetup('CONTINUATION')).toBe(true);
     expect(isQualityEntrySetup('BREAKOUT')).toBe(true);
@@ -528,7 +534,7 @@ describe('marketSetup', () => {
     expect(decideEntryFromClosed1m(contBuy, red1m, bars)).toBeNull();
   });
 
-  it('decideEntryFromClosed1m refuses BUY into dump flow', () => {
+  it('decideEntryFromClosed1m allows BUY even into dump flow (no flow filter)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) bars.push(candle(4436, 4438, 4434, 4436));
     for (let i = 0; i < 8; i++) {
@@ -547,6 +553,6 @@ describe('marketSetup', () => {
       swing_low: 4428,
     };
     const greenBlip1m = candle(4433.5, 4437, 4433.2, 4436.5); // big body but dump flow
-    expect(decideEntryFromClosed1m(contBuy, greenBlip1m, bars)).toBeNull();
+    expect(decideEntryFromClosed1m(contBuy, greenBlip1m, bars)?.direction).toBe('BUY');
   });
 });
