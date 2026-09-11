@@ -47,7 +47,7 @@ describe('USER RULE 1 — ARMED live mid entry (no 1m wait)', () => {
       confirm: 2,
       reason: 'CONTINUATION BUY',
     };
-    const e = decideEntryFromArmedLive(setup, 2005);
+    const e = decideEntryFromArmedLive(setup, 2005, null, 'TREND_UP');
     expect(e).not.toBeNull();
     expect(e!.reason).toMatch(/no 1m wait|live mid/i);
   });

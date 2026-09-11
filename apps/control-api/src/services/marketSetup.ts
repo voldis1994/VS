@@ -1036,13 +1036,16 @@ export function decideEntryFromClosed1m(
 }
 
 /**
- * LIVE entry — ARMED setup fires on quote mid (no Capital 1m close wait).
+ * LIVE entry — ARMED with-trend setup fires on quote mid (no Capital 1m close wait).
+ * FADE/FAILED_BREAK = watch-only here (not live leftovers against the move).
+ * Wrong-entry correction stays HardInv → opposite SCALP flip on the desk.
  * Profit exits still use 1m close elsewhere.
  */
 export function decideEntryFromArmedLive(
   setup: MarketSetup,
   mid: number,
-  _minutes?: CapitalPriceCandle[] | null
+  minutes?: CapitalPriceCandle[] | null,
+  regime?: string | null
 ): SetupEntry | null {
   if (
     setup.kind === 'NONE' ||
@@ -1053,18 +1056,28 @@ export function decideEntryFromArmedLive(
   ) {
     return null;
   }
+  // Watch-only on live path — do not fade/reject into a finished move
+  if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
+    return null;
+  }
+  // With-trend lock when regime is directional
+  const trendSide = withTrendSideFromRegime(regime);
+  if (trendSide && setup.side !== trendSide) {
+    return null;
+  }
+  // Never BUY into a dump / SELL into a rally (leftover chase)
+  const flow = priceFlowBias(minutes);
+  if (setup.side === 'BUY' && flow === 'DOWN') return null;
+  if (setup.side === 'SELL' && flow === 'UP') return null;
+
   return {
     direction: setup.side,
     setup: setup.kind,
     playbook: setup.playbook,
-    reason: `ENTRY · ${setup.kind} ${setup.side} live mid ${mid.toFixed(2)} · no 1m wait · ${setup.reason}`,
+    reason: `ENTRY · ${setup.kind} ${setup.side} live mid ${mid.toFixed(2)} · no 1m wait · with-trend · ${setup.reason}`,
   };
 }
 
-/**
- * DISABLED on live desk — mid-NONE 10s chase caused LONG↔SHORT flip spam.
- * Kept as null stub so callers/tests stay typed; real entries need ARMED setup.
- */
 export function decideEntryFromTenSecMove(
   _structure: StructureBook,
   _bar: TenSecBar,

@@ -325,8 +325,8 @@ describe('marketSetup', () => {
       swing_low: st.swing_low,
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
-    // live mid entry has no candle/flow confirm — ARMED FADE BUY may fire
-    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars)?.direction).toBe('BUY');
+    // live path: FADE is watch-only (no leftover fade entry)
+    expect(decideEntryFromArmedLive(fadeBuy, greenBlip.close, bars, 'TREND_DOWN')).toBeNull();
     const dump1m = candle(4433.5, 4434.3, 4430.5, 4431.0);
     // closed-1m path still needs green body for BUY — red dump candle refuses
     expect(decideEntryFromClosed1m(fadeBuy, dump1m, bars)).toBeNull();
@@ -348,9 +348,10 @@ describe('marketSetup', () => {
       swing_low: 1995,
       reason: 'live',
     };
-    const e = decideEntryFromArmedLive(armed, 2005);
+    const e = decideEntryFromArmedLive(armed, 2005, null, 'TREND_UP');
     expect(e?.direction).toBe('BUY');
     expect(e?.reason).toMatch(/no 1m wait/);
+    expect(decideEntryFromArmedLive(armed, 2005, null, 'TREND_DOWN')).toBeNull();
   });
 
   it('decideEntryFromClosed1m enters CONTINUATION on Capital 1m green body + UP impulse', () => {

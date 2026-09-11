@@ -488,7 +488,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 15m+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(live mid · no 1m wait) → BEST OUTCOME',
     note:
-      'With-trend: TREND_UP→BUY only, TREND_DOWN→SELL only. Multi-client PARALLEL. HardInv LIVE+flip; profit 1m continue→HOLD / reverse→PeakProtect.',
+      'With-trend live entry (TREND_UP→BUY / TREND_DOWN→SELL). FADE watch-only. HardInv LIVE+opposite SCALP flip on wrong entry. Profit 1m continue→HOLD / reverse→PeakProtect.',
   };
 }
 
@@ -1886,20 +1886,25 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // ARMED → enter on live mid (no Capital 1m close confirmation)
-    const entry = decideEntryFromArmedLive(setup, quote.mid, s.last_minute_candles);
+    // ARMED → with-trend live mid (no 1m wait). HardInv flip still corrects wrong entry.
+    const entry = decideEntryFromArmedLive(
+      setup,
+      quote.mid,
+      s.last_minute_candles,
+      s.regime
+    );
     if (!entry) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no live entry · regime ${s.regime} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no live entry · with-trend/flow · regime ${s.regime} · ${setup.reason}`,
       });
       return;
     }
 
-    // No entry debounce / side-lock — user: ARMED → enter (HardInv flip already bypasses these)
+    // No entry debounce / side-lock — user: ARMED → enter (HardInv flip unchanged)
 
     const direction = entry.direction;
     const setupType = entry.setup;

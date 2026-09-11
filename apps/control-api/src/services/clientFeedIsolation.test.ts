@@ -119,7 +119,7 @@ describe('per-client robot + Capital feed contract', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/pending_hardinv_flip/);
     expect(desk).toMatch(/HOLD profit/);
-    expect(desk).toMatch(/no Capital 1m close confirmation/);
+    expect(desk).toMatch(/with-trend live mid \(no 1m wait\)/);
     expect(desk).toMatch(/PeakProtect armed only on reverse/);
     expect(desk).toMatch(/peak_protect_armed/);
     expect(desk).toMatch(/peak_protect_only/);
@@ -130,7 +130,7 @@ describe('per-client robot + Capital feed contract', () => {
     expect(desk).toMatch(/last_1m_profit_exit_key/);
     expect(desk).toMatch(/last_1m_entry_key/);
     expect(desk).toMatch(/robotIdFor\(accountId, epic\)/);
-  });
+    expect(desk).toMatch(/HARDINV FLIP armed/);  });
 
   it('WS trade events emit only to owning client_id', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
