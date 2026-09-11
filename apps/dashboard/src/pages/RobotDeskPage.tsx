@@ -514,7 +514,6 @@ export function RobotDeskPage() {
                       {setupKind}
                       {setupStatus ? ` · ${setupStatus}` : ''}
                       {s.market_setup?.playbook ? ` · ${s.market_setup.playbook}` : ''}
-                      {s.open_side ? ' · LOCKED' : ''}
                     </div>
                     <div className="robot-mini-row">
                       <span>WATCH</span>

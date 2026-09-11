@@ -11,20 +11,15 @@ export type TradePlaybook = Exclude<Playbook, 'WAIT'>;
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * #314 base + user exit knobs by playbook:
- * - LONG (trend / breakout): PeakProtect 75% (max 25% giveback), wider HardInv, hold the leg
- * - SCALP (pullback / range): PeakProtect 90% (max 10% giveback), tighter HardInv, fast out
- * - FADE: PeakProtect 90%, bounce/reject — quick bank
+ * #314 base + user exit knobs:
+ * - PeakProtect 75% retention for ALL regimes (max 25% MFE giveback)
+ * - HardInv capped in absolute Gold points (pct alone ≈11pt → fat losses)
+ * - TP floors ≫ SL caps so average win > average loss
  */
-export const MAX_MFE_GIVEBACK_LONG = 0.25;
-export const MIN_MFE_RETENTION_LONG = 0.75;
-export const MAX_MFE_GIVEBACK_SCALP = 0.1;
-export const MIN_MFE_RETENTION_SCALP = 0.9;
-/** @deprecated use LONG/SCALP specific — kept for imports */
-export const MAX_MFE_GIVEBACK = MAX_MFE_GIVEBACK_LONG;
-export const MIN_MFE_RETENTION = MIN_MFE_RETENTION_LONG;
-/** Harvest field kept for API shape — unused by decide (same as peakRet). */
-export const HARVEST_MFE_RETENTION = MIN_MFE_RETENTION;
+export const MAX_MFE_GIVEBACK = 0.25;
+export const MIN_MFE_RETENTION = 0.75;
+/** Harvest disabled (= PeakProtect) — single 75% lock */
+export const HARVEST_MFE_RETENTION = 0.75;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -39,76 +34,75 @@ export type PlaybookExitParams = {
   mfeFloorAbs: number;
   /** PeakProtect when retention below this */
   peakRet: number;
-  /** Alias of peakRet — no separate harvest band */
+  /** Harvest when retention below this and fav > 0 */
   harvestRet: number;
   thesisMinHoldMs: number;
   timeDecayMs: number;
 };
 
-/** LONG 75% PeakProtect; SCALP/FADE 90%. HardInv 1.5pt all — early cut so flip SCALP can catch. */
+/** PeakProtect 75% all books; HardInv ≈1.0pt; TP ≫ SL. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0028,
     tpFloor: 6.0,
-    slPct: 0.00035,
-    slFloor: 1.5,
-    slCapAbs: 1.5,
-    mfeFloorPct: 0.00045,
-    mfeFloorAbs: 2.0,
-    peakRet: MIN_MFE_RETENTION_LONG,
-    harvestRet: MIN_MFE_RETENTION_LONG,
+    slPct: 0.00028,
+    slFloor: 0.85,
+    slCapAbs: 1.0,
+    mfeFloorPct: 0.00055,
+    mfeFloorAbs: 2.5,
+    peakRet: MIN_MFE_RETENTION,
+    harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 120_000,
     timeDecayMs: 480_000,
   },
   SCALP: {
-    tpPct: 0.0016,
-    tpFloor: 3.5,
-    slPct: 0.00035,
-    slFloor: 1.5,
-    slCapAbs: 1.5,
-    mfeFloorPct: 0.00028,
-    mfeFloorAbs: 1.2,
-    peakRet: MIN_MFE_RETENTION_SCALP,
-    harvestRet: MIN_MFE_RETENTION_SCALP,
-    thesisMinHoldMs: 60_000,
-    timeDecayMs: 240_000,
+    tpPct: 0.0022,
+    tpFloor: 5.0,
+    slPct: 0.00025,
+    slFloor: 0.8,
+    slCapAbs: 0.95,
+    mfeFloorPct: 0.0005,
+    mfeFloorAbs: 2.5,
+    peakRet: MIN_MFE_RETENTION,
+    harvestRet: HARVEST_MFE_RETENTION,
+    thesisMinHoldMs: 90_000,
+    timeDecayMs: 480_000,
   },
   FADE: {
-    tpPct: 0.0015,
-    tpFloor: 3.0,
-    slPct: 0.00035,
-    slFloor: 1.5,
-    slCapAbs: 1.5,
-    mfeFloorPct: 0.00028,
-    mfeFloorAbs: 1.2,
-    peakRet: MIN_MFE_RETENTION_SCALP,
-    harvestRet: MIN_MFE_RETENTION_SCALP,
-    thesisMinHoldMs: 60_000,
-    timeDecayMs: 180_000,
+    tpPct: 0.0018,
+    tpFloor: 4.0,
+    slPct: 0.00022,
+    slFloor: 0.7,
+    slCapAbs: 0.9,
+    mfeFloorPct: 0.00045,
+    mfeFloorAbs: 2.2,
+    peakRet: MIN_MFE_RETENTION,
+    harvestRet: HARVEST_MFE_RETENTION,
+    thesisMinHoldMs: 90_000,
+    timeDecayMs: 240_000,
   },
 };
 
-/** Entry body — closed 10s must be a real Gold move (not a half-point chase). */
+/** Entry body — 10s Gold-friendly (was too strict → missed real 10s moves). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00028, // ~1.2pt Gold @ 4400
-  SCALP: 0.00024, // ~1.05pt
-  FADE: 0.0002, // ~0.9pt bounce/reject
+  LONG: 0.00018, // ~0.8pt Gold @ 4400
+  SCALP: 0.00015, // ~0.65pt
+  FADE: 0.00012, // ~0.55pt bounce/reject
 };
 
 /**
  * Diagnostic only — LIVE entry uses playbookFromSetup (marketSetup).
  * COMPRESSION/quiet → null (NONE), never a WAIT "regime playbook".
- * Trend/breakout → LONG; pullback/expansion/range → SCALP; failed break → FADE.
  */
 export function playbookFromRegime(regime?: string | null): Playbook {
   const r = normalizeRegime(regime);
   if (r === 'COMPRESSION') return 'WAIT'; // legacy alias = no book; desk treats as NONE
   if (r === 'TREND_UP' || r === 'TREND_DOWN') return 'LONG';
-  if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'LONG';
-  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'SCALP';
+  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'LONG';
+  if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'SCALP';
   if (r === 'EXPANSION' || r === 'REVERSAL_CANDIDATE') return 'SCALP';
   if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'FADE';
-  if (r === 'RANGE') return 'SCALP';
+  if (r === 'RANGE') return 'FADE';
   return 'WAIT';
 }
 
@@ -118,59 +112,51 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
-/** Manage exit — LONG 75% PeakProtect / SCALP·FADE 90%; HardInv by book; TP ≫ SL. */
+/** Manage exit — PeakProtect 75% all setups; HardInv ≈1.0pt; TP ≫ SL. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
   entrySetup?: string | null
 ): PlaybookExitParams {
+  const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // Trend / breakout leg — LONG hold: 75% PeakProtect after ~2.5pt MFE
-  if (setup === 'CONTINUATION' || setup === 'BREAKOUT') {
+  // V-bounce / dump continuation — hold for the leg, same 75% PeakProtect
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
     return {
-      ...PLAYBOOK_EXIT.LONG,
+      ...base,
       tpPct: 0.0025,
       tpFloor: 6.5,
-      slPct: 0.00035,
-      slFloor: 1.5,
-      slCapAbs: 1.5,
+      slPct: 0.00028,
+      slFloor: 0.85,
+      slCapAbs: 1.0,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
-      peakRet: MIN_MFE_RETENTION_LONG,
-      harvestRet: MIN_MFE_RETENTION_LONG,
+      peakRet: MIN_MFE_RETENTION,
+      harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 180_000,
       timeDecayMs: 600_000,
     };
   }
 
-  // Pullback scalp / HardInv flip — 90% PeakProtect, tighter HardInv, faster bank
-  if (
-    setup === 'PULLBACK' ||
-    setup === 'HARDINV_FLIP' ||
-    playbook === 'SCALP'
-  ) {
+  // FADE / failed-break bounce — still 75% PeakProtect, tight HardInv
+  if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
-      ...PLAYBOOK_EXIT.SCALP,
-      peakRet: MIN_MFE_RETENTION_SCALP,
-      harvestRet: MIN_MFE_RETENTION_SCALP,
+      ...base,
+      tpPct: 0.0018,
+      tpFloor: 4.0,
+      slPct: 0.00025,
+      slFloor: 0.8,
+      slCapAbs: 1.0,
+      mfeFloorPct: 0.00045,
+      mfeFloorAbs: 2.0,
+      peakRet: MIN_MFE_RETENTION,
+      harvestRet: HARVEST_MFE_RETENTION,
+      thesisMinHoldMs: 120_000,
+      timeDecayMs: 420_000,
     };
   }
 
-  // FADE / failed-break — 90% PeakProtect, quick out
-  if (setup === 'FADE' || setup === 'FAILED_BREAK' || playbook === 'FADE') {
-    return {
-      ...PLAYBOOK_EXIT.FADE,
-      peakRet: MIN_MFE_RETENTION_SCALP,
-      harvestRet: MIN_MFE_RETENTION_SCALP,
-    };
-  }
-
-  // Bare LONG playbook (no setup tag)
-  if (playbook === 'LONG') {
-    return { ...PLAYBOOK_EXIT.LONG };
-  }
-
-  return PLAYBOOK_EXIT[playbook];
+  return base;
 }
 
 export function isLongFamily(regime?: string | null): boolean {
@@ -191,21 +177,6 @@ export function wasRangeOrExpansion(regime?: string | null): boolean {
 export function wasTrend(regime?: string | null): boolean {
   const r = normalizeRegime(regime);
   return r === 'TREND_UP' || r === 'TREND_DOWN';
-}
-
-/**
- * With-trend side from live regime.
- * TREND_UP / BREAKOUT_UP / PULLBACK_UPTREND → BUY only
- * TREND_DOWN / BREAKOUT_DOWN / PULLBACK_DOWNTREND → SELL only
- * RANGE / COMPRESSION / … → null (no side lock from regime)
- */
-export function withTrendSideFromRegime(
-  regime?: string | null
-): 'BUY' | 'SELL' | null {
-  const r = normalizeRegime(regime);
-  if (r === 'TREND_UP' || r === 'BREAKOUT_UP' || r === 'PULLBACK_UPTREND') return 'BUY';
-  if (r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN' || r === 'PULLBACK_DOWNTREND') return 'SELL';
-  return null;
 }
 
 /** ThesisFailure — divided by playbook (not one list for all). */

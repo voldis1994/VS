@@ -91,31 +91,31 @@ export async function executePipelineIntent(
       : null;
 
   const subs = await listActiveSubscriptionsForEpic(epic);
+  const executed: FanoutResult['executed'] = [];
 
-  // All clients in parallel — never queue A then B then C (Capital locks still
-  // serialize only same connectionId; different clients keep their own CST).
-  const executed = await Promise.all(
-    subs.map(async (sub) => {
-      if (hasRunningEntryBrain(sub.account_id, sub.epic)) {
-        return {
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false as const,
-          detail: 'skipped — client runs own entry brain',
-          entry_price: null,
-        };
-      }
-      return executeForSubscription(
-        sub,
-        direction,
-        setupType,
-        regime,
-        intent.reference_price,
-        idem
-      );
-    })
-  );
+  for (const sub of subs) {
+    // Own desk brain owns entry for this account+epic — never double-open via Market Core fanout
+    if (hasRunningEntryBrain(sub.account_id, sub.epic)) {
+      executed.push({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'skipped — client runs own entry brain',
+        entry_price: null,
+      });
+      continue;
+    }
+    const row = await executeForSubscription(
+      sub,
+      direction,
+      setupType,
+      regime,
+      intent.reference_price,
+      idem
+    );
+    executed.push(row);
+  }
 
   return {
     epic,
@@ -245,31 +245,13 @@ async function executeForSubscription(
       `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
       [sub.account_id]
     );
-    const capitalAccountId =
-      (acc.rows[0]?.external_account_id as string | null) || null;
-    const acctCount = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM broker_accounts WHERE broker_connection_id = $1`,
-      [sub.connection_id]
-    );
-    if ((acctCount.rows[0]?.n ?? 0) > 1 && !(capitalAccountId || '').trim()) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'external_account_id required (multi-account connection)',
-        entry_price: null,
-      });
-    }
-    // Short acquire — full-cycle lease + CYCLE WATCHDOG left Capital lock stuck
-    // (Connecting… forever). list/order/close already use withBoundCapitalAccount.
     const opened = await acquireCapitalSession({
       environment: connRow.rows[0].environment as string,
       apiKey: creds.api_key || '',
       identifier: String(connRow.rows[0].identifier || '').trim(),
       password: creds.password || '',
       connectionId: sub.connection_id,
-      capitalAccountId,
+      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
     });
     if (!opened.ok) {
       noteBrokerError(sub.client_id, opened.result.detail);
