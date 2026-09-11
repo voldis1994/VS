@@ -12,8 +12,8 @@ export type ExitSide = 'BUY' | 'SELL';
 /**
  * Soft loss exits use HardInv only (no BreakevenFail scratch path).
  * Profit side (Target / PeakProtect / TimeDecay): Capital 1m CLOSE only.
- * If that 1m continues with the trade → PeakProtect may bank giveback.
- * If the next 1m flips against the trade → close (DirectionFlip).
+ * If that 1m continues with the trade → HOLD (no PeakProtect yet).
+ * If the next 1m flips against the trade → PeakProtect % ON (DirectionFlip fallback).
  */
 export const BE_ZONE_ABS = 0.12; // diagnostic only — no longer triggers early exit
 export const PROFIT_HOLD_ABS = 0.45;
@@ -56,8 +56,8 @@ export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
 
 /**
  * Profit-side policy on a newly closed Capital 1m:
- * - continue: direction still with trade → PeakProtect/Target may work (no force flip)
- * - reverse: next candle flipped vs prior with-trade (or against side) → force close path
+ * - continue: direction still with trade → HOLD profit (PeakProtect stays off)
+ * - reverse: next candle flipped against side → PeakProtect % ON / DirectionFlip
  * - wait: doji / no clear signal
  */
 export function closed1mProfitPolicy(
@@ -155,7 +155,7 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  *
  * Desk: loss (HardInv) LIVE; profit (Target/PeakProtect/TimeDecay) on Capital 1m CLOSE.
- * Continuation 1m → PeakProtect may bank; reverse 1m → DirectionFlip close.
+ * Continuation 1m → HOLD; reverse 1m → PeakProtect % ON.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -209,7 +209,7 @@ export function decideBestOutcomeExit(
       };
     }
 
-    // 4) PeakProtect — giveback of MFE (desk: only when 1m continues or on reverse path)
+    // 4) PeakProtect — giveback of MFE (desk: only on reverse 1m path)
     if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
       return {
         exit: true,
