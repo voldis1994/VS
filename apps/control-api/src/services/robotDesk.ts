@@ -22,11 +22,13 @@ import {
   type RegimeName,
 } from './regimes.js';
 import {
+  closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
   hardInvFlipBrokerAction,
   hardInvOppositeScalpSide,
 } from './exitManage.js';
+import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -190,6 +192,15 @@ type Internal = RobotSession & {
    * Cleared on fill / expiry. Not armed when closed trade was already HARDINV_FLIP.
    */
   pending_hardinv_flip: { side: 'BUY' | 'SELL'; armed_at_ms: number } | null;
+  /**
+   * After reverse Capital 1m: PeakProtect % is ON and trails live until exit.
+   * Cleared on continue 1m / flat clear.
+   */
+  peak_protect_armed: boolean;
+  /** Last Capital 1m close key already evaluated for profit policy */
+  last_1m_profit_exit_key: string;
+  /** Throttle Capital MINUTE fetch while managing */
+  last_manage_minute_fetch_ms: number;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -282,6 +293,9 @@ function publicSession(s: Internal): RobotSession {
     last_entry_side_ms: _entrySideAt,
     last_hard_exit_ms: _hardExit,
     pending_hardinv_flip: _hardFlip,
+    peak_protect_armed: _peakArmed,
+    last_1m_profit_exit_key: _1mExit,
+    last_manage_minute_fetch_ms: _manageMin,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -422,7 +436,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. Max 25% MFE giveback everywhere (keep ≥75%). HardInv 1.5pt all; after HardInv → opposite SCALP once. TP ≫ SL. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live all + opposite SCALP flip. Profit: HOLD until Capital 1m close — continue→HOLD (Peak OFF); reverse→PeakProtect 75% arms + live trail. Same for ALL exits. Entry on closed 10s confirm.',
   };
 }
 
@@ -459,6 +473,26 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
+/** Last fully closed Capital 1m (not the forming minute). */
+function lastClosedCapitalMinute(
+  candles: CapitalPriceCandle[]
+): CapitalPriceCandle | null {
+  if (candles.length >= 2) return candles[candles.length - 2]!;
+  return null;
+}
+
+/** Closed Capital 1m immediately before lastClosedCapitalMinute. */
+function prevClosedCapitalMinute(
+  candles: CapitalPriceCandle[]
+): CapitalPriceCandle | null {
+  if (candles.length >= 3) return candles[candles.length - 3]!;
+  return null;
+}
+
+function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
+  return `${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+}
+
 function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
@@ -473,6 +507,8 @@ function clearTradeState(s: Internal) {
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
+  s.peak_protect_armed = false;
+  s.last_1m_profit_exit_key = '';
 }
 
 /**
@@ -1447,9 +1483,10 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
-      if (decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+      // LIVE loss: HardInv / thesis — wrong side out immediately (ALL exits)
+      const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+      if (lossDec.exit) {
+        await exitTrade(opened.session, s, quote, lossDec.reason);
         // HardInv flip: same cycle, no 1m candle wait
         if (s.pending_hardinv_flip && !s.open_side) {
           await tryExecuteHardInvFlip(opened.session, s, quote);
@@ -1457,15 +1494,93 @@ async function robotCycle(s: Internal) {
         return;
       }
 
+      // PROFIT (ALL exits / playbooks):
+      // 1) Hold green until Capital 1m CLOSES
+      // 2) Next 1m same direction → HOLD + PeakProtect OFF
+      // 3) Direction CHANGES → PeakProtect 75% ARMS and trails LIVE
+      if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
+        s.last_manage_minute_fetch_ms = Date.now();
+        try {
+          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
+          if (mins.ok && mins.candles.length) {
+            s.last_minute_candles = mins.candles;
+          }
+        } catch {
+          /* keep previous minutes */
+        }
+      }
+
+      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+      if (closed1m && s.open_side && s.entry_price != null) {
+        const key = capitalMinuteCandleKey(closed1m);
+        if (key !== s.last_1m_profit_exit_key) {
+          const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+          const policy = closed1mProfitPolicy(s.open_side, closed1m, prev1m);
+          s.last_1m_profit_exit_key = key;
+
+          if (policy === 'continue') {
+            s.peak_protect_armed = false;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m continue · HOLD profit · PeakProtect OFF`,
+            });
+          } else if (policy === 'wait') {
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m wait · HOLD profit · PeakProtect ${
+                s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
+              }`,
+            });
+          } else if (policy === 'reverse') {
+            s.peak_protect_armed = true;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m reverse · PeakProtect ARMED · trailing live giveback %`,
+            });
+            const peakAtClose = decideBestOutcomeExit(
+              s,
+              closed1m.close,
+              'peak_protect_only'
+            );
+            if (peakAtClose.exit) {
+              await exitTrade(opened.session, s, quote, peakAtClose.reason);
+              return;
+            }
+          }
+        }
+      }
+
+      // Once armed by reverse — PeakProtect-only on LIVE mark (no Target/TimeDecay)
+      if (s.peak_protect_armed && s.open_side) {
+        const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+        if (peakDec.exit) {
+          await exitTrade(opened.session, s, quote, peakDec.reason);
+          return;
+        }
+      }
+
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${
+          s.entry_setup || '?'
+        } · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+        } · loss=live · plus=1mClose(continue→HOLD·reverse→PeakARM)·peakLive=${
+          s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });
       return;
@@ -1824,6 +1939,9 @@ export async function startRobotSession(input: {
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
     pending_hardinv_flip: null,
+    peak_protect_armed: false,
+    last_1m_profit_exit_key: '',
+    last_manage_minute_fetch_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1842,7 +1960,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → HardInv live · profit 1mClose(continue→HOLD·reverse→Peak75% live) · never shared Market Core fanout',
   });
 
   sessions.set(id, session);

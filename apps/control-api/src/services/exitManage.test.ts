@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
   hardInvFlipBrokerAction,
@@ -215,5 +216,72 @@ describe('hardInvFlipBrokerAction', () => {
 
   it('none without pending flip', () => {
     expect(hardInvFlipBrokerAction(null, 'BUY')).toBe('none');
+  });
+});
+
+describe('closed1mProfitPolicy', () => {
+  it('continues when BUY still gets green 1m — desk HOLDs (PeakProtect off)', () => {
+    expect(
+      closed1mProfitPolicy('BUY', { open: 2000, close: 2003 }, { open: 1998, close: 2000 })
+    ).toBe('continue');
+  });
+
+  it('reverses when next 1m flips against BUY', () => {
+    expect(
+      closed1mProfitPolicy('BUY', { open: 2003, close: 2000 }, { open: 2000, close: 2003 })
+    ).toBe('reverse');
+  });
+
+  it('reverses when next 1m flips against SELL', () => {
+    expect(
+      closed1mProfitPolicy('SELL', { open: 2000, close: 2003 }, { open: 2003, close: 2000 })
+    ).toBe('reverse');
+  });
+
+  it('wait on doji', () => {
+    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2000 }, null)).toBe('wait');
+  });
+});
+
+describe('peak_protect_only gate', () => {
+  it('exits on live giveback after MFE when retention < 75%', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        peak_retention: 0.5,
+        playbook: 'LONG',
+      }),
+      2004,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('does not Target on peak_protect_only even if TP hit', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 1,
+        peak_retention: 0.95,
+        playbook: 'LONG',
+      }),
+      2025, // deep green ≥ TP — peak_protect_only must NOT Target
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('live_loss still HardInvs without waiting for 1m', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4400, playbook: 'LONG', entry_setup: 'CONTINUATION' }),
+      4398.4,
+      'live_loss'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/HardInvalidation/);
   });
 });
