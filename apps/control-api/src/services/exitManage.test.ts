@@ -4,8 +4,10 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   hardInvFlipBrokerAction,
+  hardInvFlipSide,
   hardInvOppositeScalpSide,
   PEAK_PROTECT_ARM_MFE,
+  shouldArmHardInvFlipFromMae,
   shouldArmPeakProtect,
   thesisFailureReason,
   type ExitSnapshot,
@@ -200,6 +202,27 @@ describe('hardInvOppositeScalpSide', () => {
     expect(
       hardInvOppositeScalpSide('HardInvalidation · SCALP', 'BUY', 'HARDINV_FLIP')
     ).toBeNull();
+  });
+});
+
+describe('hardInvFlipSide + broker MAE arm', () => {
+  it('flips BUY→SELL / SELL→BUY', () => {
+    expect(hardInvFlipSide('BUY')).toBe('SELL');
+    expect(hardInvFlipSide('SELL')).toBe('BUY');
+  });
+
+  it('does not chain HARDINV_FLIP', () => {
+    expect(hardInvFlipSide('BUY', 'HARDINV_FLIP')).toBeNull();
+  });
+
+  it('arms from broker close when MAE ≤ -1.5', () => {
+    expect(shouldArmHardInvFlipFromMae(-1.5, 'BUY', 'CONTINUATION')).toBe('SELL');
+    expect(shouldArmHardInvFlipFromMae(-2.2, 'SELL', 'CONTINUATION')).toBe('BUY');
+  });
+
+  it('does not arm when MAE still softer than -1.5', () => {
+    expect(shouldArmHardInvFlipFromMae(-1.49, 'BUY', 'CONTINUATION')).toBeNull();
+    expect(shouldArmHardInvFlipFromMae(0, 'BUY', 'CONTINUATION')).toBeNull();
   });
 });
 
