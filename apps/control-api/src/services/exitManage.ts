@@ -34,10 +34,22 @@ export type CandleOHLC = { open: number; close: number };
 
 export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
 
+/** Live MFE (pts) that arms PeakProtect on the desk — all books. */
+export const PEAK_PROTECT_ARM_MFE = 1.5;
+
+/** Arm PeakProtect as soon as live MFE reaches floor (no 1m candle wait). */
+export function shouldArmPeakProtect(
+  mfe: number,
+  alreadyArmed: boolean,
+  floor = PEAK_PROTECT_ARM_MFE
+): boolean {
+  return !alreadyArmed && Number.isFinite(mfe) && mfe >= floor;
+}
+
 /**
  * Desk gates:
  * - live_loss: HardInv 1.5pt ONLY — fire on live mark (NO thesis scratch)
- * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
+ * - peak_protect_only: PeakProtect giveback only (armed live at MFE ≥ 1.5pt)
  * - closed_1m_profit / live_profit: legacy full profit suite (not used by desk manage)
  * - all: both loss + full profit (tests / fallback)
  */
@@ -70,10 +82,8 @@ export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
 }
 
 /**
- * Profit-side policy on a newly closed Capital 1m (ALL playbooks / exits):
- * - continue: same direction → HOLD profit (PeakProtect stays OFF)
- * - reverse: flipped against side → PeakProtect % ARMS (live trail)
- * - wait: doji / no clear signal
+ * Legacy closed-1m profit policy (tests / unused by desk manage).
+ * Desk now arms PeakProtect live at MFE ≥ PEAK_PROTECT_ARM_MFE.
  */
 export function closed1mProfitPolicy(
   side: ExitSide,
@@ -141,10 +151,10 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
  *
  * Desk wiring:
  * - live_loss: HardInv 1.5pt ONLY on live mark (never thesis / micro-red scratch)
- * - peak_protect_only: PeakProtect 75% only (armed after reverse 1m; trails live)
+ * - peak_protect_only: PeakProtect 75% only (armed live at MFE ≥ 1.5pt; trails live)
  * - all: full suite (tests)
  *
- * Profit path on desk: HOLD until reverse 1m arms PeakProtect — no Target scratch on continue.
+ * Profit path on desk: PeakProtect arms live at MFE ≥ 1.5pt — trail 75% giveback.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -187,7 +197,7 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Armed after reverse 1m — PeakProtect giveback only (no Target / TimeDecay)
+  // Armed at MFE ≥ 1.5 — PeakProtect giveback only (no Target / TimeDecay)
   if (wantPeakOnly) {
     if (mfe >= mfeFloor && fav > 0 && retention != null && retention < p.peakRet) {
       return {
