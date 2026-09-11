@@ -30,6 +30,35 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
+/**
+ * After HardInvalidation: opposite side for a one-shot SCALP (catch the move).
+ * No chain: if the closed trade was already HARDINV_FLIP, return null.
+ */
+export function hardInvOppositeScalpSide(
+  reason: string,
+  closedSide: ExitSide | null | undefined,
+  entrySetup?: string | null
+): ExitSide | null {
+  if (!closedSide || !/HardInvalidation/i.test(reason)) return null;
+  if (String(entrySetup || '').toUpperCase() === 'HARDINV_FLIP') return null;
+  return closedSide === 'BUY' ? 'SELL' : 'BUY';
+}
+
+/**
+ * After HardInv close Capital often still lists the old leg briefly.
+ * Flip must not re-adopt that ghost and must not wait for a 1m candle.
+ */
+export function hardInvFlipBrokerAction(
+  pendingSide: ExitSide | null | undefined,
+  brokerSide: ExitSide | null | undefined
+): 'enter' | 'wait_clear' | 'adopt_flip' | 'none' {
+  if (!pendingSide) return 'none';
+  if (!brokerSide) return 'enter';
+  if (brokerSide === pendingSide) return 'adopt_flip';
+  return 'wait_clear';
+}
+
+
 /** Legacy helper — SCALP-style list; prefer thesisFailureForPlaybook. */
 export function thesisFailureReason(
   side: ExitSide,
