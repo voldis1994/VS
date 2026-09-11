@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
   favorableMove,
+  hardInvFlipBrokerAction,
+  hardInvOppositeScalpSide,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -83,7 +85,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('soft HardInv capped ~1.0pt on Gold CONTINUATION', () => {
+  it('soft HardInv capped ~1.5pt on Gold CONTINUATION (tight for flip SCALP)', () => {
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -93,9 +95,21 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4399.2
+      4398.7 // -1.3 — still inside 1.5
     );
     expect(hold.exit).toBe(false);
+    const stillHold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(10_000),
+        regime: 'TREND_UP',
+      }),
+      4398.6 // -1.4 — still inside 1.5
+    );
+    expect(stillHold.exit).toBe(false);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -105,7 +119,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_at: ago(10_000),
         regime: 'TREND_UP',
       }),
-      4398.8
+      4398.4 // -1.6 — past 1.5
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
@@ -165,5 +179,41 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       4420.68
     );
     expect(d.exit).toBe(false);
+  });
+});
+
+describe('hardInvOppositeScalpSide', () => {
+  it('arms opposite after HardInv', () => {
+    expect(hardInvOppositeScalpSide('HardInvalidation · LONG · UPL', 'BUY')).toBe('SELL');
+    expect(hardInvOppositeScalpSide('HardInvalidation · SCALP', 'SELL')).toBe('BUY');
+  });
+
+  it('does not arm on PeakProtect / BreakevenFail', () => {
+    expect(hardInvOppositeScalpSide('PeakProtection · LONG · live', 'BUY')).toBeNull();
+    expect(hardInvOppositeScalpSide('BreakevenFail · SCALP', 'SELL')).toBeNull();
+  });
+
+  it('does not chain — no flip of a HARDINV_FLIP scalp', () => {
+    expect(
+      hardInvOppositeScalpSide('HardInvalidation · SCALP', 'BUY', 'HARDINV_FLIP')
+    ).toBeNull();
+  });
+});
+
+describe('hardInvFlipBrokerAction', () => {
+  it('enters when broker flat', () => {
+    expect(hardInvFlipBrokerAction('SELL', null)).toBe('enter');
+  });
+
+  it('waits while old HardInv leg still listed', () => {
+    expect(hardInvFlipBrokerAction('SELL', 'BUY')).toBe('wait_clear');
+  });
+
+  it('adopts when opposite SCALP already live', () => {
+    expect(hardInvFlipBrokerAction('SELL', 'SELL')).toBe('adopt_flip');
+  });
+
+  it('none without pending flip', () => {
+    expect(hardInvFlipBrokerAction(null, 'BUY')).toBe('none');
   });
 });
