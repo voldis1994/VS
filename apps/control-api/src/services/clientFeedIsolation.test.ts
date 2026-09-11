@@ -124,6 +124,7 @@ describe('per-client robot + Capital feed contract', () => {
     expect(desk).toMatch(/peak_protect_armed/);
     expect(desk).toMatch(/peak_protect_only/);
     expect(desk).toMatch(/force-close ghost/);
+    expect(desk).toMatch(/No entry debounce \/ side-lock/);
     expect(desk).toMatch(/HARDINV_FLIP_EXPIRE_MS = 60_000/);
     expect(desk).toMatch(/HardInv flip FIRST/);
     expect(desk).toMatch(/last_1m_profit_exit_key/);

@@ -22,7 +22,7 @@ export const BE_EARLY_EXIT_ABS = 0.35;
 export const BE_EARLY_MIN_HOLD_MS = 8_000;
 
 /**
- * - live_loss: HardInv / red thesis — fire on live mark
+ * - live_loss: HardInv only — fire on live mark (ThesisFailure disabled)
  * - live_profit: Target / PeakProtect / TimeDecay (legacy alias)
  * - closed_1m_profit: Target / PeakProtect / TimeDecay — Capital 1m CLOSE
  * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
@@ -189,21 +189,12 @@ export function decideBestOutcomeExit(
     gate === 'all' || gate === 'live_profit' || gate === 'closed_1m_profit';
 
   if (wantLoss) {
-    // 1) HardInv only — BreakevenFail disabled (user: no more BE scratch exits)
+    // HardInv only — BreakevenFail + ThesisFailure disabled (user: loss = HardInv live only)
     if (fav <= -sl) {
       return {
         exit: true,
         reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
       };
-    }
-
-    // 2) Thesis only when underwater
-    const thesisRegime = s.entry_regime ?? s.regime;
-    if (thesisRegime) {
-      const thesis = thesisFailureForPlaybook(s.open_side, thesisRegime, book);
-      if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
-        return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
-      }
     }
   }
 

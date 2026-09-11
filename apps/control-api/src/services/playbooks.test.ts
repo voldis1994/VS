@@ -165,7 +165,7 @@ describe('playbook exit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('LONG thesis on TREND_DOWN after 120s only when UPL ≤ 0', () => {
+  it('LONG does not Thesis-scratch on TREND_DOWN (HardInv only for loss)', () => {
     const young = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -205,10 +205,9 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      1999.5
+      1999.5 // small red — HardInv needs ≤ -1.5pt; Thesis disabled
     );
-    expect(agedRed.exit).toBe(true);
-    expect(agedRed.reason).toMatch(/LONG/);
+    expect(agedRed.exit).toBe(false);
   });
 
   it('all books PeakProtect by style — LONG 75%, SCALP 90%', () => {
