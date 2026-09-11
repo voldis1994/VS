@@ -955,19 +955,19 @@ export function capitalMinuteAsBar(c: CapitalPriceCandle): TenSecBar {
   };
 }
 
-/** Only these setups may open — FADE/PULLBACK/RANGE noise is watch-only. */
-export const QUALITY_ENTRY_KINDS = new Set<SetupKind>(['CONTINUATION', 'BREAKOUT']);
+/** Tradeable setups — FADE/FAILED_BREAK stay watch-only (PULLBACK allowed with trend). */
+export const QUALITY_ENTRY_KINDS = new Set<SetupKind>(['CONTINUATION', 'BREAKOUT', 'PULLBACK']);
 /** Capital 1m body floor in price points (Gold) — blips below this are noise */
-export const QUALITY_1M_BODY_ABS = 2.5;
+export const QUALITY_1M_BODY_ABS = 2.0;
 
 export function isQualityEntrySetup(kind: string | null | undefined): boolean {
   return QUALITY_ENTRY_KINDS.has(String(kind || '').toUpperCase() as SetupKind);
 }
 
 /**
- * PRIMARY live entry — sticky ARMED CONTINUATION/BREAKOUT + closed Capital 1m.
- * Quality gate: real 1m body, impulse agree, 15m context not against,
- * TREND_UP→BUY only / TREND_DOWN→SELL only. No FADE/PULLBACK spam.
+ * PRIMARY live entry — sticky ARMED CONTINUATION/BREAKOUT/PULLBACK + closed Capital 1m.
+ * Quality: real 1m body, impulse must not fight the side (quiet OK), 15m not against,
+ * TREND_UP→BUY only / TREND_DOWN→SELL only. FADE/FAILED_BREAK stay watch-only.
  */
 export function decideEntryFromClosed1m(
   setup: MarketSetup,
@@ -1003,10 +1003,13 @@ export function decideEntryFromClosed1m(
     if (setup.side === 'SELL' && structure.hour_bias === 'UP') return null;
   }
 
-  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
-  // Need affirmative impulse with the side — quiet/NONE impulse = noise
-  if (setup.side === 'BUY' && imp !== 'UP') return null;
-  if (setup.side === 'SELL' && imp !== 'DOWN') return null;
+  const imp =
+    minutes && minutes.length
+      ? recentImpulse(minutes, 'flip') || recentImpulse(minutes)
+      : null;
+  // Block only when impulse fights the side — quiet/null is OK if 1m body already confirms
+  if (setup.side === 'BUY' && imp === 'DOWN') return null;
+  if (setup.side === 'SELL' && imp === 'UP') return null;
 
   const book = setup.playbook;
   const thr = PLAYBOOK_ENTRY_BODY[book];
@@ -1044,21 +1047,22 @@ export function decideEntryFromClosed1m(
     return null;
   }
 
-  if (setup.kind === 'CONTINUATION') {
+  if (setup.kind === 'CONTINUATION' || setup.kind === 'PULLBACK') {
+    const label = setup.kind;
     if (setup.side === 'BUY' && body >= thr && bar.close > bar.open) {
       return {
         direction: 'BUY',
-        setup: 'CONTINUATION',
+        setup: label,
         playbook: book,
-        reason: `ENTRY · CONTINUATION BUY Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
+        reason: `ENTRY · ${label} BUY Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
       };
     }
     if (setup.side === 'SELL' && body <= -thr && bar.close < bar.open) {
       return {
         direction: 'SELL',
-        setup: 'CONTINUATION',
+        setup: label,
         playbook: book,
-        reason: `ENTRY · CONTINUATION SELL Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
+        reason: `ENTRY · ${label} SELL Capital 1m · body ${bodyAbs.toFixed(2)}pt · ${setup.reason}`,
       };
     }
   }

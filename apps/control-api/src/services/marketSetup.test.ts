@@ -446,7 +446,7 @@ describe('marketSetup', () => {
     expect(decideEntryFromClosed1m(contBuy, micro, bars)).toBeNull();
   });
 
-  it('decideEntryFromClosed1m refuses FADE / PULLBACK (quality gate)', () => {
+  it('decideEntryFromClosed1m refuses FADE / FAILED_BREAK (quality gate); PULLBACK allowed', () => {
     const minutes = rangeMinutes();
     const fadeBuy = {
       ...emptySetup(),
@@ -461,9 +461,51 @@ describe('marketSetup', () => {
     const bigGreen = candle(2001, 2005, 2000.5, 2004.5);
     expect(decideEntryFromClosed1m(fadeBuy, bigGreen, minutes)).toBeNull();
     expect(isQualityEntrySetup('FADE')).toBe(false);
-    expect(isQualityEntrySetup('PULLBACK')).toBe(false);
+    expect(isQualityEntrySetup('FAILED_BREAK')).toBe(false);
+    expect(isQualityEntrySetup('PULLBACK')).toBe(true);
     expect(isQualityEntrySetup('CONTINUATION')).toBe(true);
     expect(isQualityEntrySetup('BREAKOUT')).toBe(true);
+  });
+
+  it('decideEntryFromClosed1m allows CONTINUATION when impulse is quiet (body confirms)', () => {
+    // Flat/quiet minutes — no impulse — but Capital 1m body is real
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 24; i++) bars.push(candle(2000, 2000.4, 1999.7, 2000.1));
+    const contBuy = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 1995,
+    };
+    const green1m = candle(2000, 2004, 1999.8, 2003.5); // 3.5pt body
+    const e = decideEntryFromClosed1m(contBuy, green1m, bars);
+    expect(e?.direction).toBe('BUY');
+    expect(e?.setup).toBe('CONTINUATION');
+  });
+
+  it('decideEntryFromClosed1m allows ARMED PULLBACK BUY on green Capital 1m', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) bars.push(candle(2000 + i * 0.15, 2000.5 + i * 0.15, 1999.5 + i * 0.15, 2000.2 + i * 0.15));
+    bars.push(candle(2003, 2004, 2002.5, 2003.6));
+    bars.push(candle(2003.6, 2005, 2003.4, 2004.8));
+    const pbBuy = {
+      ...emptySetup(),
+      kind: 'PULLBACK' as const,
+      side: 'BUY' as const,
+      playbook: 'SCALP' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: 2010,
+      swing_low: 1995,
+    };
+    const green1m = candle(2003.5, 2006.5, 2003.2, 2006.2); // ~2.7pt
+    const e = decideEntryFromClosed1m(pbBuy, green1m, bars);
+    expect(e?.direction).toBe('BUY');
+    expect(e?.setup).toBe('PULLBACK');
   });
 
   it('decideEntryFromClosed1m refuses red 1m for BUY CONTINUATION', () => {
