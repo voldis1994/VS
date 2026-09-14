@@ -67,7 +67,6 @@ export async function listActiveSubscriptionsForEpic(
        AND c.access_enabled = true
        AND c.panel_robot_requested = 'RUNNING'
        AND c.panel_epic = $1
-       AND COALESCE(ais.trading_enabled, false) = true
        AND (
          c.preferred_broker_account_id IS NULL
          OR c.preferred_broker_account_id = ba.id

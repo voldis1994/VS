@@ -799,14 +799,10 @@ function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boole
  */
 export async function readMultiFeedPrice(
   epicInput: string,
-  opts?: { anchorMid?: number | null; connectionId?: number | null }
+  opts?: { anchorMid?: number | null }
 ): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
   const anchor = opts?.anchorMid != null && Number.isFinite(opts.anchorMid) ? opts.anchorMid : null;
-  const onlyConnection =
-    opts?.connectionId != null && Number.isFinite(opts.connectionId) && opts.connectionId > 0
-      ? Number(opts.connectionId)
-      : null;
   if (!epic) {
     return {
       epic: '',
@@ -825,12 +821,9 @@ export async function readMultiFeedPrice(
   }
 
   const senders = await listDataSenders();
-  const capitalSenders = senders.filter((s) => {
-    if (s.kind !== 'capital_com' || !s.connection_id || s.enabled === false) return false;
-    // Per-client primary feed: never fuse another client's Capital mid into this robot's OHLC.
-    if (onlyConnection != null && Number(s.connection_id) !== onlyConnection) return false;
-    return true;
-  });
+  const capitalSenders = senders.filter(
+    (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
+  );
 
   const [capitalReads, publicReads, fxRead] = await Promise.all([
     Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),

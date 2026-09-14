@@ -5,7 +5,9 @@ import {
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
   computeSafetyCushionStopLevel,
+  isLateMoveOnOneMinute,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import {
@@ -16,7 +18,7 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot, hasRunningEntryBrain } from './robotDesk.js';
+import { attachManageOnlyRobot } from './robotDesk.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -94,18 +96,6 @@ export async function executePipelineIntent(
   const executed: FanoutResult['executed'] = [];
 
   for (const sub of subs) {
-    // Own desk brain owns entry for this account+epic — never double-open via Market Core fanout
-    if (hasRunningEntryBrain(sub.account_id, sub.epic)) {
-      executed.push({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'skipped — client runs own entry brain',
-        entry_price: null,
-      });
-      continue;
-    }
     const row = await executeForSubscription(
       sub,
       direction,
@@ -288,7 +278,19 @@ async function executeForSubscription(
       }
     }
 
-    // Late-move gate REMOVED — open on pipeline intent for every move
+    // Avoid chasing end of 1m move (10s scalp guided by Capital 1m OHLC)
+    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
+    if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
+      noteBrokerOk(sub.client_id);
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'Skip entry — late on 1m candle (end of move)',
+        entry_price: null,
+      });
+    }
 
     // SAFETY SL cushion (~0.20%), not broker minimum
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
