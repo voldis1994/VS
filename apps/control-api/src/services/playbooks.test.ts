@@ -126,12 +126,13 @@ describe('playbook entry', () => {
 
 describe('playbook exit', () => {
   it('LONG ignores PULLBACK_DOWNTREND thesis (hold through pullback)', () => {
+    // mfe < 1.5 so PeakProtect cannot fire — isolates thesis-off check
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(130_000),
-        mfe: 4,
+        mfe: 1.0,
         mae: 0,
         peak_retention: 0.8,
         regime: 'PULLBACK_DOWNTREND',
@@ -143,12 +144,13 @@ describe('playbook exit', () => {
   });
 
   it('LONG: regime TREND_DOWN does NOT thesis-scratch micro-red (HardInv 1.5 only)', () => {
+    // mfe < PeakProtect floor — micro-red must not exit via thesis OR peak
     const young = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(30_000),
-        mfe: 2,
+        mfe: 1.0,
         mae: 0,
         peak_retention: 0.9,
         regime: 'TREND_DOWN',
@@ -162,7 +164,7 @@ describe('playbook exit', () => {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(130_000),
-        mfe: 2,
+        mfe: 1.0, // below PeakProtect floor — thesis isolation only
         mae: 0,
         peak_retention: 0.9,
         regime: 'TREND_DOWN',
@@ -177,7 +179,7 @@ describe('playbook exit', () => {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(130_000),
-        mfe: 2,
+        mfe: 1.0,
         mae: 0,
         peak_retention: 0.9,
         regime: 'TREND_DOWN',

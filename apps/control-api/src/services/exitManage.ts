@@ -49,8 +49,25 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
 
 /** Live MFE (pts) that arms PeakProtect on the desk — all books. */
 export const PEAK_PROTECT_ARM_MFE = 1.5;
+/** Min absolute giveback (pts) before PeakProtect may cut — Gold chop noise ~0.3–0.5. */
+export const PEAK_PROTECT_MIN_GIVEBACK = 0.75;
 
 /** Arm PeakProtect as soon as live MFE reaches floor (no 1m candle wait). */
+
+/** PeakProtect cut: retention below trail AND giveback large enough to beat chop noise. */
+export function shouldPeakProtectExit(
+  mfe: number,
+  fav: number,
+  peakRet: number,
+  mfeFloor = PEAK_PROTECT_ARM_MFE,
+  minGiveback = PEAK_PROTECT_MIN_GIVEBACK
+): boolean {
+  if (!(mfe >= mfeFloor) || !(mfe > 0)) return false;
+  const retention = fav / mfe;
+  const giveback = mfe - fav;
+  return retention < peakRet && giveback >= minGiveback;
+}
+
 export function shouldArmPeakProtect(
   mfe: number,
   alreadyArmed: boolean,
@@ -243,10 +260,12 @@ export function decideBestOutcomeExit(
   // CRITICAL: do NOT require fav > 0. If MFE was ≥1.5 and price gives back through
   // green into red, still PeakProtect NOW — never wait for HardInv -1.5 to steal the book.
   if (wantPeakOnly) {
-    if (mfe >= mfeFloor && retention != null && retention < p.peakRet) {
+    // Chop-safe: 75% trail only after ≥0.75pt real giveback (not 0.3–0.4 noise after arm @1.5)
+    if (shouldPeakProtectExit(mfe, fav, p.peakRet, mfeFloor)) {
+      const ret = mfe > 0 ? fav / mfe : 0;
       return {
         exit: true,
-        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
+        reason: `PeakProtection · ${book} · retention ${(ret * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · live`,
       };
     }
     return { exit: false, reason: '' };
@@ -254,10 +273,11 @@ export function decideBestOutcomeExit(
 
   if (wantProfit) {
     // 3) PeakProtect — only after real leg (75% retention)
-    if (mfe >= mfeFloor && retention != null && retention < p.peakRet) {
+    if (shouldPeakProtectExit(mfe, fav, p.peakRet, mfeFloor)) {
+      const ret = mfe > 0 ? fav / mfe : 0;
       return {
         exit: true,
-        reason: `PeakProtection · ${book} · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
+        reason: `PeakProtection · ${book} · retention ${(ret * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)}`,
       };
     }
 

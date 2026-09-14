@@ -452,7 +452,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → one opposite SCALP flip, then 45s lock (no re-entry spam). PeakProtect ARMS @ +1.5 MFE · trail 75% (giveback cut even if UPL flips red). HardInv -1.5 only if never armed. Same ALL exits. Entry on closed 10s confirm.',
+      'Setup-first. HardInv 1.5pt live ONLY (no thesis) → one opposite SCALP flip, then 45s lock (no re-entry spam). PeakProtect ARMS @ +1.5 MFE · trail 75% after ≥0.75pt giveback (chop-safe). HardInv -1.5 only if never armed. Same ALL exits. Entry on closed 10s confirm.',
   };
 }
 
