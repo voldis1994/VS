@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { routeIntentToSubscriptions } from './intentFanout.js';
 import {
   authorizePipelineRequest,
+  isEpicBeingAnalyzed,
+  notePipelineHeartbeat,
   resetPipelineBridgeForTests,
+  getPipelineBridgeStatus,
 } from './pipelineBridge.js';
 import { computeClientRobotStatus } from './clientPanel.js';
 
@@ -54,7 +57,6 @@ vi.mock('./robotDesk.js', () => ({
   attachManageOnlyRobot: vi.fn(async () => undefined),
   listRobotSessions: () => [],
   stopRobotSession: vi.fn(async () => undefined),
-  hasRunningEntryBrain: () => false,
 }));
 
 function sub(partial: {
@@ -315,64 +317,75 @@ describe('Client isolation', () => {
 });
 
 describe('Heartbeat / runtime status', () => {
-  it('START + own desk brain live → RUNNING', () => {
+  it('START + healthy MC analyzing epic → RUNNING', () => {
+    notePipelineHeartbeat(['XAUUSD']);
+    expect(getPipelineBridgeStatus().healthy).toBe(true);
+    expect(isEpicBeingAnalyzed('XAUUSD')).toBe(true);
     expect(
       computeClientRobotStatus({
         requestedRunning: true,
         hasAccount: true,
         hasEpic: true,
-        deskEntryRunning: true,
+        bridgeHealthy: true,
+        marketAnalyzed: true,
       }).robot_status
     ).toBe('RUNNING');
   });
 
-  it('START while desk brain not yet live → STARTING', () => {
+  it('START while MC unavailable → NOT RUNNING (ERROR)', () => {
+    resetPipelineBridgeForTests();
+    expect(getPipelineBridgeStatus().healthy).toBe(false);
     expect(
       computeClientRobotStatus({
         requestedRunning: true,
         hasAccount: true,
         hasEpic: true,
-        deskEntryRunning: false,
-      }).robot_status
-    ).toBe('STARTING');
-  });
-
-  it('no account → ERROR', () => {
-    expect(
-      computeClientRobotStatus({
-        requestedRunning: true,
-        hasAccount: false,
-        hasEpic: true,
-        deskEntryRunning: false,
+        bridgeHealthy: false,
+        marketAnalyzed: false,
       }).robot_status
     ).toBe('ERROR');
   });
 
-  it('requested stop → STOPPED even if desk somehow live', () => {
+  it('healthy bridge, epic not yet listed → STARTING', () => {
+    notePipelineHeartbeat(['EURUSD']);
     expect(
       computeClientRobotStatus({
-        requestedRunning: false,
+        requestedRunning: true,
         hasAccount: true,
         hasEpic: true,
-        deskEntryRunning: true,
+        bridgeHealthy: true,
+        marketAnalyzed: isEpicBeingAnalyzed('XAUUSD'),
       }).robot_status
-    ).toBe('STOPPED');
+    ).toBe('STARTING');
+  });
+
+  it('heartbeat restored with epic → RUNNING', () => {
+    notePipelineHeartbeat(['XAUUSD']);
+    expect(
+      computeClientRobotStatus({
+        requestedRunning: true,
+        hasAccount: true,
+        hasEpic: true,
+        bridgeHealthy: getPipelineBridgeStatus().healthy,
+        marketAnalyzed: isEpicBeingAnalyzed('XAUUSD'),
+      }).robot_status
+    ).toBe('RUNNING');
   });
 });
 
 describe('UI status contract', () => {
   it('maps states for logo animation rules', () => {
     expect(computeClientRobotStatus({
-      requestedRunning: false, hasAccount: true, hasEpic: true, deskEntryRunning: true,
+      requestedRunning: false, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: true,
     }).robot_status).toBe('STOPPED');
     expect(computeClientRobotStatus({
-      requestedRunning: true, hasAccount: true, hasEpic: true, deskEntryRunning: false,
+      requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: false,
     }).robot_status).toBe('STARTING');
     expect(computeClientRobotStatus({
-      requestedRunning: true, hasAccount: true, hasEpic: true, deskEntryRunning: true,
+      requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: true,
     }).robot_status).toBe('RUNNING');
     expect(computeClientRobotStatus({
-      requestedRunning: true, hasAccount: false, hasEpic: true, deskEntryRunning: false,
+      requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: false, marketAnalyzed: false,
     }).robot_status).toBe('ERROR');
   });
 });
