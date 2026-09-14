@@ -1,6 +1,6 @@
 exit_policy:
   horizon_ms: 10000
-  peak_retention_threshold: 0.5
+  peak_retention_threshold: 0.75
   remaining_rr_threshold: 0.5
   time_decay_seconds: 1.0
   thesis_failure_enabled: true
