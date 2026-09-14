@@ -1074,7 +1074,7 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // LIVE loss: HardInv / red thesis — cut losers immediately
+      // LIVE loss: HardInv only — no thesis micro-scratch
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
       if (lossDec.exit) {
         await exitTrade(opened.session, s, quote, lossDec.reason);
@@ -1188,13 +1188,14 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 5_000) {
+    const POST_CLOSE_COOLDOWN_MS = 45_000;
+    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `brief cooldown ${Math.ceil((5_000 - sinceClose) / 1000)}s after close · then next bar`,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close · stop chop re-entry`,
       });
       return;
     }

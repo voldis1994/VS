@@ -18,7 +18,7 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
 
 /**
  * Desk gates:
- * - live_loss: HardInv / red thesis — fire on live mark
+ * - live_loss: Soft HardInv only (no thesis micro-scratch)
  * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
  * - all: both (tests / fallback)
  */
@@ -27,6 +27,13 @@ export type ExitDecideGate = 'all' | 'live_loss' | 'peak_protect_only';
 /** Keep 75% of MFE → give back at most 25% (all scalps). */
 export const PEAK_MFE_RETENTION = 0.75;
 export const MAX_MFE_GIVEBACK = 0.25;
+
+/** Gold-scale absolute floors — % alone allowed 0.08–0.15pt micro-scratches. */
+export const HARDINV_ABS_FLOOR = 1.5;
+export const PEAK_MFE_ABS_FLOOR = 1.5;
+/** Need real giveback in price pts before Peak cuts (chop-safe). */
+export const PEAK_MIN_GIVEBACK_ABS = 0.75;
+export const TARGET_ABS_FLOOR = 4.0;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -69,7 +76,7 @@ export function closed1mProfitPolicy(
   return 'wait';
 }
 
-/** Opposite regime vs open side — original PositionManager thesis failure. */
+/** Opposite regime vs open side — diagnostic only (does NOT auto-exit). */
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
@@ -98,9 +105,25 @@ export function thesisFailureReason(
   return null;
 }
 
+function peakShouldCut(
+  fav: number,
+  mfe: number,
+  retention: number | null,
+  mfeFloor: number
+): boolean {
+  // Peak locks profit only — never micro-red after reverse 1m
+  if (!(fav > 0)) return false;
+  if (mfe < mfeFloor) return false;
+  if (retention == null || retention >= PEAK_MFE_RETENTION) return false;
+  const giveback = mfe - fav;
+  if (giveback < PEAK_MIN_GIVEBACK_ABS) return false;
+  return true;
+}
+
 /**
  * Manage exit — winners hold on 1m continue; Peak 25% giveback after reverse.
- * Soft HardInv caps losers; TP ≫ SL so avg win can beat avg loss.
+ * Soft HardInv (≥1.5pt) caps losers. No thesis micro-scratch.
+ * Peak never cuts red — only green with ≥0.75pt giveback after real MFE.
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
@@ -113,10 +136,10 @@ export function decideBestOutcomeExit(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  // Asymmetric: TP room > Soft HardInv so winners can outsize losers
-  const tp = Math.max(absEntry * 0.0035, 0.35);
-  const sl = Math.max(absEntry * 0.0015, 0.15);
-  const mfeFloor = Math.max(absEntry * 0.0008, 0.08);
+  // Asymmetric + Gold floors: TP room > Soft HardInv; never 0.15pt micro-SL
+  const tp = Math.max(absEntry * 0.0035, TARGET_ABS_FLOOR);
+  const sl = Math.max(absEntry * 0.0015, HARDINV_ABS_FLOOR);
+  const mfeFloor = Math.max(absEntry * 0.0008, PEAK_MFE_ABS_FLOOR);
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
@@ -137,19 +160,15 @@ export function decideBestOutcomeExit(
         reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
       };
     }
-    // Never scratch a green trade on regime flicker — only when underwater
-    const thesis = thesisFailureReason(s.open_side, s.regime);
-    if (thesis && fav <= 0 && heldMs >= 60_000) {
-      return { exit: true, reason: thesis };
-    }
+    // Thesis is diagnostic only — micro-red regime flicker must NOT scratch
   }
 
-  // Armed after reverse 1m — PeakProtect giveback only (25%)
+  // Armed after reverse 1m — PeakProtect giveback only (25%), green only
   if (wantPeakOnly) {
-    if (mfe >= mfeFloor && retention != null && retention < PEAK_MFE_RETENTION) {
+    if (peakShouldCut(fav, mfe, retention, mfeFloor)) {
       return {
         exit: true,
-        reason: `PeakProtection · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${(
+        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${(
           MAX_MFE_GIVEBACK * 100
         ).toFixed(0)}%`,
       };
@@ -158,10 +177,10 @@ export function decideBestOutcomeExit(
   }
 
   if (wantFullProfit) {
-    if (mfe >= mfeFloor && retention != null && retention < PEAK_MFE_RETENTION) {
+    if (peakShouldCut(fav, mfe, retention, mfeFloor)) {
       return {
         exit: true,
-        reason: `PeakProtection · retention ${(retention * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,
+        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,
       };
     }
 
