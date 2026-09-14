@@ -10,6 +10,8 @@ import {
   PEAK_PROTECT_ARM_MFE,
   shouldArmHardInvFlipFromMae,
   shouldArmPeakProtect,
+  shouldPeakProtectExit,
+  PEAK_PROTECT_MIN_GIVEBACK,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -78,15 +80,16 @@ describe('decideBestOutcomeExit playbook-aware', () => {
   });
 
   it('holds while retention still ≥75%', () => {
+    // fav 3.8 / MFE 5 = 76% · below LONG TP floor 6 · PeakProtect must HOLD
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.8,
+        mfe: 5,
+        peak_retention: 0.76,
         playbook: 'LONG',
       }),
-      2004
+      2003.8
     );
     expect(d.exit).toBe(false);
   });
@@ -389,6 +392,49 @@ describe('peak_protect_only gate', () => {
     expect(d.exit).toBe(false);
   });
 
+});
+
+
+describe('PeakProtect chop-safe giveback', () => {
+  it('holds when retention < 75% but giveback < 0.75pt (chop noise)', () => {
+    expect(PEAK_PROTECT_MIN_GIVEBACK).toBe(0.75);
+    // MFE 1.5, fav 1.05 → ret 70%, giveback 0.45 — old trail would cut, chop-safe holds
+    expect(shouldPeakProtectExit(1.5, 1.05, 0.75)).toBe(false);
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 1.5,
+        peak_retention: 1.05 / 1.5,
+        playbook: 'SCALP',
+      }),
+      4401.05,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('cuts when giveback ≥ 0.75pt and retention < 75%', () => {
+    expect(shouldPeakProtectExit(1.5, 0.7, 0.75)).toBe(true); // giveback 0.8
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 1.5,
+        peak_retention: 0.7 / 1.5,
+        playbook: 'SCALP',
+      }),
+      4400.7,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('big runner still trails 75% (giveback auto ≥ 0.75)', () => {
+    // MFE 4, fav 2.9 → ret 72.5%, giveback 1.1
+    expect(shouldPeakProtectExit(4, 2.9, 0.75)).toBe(true);
+  });
 });
 
 describe('PeakProtect arms live at +1.5 MFE (no 1m wait)', () => {
