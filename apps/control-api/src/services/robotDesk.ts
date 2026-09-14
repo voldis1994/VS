@@ -8,10 +8,10 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
+  type CapitalPriceCandle,
   type CapitalSession,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
@@ -22,7 +22,11 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import {
+  closed1mProfitPolicy,
+  decideBestOutcomeExit,
+  favorableMove,
+} from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
@@ -32,7 +36,6 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -124,6 +127,13 @@ type Internal = RobotSession & {
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
+  /** Capital MINUTE candles while managing (for 1m continue/reverse) */
+  last_minute_candles: CapitalPriceCandle[];
+  last_manage_minute_fetch_ms: number;
+  /** After reverse Capital 1m: PeakProtect 25% giveback trails live */
+  peak_protect_armed: boolean;
+  /** Last Capital 1m close key already evaluated for profit policy */
+  last_1m_profit_exit_key: string;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -196,6 +206,10 @@ function publicSession(s: Internal): RobotSession {
     closedBars: _bars,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
+    last_minute_candles: _mins,
+    last_manage_minute_fetch_ms: _mmf,
+    peak_protect_armed: _ppa,
+    last_1m_profit_exit_key: _1m,
     ...rest
   } = s;
   return {
@@ -247,9 +261,10 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    chain:
+      'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback',
     note:
-      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
+      'Public feeds confirm near Capital CFD mid; no late-1m / stale-quote entry blocks. Peak giveback 25% all scalps.',
   };
 }
 
@@ -266,6 +281,26 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
+/** Last fully closed Capital 1m (not the forming minute). */
+function lastClosedCapitalMinute(
+  candles: CapitalPriceCandle[]
+): CapitalPriceCandle | null {
+  if (candles.length >= 2) return candles[candles.length - 2]!;
+  return null;
+}
+
+/** Closed Capital 1m immediately before lastClosedCapitalMinute. */
+function prevClosedCapitalMinute(
+  candles: CapitalPriceCandle[]
+): CapitalPriceCandle | null {
+  if (candles.length >= 3) return candles[candles.length - 3]!;
+  return null;
+}
+
+function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
+  return `${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+}
+
 function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
@@ -278,6 +313,8 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.mode = 'FLAT';
+  s.peak_protect_armed = false;
+  s.last_1m_profit_exit_key = '';
 }
 
 /**
@@ -897,7 +934,7 @@ async function robotCycle(s: Internal) {
         : `Session fail: ${opened.result.detail}`,
     });
     // Slow this robot while cooling down so control panel stays usable
-    if (rateLimited) setRobotCadence(s, 20_000);
+    if (rateLimited) setRobotCadence(s, 5_000);
     return;
   }
 
@@ -1037,10 +1074,86 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
-      if (decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+      // LIVE loss: HardInv / red thesis — cut losers immediately
+      const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+      if (lossDec.exit) {
+        await exitTrade(opened.session, s, quote, lossDec.reason);
         return;
+      }
+
+      // PROFIT: hold on Capital 1m continue; reverse → PeakProtect 25% giveback arms + trails live
+      if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
+        s.last_manage_minute_fetch_ms = Date.now();
+        try {
+          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
+          if (mins.ok && mins.candles.length) {
+            s.last_minute_candles = mins.candles;
+          }
+        } catch {
+          /* keep previous minutes */
+        }
+      }
+
+      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+      if (closed1m && s.open_side && s.entry_price != null) {
+        const key = capitalMinuteCandleKey(closed1m);
+        if (key !== s.last_1m_profit_exit_key) {
+          const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+          const policy = closed1mProfitPolicy(
+            s.open_side,
+            { open: closed1m.open, close: closed1m.close },
+            prev1m ? { open: prev1m.open, close: prev1m.close } : null
+          );
+          s.last_1m_profit_exit_key = key;
+
+          if (policy === 'continue') {
+            s.peak_protect_armed = false;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: '1m continue · HOLD profit · PeakProtect OFF',
+            });
+          } else if (policy === 'wait') {
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m wait · HOLD profit · PeakProtect ${
+                s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
+              }`,
+            });
+          } else if (policy === 'reverse') {
+            s.peak_protect_armed = true;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: '1m reverse · PeakProtect ARMED · trailing live giveback 25%',
+            });
+            const peakAtClose = decideBestOutcomeExit(
+              s,
+              closed1m.close,
+              'peak_protect_only'
+            );
+            if (peakAtClose.exit) {
+              await exitTrade(opened.session, s, quote, peakAtClose.reason);
+              return;
+            }
+          }
+        }
+      }
+
+      // Once armed by reverse — PeakProtect-only on LIVE mark
+      if (s.peak_protect_armed && s.open_side) {
+        const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+        if (peakDec.exit) {
+          await exitTrade(opened.session, s, quote, peakDec.reason);
+          return;
+        }
       }
 
       pushTick(s, {
@@ -1052,6 +1165,8 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+        } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak25%)·peakLive=${
+          s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });
       return;
@@ -1073,13 +1188,13 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
+    if (s.closed_at_ms > 0 && sinceClose < 5_000) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
+        detail: `brief cooldown ${Math.ceil((5_000 - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
     }
@@ -1159,43 +1274,6 @@ async function robotCycle(s: Internal) {
       });
     }
 
-    if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
-        });
-        direction = null;
-      }
-    }
-
-    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
-    if (direction && quote.mid != null) {
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: publicNear,
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
-      });
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · ${lag.reason}`,
-        });
-        direction = null;
-      }
-    }
 
     if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
@@ -1327,6 +1405,10 @@ export async function startRobotSession(input: {
     feed_sender_count: 0,
     feed_agreement: null,
     regime: 'UNKNOWN',
+    last_minute_candles: [],
+    last_manage_minute_fetch_ms: 0,
+    peak_protect_armed: false,
+    last_1m_profit_exit_key: '',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1344,7 +1426,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
+      'Rules: max 1 open · HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback · no late/stale entry blocks',
   });
 
   sessions.set(id, session);

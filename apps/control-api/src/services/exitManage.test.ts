@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
 
-function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }): ExitSnapshot {
+function snap(
+  partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }
+): ExitSnapshot {
   return {
     mfe: 0,
     mae: 0,
@@ -42,53 +45,133 @@ describe('per-client exit isolation helpers', () => {
   });
 });
 
+describe('closed1mProfitPolicy', () => {
+  it('continues BUY on green 1m → HOLD', () => {
+    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2002 })).toBe('continue');
+  });
+  it('reverses BUY on red 1m → PeakProtect arms', () => {
+    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 1998 })).toBe('reverse');
+  });
+  it('continues SELL on red 1m → HOLD', () => {
+    expect(closed1mProfitPolicy('SELL', { open: 2000, close: 1997 })).toBe('continue');
+  });
+  it('waits on doji', () => {
+    expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2000 })).toBe('wait');
+  });
+});
+
 describe('decideBestOutcomeExit', () => {
   it('holds a young BUY in TREND_UP with small noise', () => {
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4 }), 2000.5);
     expect(d.exit).toBe(false);
   });
 
-  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+  it('does NOT scratch a green BUY on TREND_DOWN thesis flicker', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
-      2001
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        mfe: 2,
+        peak_retention: 1,
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      2001,
+      'live_loss'
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('thesis failure only when underwater after min hold', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        mfe: 0.5,
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      1999.5
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
   });
 
-  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+  it('exits SELL on TREND_UP when underwater without affecting BUY rules', () => {
     const sell = decideBestOutcomeExit(
-      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
-      1999
+      snap({
+        open_side: 'SELL',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      2001
     );
     const buy = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
       1999
     );
     expect(sell.exit).toBe(true);
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation on ~0.22% adverse', () => {
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
+  it('hard invalidation on soft SL (~0.15%)', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }),
+      1994
+    );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('peak protection after meaningful MFE giveback', () => {
+  it('peak protection after 25% MFE giveback (retention < 75%)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         regime: 'TREND_UP',
         mfe: 8,
-        peak_retention: 0.2,
+        peak_retention: 0.7,
       }),
-      2001.6
+      2005.6
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('peak_protect_only gate ignores HardInv / Target', () => {
+    const hold = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, peak_retention: 0.9 }),
+      1990,
+      'peak_protect_only'
+    );
+    expect(hold.exit).toBe(false);
+    const cut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, peak_retention: 0.7 }),
+      2005.6,
+      'peak_protect_only'
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakProtection/);
+  });
+
+  it('live_loss gate ignores Peak / Target', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        peak_retention: 0.2,
+      }),
+      2005,
+      'live_loss'
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('target at ~0.35%', () => {
