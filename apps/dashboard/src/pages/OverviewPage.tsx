@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
-import { useDesk, isCapitalAccount, pickBestTradingAccount } from '../components/DeskContext';
+import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
-import { openRobotWindow } from './RobotDeskPage';
 import { Logo } from '../components/Logo';
 
 type Position = {
@@ -44,45 +43,8 @@ function seedBars(seed: number, len: number): number[] {
   });
 }
 
-type MarketOpt = {
-  instrument_id: number;
-  epic?: string;
-  symbol: string;
-  display_name: string;
-  min_lot: number;
-  lot_size: number;
-};
-
 const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
 
-const ALL_REGIMES = [
-  'RANGE',
-  'TREND_UP',
-  'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
-  'COMPRESSION',
-  'EXPANSION',
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'FAILED_BREAKOUT_UP',
-  'FAILED_BREAKOUT_DOWN',
-  'REVERSAL_CANDIDATE',
-  'TRANSITION',
-] as const;
-
-type DeskCalibration = {
-  hardinv_abs: number;
-  peak_mfe_abs: number;
-  peak_retention: number;
-  peak_min_giveback_abs: number;
-  target_abs: number;
-  hardinv_pct: number;
-  target_pct: number;
-  peak_mfe_pct: number;
-  enabled_regimes: string[];
-  updated_at?: string;
-};
 
 
 export function OverviewPage() {
@@ -92,7 +54,6 @@ export function OverviewPage() {
     accounts,
     selectedClientId,
     selectedAccountId,
-    setSelectedClientId,
     setSelectedAccountId,
     refreshDesk,
   } = useDesk();
@@ -101,15 +62,8 @@ export function OverviewPage() {
   const [events, setEvents] = useState<SystemEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [markets, setMarkets] = useState<MarketOpt[]>([]);
-  const [marketEpic, setMarketEpic] = useState('');
-  const [lotSize, setLotSize] = useState('0.1');
-  const [marketFilter, setMarketFilter] = useState('');
   const [runnerOn, setRunnerOn] = useState(false);
   const [showExtraPanels, setShowExtraPanels] = useState(false);
-  const [cal, setCal] = useState<DeskCalibration | null>(null);
-  const [calBusy, setCalBusy] = useState(false);
-  const [calMsg, setCalMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -133,115 +87,7 @@ export function OverviewPage() {
     setRunnerOn(Boolean(status?.live_enabled) && (status?.mode || '').toUpperCase() === 'LIVE');
   }, [status?.live_enabled, status?.mode]);
 
-  useEffect(() => {
-    void apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration')
-      .then((res) => setCal(res.calibration))
-      .catch(() => setCal(null));
-  }, []);
-
-  const saveCalibration = async (patch: Partial<DeskCalibration>) => {
-    if (!cal) return;
-    setCalBusy(true);
-    setCalMsg(null);
-    try {
-      const res = await apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration', {
-        method: 'PUT',
-        body: JSON.stringify({ ...cal, ...patch }),
-      });
-      setCal(res.calibration);
-      setCalMsg('Saved');
-    } catch (e) {
-      setCalMsg(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setCalBusy(false);
-    }
-  };
-
-  const toggleRegime = (name: string) => {
-    if (!cal) return;
-    const on = cal.enabled_regimes.includes(name);
-    const next = on
-      ? cal.enabled_regimes.filter((r) => r !== name)
-      : [...cal.enabled_regimes, name];
-    void saveCalibration({ enabled_regimes: next });
-  };
-
-
-  useEffect(() => {
-    if (!selectedAccountId) {
-      setMarkets([]);
-      setMarketEpic('');
-      return;
-    }
-    void apiFetch<MarketOpt[]>(`/api/trading/accounts/${selectedAccountId}/instruments`)
-      .then((rows) => {
-        // Broker epic 1:1 only — no invented names / symbol fallback
-        const brokerRows = (rows || []).filter((r) => String(r.epic || '').trim().length > 0);
-        setMarkets(brokerRows);
-        setMarketEpic((prev) =>
-          prev && brokerRows.some((r) => r.epic === prev) ? prev : ''
-        );
-      })
-      .catch(() => {
-        setMarkets([]);
-        setMarketEpic('');
-      });
-  }, [selectedAccountId]);
-
-  const filteredMarkets = useMemo(() => {
-    const q = marketFilter.trim().toLowerCase();
-    const onlyEpic = markets.filter((m) => String(m.epic || '').trim().length > 0);
-    if (!q) return onlyEpic.slice(0, 200);
-    return onlyEpic
-      .filter(
-        (m) =>
-          String(m.display_name || '').toLowerCase().includes(q) ||
-          String(m.epic).toLowerCase().includes(q)
-      )
-      .slice(0, 200);
-  }, [markets, marketFilter]);
-
-  const selectedMarket = markets.find((m) => m.epic === marketEpic) || null;
-
-  const startRobotTrading = () => {
-    if (!selectedAccountId || !selectedMarket?.epic) {
-      setMsg('Izvēlies account + Capital epic 1:1 (Pull markets Trading lapā, ja tukšs)');
-      return;
-    }
-    const lot = Number(lotSize);
-    if (!Number.isFinite(lot) || lot <= 0) {
-      setMsg('Lot size must be > 0');
-      return;
-    }
-    const name = selectedMarket.display_name || selectedMarket.epic;
-    // Named window per account+epic — same client/instrument reuses window; others stay independent
-    const w = openRobotWindow({
-      accountId: selectedAccountId,
-      epic: selectedMarket.epic,
-      lot,
-      name,
-    });
-    if (!w) {
-      setMsg(`Robot board · ${name} · epic ${selectedMarket.epic} · lot ${lot}`);
-    } else {
-      setMsg(`Robot board · ${name} · epic ${selectedMarket.epic} · lot ${lot}`);
-    }
-  };
-
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) || null;
-  const capitalAccounts = useMemo(
-    () =>
-      [...accounts]
-        .filter(isCapitalAccount)
-        .sort((a, b) => (b.capital_market_count || 0) - (a.capital_market_count || 0)),
-    [accounts],
-  );
-  const bestCapital = useMemo(
-    () => pickBestTradingAccount(accounts, selectedClientId) || pickBestTradingAccount(accounts),
-    [accounts, selectedClientId],
-  );
-  const selectedIsCapital = selectedAccount ? isCapitalAccount(selectedAccount) : false;
-  const selectedHasMarkets = (selectedAccount?.capital_market_count || 0) > 0;
   const deskAccounts = useMemo(() => {
     if (!selectedClientId) return accounts;
     const filtered = accounts.filter((a) => a.client_id === selectedClientId);
@@ -322,14 +168,6 @@ export function OverviewPage() {
     }
   };
 
-  const accountPositions = selectedAccount
-    ? positions.filter(
-        (p) =>
-          p.client_name === selectedAccount.client_name ||
-          String(p.account_name || '') === selectedAccount.display_name,
-      )
-    : positions;
-
   return (
     <div className="main-dash">
       <div className="dash-head">
@@ -346,315 +184,27 @@ export function OverviewPage() {
         {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
       </div>
 
-      <div className="control-fit-bar">
-        <div className="section-title" style={{ margin: 0 }}>CONTROL</div>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => setShowExtraPanels((v) => !v)}
-        >
-          {showExtraPanels ? 'Hide info' : 'Info / more'}
-        </button>
-      </div>
-      <div className="dash-grid dash-bottom control-fit-scroll control-fit-primary">
-        <section className="panel control-panel">
-          <div className="section-title">START ROBOT</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            Capital.com konts + broker epic 1:1 → TRADING ON → Robot Desk.
-          </p>
-          <label className="field-label">Capital account</label>
-          <select
-            className="input"
-            value={selectedAccountId ?? ''}
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              if (!Number.isFinite(id) || id <= 0) return;
-              const acc = accounts.find((a) => a.account_id === id);
-              if (acc) setSelectedClientId(acc.client_id);
-              setSelectedAccountId(id);
-            }}
-          >
-            <option value="">— select Capital account —</option>
-            {capitalAccounts.map((a) => (
-              <option key={a.account_id} value={a.account_id}>
-                {a.client_name} / {a.broker_name} ({a.environment}) ·{' '}
-                {(a.capital_market_count || 0).toLocaleString()} mkts
-              </option>
-            ))}
-          </select>
-          {!selectedAccountId && (
-            <div className="error-state">Vispirms izvēlies Capital.com account.</div>
-          )}
-          {selectedAccountId && !selectedIsCapital && (
-            <div className="error-state" style={{ marginBottom: 8 }}>
-              Atlasītais nav Capital.com ({selectedAccount?.broker_name || '—'}).
-              {bestCapital && isCapitalAccount(bestCapital) ? (
-                <>
-                  {' '}
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ marginLeft: 6 }}
-                    onClick={() => {
-                      setSelectedClientId(bestCapital.client_id);
-                      setSelectedAccountId(bestCapital.account_id);
-                    }}
-                  >
-                    Use {bestCapital.client_name} Capital (
-                    {(bestCapital.capital_market_count || 0).toLocaleString()} mkts)
-                  </button>
-                </>
-              ) : (
-                <> Pievieno Capital brokeri Brokers lapā.</>
-              )}
-            </div>
-          )}
-          {selectedAccountId && selectedIsCapital && markets.length === 0 && (
-            <div className="error-state" style={{ marginBottom: 8 }}>
-              {selectedHasMarkets
-                ? 'Tirgu saraksts vēl ielādējas…'
-                : (
-                  <>
-                    Šim Capital kontam nav ielādētu tirgu.{' '}
-                    <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets
-                    {bestCapital &&
-                      bestCapital.account_id !== selectedAccountId &&
-                      (bestCapital.capital_market_count || 0) > 0 && (
-                        <>
-                          {' '}
-                          vai{' '}
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={() => {
-                              setSelectedClientId(bestCapital.client_id);
-                              setSelectedAccountId(bestCapital.account_id);
-                            }}
-                          >
-                            {bestCapital.client_name} (
-                            {(bestCapital.capital_market_count || 0).toLocaleString()} mkts)
-                          </button>
-                        </>
-                      )}
-                  </>
-                )}
-            </div>
-          )}
-          <label className="field-label">Search market</label>
-          <input
-            className="input"
-            placeholder="Gold / XAUUSD / Capital.com name…"
-            value={marketFilter}
-            onChange={(e) => setMarketFilter(e.target.value)}
-            disabled={!markets.length}
-          />
-          <label className="field-label">Broker market (epic 1:1)</label>
-          <select
-            className="input"
-            value={marketEpic}
-            onChange={(e) => {
-              const epic = e.target.value;
-              setMarketEpic(epic);
-              const m = markets.find((x) => x.epic === epic);
-              if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
-            }}
-            disabled={!markets.length}
-          >
-            <option value="">— select Capital epic —</option>
-            {filteredMarkets.map((m) => (
-              <option key={m.instrument_id} value={m.epic}>
-                {m.display_name} · {m.epic}
-              </option>
-            ))}
-          </select>
-          {selectedMarket && (
-            <div className="hint-line" style={{ marginTop: 4 }}>
-              Order epic: <span className="mono">{selectedMarket.epic}</span> (broker exact)
-            </div>
-          )}
-          <label className="field-label">Lot size</label>
-          <input
-            className="input"
-            value={lotSize}
-            onChange={(e) => setLotSize(e.target.value)}
-            disabled={!markets.length}
-          />
-          <div className="actions" style={{ marginTop: 10 }}>
-            <button
-              className="btn btn-go"
-              disabled={busy || !marketEpic || !selectedAccountId || !selectedIsCapital}
-              onClick={startRobotTrading}
-            >
-              TRADING ON → ROBOT
-            </button>
+      <div className="panel desk-control-jump" style={{ marginBottom: 12 }}>
+        <div className="control-fit-bar" style={{ marginBottom: 0 }}>
+          <div>
+            <div className="section-title" style={{ margin: 0 }}>CONTROL → ROBOT BOARD</div>
+            <p className="hint-line" style={{ margin: '4px 0 0' }}>
+              Start Robot · Exit Calibration · Trade Regimes — visas sadaļas pilnībā redzamas Robot Board.
+            </p>
           </div>
-          {msg && <div className="hint-line" style={{ marginTop: 8 }}>{msg}</div>}
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">EXIT CALIBRATION</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            HardInv / Peak % / Target — live Soft exits (broker SAFETY SL remains cushion).
-          </p>
-          {!cal && <div className="empty-state">Loading knobs…</div>}
-          {cal && (
-            <>
-              <label className="field-label">HardInv abs (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.hardinv_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
-              />
-              <label className="field-label">Peak keep % (75 = 25% giveback)</label>
-              <input
-                className="input"
-                type="number"
-                step="1"
-                min={50}
-                max={95}
-                value={Math.round(cal.peak_retention * 100)}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
-                }
-                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
-              />
-              <label className="field-label">Peak MFE floor (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.peak_mfe_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
-              />
-              <label className="field-label">Peak min giveback (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.05"
-                value={cal.peak_min_giveback_abs}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
-                }
-                onBlur={() =>
-                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
-                }
-              />
-              <label className="field-label">Target abs (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.target_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
-              />
-              <div className="actions" style={{ marginTop: 8 }}>
-                <button
-                  className="btn btn-primary"
-                  disabled={calBusy}
-                  onClick={() => void saveCalibration({})}
-                >
-                  Save knobs
-                </button>
-              </div>
-              {calMsg && <div className="hint-line" style={{ marginTop: 6 }}>{calMsg}</div>}
-            </>
-          )}
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">TRADE REGIMES</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            Izvēlies vienu vai vairākus — entry tikai ieslēgtajos režīmos.
-          </p>
-          <div className="regime-catalog">
-            {ALL_REGIMES.map((name) => {
-              const on = Boolean(cal?.enabled_regimes.includes(name));
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  className={`regime-chip ${on ? 'on' : ''} ${
-                    name.includes('UP') || name === 'EXPANSION'
-                      ? 'up'
-                      : name.includes('DOWN') || name === 'COMPRESSION'
-                        ? 'down'
-                        : name.includes('BREAKOUT') || name === 'REVERSAL_CANDIDATE'
-                          ? 'scalp'
-                          : 'flat'
-                  }`}
-                  disabled={calBusy || !cal}
-                  onClick={() => toggleRegime(name)}
-                >
-                  {name}
-                </button>
-              );
-            })}
-          </div>
-          <div className="actions" style={{ marginTop: 8 }}>
+          <div className="actions" style={{ margin: 0 }}>
+            <Link className="btn btn-go" to="/robot">
+              OPEN ROBOT BOARD
+            </Link>
             <button
+              type="button"
               className="btn"
-              disabled={calBusy || !cal}
-              onClick={() => void saveCalibration({ enabled_regimes: [...ALL_REGIMES] })}
+              onClick={() => setShowExtraPanels((v) => !v)}
             >
-              All on
-            </button>
-            <button
-              className="btn"
-              disabled={calBusy || !cal}
-              onClick={() => void saveCalibration({ enabled_regimes: [] })}
-            >
-              All off
+              {showExtraPanels ? 'Hide info' : 'Info / more'}
             </button>
           </div>
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">ACCOUNT DETAIL</div>
-          {selectedAccount ? (
-            <>
-              <div className="metric-box" style={{ marginBottom: 8 }}>
-                <div className="label">Selected</div>
-                <div className="value" style={{ fontSize: 13 }}>{selectedAccount.display_name}</div>
-              </div>
-              <div className="metric-row">
-                <div className="metric-box">
-                  <div className="label">Env</div>
-                  <div className="value" style={{ fontSize: 12 }}>{selectedAccount.environment}</div>
-                </div>
-                <div className="metric-box">
-                  <div className="label">Markets</div>
-                  <div className="value" style={{ fontSize: 12 }}>
-                    {(selectedAccount.capital_market_count || 0).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-              <div className="section-title" style={{ marginTop: 10 }}>Open on desk</div>
-              <div className="log-list">
-                {accountPositions.length === 0 && <div>No open trades for this account</div>}
-                {accountPositions.slice(0, 6).map((p) => (
-                  <div key={p.id}>
-                    #{p.id} {p.symbol || p.instrument_id} {p.direction} {p.quantity}
-                  </div>
-                ))}
-              </div>
-              <div className="actions" style={{ marginTop: 10 }}>
-                <Link className="btn" to="/trading">Open Trading</Link>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">Select an account in the rail or table</div>
-          )}
-        </section>
+        </div>
       </div>
 
       <div className="dash-grid dash-top" style={{ marginTop: 12 }}>
