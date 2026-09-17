@@ -26,7 +26,7 @@ interface InstrumentRow {
   enabled: boolean;
   trading_enabled: boolean;
   configured: boolean;
-  source?: 'capital_com' | 'local_fallback';
+  source?: 'capital_com';
 }
 
 export function TradingPage() {
@@ -72,14 +72,10 @@ export function TradingPage() {
       setOrderEpic('');
       return;
     }
+    // Keep prior epic only if still in Capital list — never auto-pick instruments[0]
     setOrderEpic((prev) =>
-      prev && instruments.some((i) => (i.epic || i.symbol) === prev)
-        ? prev
-        : instruments[0].epic || instruments[0].symbol,
+      prev && instruments.some((i) => i.epic === prev) ? prev : ''
     );
-    if (!orderSize || orderSize === '0.1') {
-      setOrderSize(String(instruments[0].lot_size || instruments[0].min_lot || 0.1));
-    }
   }, [instruments]);
 
   const categories = useMemo(() => {
@@ -310,10 +306,12 @@ export function TradingPage() {
               onChange={(e) => setOrderEpic(e.target.value)}
               disabled={!instruments.length}
             >
-              {instruments.length === 0 && <option value="">Pull markets first</option>}
-              {instruments.map((i) => (
-                <option key={i.instrument_id} value={i.epic || i.symbol}>
-                  {i.display_name} · {i.epic || i.symbol}
+              <option value="">— select Capital epic —</option>
+              {instruments
+                .filter((i) => String(i.epic || '').trim().length > 0)
+                .map((i) => (
+                <option key={i.instrument_id} value={i.epic}>
+                  {i.display_name} · {i.epic}
                 </option>
               ))}
             </select>
@@ -342,11 +340,11 @@ export function TradingPage() {
               className="btn btn-primary"
               disabled={!orderEpic.trim() || !accountId}
               onClick={() => {
-                const row = instruments.find((i) => (i.epic || i.symbol) === orderEpic);
+                const row = instruments.find((i) => (i.epic) === orderEpic);
                 startRobotFor(
                   orderEpic.trim(),
                   Number(orderSize) || row?.lot_size || 0.1,
-                  row?.display_name || orderEpic,
+                  row?.display_name || row?.epic || orderEpic,
                 );
               }}
             >
@@ -410,7 +408,7 @@ export function TradingPage() {
               <tbody>
                 {filtered.map((row) => (
                   <tr key={row.instrument_id}>
-                    <td className="mono">{row.epic || row.symbol}</td>
+                    <td className="mono">{row.epic}</td>
                     <td>
                       <strong>{row.display_name}</strong>
                       {row.instrument_type && (
@@ -473,7 +471,7 @@ export function TradingPage() {
                         className="btn btn-go"
                         disabled={busy || !accountId}
                         onClick={() =>
-                          startRobotFor(row.epic || row.symbol, row.lot_size, row.display_name)
+                          startRobotFor(row.epic, row.lot_size, row.display_name)
                         }
                       >
                         START ROBOT

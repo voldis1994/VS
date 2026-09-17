@@ -1333,28 +1333,20 @@ export async function startRobotSession(input: {
   let epic = input.epic.trim();
   if (!epic) throw new Error('epic required');
 
+  // Broker epic 1:1 only — no ILIKE / display_name remap / invented default
   const exact = await pool.query(
     `SELECT epic, display_name FROM capital_markets
      WHERE broker_connection_id = $1 AND epic = $2
      ORDER BY updated_at DESC LIMIT 1`,
     [acc.connection_id, epic]
   );
-  if (exact.rows.length) {
-    epic = exact.rows[0].epic as string;
-    displayName = (exact.rows[0].display_name as string) || displayName || epic;
-  } else {
-    const byName = await pool.query(
-      `SELECT epic, display_name FROM capital_markets
-       WHERE broker_connection_id = $1 AND display_name ILIKE $2
-       ORDER BY updated_at DESC LIMIT 1`,
-      [acc.connection_id, epic]
+  if (!exact.rows.length) {
+    throw new Error(
+      `Epic "${epic}" not in capital_markets for this account — Pull Capital markets and pick broker epic 1:1`
     );
-    if (byName.rows.length) {
-      epic = byName.rows[0].epic as string;
-      displayName = (byName.rows[0].display_name as string) || displayName || epic;
-    }
   }
-  if (!displayName) displayName = epic;
+  epic = exact.rows[0].epic as string;
+  displayName = String(exact.rows[0].display_name || epic);
 
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');

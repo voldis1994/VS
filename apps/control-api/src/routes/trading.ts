@@ -2,7 +2,6 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
-import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
@@ -402,26 +401,16 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       [connectionId, instrumentId]
     );
 
-    let symbol = `INST_${instrumentId}`;
-    let minLot = 0.01;
-    let maxLot = 100;
-    let lotStep = 0.01;
-
-    if (capital.rows.length > 0) {
-      symbol = capital.rows[0].epic as string;
-      minLot = Number(capital.rows[0].min_lot);
-      maxLot = Number(capital.rows[0].max_lot);
-      lotStep = Number(capital.rows[0].lot_step);
-    } else {
-      const inst = getInstrumentById(parseInt(instrumentId, 10));
-      if (!inst) {
-        return reply.code(404).send({ error: `Unknown instrument ${instrumentId}` });
-      }
-      symbol = inst.symbol;
-      minLot = inst.min_lot;
-      maxLot = inst.max_lot;
-      lotStep = inst.lot_step;
+    if (capital.rows.length === 0) {
+      return reply.code(404).send({
+        error: `Instrument ${instrumentId} not in capital_markets — Pull Capital markets (broker epic 1:1)`,
+      });
     }
+
+    const symbol = String(capital.rows[0].epic);
+    const minLot = Number(capital.rows[0].min_lot);
+    const maxLot = Number(capital.rows[0].max_lot);
+    const lotStep = Number(capital.rows[0].lot_step);
 
     let lot = body.lot_size;
     if (lot !== undefined) {
@@ -572,9 +561,9 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       try {
         const m = await pool.query(
           `SELECT id FROM capital_markets
-           WHERE broker_connection_id = $1 AND (epic = $2 OR epic ILIKE $2 OR display_name ILIKE $3)
+           WHERE broker_connection_id = $1 AND epic = $2
            ORDER BY updated_at DESC LIMIT 1`,
-          [conn.connection_id, epic, `%${epic}%`]
+          [conn.connection_id, epic]
         );
         const instrumentId = (m.rows[0]?.id as number) || 0;
         await pool.query(

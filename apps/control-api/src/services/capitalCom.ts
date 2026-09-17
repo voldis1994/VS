@@ -710,19 +710,11 @@ export async function fetchCapitalMarketQuote(
   let quote = await tryEpic(clean);
   if (quote.raw_ok) return quote;
 
-  // Resolve human names like "gold" / "gold x" via Capital search
-  const resolved = await resolveEpicViaSearch(session, clean);
-  if (resolved && resolved !== clean) {
-    quote = await tryEpic(resolved);
-    if (quote.raw_ok) {
-      quote.detail = `Resolved "${clean}" → epic ${resolved}`;
-      return quote;
-    }
-  }
+  // No fuzzy remap ("gold" → first market). Caller must pass broker epic 1:1.
   return quote;
 }
 
-/** Search Capital.com markets API for an epic/name (e.g. gold → GOLD). */
+/** Exact Capital markets search only — never returns markets[0] as a kindly default. */
 export async function resolveEpicViaSearch(
   session: CapitalSession,
   query: string
@@ -736,21 +728,16 @@ export async function resolveEpicViaSearch(
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   const qn = norm(q);
-  let best: { epic: string; score: number } | null = null;
   for (const m of markets) {
     const epic = String(m.epic || '').trim();
     if (!epic) continue;
     const name = String(m.instrumentName || m.displayName || m.name || '');
     const en = norm(epic);
     const nn = norm(name);
-    let score = 0;
-    if (en === qn || nn === qn) score = 100;
-    else if (en.includes(qn) || nn.includes(qn) || qn.includes(en)) score = 70;
-    else if (qn.includes('gold') && (en.includes('gold') || nn.includes('gold') || en.includes('xau')))
-      score = 60;
-    if (!best || score > best.score) best = { epic, score };
+    // Exact epic or exact instrument name only
+    if (en === qn || nn === qn || epic === q) return epic;
   }
-  return best && best.score >= 60 ? best.epic : String(markets[0].epic || '') || null;
+  return null;
 }
 
 export type CapitalOpenPosition = {
@@ -870,11 +857,15 @@ export async function createCapitalPosition(
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   let epic = input.epic.trim();
   const quote = await fetchCapitalMarketQuote(session, epic);
-  if (quote.raw_ok && quote.epic) epic = quote.epic;
-  else if (!quote.raw_ok) {
-    const resolved = await resolveEpicViaSearch(session, epic);
-    if (resolved) epic = resolved;
+  if (!quote.raw_ok) {
+    return {
+      ok: false,
+      status: 400,
+      json: null,
+      detail: `No Capital quote for epic "${epic}" — Pull markets and pick broker epic 1:1 (no fuzzy default)`,
+    };
   }
+  // Never remap to another market — panel epic is the order epic
 
   const body: Record<string, unknown> = {
     epic,
