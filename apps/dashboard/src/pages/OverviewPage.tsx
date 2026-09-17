@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
-import { useDesk } from '../components/DeskContext';
+import { useDesk, isCapitalAccount, pickBestTradingAccount } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
 import { openRobotWindow } from './RobotDeskPage';
 import { Logo } from '../components/Logo';
@@ -92,6 +92,7 @@ export function OverviewPage() {
     accounts,
     selectedClientId,
     selectedAccountId,
+    setSelectedClientId,
     setSelectedAccountId,
     refreshDesk,
   } = useDesk();
@@ -228,6 +229,19 @@ export function OverviewPage() {
   };
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) || null;
+  const capitalAccounts = useMemo(
+    () =>
+      [...accounts]
+        .filter(isCapitalAccount)
+        .sort((a, b) => (b.capital_market_count || 0) - (a.capital_market_count || 0)),
+    [accounts],
+  );
+  const bestCapital = useMemo(
+    () => pickBestTradingAccount(accounts, selectedClientId) || pickBestTradingAccount(accounts),
+    [accounts, selectedClientId],
+  );
+  const selectedIsCapital = selectedAccount ? isCapitalAccount(selectedAccount) : false;
+  const selectedHasMarkets = (selectedAccount?.capital_market_count || 0) > 0;
   const deskAccounts = useMemo(() => {
     if (!selectedClientId) return accounts;
     const filtered = accounts.filter((a) => a.client_id === selectedClientId);
@@ -346,20 +360,90 @@ export function OverviewPage() {
         <section className="panel control-panel">
           <div className="section-title">START ROBOT</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            Izvēlies Capital.com tirgu + lot → TRADING ON → atveras Robot Desk (redzams live log).
+            Capital.com konts + broker epic 1:1 → TRADING ON → Robot Desk.
           </p>
+          <label className="field-label">Capital account</label>
+          <select
+            className="input"
+            value={selectedAccountId ?? ''}
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              if (!Number.isFinite(id) || id <= 0) return;
+              const acc = accounts.find((a) => a.account_id === id);
+              if (acc) setSelectedClientId(acc.client_id);
+              setSelectedAccountId(id);
+            }}
+          >
+            <option value="">— select Capital account —</option>
+            {capitalAccounts.map((a) => (
+              <option key={a.account_id} value={a.account_id}>
+                {a.client_name} / {a.broker_name} ({a.environment}) ·{' '}
+                {(a.capital_market_count || 0).toLocaleString()} mkts
+              </option>
+            ))}
+          </select>
           {!selectedAccountId && (
-            <div className="error-state">Vispirms izvēlies account kreisajā rail / Accounts Status.</div>
+            <div className="error-state">Vispirms izvēlies Capital.com account.</div>
           )}
-          {selectedAccountId && markets.length === 0 && (
+          {selectedAccountId && !selectedIsCapital && (
             <div className="error-state" style={{ marginBottom: 8 }}>
-              Nav tirgu. <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets.
+              Atlasītais nav Capital.com ({selectedAccount?.broker_name || '—'}).
+              {bestCapital && isCapitalAccount(bestCapital) ? (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ marginLeft: 6 }}
+                    onClick={() => {
+                      setSelectedClientId(bestCapital.client_id);
+                      setSelectedAccountId(bestCapital.account_id);
+                    }}
+                  >
+                    Use {bestCapital.client_name} Capital (
+                    {(bestCapital.capital_market_count || 0).toLocaleString()} mkts)
+                  </button>
+                </>
+              ) : (
+                <> Pievieno Capital brokeri Brokers lapā.</>
+              )}
+            </div>
+          )}
+          {selectedAccountId && selectedIsCapital && markets.length === 0 && (
+            <div className="error-state" style={{ marginBottom: 8 }}>
+              {selectedHasMarkets
+                ? 'Tirgu saraksts vēl ielādējas…'
+                : (
+                  <>
+                    Šim Capital kontam nav ielādētu tirgu.{' '}
+                    <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets
+                    {bestCapital &&
+                      bestCapital.account_id !== selectedAccountId &&
+                      (bestCapital.capital_market_count || 0) > 0 && (
+                        <>
+                          {' '}
+                          vai{' '}
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => {
+                              setSelectedClientId(bestCapital.client_id);
+                              setSelectedAccountId(bestCapital.account_id);
+                            }}
+                          >
+                            {bestCapital.client_name} (
+                            {(bestCapital.capital_market_count || 0).toLocaleString()} mkts)
+                          </button>
+                        </>
+                      )}
+                  </>
+                )}
             </div>
           )}
           <label className="field-label">Search market</label>
           <input
             className="input"
-            placeholder="Capital.com name…"
+            placeholder="Gold / XAUUSD / Capital.com name…"
             value={marketFilter}
             onChange={(e) => setMarketFilter(e.target.value)}
             disabled={!markets.length}
@@ -398,7 +482,7 @@ export function OverviewPage() {
           <div className="actions" style={{ marginTop: 10 }}>
             <button
               className="btn btn-go"
-              disabled={busy || !marketEpic || !selectedAccountId}
+              disabled={busy || !marketEpic || !selectedAccountId || !selectedIsCapital}
               onClick={startRobotTrading}
             >
               TRADING ON → ROBOT
