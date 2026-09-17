@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
+import { DeskControlPanel } from '../components/DeskControlPanel';
 
 type RobotTick = {
   at: string;
@@ -457,6 +458,30 @@ export function RobotDeskPage() {
 
         {error && <div className="error-state">{error}</div>}
         {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
+
+        <DeskControlPanel
+          variant="board"
+          onStarted={({ accountId: aid, epic: ep, lot: lt, name: nm }) => {
+            setBusy(true);
+            setError(null);
+            void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+              method: 'POST',
+              body: JSON.stringify({
+                account_id: aid,
+                epic: ep,
+                display_name: nm,
+                lot_size: lt,
+                trading_enabled: true,
+              }),
+            })
+              .then((res) => {
+                setFocusId(res.session.id);
+                void refresh();
+              })
+              .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
+              .finally(() => setBusy(false));
+          }}
+        />
 
         <div className="robot-wire-panel">
           <div className="robot-wire-head">
