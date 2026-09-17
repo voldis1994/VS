@@ -174,7 +174,7 @@ export function OverviewPage() {
     }
     void apiFetch<MarketOpt[]>(`/api/trading/accounts/${selectedAccountId}/instruments`)
       .then((rows) => {
-        // Broker epic 1:1 only — never invent / kindly default / symbol fallback
+        // Broker epic 1:1 only — no invented names / symbol fallback
         const brokerRows = (rows || []).filter((r) => String(r.epic || '').trim().length > 0);
         setMarkets(brokerRows);
         setMarketEpic((prev) =>

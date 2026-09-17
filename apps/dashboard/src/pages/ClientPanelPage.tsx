@@ -102,7 +102,7 @@ export function ClientPanelPage() {
     Promise.all([refresh(), loadMarkets()])
       .then(([st, mk]) => {
         if (!st.market) {
-          /* no kindly default — operator/client must pick broker epic */
+          /* empty until operator/client picks broker epic */
           return;
         }
         const hit = mk.find((m) => m.epic === st.market);
