@@ -101,10 +101,12 @@ export function ClientPanelPage() {
     setBusy(true);
     Promise.all([refresh(), loadMarkets()])
       .then(([st, mk]) => {
-        if (!st.market && mk[0]) {
-          setEpic(mk[0].epic);
-          setLot(mk[0].min_lot);
+        if (!st.market) {
+          /* no kindly default — operator/client must pick broker epic */
+          return;
         }
+        const hit = mk.find((m) => m.epic === st.market);
+        if (hit) setLot(hit.min_lot);
       })
       .catch((e) => {
         setError(e instanceof Error ? e.message : 'Session error');

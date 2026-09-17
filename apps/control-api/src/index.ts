@@ -12,6 +12,7 @@ import { registerTradeRoutes } from './routes/trades.js';
 import { registerMarketRoutes } from './routes/market.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerDeskCalibrationRoutes } from './routes/deskCalibration.js';
 import { registerTradingRoutes } from './routes/trading.js';
 import { registerRobotReaderRoutes } from './routes/robotReader.js';
 import { registerRobotDeskRoutes } from './routes/robotDesk.js';
@@ -98,6 +99,7 @@ async function main() {
   await registerPipelineRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
+  await registerDeskCalibrationRoutes(app);
   await registerClientPanelStatic(app);
 
   app.get('/ws', { websocket: true }, (socket) => {

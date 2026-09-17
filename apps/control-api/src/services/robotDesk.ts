@@ -28,6 +28,7 @@ import {
   favorableMove,
 } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { regimeAllowedForEntry } from './deskCalibration.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -1251,19 +1252,29 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime);
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = sig.reason;
-      } else {
+      if (!regimeAllowedForEntry(s.regime)) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · regime ${s.regime} OFF in Control calibration · no entry`,
         });
+      } else {
+        const sig = decideEntryFrom10sRegime(bar, s.regime);
+        if (sig) {
+          direction = sig.direction;
+          setupType = sig.setup;
+          reason = sig.reason;
+        } else {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          });
+        }
       }
     } else {
       pushTick(s, {

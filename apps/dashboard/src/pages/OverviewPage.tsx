@@ -55,6 +55,36 @@ type MarketOpt = {
 
 const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
 
+const ALL_REGIMES = [
+  'RANGE',
+  'TREND_UP',
+  'TREND_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
+  'COMPRESSION',
+  'EXPANSION',
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+  'REVERSAL_CANDIDATE',
+  'TRANSITION',
+] as const;
+
+type DeskCalibration = {
+  hardinv_abs: number;
+  peak_mfe_abs: number;
+  peak_retention: number;
+  peak_min_giveback_abs: number;
+  target_abs: number;
+  hardinv_pct: number;
+  target_pct: number;
+  peak_mfe_pct: number;
+  enabled_regimes: string[];
+  updated_at?: string;
+};
+
+
 export function OverviewPage() {
   const {
     status,
@@ -75,6 +105,10 @@ export function OverviewPage() {
   const [lotSize, setLotSize] = useState('0.1');
   const [marketFilter, setMarketFilter] = useState('');
   const [runnerOn, setRunnerOn] = useState(false);
+  const [showExtraPanels, setShowExtraPanels] = useState(false);
+  const [cal, setCal] = useState<DeskCalibration | null>(null);
+  const [calBusy, setCalBusy] = useState(false);
+  const [calMsg, setCalMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -99,6 +133,40 @@ export function OverviewPage() {
   }, [status?.live_enabled, status?.mode]);
 
   useEffect(() => {
+    void apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration')
+      .then((res) => setCal(res.calibration))
+      .catch(() => setCal(null));
+  }, []);
+
+  const saveCalibration = async (patch: Partial<DeskCalibration>) => {
+    if (!cal) return;
+    setCalBusy(true);
+    setCalMsg(null);
+    try {
+      const res = await apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration', {
+        method: 'PUT',
+        body: JSON.stringify({ ...cal, ...patch }),
+      });
+      setCal(res.calibration);
+      setCalMsg('Saved');
+    } catch (e) {
+      setCalMsg(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setCalBusy(false);
+    }
+  };
+
+  const toggleRegime = (name: string) => {
+    if (!cal) return;
+    const on = cal.enabled_regimes.includes(name);
+    const next = on
+      ? cal.enabled_regimes.filter((r) => r !== name)
+      : [...cal.enabled_regimes, name];
+    void saveCalibration({ enabled_regimes: next });
+  };
+
+
+  useEffect(() => {
     if (!selectedAccountId) {
       setMarkets([]);
       setMarketEpic('');
@@ -106,34 +174,37 @@ export function OverviewPage() {
     }
     void apiFetch<MarketOpt[]>(`/api/trading/accounts/${selectedAccountId}/instruments`)
       .then((rows) => {
-        setMarkets(rows);
-        if (rows[0]) {
-          setMarketEpic(rows[0].epic || rows[0].symbol);
-          setLotSize(String(rows[0].lot_size || rows[0].min_lot || 0.1));
-        } else {
-          setMarketEpic('');
-        }
+        // Broker epic 1:1 only — never invent / kindly default / symbol fallback
+        const brokerRows = (rows || []).filter((r) => String(r.epic || '').trim().length > 0);
+        setMarkets(brokerRows);
+        setMarketEpic((prev) =>
+          prev && brokerRows.some((r) => r.epic === prev) ? prev : ''
+        );
       })
-      .catch(() => setMarkets([]));
+      .catch(() => {
+        setMarkets([]);
+        setMarketEpic('');
+      });
   }, [selectedAccountId]);
 
   const filteredMarkets = useMemo(() => {
     const q = marketFilter.trim().toLowerCase();
-    if (!q) return markets.slice(0, 200);
-    return markets
+    const onlyEpic = markets.filter((m) => String(m.epic || '').trim().length > 0);
+    if (!q) return onlyEpic.slice(0, 200);
+    return onlyEpic
       .filter(
         (m) =>
-          m.display_name.toLowerCase().includes(q) ||
-          (m.epic || m.symbol).toLowerCase().includes(q),
+          String(m.display_name || '').toLowerCase().includes(q) ||
+          String(m.epic).toLowerCase().includes(q)
       )
       .slice(0, 200);
   }, [markets, marketFilter]);
 
-  const selectedMarket = markets.find((m) => (m.epic || m.symbol) === marketEpic) || null;
+  const selectedMarket = markets.find((m) => m.epic === marketEpic) || null;
 
   const startRobotTrading = () => {
-    if (!selectedAccountId || !marketEpic) {
-      setMsg('Izvēlies account + Capital.com tirgu (Pull markets Trading lapā, ja tukšs)');
+    if (!selectedAccountId || !selectedMarket?.epic) {
+      setMsg('Izvēlies account + Capital epic 1:1 (Pull markets Trading lapā, ja tukšs)');
       return;
     }
     const lot = Number(lotSize);
@@ -141,18 +212,18 @@ export function OverviewPage() {
       setMsg('Lot size must be > 0');
       return;
     }
-    const name = selectedMarket?.display_name || marketEpic;
+    const name = selectedMarket.display_name || selectedMarket.epic;
     // Named window per account+epic — same client/instrument reuses window; others stay independent
     const w = openRobotWindow({
       accountId: selectedAccountId,
-      epic: marketEpic,
+      epic: selectedMarket.epic,
       lot,
       name,
     });
     if (!w) {
-      setMsg(`Robot board · ${name} · lot ${lot}`);
+      setMsg(`Robot board · ${name} · epic ${selectedMarket.epic} · lot ${lot}`);
     } else {
-      setMsg(`Robot board · ${name} · lot ${lot}`);
+      setMsg(`Robot board · ${name} · epic ${selectedMarket.epic} · lot ${lot}`);
     }
   };
 
@@ -485,7 +556,17 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <div className="dash-grid dash-bottom" style={{ marginTop: 12 }}>
+      <div className="control-fit-bar" style={{ marginTop: 12 }}>
+        <div className="section-title" style={{ margin: 0 }}>CONTROL</div>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setShowExtraPanels((v) => !v)}
+        >
+          {showExtraPanels ? 'Hide extra' : 'Info / more'}
+        </button>
+      </div>
+      <div className="dash-grid dash-bottom control-fit-scroll">
         <section className="panel control-panel">
           <div className="section-title">ACCOUNT DETAIL</div>
           {selectedAccount ? (
@@ -545,24 +626,30 @@ export function OverviewPage() {
             onChange={(e) => setMarketFilter(e.target.value)}
             disabled={!markets.length}
           />
-          <label className="field-label">Market</label>
+          <label className="field-label">Broker market (epic 1:1)</label>
           <select
             className="input"
             value={marketEpic}
             onChange={(e) => {
-              setMarketEpic(e.target.value);
-              const m = markets.find((x) => (x.epic || x.symbol) === e.target.value);
+              const epic = e.target.value;
+              setMarketEpic(epic);
+              const m = markets.find((x) => x.epic === epic);
               if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
             }}
             disabled={!markets.length}
           >
-            {filteredMarkets.length === 0 && <option value="">No markets</option>}
+            <option value="">— select Capital epic —</option>
             {filteredMarkets.map((m) => (
-              <option key={m.instrument_id} value={m.epic || m.symbol}>
-                {m.display_name} · {m.epic || m.symbol}
+              <option key={m.instrument_id} value={m.epic}>
+                {m.display_name} · {m.epic}
               </option>
             ))}
           </select>
+          {selectedMarket && (
+            <div className="hint-line" style={{ marginTop: 4 }}>
+              Order epic: <span className="mono">{selectedMarket.epic}</span> (broker exact)
+            </div>
+          )}
           <label className="field-label">Lot size</label>
           <input
             className="input"
@@ -582,6 +669,135 @@ export function OverviewPage() {
           {msg && <div className="hint-line" style={{ marginTop: 8 }}>{msg}</div>}
         </section>
 
+        <section className="panel control-panel">
+          <div className="section-title">EXIT CALIBRATION</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            HardInv / Peak % / Target — live Soft exits (broker SAFETY SL remains cushion).
+          </p>
+          {!cal && <div className="empty-state">Loading knobs…</div>}
+          {cal && (
+            <>
+              <label className="field-label">HardInv abs (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.hardinv_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
+              />
+              <label className="field-label">Peak keep % (75 = 25% giveback)</label>
+              <input
+                className="input"
+                type="number"
+                step="1"
+                min={50}
+                max={95}
+                value={Math.round(cal.peak_retention * 100)}
+                disabled={calBusy}
+                onChange={(e) =>
+                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                }
+                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
+              />
+              <label className="field-label">Peak MFE floor (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.peak_mfe_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
+              />
+              <label className="field-label">Peak min giveback (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.05"
+                value={cal.peak_min_giveback_abs}
+                disabled={calBusy}
+                onChange={(e) =>
+                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                }
+                onBlur={() =>
+                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                }
+              />
+              <label className="field-label">Target abs (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.target_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
+              />
+              <div className="actions" style={{ marginTop: 8 }}>
+                <button
+                  className="btn btn-primary"
+                  disabled={calBusy}
+                  onClick={() => void saveCalibration({})}
+                >
+                  Save knobs
+                </button>
+              </div>
+              {calMsg && <div className="hint-line" style={{ marginTop: 6 }}>{calMsg}</div>}
+            </>
+          )}
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">TRADE REGIMES</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            Izvēlies vienu vai vairākus — entry tikai ieslēgtajos režīmos.
+          </p>
+          <div className="regime-catalog">
+            {ALL_REGIMES.map((name) => {
+              const on = Boolean(cal?.enabled_regimes.includes(name));
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`regime-chip ${on ? 'on' : ''} ${
+                    name.includes('UP') || name === 'EXPANSION'
+                      ? 'up'
+                      : name.includes('DOWN') || name === 'COMPRESSION'
+                        ? 'down'
+                        : name.includes('BREAKOUT') || name === 'REVERSAL_CANDIDATE'
+                          ? 'scalp'
+                          : 'flat'
+                  }`}
+                  disabled={calBusy || !cal}
+                  onClick={() => toggleRegime(name)}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+          <div className="actions" style={{ marginTop: 8 }}>
+            <button
+              className="btn"
+              disabled={calBusy || !cal}
+              onClick={() => void saveCalibration({ enabled_regimes: [...ALL_REGIMES] })}
+            >
+              All on
+            </button>
+            <button
+              className="btn"
+              disabled={calBusy || !cal}
+              onClick={() => void saveCalibration({ enabled_regimes: [] })}
+            >
+              All off
+            </button>
+          </div>
+        </section>
+
+        {showExtraPanels && (
+          <>
         <section className="panel control-panel">
           <div className="section-title">ORBIT READER</div>
           <p className="hint-line" style={{ marginTop: 0 }}>
@@ -631,6 +847,9 @@ export function OverviewPage() {
             ))}
           </div>
         </section>
+          </>
+        )}
+
       </div>
     </div>
   );

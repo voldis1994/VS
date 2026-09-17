@@ -280,23 +280,27 @@ export function RobotDeskPage() {
     if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
-        setLaunchMarkets(rows || []);
-        if (rows?.[0]) {
-          setLaunchEpic(rows[0].epic || rows[0].symbol);
-          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
-        }
+        const brokerRows = (rows || []).filter((r) => String(r.epic || '').trim().length > 0);
+        setLaunchMarkets(brokerRows);
+        setLaunchEpic((prev) =>
+          prev && brokerRows.some((r) => r.epic === prev) ? prev : ''
+        );
       })
-      .catch(() => setLaunchMarkets([]));
+      .catch(() => {
+        setLaunchMarkets([]);
+        setLaunchEpic('');
+      });
   }, [launchAccountId]);
 
   const filteredLaunch = useMemo(() => {
     const q = launchFilter.trim().toLowerCase();
-    if (!q) return launchMarkets.slice(0, 200);
-    return launchMarkets
+    const onlyEpic = launchMarkets.filter((x) => String(x.epic || '').trim().length > 0);
+    if (!q) return onlyEpic.slice(0, 200);
+    return onlyEpic
       .filter(
         (m) =>
-          m.display_name.toLowerCase().includes(q) ||
-          (m.epic || m.symbol).toLowerCase().includes(q),
+          String(m.display_name || '').toLowerCase().includes(q) ||
+          String(m.epic).toLowerCase().includes(q)
       )
       .slice(0, 200);
   }, [launchMarkets, launchFilter]);
@@ -342,15 +346,19 @@ export function RobotDeskPage() {
       setError('Lot > 0');
       return;
     }
-    const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
+    const m = launchMarkets.find((x) => x.epic === launchEpic);
+    if (!m?.epic) {
+      setError('Tirgus epic nav no Capital (1:1) — Pull markets');
+      return;
+    }
     setBusy(true);
     setError(null);
     void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
       method: 'POST',
       body: JSON.stringify({
         account_id: launchAccountId,
-        epic: launchEpic,
-        display_name: m?.display_name || launchEpic,
+        epic: m.epic,
+        display_name: m.display_name || m.epic,
         lot_size: lotN,
         trading_enabled: true,
       }),
@@ -544,13 +552,14 @@ export function RobotDeskPage() {
                 value={launchEpic}
                 onChange={(e) => {
                   setLaunchEpic(e.target.value);
-                  const m = launchMarkets.find((x) => (x.epic || x.symbol) === e.target.value);
+                  const m = launchMarkets.find((x) => x.epic === e.target.value);
                   if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
                 }}
               >
+                <option value="">— select Capital epic —</option>
                 {filteredLaunch.map((m) => (
-                  <option key={m.instrument_id} value={m.epic || m.symbol}>
-                    {m.display_name} · {m.epic || m.symbol}
+                  <option key={m.instrument_id} value={m.epic}>
+                    {m.display_name} · {m.epic}
                   </option>
                 ))}
               </select>

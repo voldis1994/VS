@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
@@ -8,6 +8,11 @@ import {
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
+import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js';
+
+beforeEach(() => {
+  setDeskCalibration(defaultDeskCalibration());
+});
 
 function snap(
   partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }

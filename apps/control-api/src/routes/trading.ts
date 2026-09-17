@@ -337,13 +337,17 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
     );
 
     if (capital.rows.length > 0) {
-      let rows = capital.rows.map((m) => {
+      let rows = capital.rows
+        .filter((m) => String(m.epic || '').trim().length > 0)
+        .map((m) => {
         const row = settingsById.get(Number(m.id));
+        const epic = String(m.epic).trim();
+        // Broker identity 1:1 — epic is the only order key; display_name from Capital only
         return {
           instrument_id: Number(m.id),
-          epic: m.epic as string,
-          symbol: m.epic as string,
-          display_name: m.display_name as string,
+          epic,
+          symbol: epic,
+          display_name: String(m.display_name || epic),
           category: m.category as string,
           instrument_type: m.instrument_type as string,
           min_lot: Number(m.min_lot),
