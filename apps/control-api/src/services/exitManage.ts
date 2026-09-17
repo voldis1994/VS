@@ -1,4 +1,5 @@
 /** Live Capital exit — HardInv live; PeakProtect after reverse 1m (25% giveback). */
+import { getDeskCalibration } from './deskCalibration.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -109,14 +110,16 @@ function peakShouldCut(
   fav: number,
   mfe: number,
   retention: number | null,
-  mfeFloor: number
+  mfeFloor: number,
+  peakRet: number,
+  minGiveback: number
 ): boolean {
   // Peak locks profit only — never micro-red after reverse 1m
   if (!(fav > 0)) return false;
   if (mfe < mfeFloor) return false;
-  if (retention == null || retention >= PEAK_MFE_RETENTION) return false;
+  if (retention == null || retention >= peakRet) return false;
   const giveback = mfe - fav;
-  if (giveback < PEAK_MIN_GIVEBACK_ABS) return false;
+  if (giveback < minGiveback) return false;
   return true;
 }
 
@@ -136,10 +139,17 @@ export function decideBestOutcomeExit(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  // Asymmetric + Gold floors: TP room > Soft HardInv; never 0.15pt micro-SL
-  const tp = Math.max(absEntry * 0.0035, TARGET_ABS_FLOOR);
-  const sl = Math.max(absEntry * 0.0015, HARDINV_ABS_FLOOR);
-  const mfeFloor = Math.max(absEntry * 0.0008, PEAK_MFE_ABS_FLOOR);
+  const cal = getDeskCalibration();
+  const peakRet = cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
+  const minGiveback =
+    cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS;
+  // Asymmetric + Gold floors from desk calibration (Control panel knobs)
+  const tp = Math.max(absEntry * cal.target_pct, cal.target_abs || TARGET_ABS_FLOOR);
+  const sl = Math.max(absEntry * cal.hardinv_pct, cal.hardinv_abs || HARDINV_ABS_FLOOR);
+  const mfeFloor = Math.max(
+    absEntry * cal.peak_mfe_pct,
+    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR
+  );
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
@@ -165,19 +175,18 @@ export function decideBestOutcomeExit(
 
   // Armed after reverse 1m — PeakProtect giveback only (25%), green only
   if (wantPeakOnly) {
-    if (peakShouldCut(fav, mfe, retention, mfeFloor)) {
+    if (peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
+      const givePct = ((1 - peakRet) * 100).toFixed(0);
       return {
         exit: true,
-        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${(
-          MAX_MFE_GIVEBACK * 100
-        ).toFixed(0)}%`,
+        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}%`,
       };
     }
     return { exit: false, reason: '' };
   }
 
   if (wantFullProfit) {
-    if (peakShouldCut(fav, mfe, retention, mfeFloor)) {
+    if (peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
       return {
         exit: true,
         reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,

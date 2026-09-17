@@ -12,7 +12,7 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
     return rows;
   });
 
-  app.put('/api/accounts/:id/instruments/:instrumentId', async (request) => {
+  app.put('/api/accounts/:id/instruments/:instrumentId', async (request, reply) => {
     const { id, instrumentId } = request.params as { id: string; instrumentId: string };
     const body = request.body as {
       lot_size?: number;
@@ -20,6 +20,13 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
       trading_enabled?: boolean;
       symbol?: string;
     };
+
+    const symbol = String(body.symbol || '').trim();
+    if (!symbol) {
+      return reply.code(400).send({
+        error: 'symbol (Capital epic) required — no INST_* invent',
+      });
+    }
 
     const prev = await pool.query(
       'SELECT * FROM account_instrument_settings WHERE broker_account_id = $1 AND instrument_id = $2',
@@ -32,6 +39,7 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (broker_account_id, instrument_id)
        DO UPDATE SET
+         symbol = EXCLUDED.symbol,
          lot_size = COALESCE($4, account_instrument_settings.lot_size),
          enabled = COALESCE($5, account_instrument_settings.enabled),
          trading_enabled = COALESCE($6, account_instrument_settings.trading_enabled),
@@ -40,7 +48,7 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
       [
         id,
         instrumentId,
-        body.symbol || `INST_${instrumentId}`,
+        symbol,
         body.lot_size ?? 0.01,
         body.enabled ?? true,
         body.trading_enabled ?? false,

@@ -2107,3 +2107,32 @@ button.regime-chip { cursor: pointer; }
 .regime-chip.flat.on {
   border-color: rgba(200, 200, 180, 0.4);
 }
+
+
+/* Control panels: fit viewport + scroll; Info/more toggles secondary cards */
+.control-fit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.control-fit-scroll {
+  max-height: min(58dvh, 640px);
+  overflow: auto;
+  padding-bottom: 8px;
+  align-content: start;
+}
+.control-fit-scroll .control-panel {
+  max-height: none;
+  overflow: visible;
+}
+.control-panel .regime-catalog {
+  max-height: 160px;
+  overflow: auto;
+}
+@media (max-width: 1100px) {
+  .control-fit-scroll {
+    max-height: min(70dvh, 720px);
+  }
+}

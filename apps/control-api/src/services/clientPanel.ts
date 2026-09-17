@@ -201,11 +201,10 @@ async function loadMarketForClient(
 
 function robotForAccount(accountId: number, epic?: string | null) {
   const all = listRobotSessions().filter((s) => s.account_id === accountId);
-  if (epic) {
-    const exact = all.find((s) => s.epic === epic && s.running);
-    if (exact) return exact;
-  }
-  return all.find((s) => s.running) || all[0] || null;
+  const want = String(epic || '').trim();
+  if (!want) return null;
+  // Exact epic only — never fall back to another market on the same account
+  return all.find((s) => s.epic === want && s.running) || all.find((s) => s.epic === want) || null;
 }
 
 export async function getClientPanelStatus(clientId: number): Promise<ClientPanelStatus> {
