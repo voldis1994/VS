@@ -249,9 +249,9 @@ echo.
 
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
 start "" "http://127.0.0.1:18080"
-start http://localhost:5173/clients
+start http://localhost:5173/
 echo [OK] lokali panelis http://127.0.0.1:18080
-echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
+echo [OK] admin COMMAND http://localhost:5173/  (klientam NESUTI)
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)

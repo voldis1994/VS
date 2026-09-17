@@ -332,7 +332,248 @@ export function OverviewPage() {
         {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
       </div>
 
-      <div className="dash-grid dash-top">
+      <div className="control-fit-bar">
+        <div className="section-title" style={{ margin: 0 }}>CONTROL</div>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setShowExtraPanels((v) => !v)}
+        >
+          {showExtraPanels ? 'Hide info' : 'Info / more'}
+        </button>
+      </div>
+      <div className="dash-grid dash-bottom control-fit-scroll control-fit-primary">
+        <section className="panel control-panel">
+          <div className="section-title">START ROBOT</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            Izvēlies Capital.com tirgu + lot → TRADING ON → atveras Robot Desk (redzams live log).
+          </p>
+          {!selectedAccountId && (
+            <div className="error-state">Vispirms izvēlies account kreisajā rail / Accounts Status.</div>
+          )}
+          {selectedAccountId && markets.length === 0 && (
+            <div className="error-state" style={{ marginBottom: 8 }}>
+              Nav tirgu. <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets.
+            </div>
+          )}
+          <label className="field-label">Search market</label>
+          <input
+            className="input"
+            placeholder="Capital.com name…"
+            value={marketFilter}
+            onChange={(e) => setMarketFilter(e.target.value)}
+            disabled={!markets.length}
+          />
+          <label className="field-label">Broker market (epic 1:1)</label>
+          <select
+            className="input"
+            value={marketEpic}
+            onChange={(e) => {
+              const epic = e.target.value;
+              setMarketEpic(epic);
+              const m = markets.find((x) => x.epic === epic);
+              if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
+            }}
+            disabled={!markets.length}
+          >
+            <option value="">— select Capital epic —</option>
+            {filteredMarkets.map((m) => (
+              <option key={m.instrument_id} value={m.epic}>
+                {m.display_name} · {m.epic}
+              </option>
+            ))}
+          </select>
+          {selectedMarket && (
+            <div className="hint-line" style={{ marginTop: 4 }}>
+              Order epic: <span className="mono">{selectedMarket.epic}</span> (broker exact)
+            </div>
+          )}
+          <label className="field-label">Lot size</label>
+          <input
+            className="input"
+            value={lotSize}
+            onChange={(e) => setLotSize(e.target.value)}
+            disabled={!markets.length}
+          />
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button
+              className="btn btn-go"
+              disabled={busy || !marketEpic || !selectedAccountId}
+              onClick={startRobotTrading}
+            >
+              TRADING ON → ROBOT
+            </button>
+          </div>
+          {msg && <div className="hint-line" style={{ marginTop: 8 }}>{msg}</div>}
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">EXIT CALIBRATION</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            HardInv / Peak % / Target — live Soft exits (broker SAFETY SL remains cushion).
+          </p>
+          {!cal && <div className="empty-state">Loading knobs…</div>}
+          {cal && (
+            <>
+              <label className="field-label">HardInv abs (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.hardinv_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
+              />
+              <label className="field-label">Peak keep % (75 = 25% giveback)</label>
+              <input
+                className="input"
+                type="number"
+                step="1"
+                min={50}
+                max={95}
+                value={Math.round(cal.peak_retention * 100)}
+                disabled={calBusy}
+                onChange={(e) =>
+                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                }
+                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
+              />
+              <label className="field-label">Peak MFE floor (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.peak_mfe_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
+              />
+              <label className="field-label">Peak min giveback (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.05"
+                value={cal.peak_min_giveback_abs}
+                disabled={calBusy}
+                onChange={(e) =>
+                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                }
+                onBlur={() =>
+                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                }
+              />
+              <label className="field-label">Target abs (pts)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.1"
+                value={cal.target_abs}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
+              />
+              <div className="actions" style={{ marginTop: 8 }}>
+                <button
+                  className="btn btn-primary"
+                  disabled={calBusy}
+                  onClick={() => void saveCalibration({})}
+                >
+                  Save knobs
+                </button>
+              </div>
+              {calMsg && <div className="hint-line" style={{ marginTop: 6 }}>{calMsg}</div>}
+            </>
+          )}
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">TRADE REGIMES</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            Izvēlies vienu vai vairākus — entry tikai ieslēgtajos režīmos.
+          </p>
+          <div className="regime-catalog">
+            {ALL_REGIMES.map((name) => {
+              const on = Boolean(cal?.enabled_regimes.includes(name));
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`regime-chip ${on ? 'on' : ''} ${
+                    name.includes('UP') || name === 'EXPANSION'
+                      ? 'up'
+                      : name.includes('DOWN') || name === 'COMPRESSION'
+                        ? 'down'
+                        : name.includes('BREAKOUT') || name === 'REVERSAL_CANDIDATE'
+                          ? 'scalp'
+                          : 'flat'
+                  }`}
+                  disabled={calBusy || !cal}
+                  onClick={() => toggleRegime(name)}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+          <div className="actions" style={{ marginTop: 8 }}>
+            <button
+              className="btn"
+              disabled={calBusy || !cal}
+              onClick={() => void saveCalibration({ enabled_regimes: [...ALL_REGIMES] })}
+            >
+              All on
+            </button>
+            <button
+              className="btn"
+              disabled={calBusy || !cal}
+              onClick={() => void saveCalibration({ enabled_regimes: [] })}
+            >
+              All off
+            </button>
+          </div>
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">ACCOUNT DETAIL</div>
+          {selectedAccount ? (
+            <>
+              <div className="metric-box" style={{ marginBottom: 8 }}>
+                <div className="label">Selected</div>
+                <div className="value" style={{ fontSize: 13 }}>{selectedAccount.display_name}</div>
+              </div>
+              <div className="metric-row">
+                <div className="metric-box">
+                  <div className="label">Env</div>
+                  <div className="value" style={{ fontSize: 12 }}>{selectedAccount.environment}</div>
+                </div>
+                <div className="metric-box">
+                  <div className="label">Markets</div>
+                  <div className="value" style={{ fontSize: 12 }}>
+                    {(selectedAccount.capital_market_count || 0).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <div className="section-title" style={{ marginTop: 10 }}>Open on desk</div>
+              <div className="log-list">
+                {accountPositions.length === 0 && <div>No open trades for this account</div>}
+                {accountPositions.slice(0, 6).map((p) => (
+                  <div key={p.id}>
+                    #{p.id} {p.symbol || p.instrument_id} {p.direction} {p.quantity}
+                  </div>
+                ))}
+              </div>
+              <div className="actions" style={{ marginTop: 10 }}>
+                <Link className="btn" to="/trading">Open Trading</Link>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">Select an account in the rail or table</div>
+          )}
+        </section>
+      </div>
+
+      <div className="dash-grid dash-top" style={{ marginTop: 12 }}>
         <section className="panel">
           <div className="section-title">OVERVIEW</div>
           <div className="metric-row">
@@ -556,301 +797,59 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <div className="control-fit-bar" style={{ marginTop: 12 }}>
-        <div className="section-title" style={{ margin: 0 }}>CONTROL</div>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => setShowExtraPanels((v) => !v)}
-        >
-          {showExtraPanels ? 'Hide extra' : 'Info / more'}
-        </button>
-      </div>
-      <div className="dash-grid dash-bottom control-fit-scroll">
-        <section className="panel control-panel">
-          <div className="section-title">ACCOUNT DETAIL</div>
-          {selectedAccount ? (
-            <>
-              <div className="metric-box" style={{ marginBottom: 8 }}>
-                <div className="label">Selected</div>
-                <div className="value" style={{ fontSize: 13 }}>{selectedAccount.display_name}</div>
+      {showExtraPanels && (
+        <div className="dash-grid dash-bottom control-fit-scroll" style={{ marginTop: 12 }}>
+          <section className="panel control-panel">
+            <div className="section-title">ORBIT READER</div>
+            <p className="hint-line" style={{ marginTop: 0 }}>
+              Multi-sender quotes (read-only).
+            </p>
+            <div className="actions" style={{ marginTop: 10 }}>
+              <Link className="btn btn-primary" to="/orbit">
+                Open Orbit
+              </Link>
+              <Link className="btn" to="/robot">
+                Robot Desk
+              </Link>
+            </div>
+          </section>
+
+          <section className="panel control-panel">
+            <div className="section-title">AI RUNNER CONTROL</div>
+            <div className="gauge-wrap">
+              <div className={`gauge ${runnerOn ? 'on' : ''}`}>
+                <strong>{runnerOn ? '72%' : '0%'}</strong>
+                <span>PROFIT</span>
               </div>
-              <div className="metric-row">
-                <div className="metric-box">
-                  <div className="label">Env</div>
-                  <div className="value" style={{ fontSize: 12 }}>{selectedAccount.environment}</div>
+            </div>
+            <div className="actions" style={{ justifyContent: 'center', marginTop: 8 }}>
+              <button className="btn btn-go" disabled={busy} onClick={() => void startRunner()}>START</button>
+              <button className="btn btn-stop" disabled={busy} onClick={() => void stopRunner()}>STOP</button>
+            </div>
+            <div className="metric-box" style={{ marginTop: 10 }}>
+              <div className="label">Desk focus</div>
+              <div className="value" style={{ fontSize: 12 }}>
+                {deskAccounts[0]?.client_name || '—'} / {selectedAccount?.environment || '—'}
+              </div>
+            </div>
+          </section>
+
+          <section className="panel control-panel">
+            <div className="section-title">AI INFO LOG</div>
+            <div className="log-list tall">
+              <div>Conf 72% · desk sync {(status?.server_time && new Date(status.server_time).toLocaleTimeString()) || '—'}</div>
+              <div>Mode {(status?.mode || 'LIVE').toUpperCase()} · live {status?.live_enabled === false ? 'OFF' : 'ON'}</div>
+              <div>Capital live brokers: {status?.brokers_live ?? 0}</div>
+              <div>Markets cached: {(status?.capital_markets ?? totalMarkets).toLocaleString()}</div>
+              {events.slice(0, 6).map((e, i) => (
+                <div key={`log-${e.id ?? i}`}>
+                  {e.event_type || 'sys'} · {e.message || 'ok'}
                 </div>
-                <div className="metric-box">
-                  <div className="label">Markets</div>
-                  <div className="value" style={{ fontSize: 12 }}>
-                    {(selectedAccount.capital_market_count || 0).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-              <div className="section-title" style={{ marginTop: 10 }}>Open on desk</div>
-              <div className="log-list">
-                {accountPositions.length === 0 && <div>No open trades for this account</div>}
-                {accountPositions.slice(0, 6).map((p) => (
-                  <div key={p.id}>
-                    #{p.id} {p.symbol || p.instrument_id} {p.direction} {p.quantity}
-                  </div>
-                ))}
-              </div>
-              <div className="actions" style={{ marginTop: 10 }}>
-                <Link className="btn" to="/trading">Open Trading</Link>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">Select an account in the rail or table</div>
-          )}
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">START ROBOT</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            Izvēlies Capital.com tirgu + lot → TRADING ON → atveras Robot Desk (redzams live log).
-          </p>
-          {!selectedAccountId && (
-            <div className="error-state">Vispirms izvēlies account kreisajā rail / Accounts Status.</div>
-          )}
-          {selectedAccountId && markets.length === 0 && (
-            <div className="error-state" style={{ marginBottom: 8 }}>
-              Nav tirgu. <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets.
+              ))}
             </div>
-          )}
-          <label className="field-label">Search market</label>
-          <input
-            className="input"
-            placeholder="Capital.com name…"
-            value={marketFilter}
-            onChange={(e) => setMarketFilter(e.target.value)}
-            disabled={!markets.length}
-          />
-          <label className="field-label">Broker market (epic 1:1)</label>
-          <select
-            className="input"
-            value={marketEpic}
-            onChange={(e) => {
-              const epic = e.target.value;
-              setMarketEpic(epic);
-              const m = markets.find((x) => x.epic === epic);
-              if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
-            }}
-            disabled={!markets.length}
-          >
-            <option value="">— select Capital epic —</option>
-            {filteredMarkets.map((m) => (
-              <option key={m.instrument_id} value={m.epic}>
-                {m.display_name} · {m.epic}
-              </option>
-            ))}
-          </select>
-          {selectedMarket && (
-            <div className="hint-line" style={{ marginTop: 4 }}>
-              Order epic: <span className="mono">{selectedMarket.epic}</span> (broker exact)
-            </div>
-          )}
-          <label className="field-label">Lot size</label>
-          <input
-            className="input"
-            value={lotSize}
-            onChange={(e) => setLotSize(e.target.value)}
-            disabled={!markets.length}
-          />
-          <div className="actions" style={{ marginTop: 10 }}>
-            <button
-              className="btn btn-go"
-              disabled={busy || !marketEpic || !selectedAccountId}
-              onClick={startRobotTrading}
-            >
-              TRADING ON → ROBOT
-            </button>
-          </div>
-          {msg && <div className="hint-line" style={{ marginTop: 8 }}>{msg}</div>}
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">EXIT CALIBRATION</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            HardInv / Peak % / Target — live Soft exits (broker SAFETY SL remains cushion).
-          </p>
-          {!cal && <div className="empty-state">Loading knobs…</div>}
-          {cal && (
-            <>
-              <label className="field-label">HardInv abs (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.hardinv_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
-              />
-              <label className="field-label">Peak keep % (75 = 25% giveback)</label>
-              <input
-                className="input"
-                type="number"
-                step="1"
-                min={50}
-                max={95}
-                value={Math.round(cal.peak_retention * 100)}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
-                }
-                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
-              />
-              <label className="field-label">Peak MFE floor (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.peak_mfe_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
-              />
-              <label className="field-label">Peak min giveback (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.05"
-                value={cal.peak_min_giveback_abs}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
-                }
-                onBlur={() =>
-                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
-                }
-              />
-              <label className="field-label">Target abs (pts)</label>
-              <input
-                className="input"
-                type="number"
-                step="0.1"
-                value={cal.target_abs}
-                disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
-              />
-              <div className="actions" style={{ marginTop: 8 }}>
-                <button
-                  className="btn btn-primary"
-                  disabled={calBusy}
-                  onClick={() => void saveCalibration({})}
-                >
-                  Save knobs
-                </button>
-              </div>
-              {calMsg && <div className="hint-line" style={{ marginTop: 6 }}>{calMsg}</div>}
-            </>
-          )}
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">TRADE REGIMES</div>
-          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
-            Izvēlies vienu vai vairākus — entry tikai ieslēgtajos režīmos.
-          </p>
-          <div className="regime-catalog">
-            {ALL_REGIMES.map((name) => {
-              const on = Boolean(cal?.enabled_regimes.includes(name));
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  className={`regime-chip ${on ? 'on' : ''} ${
-                    name.includes('UP') || name === 'EXPANSION'
-                      ? 'up'
-                      : name.includes('DOWN') || name === 'COMPRESSION'
-                        ? 'down'
-                        : name.includes('BREAKOUT') || name === 'REVERSAL_CANDIDATE'
-                          ? 'scalp'
-                          : 'flat'
-                  }`}
-                  disabled={calBusy || !cal}
-                  onClick={() => toggleRegime(name)}
-                >
-                  {name}
-                </button>
-              );
-            })}
-          </div>
-          <div className="actions" style={{ marginTop: 8 }}>
-            <button
-              className="btn"
-              disabled={calBusy || !cal}
-              onClick={() => void saveCalibration({ enabled_regimes: [...ALL_REGIMES] })}
-            >
-              All on
-            </button>
-            <button
-              className="btn"
-              disabled={calBusy || !cal}
-              onClick={() => void saveCalibration({ enabled_regimes: [] })}
-            >
-              All off
-            </button>
-          </div>
-        </section>
-
-        {showExtraPanels && (
-          <>
-        <section className="panel control-panel">
-          <div className="section-title">ORBIT READER</div>
-          <p className="hint-line" style={{ marginTop: 0 }}>
-            Multi-sender quotes (read-only).
-          </p>
-          <div className="actions" style={{ marginTop: 10 }}>
-            <Link className="btn btn-primary" to="/orbit">
-              Open Orbit
-            </Link>
-            <Link className="btn" to="/robot">
-              Robot Desk
-            </Link>
-          </div>
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">AI RUNNER CONTROL</div>
-          <div className="gauge-wrap">
-            <div className={`gauge ${runnerOn ? 'on' : ''}`}>
-              <strong>{runnerOn ? '72%' : '0%'}</strong>
-              <span>PROFIT</span>
-            </div>
-          </div>
-          <div className="actions" style={{ justifyContent: 'center', marginTop: 8 }}>
-            <button className="btn btn-go" disabled={busy} onClick={() => void startRunner()}>START</button>
-            <button className="btn btn-stop" disabled={busy} onClick={() => void stopRunner()}>STOP</button>
-          </div>
-          <div className="metric-box" style={{ marginTop: 10 }}>
-            <div className="label">Desk focus</div>
-            <div className="value" style={{ fontSize: 12 }}>
-              {deskAccounts[0]?.client_name || '—'} / {selectedAccount?.environment || '—'}
-            </div>
-          </div>
-        </section>
-
-        <section className="panel control-panel">
-          <div className="section-title">AI INFO LOG</div>
-          <div className="log-list tall">
-            <div>Conf 72% · desk sync {(status?.server_time && new Date(status.server_time).toLocaleTimeString()) || '—'}</div>
-            <div>Mode {(status?.mode || 'LIVE').toUpperCase()} · live {status?.live_enabled === false ? 'OFF' : 'ON'}</div>
-            <div>Capital live brokers: {status?.brokers_live ?? 0}</div>
-            <div>Markets cached: {(status?.capital_markets ?? totalMarkets).toLocaleString()}</div>
-            {events.slice(0, 6).map((e, i) => (
-              <div key={`log-${e.id ?? i}`}>
-                {e.event_type || 'sys'} · {e.message || 'ok'}
-              </div>
-            ))}
-          </div>
-        </section>
-          </>
-        )}
-
-      </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
