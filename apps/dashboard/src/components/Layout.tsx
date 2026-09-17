@@ -7,6 +7,8 @@ import {
   DeskClient,
   DeskContext,
   DeskStatus,
+  isCapitalAccount,
+  pickBestTradingAccount,
 } from './DeskContext';
 
 const NAV = [
@@ -66,10 +68,31 @@ export function Layout({ children }: { children: ReactNode }) {
       setSelectedClientId(null);
       return;
     }
-    setSelectedClientId((prev) =>
-      prev && clients.some((x) => x.id === prev) ? prev : clients[0].id,
-    );
-  }, [clients]);
+    setSelectedClientId((prev) => {
+      const capitalClient = clients.find((c) =>
+        accounts.some(
+          (a) =>
+            a.client_id === c.id &&
+            isCapitalAccount(a) &&
+            (a.capital_market_count || 0) > 0,
+        ),
+      );
+      if (!prev || !clients.some((x) => x.id === prev)) {
+        return capitalClient?.id ?? clients[0].id;
+      }
+      const prevHasCapitalMkts = accounts.some(
+        (a) =>
+          a.client_id === prev &&
+          isCapitalAccount(a) &&
+          (a.capital_market_count || 0) > 0,
+      );
+      // After accounts load: leave crypto-only / empty clients for Capital with markets
+      if (!prevHasCapitalMkts && capitalClient && capitalClient.id !== prev) {
+        return capitalClient.id;
+      }
+      return prev;
+    });
+  }, [clients, accounts]);
 
   useEffect(() => {
     if (!accounts.length) {
@@ -80,12 +103,28 @@ export function Layout({ children }: { children: ReactNode }) {
       if (prev && accounts.some((x) => x.account_id === prev)) {
         if (!selectedClientId) return prev;
         const still = accounts.find((x) => x.account_id === prev);
-        if (still && still.client_id === selectedClientId) return prev;
+        if (still && still.client_id === selectedClientId) {
+          // Keep Capital with markets; bounce off crypto/empty when client has Capital
+          if (
+            isCapitalAccount(still) &&
+            (still.capital_market_count || 0) > 0
+          ) {
+            return prev;
+          }
+          const better = pickBestTradingAccount(accounts, selectedClientId);
+          if (
+            better &&
+            better.account_id !== prev &&
+            isCapitalAccount(better) &&
+            (better.capital_market_count || 0) > 0
+          ) {
+            return better.account_id;
+          }
+          return prev;
+        }
       }
-      const forClient = selectedClientId
-        ? accounts.filter((x) => x.client_id === selectedClientId)
-        : accounts;
-      return (forClient[0] || accounts[0]).account_id;
+      const best = pickBestTradingAccount(accounts, selectedClientId);
+      return best?.account_id ?? accounts[0].account_id;
     });
   }, [accounts, selectedClientId]);
 

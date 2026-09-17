@@ -34,6 +34,32 @@ export type DeskAccount = {
   account_enabled?: boolean;
 };
 
+/** Prefer Capital.com with pulled markets — crypto/other brokers have no epic catalog. */
+export function isCapitalAccount(a: DeskAccount): boolean {
+  return String(a.broker_name || '').toLowerCase() === 'capital_com';
+}
+
+export function pickBestTradingAccount(
+  accounts: DeskAccount[],
+  clientId?: number | null,
+): DeskAccount | null {
+  if (!accounts.length) return null;
+  const pool = clientId
+    ? accounts.filter((a) => a.client_id === clientId)
+    : accounts;
+  const scope = pool.length ? pool : accounts;
+  const capital = scope.filter(isCapitalAccount);
+  const withMkts = [...capital].sort(
+    (a, b) => (b.capital_market_count || 0) - (a.capital_market_count || 0),
+  );
+  if (withMkts[0] && (withMkts[0].capital_market_count || 0) > 0) return withMkts[0];
+  if (capital[0]) return capital[0];
+  const anyMkts = [...scope].sort(
+    (a, b) => (b.capital_market_count || 0) - (a.capital_market_count || 0),
+  );
+  return anyMkts[0] || accounts[0] || null;
+}
+
 export type DeskContextValue = {
   status: DeskStatus | null;
   clients: DeskClient[];
