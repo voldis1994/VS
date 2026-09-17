@@ -2123,6 +2123,14 @@ button.regime-chip { cursor: pointer; }
   padding-bottom: 8px;
   align-content: start;
 }
+.control-fit-primary {
+  max-height: none;
+  overflow: visible;
+  margin-bottom: 4px;
+}
+.dash-bottom.control-fit-primary {
+  grid-template-columns: repeat(4, 1fr);
+}
 .control-fit-scroll .control-panel {
   max-height: none;
   overflow: visible;
