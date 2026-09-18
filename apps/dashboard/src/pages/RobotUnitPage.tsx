@@ -314,315 +314,329 @@ export function RobotUnitPage() {
 
         {error && <div className="error-state">{error}</div>}
 
-        {session && (
-          <div className="robot-unit-grid">
-            <section className="robot-unit-panel robot-unit-status">
-              <div className="robot-arena-kicker">STATUS</div>
-              <div className={`robot-unit-posture ${session.open_side ? 'open' : session.running ? 'watch' : 'flat'}`}>
-                {postureLabel(session)}
-              </div>
-              <div className="robot-unit-metrics">
-                <div>
-                  <span>MID</span>
-                  <strong>{fmt(session.last_mid)}</strong>
+        <div className="robot-unit-grid">
+          <section className="robot-unit-panel robot-unit-status">
+            <div className="robot-arena-kicker">STATUS</div>
+            {session ? (
+              <>
+                <div className={`robot-unit-posture ${session.open_side ? 'open' : session.running ? 'watch' : 'flat'}`}>
+                  {postureLabel(session)}
                 </div>
-                <div>
-                  <span>UPL</span>
-                  <strong className={(session.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
-                    {fmt(session.unrealized)}
-                  </strong>
+                <div className="robot-unit-metrics">
+                  <div>
+                    <span>MID</span>
+                    <strong>{fmt(session.last_mid)}</strong>
+                  </div>
+                  <div>
+                    <span>UPL</span>
+                    <strong className={(session.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
+                      {fmt(session.unrealized)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>MFE / MAE</span>
+                    <strong>
+                      {fmt(session.mfe)} / {fmt(session.mae)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>MODE</span>
+                    <strong>{session.running ? session.mode : 'STOPPED'}</strong>
+                  </div>
+                  <div>
+                    <span>REGIME</span>
+                    <strong>{(session.regime || 'UNKNOWN').toUpperCase()}</strong>
+                  </div>
+                  <div>
+                    <span>SIDE / ENTRY</span>
+                    <strong>
+                      {session.open_side || 'FLAT'} · {fmt(session.entry_price)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>SAFETY SL</span>
+                    <strong>{fmt(session.safety_sl)}</strong>
+                  </div>
+                  <div>
+                    <span>DEAL</span>
+                    <strong className="mono">{session.deal_id || '—'}</strong>
+                  </div>
+                  <div>
+                    <span>IN / OUT</span>
+                    <strong>
+                      {session.orders_placed} / {session.exits_done}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>READS</span>
+                    <strong>
+                      {session.reads_ok}/{session.reads_fail}
+                    </strong>
+                  </div>
                 </div>
-                <div>
-                  <span>MFE / MAE</span>
-                  <strong>
-                    {fmt(session.mfe)} / {fmt(session.mae)}
-                  </strong>
-                </div>
-                <div>
-                  <span>MODE</span>
-                  <strong>{session.running ? session.mode : 'STOPPED'}</strong>
-                </div>
-                <div>
-                  <span>REGIME</span>
-                  <strong>{(session.regime || 'UNKNOWN').toUpperCase()}</strong>
-                </div>
-                <div>
-                  <span>SIDE / ENTRY</span>
-                  <strong>
-                    {session.open_side || 'FLAT'} · {fmt(session.entry_price)}
-                  </strong>
-                </div>
-                <div>
-                  <span>SAFETY SL</span>
-                  <strong>{fmt(session.safety_sl)}</strong>
-                </div>
-                <div>
-                  <span>DEAL</span>
-                  <strong className="mono">{session.deal_id || '—'}</strong>
-                </div>
-                <div>
-                  <span>IN / OUT</span>
-                  <strong>
-                    {session.orders_placed} / {session.exits_done}
-                  </strong>
-                </div>
-                <div>
-                  <span>READS</span>
-                  <strong>
-                    {session.reads_ok}/{session.reads_fail}
-                  </strong>
-                </div>
-              </div>
-              {chain && (
-                <div className="robot-unit-chain mono">
-                  {chain.feeds} → {chain.ohlc} → {chain.regime}
-                  {chain.setup ? ` · ${chain.setup}` : ''} → {chain.action}
-                </div>
-              )}
-            </section>
+                {chain && (
+                  <div className="robot-unit-chain mono">
+                    {chain.feeds} → {chain.ohlc} → {chain.regime}
+                    {chain.setup ? ` · ${chain.setup}` : ''} → {chain.action}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="muted">{busy ? 'Starting…' : 'Waiting for session…'}</div>
+            )}
+          </section>
 
-            <section className={`robot-unit-panel robot-unit-watch ${w?.armed ? 'armed' : ''}`}>
-              <div className="robot-arena-kicker">ENTRY WATCH</div>
-              {w ? (
+          <section className={`robot-unit-panel robot-unit-watch ${w?.armed ? 'armed' : ''}`}>
+            <div className="robot-arena-kicker">ENTRY WATCH</div>
+            {w ? (
+              <>
+                <div className="robot-unit-watch-status">
+                  <strong>{w.status}</strong>
+                  {w.armed ? ` · ARMED ${w.direction || ''} ${w.setup || ''}` : ''}
+                  {w.regime_enabled ? ' · REGIME ON' : ' · REGIME OFF'}
+                </div>
+                <div className="robot-unit-watch-look">{w.looking_for}</div>
+                <div className="mono">
+                  O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C {fmt(w.bar.c, 2)}
+                  {w.bar.forming_c != null ? ` · forming ${fmt(w.bar.forming_c, 2)}` : ''}
+                </div>
+                <div className="mono">
+                  BODY {pctFmt(w.bar.body_pct)} · RANGE {pctFmt(w.bar.range_pct)} · {w.bar.market}
+                  {w.bar.closed ? ' · CLOSED' : ' · FORMING'}
+                </div>
+                <div className="robot-unit-watch-vs">{w.bar_vs_trigger}</div>
+                <div className="muted">{w.last_reason}</div>
+              </>
+            ) : (
+              <div className="muted">{session ? 'Watch seeding…' : 'Waiting for session…'}</div>
+            )}
+            {session && (
+              <>
+                <div className="robot-unit-ohlc mono" style={{ marginTop: 8 }}>
+                  10s · O {fmt(session.ohlc_10s?.last_o, 2)} H {fmt(session.ohlc_10s?.last_h, 2)} L{' '}
+                  {fmt(session.ohlc_10s?.last_l, 2)} C {fmt(session.ohlc_10s?.last_c, 2)} ·{' '}
+                  {session.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(session.ohlc_10s?.body_pct)}
+                </div>
+                <div className="mono" style={{ marginTop: 4 }}>
+                  FEEDS · {session.feed_contributing ?? 0}/{session.feed_sender_count ?? 0}{' '}
+                  {session.feed_agreement || ''} · {session.feed_source || '—'}
+                </div>
+                {(session.feed_legs?.length ?? 0) > 0 && (
+                  <div className="robot-unit-legs">
+                    {session.feed_legs!.map((leg) => (
+                      <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'} {leg.latency_ms}ms
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {session.error && <div className="error-state" style={{ marginTop: 8 }}>{session.error}</div>}
+              </>
+            )}
+          </section>
+
+          <section className="robot-unit-panel robot-unit-settings">
+            <div className="robot-arena-kicker">SETTINGS</div>
+            <div className="robot-unit-settings-tabs">
+              <button
+                type="button"
+                className={`btn ${settingsTab === 'exit' ? 'btn-primary' : ''}`}
+                onClick={() => setSettingsTab('exit')}
+              >
+                EXIT
+              </button>
+              <button
+                type="button"
+                className={`btn ${settingsTab === 'regimes' ? 'btn-primary' : ''}`}
+                onClick={() => setSettingsTab('regimes')}
+              >
+                REGIMES
+              </button>
+              <button
+                type="button"
+                className={`btn ${settingsTab === 'lot' ? 'btn-primary' : ''}`}
+                onClick={() => setSettingsTab('lot')}
+              >
+                LOT
+              </button>
+            </div>
+
+            {settingsTab === 'exit' && (
+              <div className="robot-unit-settings-body">
+                {!cal && <div className="muted">Loading calibration…</div>}
+                {cal && (
+                  <div className="robot-unit-settings-fields">
+                    <label className="field-label">HardInv abs</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.1"
+                      value={cal.hardinv_abs}
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
+                    />
+                    <label className="field-label">Peak keep % (75=25% giveback)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="1"
+                      min={50}
+                      max={95}
+                      value={Math.round(cal.peak_retention * 100)}
+                      disabled={calBusy}
+                      onChange={(e) =>
+                        setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                      }
+                      onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
+                    />
+                    <label className="field-label">Peak MFE floor</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.1"
+                      value={cal.peak_mfe_abs}
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
+                    />
+                    <label className="field-label">Peak min giveback</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.05"
+                      value={cal.peak_min_giveback_abs}
+                      disabled={calBusy}
+                      onChange={(e) =>
+                        setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                      }
+                      onBlur={() =>
+                        void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                      }
+                    />
+                    <label className="field-label">Target abs</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.1"
+                      value={cal.target_abs}
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
+                    />
+                    <div className="actions" style={{ marginTop: 4 }}>
+                      <button
+                        className="btn btn-primary"
+                        type="button"
+                        disabled={calBusy}
+                        onClick={() => void saveCalibration({})}
+                      >
+                        Save knobs
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {settingsTab === 'regimes' && (
+              <div className="robot-unit-settings-body">
+                <p className="hint-line" style={{ margin: '0 0 6px' }}>
+                  Entry tikai ieslēgtajos regimes.
+                </p>
+                <div className="regime-catalog desk-control-regimes robot-unit-regimes">
+                  {ALL_DESK_REGIMES.map((regimeName) => {
+                    const on = Boolean(cal?.enabled_regimes.includes(regimeName));
+                    return (
+                      <button
+                        key={regimeName}
+                        type="button"
+                        className={`regime-chip ${on ? 'on' : ''} ${
+                          regimeName.includes('UP') || regimeName === 'EXPANSION'
+                            ? 'up'
+                            : regimeName.includes('DOWN') || regimeName === 'COMPRESSION'
+                              ? 'down'
+                              : regimeName.includes('BREAKOUT') || regimeName === 'REVERSAL_CANDIDATE'
+                                ? 'scalp'
+                                : 'flat'
+                        }`}
+                        disabled={calBusy || !cal}
+                        onClick={() => toggleRegime(regimeName)}
+                      >
+                        {regimeName}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="actions" style={{ marginTop: 6 }}>
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={calBusy || !cal}
+                    onClick={() => void saveCalibration({ enabled_regimes: [...ALL_DESK_REGIMES] })}
+                  >
+                    All on
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={calBusy || !cal}
+                    onClick={() => void saveCalibration({ enabled_regimes: [] })}
+                  >
+                    All off
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'lot' && (
+              <div className="robot-unit-settings-body">
+                <label className="field-label">Lot size</label>
+                <input
+                  className="input"
+                  value={lotEdit || lot || ''}
+                  onChange={(e) => setLotEdit(e.target.value)}
+                  disabled={busy}
+                />
+                <p className="hint-line" style={{ margin: '4px 0 0' }}>
+                  Apply restartē robotu ar jauno lot (šim klientam).
+                </p>
+                <div className="actions" style={{ marginTop: 6 }}>
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={busy || !session}
+                    onClick={() => void applyLot()}
+                  >
+                    Apply lot
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {calMsg && <div className="hint-line">{calMsg}</div>}
+          </section>
+
+          <section className="robot-unit-panel robot-unit-feed">
+            <div className="robot-arena-kicker">LIVE LOG</div>
+            <div className="robot-unit-ticks">
+              {session ? (
                 <>
-                  <div className="robot-unit-watch-status">
-                    <strong>{w.status}</strong>
-                    {w.armed ? ` · ARMED ${w.direction || ''} ${w.setup || ''}` : ''}
-                    {w.regime_enabled ? ' · REGIME ON' : ' · REGIME OFF'}
-                  </div>
-                  <div className="robot-unit-watch-look">{w.looking_for}</div>
-                  <div className="mono">
-                    O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C {fmt(w.bar.c, 2)}
-                    {w.bar.forming_c != null ? ` · forming ${fmt(w.bar.forming_c, 2)}` : ''}
-                  </div>
-                  <div className="mono">
-                    BODY {pctFmt(w.bar.body_pct)} · RANGE {pctFmt(w.bar.range_pct)} · {w.bar.market}
-                    {w.bar.closed ? ' · CLOSED' : ' · FORMING'}
-                  </div>
-                  <div className="robot-unit-watch-vs">{w.bar_vs_trigger}</div>
-                  <div className="muted">{w.last_reason}</div>
+                  {session.ticks.slice(0, 50).map((t, i) => (
+                    <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
+                      <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
+                      <span className="badge phase">{t.phase}</span>
+                      <span className="detail">{t.detail}</span>
+                    </div>
+                  ))}
+                  {session.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
                 </>
               ) : (
-                <div className="muted">Watch seeding…</div>
+                <div className="mono">Waiting for session…</div>
               )}
-              <div className="robot-unit-ohlc mono" style={{ marginTop: 8 }}>
-                10s · O {fmt(session.ohlc_10s?.last_o, 2)} H {fmt(session.ohlc_10s?.last_h, 2)} L{' '}
-                {fmt(session.ohlc_10s?.last_l, 2)} C {fmt(session.ohlc_10s?.last_c, 2)} ·{' '}
-                {session.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(session.ohlc_10s?.body_pct)}
-              </div>
-              <div className="mono" style={{ marginTop: 4 }}>
-                FEEDS · {session.feed_contributing ?? 0}/{session.feed_sender_count ?? 0}{' '}
-                {session.feed_agreement || ''} · {session.feed_source || '—'}
-              </div>
-              {(session.feed_legs?.length ?? 0) > 0 && (
-                <div className="robot-unit-legs">
-                  {session.feed_legs!.map((leg) => (
-                    <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                      {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'} {leg.latency_ms}ms
-                    </span>
-                  ))}
-                </div>
-              )}
-              {session.error && <div className="error-state" style={{ marginTop: 8 }}>{session.error}</div>}
-            </section>
-
-            <section className="robot-unit-panel robot-unit-settings">
-              <div className="robot-arena-kicker">SETTINGS</div>
-              <div className="robot-unit-settings-tabs">
-                <button
-                  type="button"
-                  className={`btn ${settingsTab === 'exit' ? 'btn-primary' : ''}`}
-                  onClick={() => setSettingsTab('exit')}
-                >
-                  EXIT
-                </button>
-                <button
-                  type="button"
-                  className={`btn ${settingsTab === 'regimes' ? 'btn-primary' : ''}`}
-                  onClick={() => setSettingsTab('regimes')}
-                >
-                  REGIMES
-                </button>
-                <button
-                  type="button"
-                  className={`btn ${settingsTab === 'lot' ? 'btn-primary' : ''}`}
-                  onClick={() => setSettingsTab('lot')}
-                >
-                  LOT
-                </button>
-              </div>
-
-              {settingsTab === 'exit' && (
-                <div className="robot-unit-settings-body">
-                  {!cal && <div className="muted">Loading calibration…</div>}
-                  {cal && (
-                    <div className="robot-unit-settings-fields">
-                      <label className="field-label">HardInv abs</label>
-                      <input
-                        className="input"
-                        type="number"
-                        step="0.1"
-                        value={cal.hardinv_abs}
-                        disabled={calBusy}
-                        onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
-                        onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
-                      />
-                      <label className="field-label">Peak keep % (75=25% giveback)</label>
-                      <input
-                        className="input"
-                        type="number"
-                        step="1"
-                        min={50}
-                        max={95}
-                        value={Math.round(cal.peak_retention * 100)}
-                        disabled={calBusy}
-                        onChange={(e) =>
-                          setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
-                        }
-                        onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
-                      />
-                      <label className="field-label">Peak MFE floor</label>
-                      <input
-                        className="input"
-                        type="number"
-                        step="0.1"
-                        value={cal.peak_mfe_abs}
-                        disabled={calBusy}
-                        onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
-                        onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
-                      />
-                      <label className="field-label">Peak min giveback</label>
-                      <input
-                        className="input"
-                        type="number"
-                        step="0.05"
-                        value={cal.peak_min_giveback_abs}
-                        disabled={calBusy}
-                        onChange={(e) =>
-                          setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
-                        }
-                        onBlur={() =>
-                          void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
-                        }
-                      />
-                      <label className="field-label">Target abs</label>
-                      <input
-                        className="input"
-                        type="number"
-                        step="0.1"
-                        value={cal.target_abs}
-                        disabled={calBusy}
-                        onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
-                        onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
-                      />
-                      <div className="actions" style={{ marginTop: 4 }}>
-                        <button
-                          className="btn btn-primary"
-                          type="button"
-                          disabled={calBusy}
-                          onClick={() => void saveCalibration({})}
-                        >
-                          Save knobs
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {settingsTab === 'regimes' && (
-                <div className="robot-unit-settings-body">
-                  <p className="hint-line" style={{ margin: '0 0 6px' }}>
-                    Entry tikai ieslēgtajos regimes.
-                  </p>
-                  <div className="regime-catalog desk-control-regimes robot-unit-regimes">
-                    {ALL_DESK_REGIMES.map((regimeName) => {
-                      const on = Boolean(cal?.enabled_regimes.includes(regimeName));
-                      return (
-                        <button
-                          key={regimeName}
-                          type="button"
-                          className={`regime-chip ${on ? 'on' : ''} ${
-                            regimeName.includes('UP') || regimeName === 'EXPANSION'
-                              ? 'up'
-                              : regimeName.includes('DOWN') || regimeName === 'COMPRESSION'
-                                ? 'down'
-                                : regimeName.includes('BREAKOUT') || regimeName === 'REVERSAL_CANDIDATE'
-                                  ? 'scalp'
-                                  : 'flat'
-                          }`}
-                          disabled={calBusy || !cal}
-                          onClick={() => toggleRegime(regimeName)}
-                        >
-                          {regimeName}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="actions" style={{ marginTop: 6 }}>
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={calBusy || !cal}
-                      onClick={() => void saveCalibration({ enabled_regimes: [...ALL_DESK_REGIMES] })}
-                    >
-                      All on
-                    </button>
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={calBusy || !cal}
-                      onClick={() => void saveCalibration({ enabled_regimes: [] })}
-                    >
-                      All off
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {settingsTab === 'lot' && (
-                <div className="robot-unit-settings-body">
-                  <label className="field-label">Lot size</label>
-                  <input
-                    className="input"
-                    value={lotEdit}
-                    onChange={(e) => setLotEdit(e.target.value)}
-                    disabled={busy}
-                  />
-                  <p className="hint-line" style={{ margin: '4px 0 0' }}>
-                    Apply restartē robotu ar jauno lot (šim klientam).
-                  </p>
-                  <div className="actions" style={{ marginTop: 6 }}>
-                    <button
-                      className="btn btn-primary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void applyLot()}
-                    >
-                      Apply lot
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {calMsg && <div className="hint-line">{calMsg}</div>}
-            </section>
-
-            <section className="robot-unit-panel robot-unit-feed">
-              <div className="robot-arena-kicker">LIVE LOG</div>
-              <div className="robot-unit-ticks">
-                {session.ticks.slice(0, 50).map((t, i) => (
-                  <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
-                    <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
-                    <span className="badge phase">{t.phase}</span>
-                    <span className="detail">{t.detail}</span>
-                  </div>
-                ))}
-                {session.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
-              </div>
-            </section>
-          </div>
-        )}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
