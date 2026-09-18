@@ -209,14 +209,28 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < 0.35;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
+  /** Quiet pierce of a chop zone (≥15% of width) — not a continuation of an existing trend */
+  const fromChop =
+    previous === 'RANGE' ||
+    previous === 'COMPRESSION' ||
+    previous === 'TRANSITION' ||
+    previous === 'UNKNOWN' ||
+    previous === 'EXPANSION' ||
+    previous === 'REVERSAL_CANDIDATE';
+  const clearBreakUp =
+    fromChop && breakoutUp && (last.close - hi) / zoneWidth >= 0.15;
+  const clearBreakDown =
+    fromChop && breakoutDown && (lo - last.close) / zoneWidth >= 0.15;
   const reversal =
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  // Expansion OR clear pierce out of chop — quiet Gold breakouts no longer stick as RANGE
+  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
+  if ((expanding || clearBreakDown) && breakoutDown && (trendingDown || lastVel < 0))
+    return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
 
   // Pullbacks only inside the parent trend family (zone still respected)
@@ -246,7 +260,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
  * Anti-flicker without freeze:
  * - Soft noise before dwell stays on current regime
  * - Pending candidate is NOT cleared on reject (so confirm survives dwell)
- * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar
+ * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar after dwell
+ * - Strong (opposite family / breakout) may switch before dwell completes
+ * - Same-family (TREND↔PULLBACK) no longer bypasses dwell — that caused 10s recipe flicker
  */
 export function stabilizeRegime(
   book: {
@@ -279,7 +295,8 @@ export function stabilizeRegime(
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   const need = sameFamily || strong ? 1 : CONFIRM_BARS;
-  const canSwitch = (dwellOk || strong || sameFamily) && book.pending_count >= need;
+  // sameFamily must still wait for dwell — only strong structure breaks skip it
+  const canSwitch = (dwellOk || strong) && book.pending_count >= need;
 
   if (canSwitch) {
     book.previous = book.current;

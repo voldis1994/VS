@@ -197,7 +197,7 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     expect(new Set(['RANGE', 'COMPRESSION', 'EXPANSION', 'TREND_UP']).size).toBe(4);
   });
 
-  it('allows TREND_UP → PULLBACK_UPTREND same-family without long dwell', () => {
+  it('TREND_UP → PULLBACK_UPTREND same-family waits for dwell then 1 confirm', () => {
     const book = {
       current: 'TREND_UP' as RegimeName,
       previous: 'UNKNOWN' as RegimeName,
@@ -206,6 +206,10 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
       pending_count: 0,
       since: new Date().toISOString(),
     };
+    // Before dwell — stay TREND_UP, accumulate pending
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP');
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP');
+    // bars_in_current was 2; two more soft candidates → dwellOk (4) + pending ≥1
     expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND');
   });
 
