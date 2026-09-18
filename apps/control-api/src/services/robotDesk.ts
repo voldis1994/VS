@@ -171,7 +171,7 @@ const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 /** If a Capital await hangs, force-clear so the robot keeps polling */
-const CYCLE_BUSY_STALE_MS = 60_000;
+const CYCLE_BUSY_STALE_MS = 50_000;
 const ZONE_SEED_THROTTLE_MS = 15_000;
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
@@ -1865,16 +1865,27 @@ async function robotCycleLocked(s: Internal) {
     s.error = leased.result.detail;
     const rateLimited =
       leased.result.status === 429 || /rate-limit|too-many|cooldown/i.test(leased.result.detail);
+    const timedOut =
+      leased.result.status === 408 || /timeout|hung|lock (wait|hold)/i.test(leased.result.detail);
     pushTick(s, {
-      phase: rateLimited ? 'WAIT' : 'ERROR',
+      phase: rateLimited || timedOut ? 'WAIT' : 'ERROR',
       bid: null,
       ask: null,
       mid: null,
       detail: rateLimited
         ? `RATE LIMIT — ${leased.result.detail}`
-        : `Session fail: ${leased.result.detail}`,
+        : timedOut
+          ? `CAPITAL TIMEOUT — ${leased.result.detail} · retry next tick · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+          : `Session fail: ${leased.result.detail}`,
+    });
+    refreshEntryWatch(s, {
+      status_override: 'SEEDING',
+      last_reason: timedOut
+        ? `Capital timeout · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+        : leased.result.detail,
     });
     if (rateLimited) setRobotCadence(s, 5_000);
+    else if (timedOut) setRobotCadence(s, 3_000);
   }
 }
 
@@ -1939,6 +1950,7 @@ export async function startRobotSession(input: {
     existing.running = false;
     await waitCycleIdle(existing);
     existing.cycle_busy = false;
+    existing.cycle_busy_since = 0;
   }
   sessions.delete(id);
 
