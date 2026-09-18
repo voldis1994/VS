@@ -68,6 +68,31 @@ type DataSender = {
   enabled?: boolean;
 };
 
+type EntryWatch = {
+  regime: string;
+  regime_enabled: boolean;
+  enabled_regimes: string[];
+  status: string;
+  looking_for: string;
+  bar_vs_trigger: string;
+  direction: 'BUY' | 'SELL' | null;
+  setup: string | null;
+  armed: boolean;
+  threshold_body_pct: number;
+  bar: {
+    o: number | null;
+    h: number | null;
+    l: number | null;
+    c: number | null;
+    forming_c: number | null;
+    body_pct: number | null;
+    range_pct: number | null;
+    market: string;
+    closed: boolean;
+  };
+  last_reason: string;
+};
+
 type RobotSession = {
   id: string;
   account_id: number;
@@ -100,6 +125,7 @@ type RobotSession = {
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
   decision_chain?: DecisionChain;
+  entry_watch?: EntryWatch | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -123,6 +149,13 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
+function pctFmt(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const p = v * 100;
+  const sign = p > 0 ? '+' : '';
+  return `${sign}${p.toFixed(3)}%`;
+}
+
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.open_side === 'BUY') {
@@ -134,6 +167,11 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
   }
   if (s.running && !s.open_side) {
+    const w = s.entry_watch;
+    if (w?.armed) return { label: `ARMED ${w.direction || ''} · ${w.regime}`, kind: 'entry' };
+    if (w?.status === 'FORMING') return { label: `WATCH · ${w.regime}`, kind: 'entry' };
+    if (w?.status === 'WAITING_TRIGGER') return { label: `TRIGGER · ${w.regime}`, kind: 'entry' };
+    if (w?.status === 'REGIME_OFF') return { label: `REGIME OFF · ${w.regime}`, kind: 'flat' };
     const r = (s.regime || 'UNKNOWN').toUpperCase();
     return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
   }
@@ -638,6 +676,15 @@ export function RobotDeskPage() {
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
                 <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
+                {s.entry_watch && s.running && !s.open_side && (
+                  <div className={`robot-mini-watch ${s.entry_watch.armed ? 'armed' : ''}`}>
+                    <div className="mono">{s.entry_watch.status}</div>
+                    <div className="robot-mini-watch-line">{s.entry_watch.looking_for}</div>
+                    <div className="robot-mini-watch-line muted">
+                      body {pctFmt(s.entry_watch.bar.body_pct)} · {s.entry_watch.bar.market}
+                    </div>
+                  </div>
+                )}
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -747,10 +794,43 @@ export function RobotDeskPage() {
                     ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.regime} → ${focusChain.action}`
                     : chainLabel}
                 </div>
+                {focused.entry_watch && (
+                  <div className={`robot-entry-watch ${focused.entry_watch.armed ? 'armed' : ''}`}>
+                    <div className="robot-arena-kicker">ENTRY WATCH</div>
+                    <div>
+                      STATUS · <strong>{focused.entry_watch.status}</strong>
+                      {focused.entry_watch.armed
+                        ? ` · ARMED ${focused.entry_watch.direction || ''} ${focused.entry_watch.setup || ''}`
+                        : ''}
+                    </div>
+                    <div>REGIME · {focused.entry_watch.regime}
+                      {focused.entry_watch.regime_enabled ? ' · ON' : ' · OFF kalibrācijā'}
+                    </div>
+                    <div className="robot-entry-watch-look">
+                      MEKLĒ · {focused.entry_watch.looking_for}
+                    </div>
+                    <div>
+                      BARS · O {fmt(focused.entry_watch.bar.o, 2)} H {fmt(focused.entry_watch.bar.h, 2)} L{' '}
+                      {fmt(focused.entry_watch.bar.l, 2)} C {fmt(focused.entry_watch.bar.c, 2)}
+                      {focused.entry_watch.bar.forming_c != null
+                        ? ` · forming ${fmt(focused.entry_watch.bar.forming_c, 2)}`
+                        : ''}
+                    </div>
+                    <div>
+                      BODY · {pctFmt(focused.entry_watch.bar.body_pct)} · RANGE{' '}
+                      {pctFmt(focused.entry_watch.bar.range_pct)} · {focused.entry_watch.bar.market}
+                      {focused.entry_watch.bar.closed ? ' · CLOSED' : ' · FORMING'}
+                    </div>
+                    <div className="robot-entry-watch-vs">
+                      VS TRIGGER · {focused.entry_watch.bar_vs_trigger}
+                    </div>
+                    <div className="muted">NOW · {focused.entry_watch.last_reason}</div>
+                  </div>
+                )}
                 <div>
                   10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
                   {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
-                  {focused.ohlc_10s?.market || 'SEEDING'}
+                  {focused.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(focused.ohlc_10s?.body_pct)}
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                 <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
