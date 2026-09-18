@@ -650,6 +650,19 @@ function matchOpenOnEpic(
   );
 }
 
+/**
+ * Fresh fill: broker open_level beats provisional mid/ref.
+ * If list fails / open_level missing, keep provisional.
+ */
+export function preferBrokerOpenLevel(
+  provisional: number | null | undefined,
+  openLevel: number | null | undefined
+): number | null {
+  if (openLevel != null && Number.isFinite(openLevel)) return openLevel;
+  if (provisional != null && Number.isFinite(provisional)) return provisional;
+  return null;
+}
+
 async function resolveDealId(
   session: CapitalSession,
   s: Internal,
@@ -1002,6 +1015,7 @@ async function enterTradeLocked(
   s.open_side = direction;
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
+  // Temporary — prefer broker open_level after dealId + list (mid is only fallback)
   s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
@@ -1015,16 +1029,21 @@ async function enterTradeLocked(
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel when available
+  // Sync broker truth: open_level + stopLevel (mid was only provisional entry)
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
       const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      const brokerEntry = preferBrokerOpenLevel(s.entry_price, pos?.open_level);
+      if (brokerEntry != null) {
+        s.entry_price = brokerEntry;
+        s.peak_favorable = brokerEntry;
+      }
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
     } catch {
-      /* ignore */
+      /* mid / computed SL remain as temporary fallback */
     }
   }
 
@@ -1033,11 +1052,11 @@ async function enterTradeLocked(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
-      s.safety_sl ?? 'none'
-    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
-      dealId ? ` · dealId=${dealId}` : ''
-    }`,
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · entry ${
+      s.entry_price ?? '—'
+    } · SL ${s.safety_sl ?? 'none'}${
+      usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''
+    } · ${result.detail}${dealId ? ` · dealId=${dealId}` : ''}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1066,7 +1085,7 @@ async function enterTradeLocked(
         s.account_id,
         m.rows[0]?.id || 0,
         direction === 'BUY' ? 'LONG' : 'SHORT',
-        quote.mid || 0,
+        (s.entry_price ?? quote.mid) || 0,
         s.lot_size,
       ]
     );
