@@ -29,6 +29,7 @@ import {
 } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
+import { buildEntryWatch, type EntryWatch } from './entryWatch.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -112,6 +113,8 @@ export type RobotSession = {
     setup: string | null;
     action: string;
   };
+  /** Live: what robot reads / waits for before entry (all regimes) */
+  entry_watch?: EntryWatch | null;
 };
 
 type Internal = RobotSession & {
@@ -135,6 +138,8 @@ type Internal = RobotSession & {
   peak_protect_armed: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
   last_1m_profit_exit_key: string;
+  /** Cached live entry watch for board UI */
+  entry_watch: EntryWatch | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -193,6 +198,25 @@ function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
   if (s.ticks.length > MAX_TICKS) s.ticks.length = MAX_TICKS;
 }
 
+function refreshEntryWatch(
+  s: Internal,
+  opts?: { cooldown_left_s?: number; status_override?: EntryWatch['status'] | null; last_reason?: string }
+): void {
+  const ohlc = publicOhlc10s(s.ohlcState);
+  s.entry_watch = buildEntryWatch({
+    running: s.running,
+    open_side: s.open_side,
+    entry_enabled: s.entry_enabled,
+    regime: s.regime,
+    last_closed: s.ohlcState.last_closed,
+    forming_c: ohlc.forming_c,
+    just_closed: Boolean(s.ohlcState.just_closed),
+    cooldown_left_s: opts?.cooldown_left_s,
+    status_override: opts?.status_override,
+    last_reason: opts?.last_reason,
+  });
+}
+
 function publicSession(s: Internal): RobotSession {
   const {
     timer: _t,
@@ -213,8 +237,10 @@ function publicSession(s: Internal): RobotSession {
     last_1m_profit_exit_key: _1m,
     ...rest
   } = s;
+  if (!rest.entry_watch) refreshEntryWatch(s);
   return {
     ...rest,
+    entry_watch: s.entry_watch,
     ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
@@ -234,15 +260,20 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
   } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
+  const w = s.entry_watch;
   let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
+  else if (w?.status === 'ARMED') action = `ARMED ${w.direction || ''}`.trim();
+  else if (w?.status === 'FORMING') action = 'WATCH · forming 10s';
+  else if (w?.status === 'WAITING_TRIGGER') action = 'WATCH · trigger';
+  else if (w?.status === 'REGIME_OFF') action = 'REGIME OFF';
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
     feeds,
     ohlc: ohlcLine,
     regime: s.regime || 'UNKNOWN',
-    setup: null,
+    setup: w?.setup ?? null,
     action,
   };
 }
@@ -1056,8 +1087,11 @@ async function robotCycle(s: Internal) {
       mid: quote.mid,
       detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · mode=${s.mode} · side=${
         s.open_side || 'FLAT'
-      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)}`,
+      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · regime=${s.regime}`,
     });
+    if (s.open_side) {
+      refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
+    }
 
     if (!s.trading_enabled) {
       pushTick(s, {
@@ -1176,6 +1210,10 @@ async function robotCycle(s: Internal) {
     // ——— FLAT: entry only after close (and only if entry_enabled) ———
     if (!s.entry_enabled) {
       s.mode = s.open_side ? 'MANAGE' : 'FLAT';
+      refreshEntryWatch(s, {
+        status_override: 'MANAGE_ONLY',
+        last_reason: 'MANAGE-ONLY · nav lokālā entry smadzeņu',
+      });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1191,12 +1229,17 @@ async function robotCycle(s: Internal) {
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     const POST_CLOSE_COOLDOWN_MS = 45_000;
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
+      const left = Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000);
+      refreshEntryWatch(s, {
+        cooldown_left_s: left,
+        last_reason: `Cooldown ${left}s pēc close`,
+      });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close · stop chop re-entry`,
+        detail: `cooldown ${left}s after close · stop chop re-entry · ${s.entry_watch?.looking_for || ''}`,
       });
       return;
     }
@@ -1253,12 +1296,16 @@ async function robotCycle(s: Internal) {
 
     if (s.ohlcState.just_closed && bar) {
       if (!regimeAllowedForEntry(s.regime)) {
+        refreshEntryWatch(s, {
+          status_override: 'REGIME_OFF',
+          last_reason: `${s.regime} OFF kalibrācijā`,
+        });
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · regime ${s.regime} OFF in Control calibration · no entry`,
+          detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
         const sig = decideEntryFrom10sRegime(bar, s.regime);
@@ -1266,26 +1313,45 @@ async function robotCycle(s: Internal) {
           direction = sig.direction;
           setupType = sig.setup;
           reason = sig.reason;
-        } else {
+          refreshEntryWatch(s, {
+            status_override: 'ARMED',
+            last_reason: sig.reason,
+          });
           pushTick(s, {
             phase: 'DECIDE',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+            detail: `ARMED ${sig.direction} ${sig.setup} · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger}`,
+          });
+        } else {
+          refreshEntryWatch(s, {
+            status_override: 'WAITING_TRIGGER',
+            last_reason: `${s.regime} · trigeris nav · nākamā svece`,
+          });
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `${ohlcLine} · WATCH · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger} · wait next candle`,
           });
         }
       }
     } else {
+      refreshEntryWatch(s, {
+        status_override: bar ? 'FORMING' : 'SEEDING',
+      });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        detail: `${ohlcLine} · ${s.entry_watch?.looking_for || 'WATCH'} · forming C=${
+          ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'
+        } · ${s.entry_watch?.bar_vs_trigger || 'wait bar close'}`,
       });
     }
-
 
     if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
@@ -1413,6 +1479,7 @@ export async function startRobotSession(input: {
     last_manage_minute_fetch_ms: 0,
     peak_protect_armed: false,
     last_1m_profit_exit_key: '',
+    entry_watch: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1423,6 +1490,14 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
+  });
+  refreshEntryWatch(session, { last_reason: 'Started · lasa tirgu · meklē entry' });
+  pushTick(session, {
+    phase: 'INFO',
+    bid: null,
+    ask: null,
+    mid: null,
+    detail: `ENTRY WATCH · ${session.entry_watch?.looking_for || 'UNKNOWN'}`,
   });
   pushTick(session, {
     phase: 'INFO',
