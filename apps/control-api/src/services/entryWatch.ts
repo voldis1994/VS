@@ -4,6 +4,11 @@ import { normalizeRegime } from './regimes.js';
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
+import {
+  flipFilterReason,
+  requiredFlipSide,
+  sameDirectionBlocked,
+} from './flipFilter.js';
 
 const DIP = -0.0001;
 const RALLY = 0.0001;
@@ -18,6 +23,7 @@ export type EntryWatchStatus =
   | 'SEEDING'
   | 'FORMING'
   | 'REGIME_OFF'
+  | 'FLIP_FILTER'
   | 'WAITING_TRIGGER'
   | 'ARMED'
   | 'ENTERING';
@@ -34,6 +40,10 @@ export type EntryWatch = {
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
+  /** Last closed side — next entry must be opposite (all regimes) */
+  last_closed_side: 'BUY' | 'SELL' | null;
+  /** Required flip side after close, or null if first trade */
+  need_side: 'BUY' | 'SELL' | null;
   threshold_body_pct: number;
   bar: {
     o: number | null;
@@ -211,6 +221,7 @@ export type BuildWatchInput = {
   last_closed: TenSecBar | null | undefined;
   forming_c: number | null | undefined;
   just_closed: boolean;
+  last_closed_side?: 'BUY' | 'SELL' | null;
   cooldown_left_s?: number;
   status_override?: EntryWatchStatus | null;
   last_reason?: string;
@@ -225,16 +236,23 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const body = bar ? bodyPct(bar) : null;
   const rng = bar ? rangePct(bar) : null;
   const mkt = marketOf(bar);
-  const sig =
+  const lastClosedSide = input.last_closed_side ?? null;
+  const needSide = requiredFlipSide(lastClosedSide);
+  const rawSig =
     bar && regimeOn && input.entry_enabled && !input.open_side
       ? decideEntryFrom10sRegime(bar, regime)
       : null;
+  const flipBlocked = Boolean(
+    rawSig && sameDirectionBlocked(rawSig.direction, lastClosedSide)
+  );
+  const sig = flipBlocked ? null : rawSig;
 
   let status: EntryWatchStatus = 'WAITING_TRIGGER';
   if (!input.running) status = 'STOPPED';
   else if (input.open_side) status = 'MANAGE';
   else if (!input.entry_enabled) status = 'MANAGE_ONLY';
   else if (input.cooldown_left_s && input.cooldown_left_s > 0) status = 'COOLDOWN';
+  else if (input.status_override === 'FLIP_FILTER' || flipBlocked) status = 'FLIP_FILTER';
   else if (input.status_override) status = input.status_override;
   else if (!bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';
@@ -246,6 +264,8 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   let last_reason = input.last_reason || '';
   if (!last_reason) {
     if (status === 'ARMED' && sig) last_reason = sig.reason;
+    else if (status === 'FLIP_FILTER' && rawSig && lastClosedSide)
+      last_reason = flipFilterReason(rawSig.direction, lastClosedSide);
     else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
       last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
@@ -258,16 +278,22 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     else if (status === 'STOPPED') last_reason = 'Robots STOP';
   }
 
+  const flipNote = needSide
+    ? ` · FLIP: last ${lastClosedSide} → next ${needSide} only`
+    : '';
+
   return {
     regime,
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: recipe.looking_for,
+    looking_for: `${recipe.looking_for}${flipNote}`,
     bar_vs_trigger: vs,
-    direction: sig?.direction ?? recipe.direction,
+    direction: sig?.direction ?? (flipBlocked ? needSide : recipe.direction),
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',
+    last_closed_side: lastClosedSide,
+    need_side: needSide,
     threshold_body_pct: recipe.threshold_body_pct,
     bar: {
       o: bar?.open ?? null,

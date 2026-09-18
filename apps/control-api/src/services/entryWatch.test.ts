@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { buildEntryWatch, watchRecipe } from './entryWatch.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
+import { setDeskCalibration, defaultDeskCalibration } from './deskCalibration.js';
 
 function bar(o: number, h: number, l: number, c: number): TenSecBar {
   return { open_time_ms: 1, open: o, high: h, low: l, close: c, ticks: 3 };
 }
 
 describe('entryWatch', () => {
+  beforeEach(() => {
+    setDeskCalibration(defaultDeskCalibration());
+  });
   it('describes TREND_UP dip trigger', () => {
     const r = watchRecipe('TREND_UP');
     expect(r.direction).toBe('BUY');
@@ -61,5 +65,23 @@ describe('entryWatch', () => {
       just_closed: true,
     });
     expect(w.looking_for).toMatch(/COMPRESSION/);
+  });
+
+  it('FLIP FILTER blocks same direction after close', () => {
+    const b = bar(2000, 2000.2, 1998.5, 1999); // dip → BUY in RANGE
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'RANGE',
+      last_closed: b,
+      forming_c: null,
+      just_closed: true,
+      last_closed_side: 'BUY',
+    });
+    expect(w.status).toBe('FLIP_FILTER');
+    expect(w.need_side).toBe('SELL');
+    expect(w.armed).toBe(false);
+    expect(w.last_reason).toMatch(/FLIP FILTER/);
   });
 });

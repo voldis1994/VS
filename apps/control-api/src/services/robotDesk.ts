@@ -30,6 +30,11 @@ import {
 } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
+import {
+  flipFilterReason,
+  requiredFlipSide,
+  sameDirectionBlocked,
+} from './flipFilter.js';
 import { buildEntryWatch, type EntryWatch } from './entryWatch.js';
 import {
   allowEntryFromFeeds,
@@ -89,6 +94,8 @@ export type RobotSession = {
   reads_ok: number;
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
+  /** Last closed trade side — next entry must flip (all regimes) */
+  last_closed_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
@@ -214,6 +221,7 @@ function refreshEntryWatch(
     last_closed: s.ohlcState.last_closed,
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),
+    last_closed_side: s.last_closed_side,
     cooldown_left_s: opts?.cooldown_left_s,
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
@@ -268,6 +276,8 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (w?.status === 'ARMED') action = `ARMED ${w.direction || ''}`.trim();
+  else if (w?.status === 'FLIP_FILTER')
+    action = `FLIP · need ${w.need_side || 'opp'} (last ${w.last_closed_side || '—'})`;
   else if (w?.status === 'FORMING') action = 'WATCH · forming 10s';
   else if (w?.status === 'WAITING_TRIGGER') action = 'WATCH · trigger';
   else if (w?.status === 'REGIME_OFF') action = 'REGIME OFF';
@@ -602,12 +612,13 @@ async function exitTrade(
     s.exit_deal_fails = (s.exit_deal_fails || 0) + 1;
     const listed = await listCapitalOpenPositions(session);
     if (listed.ok && !matchOpenOnEpic(listed.positions, s.epic)) {
+      if (s.open_side) s.last_closed_side = s.open_side;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'EXIT: no dealId + broker flat — clear ghost · FLAT (entry allowed)',
+        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · next must flip ≠ ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
       clearTradeState(s);
@@ -650,12 +661,13 @@ async function exitTrade(
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
   s.error = null;
+  if (s.open_side) s.last_closed_side = s.open_side;
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · next must flip ≠ ${s.last_closed_side}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -694,6 +706,16 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
+  if (sameDirectionBlocked(direction, s.last_closed_side)) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: flipFilterReason(direction, s.last_closed_side!),
+    });
+    return;
+  }
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (!listed.ok) {
@@ -1101,12 +1123,14 @@ async function robotCycle(s: Internal) {
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed
+        const closedSide = s.open_side;
+        s.last_closed_side = closedSide;
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: `Broker flat on this epic — trade closed externally · FLAT · next must flip ≠ ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -1394,20 +1418,35 @@ async function robotCycle(s: Internal) {
       } else {
         const sig = decideEntryFrom10sRegime(bar, s.regime);
         if (sig) {
-          direction = sig.direction;
-          setupType = sig.setup;
-          reason = sig.reason;
-          refreshEntryWatch(s, {
-            status_override: 'ARMED',
-            last_reason: sig.reason,
-          });
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `ARMED ${sig.direction} ${sig.setup} · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger}`,
-          });
+          if (sameDirectionBlocked(sig.direction, s.last_closed_side)) {
+            const need = requiredFlipSide(s.last_closed_side);
+            refreshEntryWatch(s, {
+              status_override: 'FLIP_FILTER',
+              last_reason: flipFilterReason(sig.direction, s.last_closed_side!),
+            });
+            pushTick(s, {
+              phase: 'DECIDE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `${ohlcLine} · FLIP FILTER · blocked ${sig.direction} ${sig.setup} · need ${need} (last closed ${s.last_closed_side})`,
+            });
+          } else {
+            direction = sig.direction;
+            setupType = sig.setup;
+            reason = sig.reason;
+            refreshEntryWatch(s, {
+              status_override: 'ARMED',
+              last_reason: sig.reason,
+            });
+            pushTick(s, {
+              phase: 'DECIDE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `ARMED ${sig.direction} ${sig.setup} · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger}`,
+            });
+          }
         } else {
           refreshEntryWatch(s, {
             status_override: 'WAITING_TRIGGER',
@@ -1540,6 +1579,7 @@ export async function startRobotSession(input: {
     reads_ok: 0,
     reads_fail: 0,
     open_side: null,
+    last_closed_side: null,
     safety_sl: null,
     error: null,
     entry_enabled: input.entry_enabled !== false,
