@@ -16,7 +16,7 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot, listRobotSessions, robotIdFor, preferBrokerOpenLevel } from './robotDesk.js';
+import { attachManageOnlyRobot, listRobotSessions, robotIdFor } from './robotDesk.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
 import { sameDirectionBlocked, sameDirLockLeftSec, flipFilterReason } from './flipFilter.js';
 
