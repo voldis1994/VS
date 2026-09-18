@@ -1,6 +1,22 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import {
+  CLEAR_BREAK_FRAC,
+  COMPRESS_ABS,
+  COMPRESS_AVG_MULT,
+  EXPAND_ABS,
+  EXPAND_AVG_MULT,
+  MOVE,
+  NEAR_ZONE_MID,
+  PERSIST_ENTER,
+  PERSIST_PULLBACK,
+  PERSIST_STAY,
+  PULLBACK,
+  REVERSAL,
+  TREND_ENTER,
+  TREND_STAY,
+} from './regimeBands.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -118,36 +134,6 @@ const MIN_DWELL_BARS = 5;
 /** Cross-family soft switches need this many agreeing candidates after dwell */
 const CONFIRM_BARS = 3;
 
-/**
- * Body / range bands as fraction of price (Gold ~2650).
- * Gaps are intentional: quiet → soft → trend → pullback → reversal must not abut,
- * so one 10s tick near a boundary cannot flip "into the next percent".
- *
- *   quiet      |body| < 0.012%
- *   soft move  0.012% … 0.022%
- *   trend enter ≥ 0.022% (stay ≥ 0.010% once already in trend)
- *   pullback   against ≥ 0.028% (above trend-enter — clear dip, not noise)
- *   reversal   against ≥ 0.15%
- *
- *   compress   range < 0.010% and << avg
- *   (dead zone 0.010% … 0.040% → RANGE / stick)
- *   expand     range ≥ 0.040% and >> avg
- */
-const SIGN_BODY = 0.00012;
-const TREND_ENTER_VEL = 0.00022;
-const TREND_STAY_VEL = 0.0001;
-const PULLBACK_VEL = 0.00028;
-const REVERSAL_VEL = 0.0015;
-const PERSIST_ENTER = 0.5;
-const PERSIST_STAY = 0.28;
-const PERSIST_PULLBACK = 0.22;
-const COMPRESS_AVG_MULT = 0.35;
-const COMPRESS_ABS = 0.0001;
-const EXPAND_AVG_MULT = 1.65;
-const EXPAND_ABS = 0.0004;
-const NEAR_ZONE_MID = 0.28;
-const CLEAR_BREAK_FRAC = 0.25;
-
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -223,18 +209,18 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const lastRange = rangePct(last);
   const persistWindow = velocities.slice(-6);
   const persistence = mean(
-    persistWindow.map((v) => (v > SIGN_BODY ? 1 : v < -SIGN_BODY ? -1 : 0))
+    persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );
 
   const inUpFamily = previous === 'TREND_UP' || previous === 'PULLBACK_UPTREND';
   const inDownFamily = previous === 'TREND_DOWN' || previous === 'PULLBACK_DOWNTREND';
-  // Hysteresis: already-in-trend stays on softer vel/persist; fresh enter needs the higher band
+  // Hysteresis: already-in-trend stays on TREND_STAY; fresh enter needs TREND_ENTER (> stay)
   const trendingUp = inUpFamily
-    ? persistence > PERSIST_STAY && lastVel > TREND_STAY_VEL
-    : persistence > PERSIST_ENTER && lastVel > TREND_ENTER_VEL;
+    ? persistence > PERSIST_STAY && lastVel > TREND_STAY
+    : persistence > PERSIST_ENTER && lastVel > TREND_ENTER;
   const trendingDown = inDownFamily
-    ? persistence < -PERSIST_STAY && lastVel < -TREND_STAY_VEL
-    : persistence < -PERSIST_ENTER && lastVel < -TREND_ENTER_VEL;
+    ? persistence < -PERSIST_STAY && lastVel < -TREND_STAY
+    : persistence < -PERSIST_ENTER && lastVel < -TREND_ENTER;
   const compressed =
     lastRange < avgRange * COMPRESS_AVG_MULT && lastRange < COMPRESS_ABS;
   const expanding =
@@ -263,31 +249,31 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     fromChop && breakoutDown && (lo - last.close) / zoneWidth >= CLEAR_BREAK_FRAC;
   const reversal =
     (previous === 'TREND_UP' &&
-      lastVel < -REVERSAL_VEL &&
+      lastVel < -REVERSAL &&
       lastRange > avgRange &&
       !breakoutDown) ||
     (previous === 'TREND_DOWN' &&
-      lastVel > REVERSAL_VEL &&
+      lastVel > REVERSAL &&
       lastRange > avgRange &&
       !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < -SIGN_BODY) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > SIGN_BODY) return 'FAILED_BREAKOUT_DOWN';
-  // Expansion OR clear pierce out of chop — needs the expand band (gap above compress)
-  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > TREND_ENTER_VEL))
+  if (previous === 'BREAKOUT_UP' && inRange && lastVel < -MOVE) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > MOVE) return 'FAILED_BREAKOUT_DOWN';
+  // Expansion OR clear pierce out of chop — body must clear TREND_ENTER
+  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > TREND_ENTER))
     return 'BREAKOUT_UP';
   if (
     (expanding || clearBreakDown) &&
     breakoutDown &&
-    (trendingDown || lastVel < -TREND_ENTER_VEL)
+    (trendingDown || lastVel < -TREND_ENTER)
   )
     return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
 
-  // Pullbacks: against-body must clear PULLBACK_VEL (above trend-enter) so soft noise ≠ pullback
+  // Pullbacks: against-body ≥ PULLBACK (> TREND_ENTER) so soft noise ≠ pullback
   if (
     previous === 'TREND_UP' &&
-    lastVel <= -PULLBACK_VEL &&
+    lastVel <= -PULLBACK &&
     persistence > PERSIST_PULLBACK &&
     inRange
   ) {
@@ -295,23 +281,23 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   }
   if (
     previous === 'TREND_DOWN' &&
-    lastVel >= PULLBACK_VEL &&
+    lastVel >= PULLBACK &&
     persistence < -PERSIST_PULLBACK &&
     inRange
   ) {
     return 'PULLBACK_DOWNTREND';
   }
-  // Resume trend from pullback only on enter-band strength (not stay-band)
+  // Resume trend from pullback only on enter-band strength
   if (
     previous === 'PULLBACK_UPTREND' &&
     persistence > PERSIST_ENTER &&
-    lastVel > TREND_ENTER_VEL
+    lastVel > TREND_ENTER
   )
     return 'TREND_UP';
   if (
     previous === 'PULLBACK_DOWNTREND' &&
     persistence < -PERSIST_ENTER &&
-    lastVel < -TREND_ENTER_VEL
+    lastVel < -TREND_ENTER
   )
     return 'TREND_DOWN';
 

@@ -10,6 +10,15 @@ import {
   stabilizeRegime,
   type RegimeName,
 } from './regimes.js';
+import {
+  COMPRESS_ABS,
+  EXPAND_ABS,
+  MOVE,
+  MOVE_RANGE,
+  PULLBACK,
+  TREND_ENTER,
+  TREND_STAY,
+} from './regimeBands.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
 
@@ -68,12 +77,12 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
   });
 
   it('persistent rally → TREND_UP (stabilized), not 10s flicker through catalog', () => {
-    const closes = [2640, 2640.8, 2641.6, 2642.5, 2643.4, 2644.2, 2645.1, 2646.0, 2646.9, 2647.8];
+    // Steps ≥ TREND_ENTER (~0.038% ≈ 1.0 pt at 2640) so enter-band fires
+    const closes = [2640, 2641.1, 2642.3, 2643.5, 2644.8, 2646.1, 2647.4, 2648.8, 2650.2, 2651.6];
     const seq = feed('GOLD', path(closes), 2);
     const unique = new Set(seq);
     expect(unique.size).toBeLessThanOrEqual(4);
     expect(seq[seq.length - 1]).toBe('TREND_UP');
-    // Once TREND_UP, must not visit opposite family in same rally
     const afterTrend = seq.slice(seq.indexOf('TREND_UP'));
     expect(afterTrend.some((r) => r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN')).toBe(false);
   });
@@ -127,8 +136,8 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     const hi = Math.max(...zonePrior.map((b) => b.high));
     const lo = Math.min(...zonePrior.map((b) => b.low));
     const width = Math.max(hi - lo, 1e-9);
-    // Clear ≥25% zone pierce + body ≥ TREND_ENTER (0.022%)
-    const pierce = hi + Math.max(width * 0.3, 2650 * 0.0004);
+    // Clear ≥25% zone pierce + body ≥ TREND_ENTER
+    const pierce = hi + Math.max(width * 0.3, 2650 * TREND_ENTER * 1.2);
     const open = hi - 0.02;
     const last = bar(open, pierce + 0.05, open - 0.02, pierce, bars.length);
     const raw = classifyRegime([...bars.slice(0, -1), last], 'RANGE');
@@ -189,17 +198,16 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     expect(hit).toBeGreaterThanOrEqual(2);
   });
 
-  it('body/range scales: Gold 0.20pt body ≈ 0.0075% — below SIGN quiet band', () => {
+  it('body/range scales: Gold quiet bar stays below MOVE', () => {
     const quiet = bar(2650, 2650.08, 2649.95, 2650.05);
-    expect(Math.abs(bodyPct(quiet))).toBeLessThan(0.00012);
-    expect(rangePct(quiet)).toBeLessThan(0.00022);
+    expect(Math.abs(bodyPct(quiet))).toBeLessThan(MOVE);
+    expect(rangePct(quiet)).toBeLessThan(MOVE_RANGE);
   });
 
-  it('percent bands have gaps — compress abs < expand abs with dead zone between', () => {
-    // Documented contract: COMPRESS_ABS 0.010% vs EXPAND_ABS 0.040%
-    expect(0.0001).toBeLessThan(0.0004);
-    expect(0.0004 - 0.0001).toBeGreaterThanOrEqual(0.00025);
-    // pullback against > trend enter so soft up-tick ≠ pullback flip
-    expect(0.00028).toBeGreaterThan(0.00022);
+  it('percent bands have gaps — shared ladder compress < move < enter < expand', () => {
+    expect(COMPRESS_ABS).toBeLessThan(MOVE);
+    expect(EXPAND_ABS).toBeGreaterThan(TREND_ENTER);
+    expect(PULLBACK).toBeGreaterThan(TREND_ENTER);
+    expect(TREND_STAY).toBeGreaterThan(MOVE);
   });
 });

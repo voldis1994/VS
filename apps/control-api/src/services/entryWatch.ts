@@ -10,11 +10,12 @@ import {
   sameDirLockLeftSec,
   sameDirectionBlocked,
 } from './flipFilter.js';
+import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
 
-const DIP = -0.0001;
-const RALLY = 0.0001;
-const MOVING_BODY = 0.0001;
-const MOVING_RANGE = 0.00018;
+const DIP = ENTRY_DIP;
+const RALLY = ENTRY_RALLY;
+const MOVING_BODY = MOVE;
+const MOVING_RANGE = MOVE_RANGE;
 
 export type EntryWatchStatus =
   | 'STOPPED'
