@@ -101,6 +101,41 @@ export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
   return bars;
 }
 
+/**
+ * Expand Capital MINUTE candles into synthetic 10s bars (6 per minute) so a 30m zone
+ * can be seeded — Capital SECOND max (~50) cannot fill ZONE_BARS=180.
+ *
+ * Do NOT copy full minute O/H/L/C onto every 10s bar (that looks like 1m EXPANSION).
+ * Interpolate the body path; park minute hi/lo on the mid bucket so zone extremes survive.
+ */
+export function expandMinutesToTen(minutes: CapitalOhlc[], endMs = Date.now()): TenSecBar[] {
+  if (!minutes.length) return [];
+  const bars: TenSecBar[] = [];
+  // Align to 10s buckets so seed timeline matches live updateTenSecondOhlc
+  const alignedEnd = Math.floor(endMs / 10_000) * 10_000;
+  const startMs = alignedEnd - minutes.length * 60_000;
+  for (let i = 0; i < minutes.length; i++) {
+    const m = minutes[i]!;
+    const minuteStart = startMs + i * 60_000;
+    for (let k = 0; k < 6; k++) {
+      const o = m.open + (m.close - m.open) * (k / 6);
+      const c = m.open + (m.close - m.open) * ((k + 1) / 6);
+      const carryExt = k === 2;
+      const high = carryExt ? Math.max(m.high, o, c) : Math.max(o, c);
+      const low = carryExt ? Math.min(m.low, o, c) : Math.min(o, c);
+      bars.push({
+        open_time_ms: minuteStart + k * 10_000,
+        open: o,
+        high,
+        low,
+        close: c,
+        ticks: 1,
+      });
+    }
+  }
+  return bars;
+}
+
 export function decideFromClosed10s(
   bar: TenSecBar
 ): { direction: 'BUY' | 'SELL'; reason: string } | null {

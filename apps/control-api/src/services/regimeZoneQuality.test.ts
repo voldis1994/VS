@@ -8,6 +8,7 @@ import {
   observeClosedBars,
   resetRegimeBook,
   stabilizeRegime,
+  MIN_BARS_FOR_ZONE,
   type RegimeName,
 } from './regimes.js';
 import {
@@ -20,7 +21,7 @@ import {
   TREND_STAY,
 } from './regimeBands.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import { bodyPct, expandMinutesToTen, rangePct } from './tenSecondOhlc.js';
 
 function bar(open: number, high: number, low: number, close: number, i = 0): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
@@ -34,6 +35,15 @@ function path(closes: number[], startI = 0): TenSecBar[] {
     const lo = Math.min(prev, c) - 0.15;
     return bar(prev, hi, lo, c, startI + i);
   });
+}
+
+function withFloor(signal: number[]): number[] {
+  const base = signal[0] ?? 2650;
+  // Full floor then signal — observe needs bars after thin-book gate for dwell/confirm
+  const pad = Array.from({ length: MIN_BARS_FOR_ZONE }, (_, i) =>
+    base + ((i % 5) - 2) * 0.04
+  );
+  return [...pad, ...signal];
 }
 
 function feed(epic: string, bars: TenSecBar[], accountId = 1): RegimeName[] {
@@ -77,8 +87,10 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
   });
 
   it('persistent rally → TREND_UP (stabilized), not 10s flicker through catalog', () => {
-    // Steps ≥ TREND_ENTER (~0.038% ≈ 1.0 pt at 2640) so enter-band fires
-    const closes = [2640, 2641.1, 2642.3, 2643.5, 2644.8, 2646.1, 2647.4, 2648.8, 2650.2, 2651.6];
+    // Floor + steps ≥ TREND_ENTER so enter-band fires after zone warmup
+    const closes = withFloor([
+      2640, 2641.1, 2642.3, 2643.5, 2644.8, 2646.1, 2647.4, 2648.8, 2650.2, 2651.6,
+    ]);
     const seq = feed('GOLD', path(closes), 2);
     const unique = new Set(seq);
     expect(unique.size).toBeLessThanOrEqual(4);
@@ -87,19 +99,61 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     expect(afterTrend.some((r) => r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN')).toBe(false);
   });
 
+  it('MINUTE expand fills ~30m zone seed (6×10s per minute)', () => {
+    const mins = Array.from({ length: 30 }, (_, i) => ({
+      open: 2650 + i * 0.1,
+      high: 2650 + i * 0.1 + 0.2,
+      low: 2650 + i * 0.1 - 0.1,
+      close: 2650 + i * 0.1 + 0.05,
+    }));
+    const bars = expandMinutesToTen(mins, 1_700_000_000_000);
+    expect(bars.length).toBe(180);
+    expect(bars.length).toBeGreaterThanOrEqual(MIN_BARS_FOR_ZONE);
+  });
+
   it('pullback inside uptrend zone stays out of DOWN family', () => {
-    const up = [2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647];
+    const up = withFloor([2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647]);
     feed('GOLD', path(up), 3);
     const dip = path(
       [2647, 2646.2, 2645.5, 2645.2, 2645.0, 2645.4, 2646.4, 2647.2],
       up.length
     );
     const seq = feed('GOLD', dip, 3);
-    // May label PULLBACK, stay TREND_UP, or soften to RANGE — must not flip to sell family
     expect(seq.some((r) => r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN')).toBe(false);
     expect(seq[seq.length - 1]).toMatch(
       /TREND_UP|PULLBACK_UPTREND|RANGE|COMPRESSION|EXPANSION/
     );
+  });
+
+  it('quality scorecard: majority of intended scenarios land in expected family', () => {
+    type Case = { name: string; closes: number[]; expectFamily: RegExp };
+    const cases: Case[] = [
+      {
+        name: 'rally',
+        closes: withFloor([2600, 2601, 2602.2, 2603.5, 2604.8, 2606, 2607.2, 2608.5]),
+        expectFamily: /TREND_UP|BREAKOUT_UP|EXPANSION|PULLBACK_UPTREND/,
+      },
+      {
+        name: 'selloff',
+        closes: withFloor([2608, 2607, 2605.8, 2604.5, 2603.2, 2602, 2600.8, 2599.5]),
+        expectFamily: /TREND_DOWN|BREAKOUT_DOWN|EXPANSION|PULLBACK_DOWNTREND/,
+      },
+      {
+        name: 'range',
+        closes: withFloor([
+          2650, 2650.4, 2649.7, 2650.3, 2649.8, 2650.2, 2649.9, 2650.1, 2650.0, 2650.15,
+        ]),
+        expectFamily: /RANGE|COMPRESSION/,
+      },
+    ];
+    let hit = 0;
+    for (const c of cases) {
+      resetRegimeBook();
+      const seq = feed(`G-${c.name}`, path(c.closes), hit + 10);
+      const end = seq[seq.length - 1]!;
+      if (c.expectFamily.test(end)) hit += 1;
+    }
+    expect(hit).toBeGreaterThanOrEqual(2);
   });
 
   it('dwell+confirm: soft CHOP noise does not flip every bar', () => {
@@ -130,7 +184,7 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
 
   it('quiet structural pierce out of chop → BREAKOUT_UP (not sticky RANGE)', () => {
     const closes: number[] = [];
-    for (let i = 0; i < 16; i++) closes.push(2650 + (i % 3) * 0.15);
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) closes.push(2650 + (i % 3) * 0.15);
     const bars = path(closes);
     const zonePrior = bars.slice(0, -1);
     const hi = Math.max(...zonePrior.map((b) => b.high));
@@ -147,7 +201,7 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
   it('raw classify uses zone hi/lo (not last micro-candle only)', () => {
     // Build a clear zone then one quiet bar mid-zone
     const closes: number[] = [];
-    for (let i = 0; i < 16; i++) closes.push(2650 + Math.sin(i) * 0.8);
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) closes.push(2650 + Math.sin(i) * 0.8);
     const bars = path(closes);
     const last = bars[bars.length - 1]!;
     const zonePrior = bars.slice(-180, -1);
@@ -161,41 +215,12 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
   });
 
   it('ultra-tight mid-zone → COMPRESSION; mild quiet → RANGE (no starve)', () => {
-    const wide = path([2650, 2651, 2650.2, 2651.1, 2650.4, 2650.9, 2650.5, 2650.8]);
+    const wideCloses = withFloor([2650, 2651, 2650.2, 2651.1, 2650.4, 2650.9, 2650.5, 2650.8]);
+    const wide = path(wideCloses);
     // Last bar extremely tight near mid
     const tight = bar(2650.6, 2650.62, 2650.58, 2650.6, wide.length);
     const raw = classifyRegime([...wide, tight], 'RANGE');
     expect(['COMPRESSION', 'RANGE']).toContain(raw);
-  });
-
-  it('quality scorecard: majority of intended scenarios land in expected family', () => {
-    type Case = { name: string; closes: number[]; expectFamily: RegExp };
-    const cases: Case[] = [
-      {
-        name: 'rally',
-        closes: [2600, 2601, 2602.2, 2603.5, 2604.8, 2606, 2607.2, 2608.5],
-        expectFamily: /TREND_UP|BREAKOUT_UP|EXPANSION|PULLBACK_UPTREND/,
-      },
-      {
-        name: 'selloff',
-        closes: [2608, 2607, 2605.8, 2604.5, 2603.2, 2602, 2600.8, 2599.5],
-        expectFamily: /TREND_DOWN|BREAKOUT_DOWN|EXPANSION|PULLBACK_DOWNTREND/,
-      },
-      {
-        name: 'range',
-        closes: [2650, 2650.4, 2649.7, 2650.3, 2649.8, 2650.2, 2649.9, 2650.1, 2650.0, 2650.15],
-        expectFamily: /RANGE|COMPRESSION/,
-      },
-    ];
-    let hit = 0;
-    for (const c of cases) {
-      resetRegimeBook();
-      const seq = feed(`G-${c.name}`, path(c.closes), hit + 10);
-      const end = seq[seq.length - 1]!;
-      if (c.expectFamily.test(end)) hit += 1;
-    }
-    // At least 2/3 scenarios must land in the intended family
-    expect(hit).toBeGreaterThanOrEqual(2);
   });
 
   it('body/range scales: Gold quiet bar stays below MOVE', () => {

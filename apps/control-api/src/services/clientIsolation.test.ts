@@ -5,19 +5,30 @@ import { isPublicUnauthedPath } from '../middleware/auth.js';
 describe('multi-client isolation invariants', () => {
   it('STOP kills entry brains only — manage-only open trade on same account survives', () => {
     const robots = [
-      { id: 'a-entry', account_id: 1, running: true, entry_enabled: true, open_side: null },
-      { id: 'a-manage', account_id: 1, running: true, entry_enabled: false, open_side: 'BUY' as const },
-      { id: 'b-manage', account_id: 2, running: true, entry_enabled: false, open_side: 'SELL' as const },
+      { id: 'a-entry', account_id: 1, running: true, entry_enabled: true, open_side: null, deal_id: null, mode: 'ENTRY' },
+      { id: 'a-manage', account_id: 1, running: true, entry_enabled: false, open_side: 'BUY' as const, deal_id: 'd1', mode: 'MANAGE' },
+      { id: 'a-ghost-manage', account_id: 1, running: true, entry_enabled: false, open_side: null, deal_id: null, mode: 'MANAGE' },
+      { id: 'a-flat-manage', account_id: 1, running: true, entry_enabled: false, open_side: null, deal_id: null, mode: 'FLAT' },
+      { id: 'b-manage', account_id: 2, running: true, entry_enabled: false, open_side: 'SELL' as const, deal_id: 'd2', mode: 'MANAGE' },
     ];
     const stopEntry = robots
       .filter((s) => s.account_id === 1 && s.running && s.entry_enabled)
       .map((s) => s.id);
     const stopFlat = robots
-      .filter((s) => s.account_id === 1 && s.running && !s.entry_enabled && !s.open_side)
+      .filter(
+        (s) =>
+          s.account_id === 1 &&
+          s.running &&
+          !s.entry_enabled &&
+          !s.open_side &&
+          !s.deal_id &&
+          s.mode !== 'MANAGE'
+      )
       .map((s) => s.id);
     expect(stopEntry).toEqual(['a-entry']);
-    expect(stopFlat).toEqual([]);
+    expect(stopFlat).toEqual(['a-flat-manage']);
     expect(robots.find((s) => s.id === 'a-manage')?.open_side).toBe('BUY');
+    expect(robots.find((s) => s.id === 'a-ghost-manage')?.mode).toBe('MANAGE');
     expect(robots.find((s) => s.id === 'b-manage')?.running).toBe(true);
   });
 

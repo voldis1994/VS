@@ -20,6 +20,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
+  MIN_BARS_FOR_ZONE,
   type RegimeName,
 } from './regimes.js';
 import {
@@ -45,8 +46,8 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
-  aggregateSecondsToTen,
   emptyTenSecState,
+  expandMinutesToTen,
   publicOhlc10s,
   updateTenSecondOhlc,
   type TenSecBar,
@@ -352,13 +353,8 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   for (const bar of feed) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = s.closedBars[s.closedBars.length - 1];
-    const same =
-      last &&
-      Math.abs(last.open - bar.open) < 1e-9 &&
-      Math.abs(last.close - bar.close) < 1e-9 &&
-      Math.abs(last.high - bar.high) < 1e-9 &&
-      Math.abs(last.low - bar.low) < 1e-9;
-    if (same) continue;
+    // Time-bucket dedupe — MINUTE→10s seed repeats OHLC 6×; those must all count
+    if (last && last.open_time_ms === bar.open_time_ms) continue;
     s.closedBars.push(bar);
   }
   if (s.closedBars.length > 216) s.closedBars.splice(0, s.closedBars.length - 216);
@@ -385,7 +381,9 @@ function prevClosedCapitalMinute(
 }
 
 function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
-  return `${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+  // Wall-minute bucket so two flat identical OHLC minutes still re-arm Peak/continue
+  const bucket = Math.floor(Date.now() / 60_000);
+  return `${bucket}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
 }
 
 function clearTradeState(s: Internal) {
@@ -548,11 +546,23 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
+/** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
 export async function stopEntryRobotsForAccount(accountId: number): Promise<void> {
   for (const s of [...sessions.values()]) {
     if (s.account_id === accountId && s.running && s.entry_enabled) {
-      await stopRobotSession(s.id);
+      if (s.open_side || s.deal_id) {
+        s.entry_enabled = false;
+        s.pending_entry = null;
+        pushTick(s, {
+          phase: 'INFO',
+          bid: null,
+          ask: null,
+          mid: s.last_mid,
+          detail: 'ENTRY brain OFF · open trade kept · MANAGE-ONLY (HardInv/Peak live)',
+        });
+      } else {
+        await stopRobotSession(s.id);
+      }
     }
   }
 }
@@ -560,7 +570,15 @@ export async function stopEntryRobotsForAccount(accountId: number): Promise<void
 /** Stop manage-only robots that are already flat (client STOP, no open trade). */
 export async function stopFlatManageRobotsForAccount(accountId: number): Promise<void> {
   for (const s of [...sessions.values()]) {
-    if (s.account_id === accountId && s.running && !s.entry_enabled && !s.open_side) {
+    if (
+      s.account_id === accountId &&
+      s.running &&
+      !s.entry_enabled &&
+      !s.open_side &&
+      !s.deal_id &&
+      // MANAGE mode may be local-flat while broker still open (attach lag) — keep HardInv
+      s.mode !== 'MANAGE'
+    ) {
       await stopRobotSession(s.id);
     }
   }
@@ -569,6 +587,19 @@ export async function stopFlatManageRobotsForAccount(accountId: number): Promise
 export async function stopRobotSession(id: string): Promise<RobotSession | null> {
   const s = sessions.get(id);
   if (!s) return null;
+  // Open trade → demote to manage-only; never clear HardInv timer
+  if (s.open_side || s.deal_id) {
+    s.entry_enabled = false;
+    s.pending_entry = null;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: null,
+      ask: null,
+      mid: s.last_mid,
+      detail: 'STOP entry · open trade kept · MANAGE-ONLY (HardInv/Peak live)',
+    });
+    return publicSession(s);
+  }
   s.running = false;
   s.trading_enabled = false;
   s.pending_entry = null;
@@ -1439,6 +1470,12 @@ async function robotCycleLocked(s: Internal) {
       return;
     }
     if (positionsUncertain) {
+      // Still expire stale pending on bar rollover — don't keep a stuck setup across bars
+      const pendBar = s.ohlcState.last_closed;
+      const pendKey = pendBar ? closedBarKey(pendBar) : '';
+      if (s.pending_entry && s.pending_entry.bar_key !== pendKey) {
+        s.pending_entry = null;
+      }
       refreshEntryWatch(s, {
         status_override: 'WAITING_TRIGGER',
         last_reason: 'Position list fail — no entry until sync OK',
@@ -1492,35 +1529,35 @@ async function robotCycleLocked(s: Internal) {
       return;
     }
 
-    // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
-    // Never clear a live tick just_closed — that race dropped the only entry window each bar.
-    // Never ARM just_closed from SECOND history — only live 10s OHLC closes may trigger entry.
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    // Seed 30m zone from MINUTE history (SECOND max ~50s cannot fill ZONE_BARS=180).
+    // Only while book is thin — never append Capital history after live 10s closes (order corruption).
+    if (
+      s.closedBars.length < MIN_BARS_FOR_ZONE &&
+      !multiFeedOwnsOhlc(s.multiFeed) &&
+      Date.now() - s.last_second_fetch_ms >= 15_000
+    ) {
       s.last_second_fetch_ms = Date.now();
-      const tickJustClosed = s.ohlcState.just_closed;
-      const tickLastClosed = s.ohlcState.last_closed;
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
-      if (sec.ok && sec.candles.length >= 10) {
-        const bars = aggregateSecondsToTen(sec.candles);
+      const mins = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', 40);
+      if (mins.ok && mins.candles.length >= 10) {
+        const bars = expandMinutesToTen(mins.candles);
+        applyRobotRegime(s, bars);
         const last = bars[bars.length - 1];
-        if (last) {
-          const key = closedBarKey(last);
-          const isNew = key !== s.last_closed_bar_key;
-          if (tickJustClosed && tickLastClosed) {
-            // Keep live close flag for entry this cycle; still absorb Capital history for regime
-            if (isNew) s.last_closed_bar_key = key;
-            applyRobotRegime(s, bars.filter((b) => b !== last));
-          } else {
-            s.ohlcState = {
-              forming: s.ohlcState.forming,
-              last_closed: last,
-              just_closed: false,
-            };
-            if (isNew) s.last_closed_bar_key = key;
-            s.ohlc_10s = publicOhlc10s(s.ohlcState);
-            applyRobotRegime(s, bars);
-          }
+        if (last && !s.ohlcState.last_closed) {
+          s.ohlcState = {
+            forming: s.ohlcState.forming,
+            last_closed: last,
+            just_closed: false,
+          };
+          s.last_closed_bar_key = closedBarKey(last);
+          s.ohlc_10s = publicOhlc10s(s.ohlcState);
         }
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `ZONE SEED · ${mins.candles.length}m → ${bars.length}×10s · book=${s.closedBars.length} · regime=${s.regime}`,
+        });
       }
     }
 
