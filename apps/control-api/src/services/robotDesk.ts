@@ -21,6 +21,7 @@ import {
   normalizeRegime,
   REGIME_NAMES,
   MIN_BARS_FOR_ZONE,
+  clearRegimeBookFor,
   type RegimeName,
 } from './regimes.js';
 import {
@@ -39,7 +40,6 @@ import {
 import { buildEntryWatch, type EntryWatch } from './entryWatch.js';
 import {
   allowEntryFromFeeds,
-  multiFeedOwnsOhlc,
   pickOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
@@ -156,6 +156,8 @@ type Internal = RobotSession & {
   exit_deal_fails: number;
   /** Prevent overlapping robotCycle (Capital awaits > cadence) */
   cycle_busy: boolean;
+  /** Wall clock when cycle_busy became true — unstick hung Capital awaits */
+  cycle_busy_since: number;
   /** Retry entry after failed order on same closed 10s bar */
   pending_entry: {
     direction: 'BUY' | 'SELL';
@@ -168,6 +170,9 @@ type Internal = RobotSession & {
 const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
+/** If a Capital await hangs, force-clear so the robot keeps polling */
+const CYCLE_BUSY_STALE_MS = 60_000;
+const ZONE_SEED_THROTTLE_MS = 15_000;
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
@@ -183,9 +188,34 @@ function setRobotCadence(s: Internal, ms: number) {
   if (s.timer) clearInterval(s.timer);
   s.cadence_ms = ms;
   s.timer = setInterval(() => {
-    if (s.cycle_busy) return;
+    if (s.cycle_busy) {
+      if (s.cycle_busy_since > 0 && Date.now() - s.cycle_busy_since > CYCLE_BUSY_STALE_MS) {
+        s.cycle_busy = false;
+        s.cycle_busy_since = 0;
+        pushTick(s, {
+          phase: 'ERROR',
+          bid: null,
+          ask: null,
+          mid: null,
+          detail: `CYCLE UNSTUCK — previous tick hung >${CYCLE_BUSY_STALE_MS / 1000}s (Capital await)`,
+        });
+      } else {
+        return;
+      }
+    }
     void robotCycle(s);
   }, ms);
+}
+
+/** Whether to attempt Capital MINUTE→10s zone seed (multi-feed never fills history). */
+export function shouldAttemptZoneSeed(
+  closedBarCount: number,
+  lastSeedAttemptMs: number,
+  nowMs = Date.now(),
+  throttleMs = ZONE_SEED_THROTTLE_MS
+): boolean {
+  if (closedBarCount >= MIN_BARS_FOR_ZONE) return false;
+  return nowMs - lastSeedAttemptMs >= throttleMs;
 }
 
 const sessions = new Map<string, Internal>();
@@ -265,6 +295,7 @@ function publicSession(s: Internal): RobotSession {
     last_1m_profit_exit_key: _1m,
     exit_deal_fails: _edf,
     cycle_busy: _busy,
+    cycle_busy_since: _busySince,
     pending_entry: _pend,
     ...rest
   } = s;
@@ -368,6 +399,72 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   // Single path: zone + dwell/confirm stabilize via account-scoped book
   const snap = observeClosedBars(s.epic, feed, s.display_name, s.account_id);
   s.regime = snap.current;
+}
+
+/**
+ * Fill thin 30m zone from Capital MINUTE history.
+ * Multi-feed only supplies live mids — never block seed on multiFeedOwnsOhlc.
+ * If a few live 10s bars arrived first, replace them with the richer seed (clear regime book).
+ */
+async function seedZoneFromMinuteHistory(
+  session: CapitalSession,
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null }
+): Promise<void> {
+  if (!shouldAttemptZoneSeed(s.closedBars.length, s.last_second_fetch_ms)) return;
+  s.last_second_fetch_ms = Date.now();
+  const mins = await fetchCapitalPrices(session, s.epic, 'MINUTE', 40);
+  if (!mins.ok || mins.candles.length < 2) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ZONE SEED WAIT · book=${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · ${
+        mins.detail || 'no minute candles'
+      } · live 10s still building`,
+    });
+    refreshEntryWatch(s, {
+      status_override: 'SEEDING',
+      last_reason: `Lasa tirgu · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · seed: ${mins.detail || 'fail'}`,
+    });
+    return;
+  }
+  const bars = expandMinutesToTen(mins.candles);
+  if (bars.length <= s.closedBars.length) {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ZONE SEED skip · seed ${bars.length} ≤ book ${s.closedBars.length}`,
+    });
+    return;
+  }
+  // Replace thin live book so minute history is not appended after newer 10s bars
+  clearRegimeBookFor(s.epic, s.account_id);
+  s.closedBars = [];
+  applyRobotRegime(s, bars);
+  const last = bars[bars.length - 1];
+  if (last) {
+    s.ohlcState = {
+      forming: s.ohlcState.forming,
+      last_closed: last,
+      just_closed: false,
+    };
+    s.last_closed_bar_key = closedBarKey(last);
+    s.ohlc_10s = publicOhlc10s(s.ohlcState);
+  }
+  refreshEntryWatch(s, {
+    last_reason: `ZONE SEED · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} sveces · regime=${s.regime}`,
+  });
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `ZONE SEED · ${mins.candles.length}m → ${bars.length}×10s · book=${s.closedBars.length} · regime=${s.regime}`,
+  });
 }
 
 /** Last fully closed Capital 1m (not the forming minute). */
@@ -624,6 +721,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   // Drain in-flight Capital create/close so restart cannot race a second entry
   await waitCycleIdle(s);
   s.cycle_busy = false;
+  s.cycle_busy_since = 0;
   pushTick(s, {
     phase: 'INFO',
     bid: null,
@@ -1122,10 +1220,12 @@ async function enterTradeLocked(
 async function robotCycle(s: Internal) {
   if (!s.running || s.cycle_busy) return;
   s.cycle_busy = true;
+  s.cycle_busy_since = Date.now();
   try {
     await robotCycleLocked(s);
   } finally {
     s.cycle_busy = false;
+    s.cycle_busy_since = 0;
   }
 }
 
@@ -1264,9 +1364,19 @@ async function robotCycleLocked(s: Internal) {
         return;
       }
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
+      // Warm the 30m zone from history while closed — so TRADEABLE does not start at 0/90
+      try {
+        await seedZoneFromMinuteHistory(session, s, quote);
+      } catch {
+        /* park tick below still runs */
+      }
       const now = Date.now();
       if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
         s.last_market_closed_tick_ms = now;
+        refreshEntryWatch(s, {
+          status_override: 'SEEDING',
+          last_reason: `MARKET ${quote.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+        });
         pushTick(s, {
           phase: 'WAIT',
           bid: quote.bid,
@@ -1274,7 +1384,7 @@ async function robotCycleLocked(s: Internal) {
           mid: quote.mid,
           detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
-          }s until TRADEABLE`,
+          }s until TRADEABLE · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
       }
       return;
@@ -1310,6 +1420,9 @@ async function robotCycleLocked(s: Internal) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
     }
+
+    // Seed 30m zone early — before manage-only / trading-off returns (multi-feed never fills history)
+    await seedZoneFromMinuteHistory(session, s, quote);
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(session);
@@ -1367,12 +1480,15 @@ async function robotCycleLocked(s: Internal) {
 
     // Trading OFF: still manage/exit open trades; block only new entries
     if (!s.trading_enabled && !(s.open_side || brokerOpen)) {
+      refreshEntryWatch(s, {
+        last_reason: `Trading OFF · lasa · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+      });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'Trading OFF — reading only',
+        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${s.regime}`,
       });
       return;
     }
@@ -1565,46 +1681,18 @@ async function robotCycleLocked(s: Internal) {
     }
 
     if (quote.mid == null) {
+      refreshEntryWatch(s, {
+        status_override: 'SEEDING',
+        last_reason: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+      });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'ENTRY · no mid — wait quote (silent skip removed)',
+        detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
       });
       return;
-    }
-
-    // Seed 30m zone from MINUTE history (SECOND max ~50s cannot fill ZONE_BARS=180).
-    // Only while book is thin — never append Capital history after live 10s closes (order corruption).
-    if (
-      s.closedBars.length < MIN_BARS_FOR_ZONE &&
-      !multiFeedOwnsOhlc(s.multiFeed) &&
-      Date.now() - s.last_second_fetch_ms >= 15_000
-    ) {
-      s.last_second_fetch_ms = Date.now();
-      const mins = await fetchCapitalPrices(session, s.epic, 'MINUTE', 40);
-      if (mins.ok && mins.candles.length >= 10) {
-        const bars = expandMinutesToTen(mins.candles);
-        applyRobotRegime(s, bars);
-        const last = bars[bars.length - 1];
-        if (last && !s.ohlcState.last_closed) {
-          s.ohlcState = {
-            forming: s.ohlcState.forming,
-            last_closed: last,
-            just_closed: false,
-          };
-          s.last_closed_bar_key = closedBarKey(last);
-          s.ohlc_10s = publicOhlc10s(s.ohlcState);
-        }
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `ZONE SEED · ${mins.candles.length}m → ${bars.length}×10s · book=${s.closedBars.length} · regime=${s.regime}`,
-        });
-      }
     }
 
     // Soft advisory only — public feeds must never freeze Capital entries
@@ -1913,6 +2001,7 @@ export async function startRobotSession(input: {
     entry_watch: null,
     exit_deal_fails: 0,
     cycle_busy: false,
+    cycle_busy_since: 0,
     pending_entry: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
