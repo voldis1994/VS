@@ -184,9 +184,15 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
       setMsg(`Started · ${name} · ${selectedMarket.epic}`);
       return;
     }
-    window.location.href = `/robot?account_id=${accountId}&epic=${encodeURIComponent(
-      selectedMarket.epic,
-    )}&lot=${lot}&name=${encodeURIComponent(name)}`;
+    window.open(
+      `/robot/unit?account_id=${accountId}&epic=${encodeURIComponent(
+        selectedMarket.epic,
+      )}&lot=${lot}&name=${encodeURIComponent(name)}`,
+      `robot_${accountId}_${selectedMarket.epic}`,
+      'noopener,noreferrer',
+    );
+    setBusy(false);
+    setMsg(`Unit page · ${name}`);
   };
 
   const rootClass =
