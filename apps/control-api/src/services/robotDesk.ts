@@ -165,6 +165,11 @@ type Internal = RobotSession & {
     setup: string | null;
     bar_key: string;
   } | null;
+  /**
+   * Live 10s close waiting for entry decide.
+   * Survives zone-seed / position-list races that clear just_closed before ORDER.
+   */
+  entry_close_latch: TenSecBar | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -411,6 +416,9 @@ async function seedZoneFromMinuteHistory(
   s: Internal,
   quote: { bid: number | null; ask: number | null; mid: number | null }
 ): Promise<void> {
+  // Never steal the only entry window — zone seed used to force just_closed=false
+  // on the close tick (regression of the SECOND-seed race fix).
+  if (s.ohlcState.just_closed) return;
   if (!shouldAttemptZoneSeed(s.closedBars.length, s.last_second_fetch_ms)) return;
   s.last_second_fetch_ms = Date.now();
   const mins = await fetchCapitalPrices(session, s.epic, 'MINUTE', 40);
@@ -713,6 +721,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   s.running = false;
   s.trading_enabled = false;
   s.pending_entry = null;
+  s.entry_close_latch = null;
   s.stopped_at = new Date().toISOString();
   if (s.timer) {
     clearInterval(s.timer);
@@ -1417,6 +1426,8 @@ async function robotCycleLocked(s: Internal) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        // Latch before seed / position-list — those paths used to drop the only entry window
+        s.entry_close_latch = s.ohlcState.last_closed;
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
     }
@@ -1622,6 +1633,7 @@ async function robotCycleLocked(s: Internal) {
 
     // ——— FLAT: entry only after close (and only if entry_enabled) ———
     if (!s.trading_enabled) {
+      s.entry_close_latch = null;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1638,6 +1650,7 @@ async function robotCycleLocked(s: Internal) {
       if (s.pending_entry && s.pending_entry.bar_key !== pendKey) {
         s.pending_entry = null;
       }
+      // Keep entry_close_latch — retry decide next tick when list OK
       refreshEntryWatch(s, {
         status_override: 'WAITING_TRIGGER',
         last_reason: 'Position list fail — no entry until sync OK',
@@ -1645,6 +1658,7 @@ async function robotCycleLocked(s: Internal) {
       return;
     }
     if (!s.entry_enabled) {
+      s.entry_close_latch = null;
       s.mode = s.open_side ? 'MANAGE' : 'FLAT';
       refreshEntryWatch(s, {
         status_override: 'MANAGE_ONLY',
@@ -1709,9 +1723,24 @@ async function robotCycleLocked(s: Internal) {
     }
 
     const bar = s.ohlcState.last_closed;
+    const latchRaw = s.entry_close_latch;
+    // Drop latch if the close is older than ~1.5× bar — avoid stale arms after Capital gaps
+    if (latchRaw && Date.now() - latchRaw.open_time_ms > 15_000) {
+      s.entry_close_latch = null;
+    }
+    const latch = s.entry_close_latch;
+    /** Prefer the latched live close when seed replaced last_closed */
+    const entryBar =
+      latch &&
+      (!bar ||
+        closedBarKey(latch) === closedBarKey(bar) ||
+        s.ohlcState.just_closed ||
+        latch.open_time_ms >= (bar.open_time_ms || 0))
+        ? latch
+        : bar;
     const ohlc = s.ohlc_10s;
-    const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+    const ohlcLine = entryBar
+      ? `10s O=${entryBar.open.toFixed(2)} H=${entryBar.high.toFixed(2)} L=${entryBar.low.toFixed(2)} C=${entryBar.close.toFixed(2)} ${s.regime} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -1719,13 +1748,20 @@ async function robotCycleLocked(s: Internal) {
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
-    const barKey = bar ? closedBarKey(bar) : '';
+    const barKey = entryBar ? closedBarKey(entryBar) : '';
     if (s.pending_entry && s.pending_entry.bar_key !== barKey) {
       s.pending_entry = null;
     }
 
-    if (s.ohlcState.just_closed && bar) {
+    const onCloseTick = Boolean(
+      entryBar &&
+        (s.ohlcState.just_closed ||
+          (latch && closedBarKey(latch) === closedBarKey(entryBar)))
+    );
+
+    if (onCloseTick && entryBar) {
       if (!regimeAllowedForEntry(s.regime)) {
+        s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
           last_reason: `${s.regime} OFF kalibrācijā`,
@@ -1738,12 +1774,13 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        const sig = decideEntryFrom10sRegime(bar, s.regime);
+        const sig = decideEntryFrom10sRegime(entryBar, s.regime);
         if (sig) {
           if (sameDirectionBlocked(sig.direction, s.last_closed_side, s.closed_at_ms)) {
             const need = requiredFlipSide(s.last_closed_side, s.closed_at_ms);
             const left = sameDirLockLeftSec(s.closed_at_ms);
             s.pending_entry = null;
+            s.entry_close_latch = null;
             refreshEntryWatch(s, {
               status_override: 'FLIP_FILTER',
               last_reason: flipFilterReason(sig.direction, s.last_closed_side!, left),
@@ -1759,6 +1796,7 @@ async function robotCycleLocked(s: Internal) {
             direction = sig.direction;
             setupType = sig.setup;
             reason = sig.reason;
+            s.entry_close_latch = null;
             refreshEntryWatch(s, {
               status_override: 'ARMED',
               last_reason: sig.reason,
@@ -1772,6 +1810,7 @@ async function robotCycleLocked(s: Internal) {
             });
           }
         } else {
+          s.entry_close_latch = null;
           refreshEntryWatch(s, {
             status_override: 'WAITING_TRIGGER',
             last_reason: `${s.regime} · trigeris nav · nākamā svece`,
@@ -1785,7 +1824,7 @@ async function robotCycleLocked(s: Internal) {
           });
         }
       }
-    } else if (s.pending_entry && s.pending_entry.bar_key === barKey && bar) {
+    } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
       if (!regimeAllowedForEntry(s.regime)) {
         s.pending_entry = null;
@@ -1828,7 +1867,7 @@ async function robotCycleLocked(s: Internal) {
       }
     } else {
       refreshEntryWatch(s, {
-        status_override: bar ? 'FORMING' : 'SEEDING',
+        status_override: entryBar ? 'FORMING' : 'SEEDING',
       });
       pushTick(s, {
         phase: 'WAIT',
@@ -1847,7 +1886,7 @@ async function robotCycleLocked(s: Internal) {
       direction,
       reason,
       setup: setupType,
-      bar_key: barKey || closedBarKey(bar!),
+      bar_key: barKey || (entryBar ? closedBarKey(entryBar) : ''),
     };
     await enterTrade(session, s, direction, quote, reason, setupType);
   } catch (err) {
@@ -2015,6 +2054,7 @@ export async function startRobotSession(input: {
     cycle_busy: false,
     cycle_busy_since: 0,
     pending_entry: null,
+    entry_close_latch: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
