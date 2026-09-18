@@ -265,10 +265,21 @@ describe('Idempotency', () => {
     });
 
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
+    expect(withCapitalAccountSession).toHaveBeenCalled();
+    expect(withCapitalAccountSession.mock.calls[0]![0]).toMatchObject({
+      requireAccountId: true,
+      capitalAccountId: 'XYZ',
+    });
     const opened = emitToClient.mock.calls.filter(
       (c: unknown[]) => (c[1] as { type: string }).type === 'trade_opened'
     );
     expect(opened).toHaveLength(1);
+    // SAFETY SL was attached on the real create call
+    expect(createCapitalPosition.mock.calls[0]![1]).toMatchObject({
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      stopLevel: 1995,
+    });
   });
 
   it('concurrent same key → exactly ONE Capital execution', async () => {

@@ -168,7 +168,7 @@ function isRetryableFanoutDetail(detail: string): boolean {
 }
 
 /** Always produce a stable key — missing reader key → 10s bucket hash (retry-safe). */
-function resolveFanoutIdempotencyKey(intent: PipelineIntentInput): string {
+export function resolveFanoutIdempotencyKey(intent: PipelineIntentInput): string {
   const raw = intent.idempotency_key && String(intent.idempotency_key).trim();
   if (raw) return raw.slice(0, 190);
   const epic = String(intent.epic || '').trim().toUpperCase();
