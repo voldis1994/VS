@@ -113,10 +113,40 @@ const books = new Map<string, Book>();
 const ZONE_BARS = 18;
 /** Momentum window */
 const MOM_BARS = 8;
-/** Stay in a regime ≥40s before soft switches (4 × 10s) — was 60s and over-stuck */
-const MIN_DWELL_BARS = 4;
-/** Soft family switches need this many agreeing candidates after dwell */
-const CONFIRM_BARS = 2;
+/** Stay in a regime ≥50s before soft switches — room between % bands to settle */
+const MIN_DWELL_BARS = 5;
+/** Cross-family soft switches need this many agreeing candidates after dwell */
+const CONFIRM_BARS = 3;
+
+/**
+ * Body / range bands as fraction of price (Gold ~2650).
+ * Gaps are intentional: quiet → soft → trend → pullback → reversal must not abut,
+ * so one 10s tick near a boundary cannot flip "into the next percent".
+ *
+ *   quiet      |body| < 0.012%
+ *   soft move  0.012% … 0.022%
+ *   trend enter ≥ 0.022% (stay ≥ 0.010% once already in trend)
+ *   pullback   against ≥ 0.028% (above trend-enter — clear dip, not noise)
+ *   reversal   against ≥ 0.15%
+ *
+ *   compress   range < 0.010% and << avg
+ *   (dead zone 0.010% … 0.040% → RANGE / stick)
+ *   expand     range ≥ 0.040% and >> avg
+ */
+const SIGN_BODY = 0.00012;
+const TREND_ENTER_VEL = 0.00022;
+const TREND_STAY_VEL = 0.0001;
+const PULLBACK_VEL = 0.00028;
+const REVERSAL_VEL = 0.0015;
+const PERSIST_ENTER = 0.5;
+const PERSIST_STAY = 0.28;
+const PERSIST_PULLBACK = 0.22;
+const COMPRESS_AVG_MULT = 0.35;
+const COMPRESS_ABS = 0.0001;
+const EXPAND_AVG_MULT = 1.65;
+const EXPAND_ABS = 0.0004;
+const NEAR_ZONE_MID = 0.28;
+const CLEAR_BREAK_FRAC = 0.25;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -173,6 +203,7 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
 /**
  * Classify from closed 10s OHLC using a wider structure zone (~3m) + shorter momentum.
  * Raw candidate only — live path must run through stabilizeRegime (dwell + confirm).
+ * Enter vs stay thresholds keep hysteresis so borderline % ticks do not flip regimes.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -192,24 +223,33 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const lastRange = rangePct(last);
   const persistWindow = velocities.slice(-6);
   const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
+    persistWindow.map((v) => (v > SIGN_BODY ? 1 : v < -SIGN_BODY ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
-  const compressed = lastRange < avgRange * 0.4 && lastRange < 0.00014;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
+  const inUpFamily = previous === 'TREND_UP' || previous === 'PULLBACK_UPTREND';
+  const inDownFamily = previous === 'TREND_DOWN' || previous === 'PULLBACK_DOWNTREND';
+  // Hysteresis: already-in-trend stays on softer vel/persist; fresh enter needs the higher band
+  const trendingUp = inUpFamily
+    ? persistence > PERSIST_STAY && lastVel > TREND_STAY_VEL
+    : persistence > PERSIST_ENTER && lastVel > TREND_ENTER_VEL;
+  const trendingDown = inDownFamily
+    ? persistence < -PERSIST_STAY && lastVel < -TREND_STAY_VEL
+    : persistence < -PERSIST_ENTER && lastVel < -TREND_ENTER_VEL;
+  const compressed =
+    lastRange < avgRange * COMPRESS_AVG_MULT && lastRange < COMPRESS_ABS;
+  const expanding =
+    lastRange > avgRange * EXPAND_AVG_MULT && lastRange >= EXPAND_ABS;
 
-  // Zone highs/lows — multi-minute structure, not last 7×10s chop
+  // Zone highs/lows — multi-minute structure, not last micro-candle chop
   const hi = Math.max(...zonePrior.map((b) => b.high));
   const lo = Math.min(...zonePrior.map((b) => b.low));
   const zoneMid = (hi + lo) / 2;
   const zoneWidth = Math.max(hi - lo, 1e-9);
   const inRange = last.close <= hi && last.close >= lo;
-  const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < 0.35;
+  const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < NEAR_ZONE_MID;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
-  /** Quiet pierce of a chop zone (≥15% of width) — not a continuation of an existing trend */
+  /** Quiet pierce of a chop zone — not a continuation of an existing trend */
   const fromChop =
     previous === 'RANGE' ||
     previous === 'COMPRESSION' ||
@@ -218,36 +258,68 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     previous === 'EXPANSION' ||
     previous === 'REVERSAL_CANDIDATE';
   const clearBreakUp =
-    fromChop && breakoutUp && (last.close - hi) / zoneWidth >= 0.15;
+    fromChop && breakoutUp && (last.close - hi) / zoneWidth >= CLEAR_BREAK_FRAC;
   const clearBreakDown =
-    fromChop && breakoutDown && (lo - last.close) / zoneWidth >= 0.15;
+    fromChop && breakoutDown && (lo - last.close) / zoneWidth >= CLEAR_BREAK_FRAC;
   const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
+    (previous === 'TREND_UP' &&
+      lastVel < -REVERSAL_VEL &&
+      lastRange > avgRange &&
+      !breakoutDown) ||
+    (previous === 'TREND_DOWN' &&
+      lastVel > REVERSAL_VEL &&
+      lastRange > avgRange &&
+      !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  // Expansion OR clear pierce out of chop — quiet Gold breakouts no longer stick as RANGE
-  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if ((expanding || clearBreakDown) && breakoutDown && (trendingDown || lastVel < 0))
+  if (previous === 'BREAKOUT_UP' && inRange && lastVel < -SIGN_BODY) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > SIGN_BODY) return 'FAILED_BREAKOUT_DOWN';
+  // Expansion OR clear pierce out of chop — needs the expand band (gap above compress)
+  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > TREND_ENTER_VEL))
+    return 'BREAKOUT_UP';
+  if (
+    (expanding || clearBreakDown) &&
+    breakoutDown &&
+    (trendingDown || lastVel < -TREND_ENTER_VEL)
+  )
     return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
 
-  // Pullbacks only inside the parent trend family (zone still respected)
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15 && inRange) {
+  // Pullbacks: against-body must clear PULLBACK_VEL (above trend-enter) so soft noise ≠ pullback
+  if (
+    previous === 'TREND_UP' &&
+    lastVel <= -PULLBACK_VEL &&
+    persistence > PERSIST_PULLBACK &&
+    inRange
+  ) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15 && inRange) {
+  if (
+    previous === 'TREND_DOWN' &&
+    lastVel >= PULLBACK_VEL &&
+    persistence < -PERSIST_PULLBACK &&
+    inRange
+  ) {
     return 'PULLBACK_DOWNTREND';
   }
-  if (previous === 'PULLBACK_UPTREND' && trendingUp) return 'TREND_UP';
-  if (previous === 'PULLBACK_DOWNTREND' && trendingDown) return 'TREND_DOWN';
+  // Resume trend from pullback only on enter-band strength (not stay-band)
+  if (
+    previous === 'PULLBACK_UPTREND' &&
+    persistence > PERSIST_ENTER &&
+    lastVel > TREND_ENTER_VEL
+  )
+    return 'TREND_UP';
+  if (
+    previous === 'PULLBACK_DOWNTREND' &&
+    persistence < -PERSIST_ENTER &&
+    lastVel < -TREND_ENTER_VEL
+  )
+    return 'TREND_DOWN';
 
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
 
-  // Compression only when truly squeezed near zone mid — not every quiet 10s tick
+  // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
   if (inRange) return 'RANGE';
 

@@ -9,9 +9,9 @@ export type RegimeEntry = {
   reason: string;
 };
 
-/** Soft Gold-aware floors — old 0.015%/0.025% starved quiet 10s sessions. */
-const DIP = -0.0001;
-const RALLY = 0.0001;
+/** Soft entry floors — below TREND_ENTER (0.022%) so setups fire inside a stable regime. */
+const DIP = -0.00012;
+const RALLY = 0.00012;
 
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);

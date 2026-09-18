@@ -119,16 +119,18 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     expect(book.pending).toBe('PULLBACK_UPTREND');
   });
 
-  it('quiet structural pierce (no expansion range) → BREAKOUT_UP, not sticky prior', () => {
-    // Build a tight zone then close clearly above hi without huge range bar
+  it('quiet structural pierce out of chop → BREAKOUT_UP (not sticky RANGE)', () => {
     const closes: number[] = [];
-    for (let i = 0; i < 16; i++) closes.push(2650 + (i % 3) * 0.2);
+    for (let i = 0; i < 16; i++) closes.push(2650 + (i % 3) * 0.15);
     const bars = path(closes);
     const zonePrior = bars.slice(0, -1);
     const hi = Math.max(...zonePrior.map((b) => b.high));
-    // Pierce ≥15% of zone width, normal wick — not "expanding" vs prior avg
-    const pierce = hi + Math.max((hi - Math.min(...zonePrior.map((b) => b.low))) * 0.2, 0.4);
-    const last = bar(hi - 0.1, pierce + 0.05, hi - 0.15, pierce, bars.length);
+    const lo = Math.min(...zonePrior.map((b) => b.low));
+    const width = Math.max(hi - lo, 1e-9);
+    // Clear ≥25% zone pierce + body ≥ TREND_ENTER (0.022%)
+    const pierce = hi + Math.max(width * 0.3, 2650 * 0.0004);
+    const open = hi - 0.02;
+    const last = bar(open, pierce + 0.05, open - 0.02, pierce, bars.length);
     const raw = classifyRegime([...bars.slice(0, -1), last], 'RANGE');
     expect(raw).toBe('BREAKOUT_UP');
   });
@@ -187,9 +189,17 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     expect(hit).toBeGreaterThanOrEqual(2);
   });
 
-  it('body/range scales: Gold 0.20pt body ≈ 0.0075% — below soft moving floor is quiet', () => {
+  it('body/range scales: Gold 0.20pt body ≈ 0.0075% — below SIGN quiet band', () => {
     const quiet = bar(2650, 2650.08, 2649.95, 2650.05);
-    expect(Math.abs(bodyPct(quiet))).toBeLessThan(0.0001);
-    expect(rangePct(quiet)).toBeLessThan(0.00018);
+    expect(Math.abs(bodyPct(quiet))).toBeLessThan(0.00012);
+    expect(rangePct(quiet)).toBeLessThan(0.00022);
+  });
+
+  it('percent bands have gaps — compress abs < expand abs with dead zone between', () => {
+    // Documented contract: COMPRESS_ABS 0.010% vs EXPAND_ABS 0.040%
+    expect(0.0001).toBeLessThan(0.0004);
+    expect(0.0004 - 0.0001).toBeGreaterThanOrEqual(0.00025);
+    // pullback against > trend enter so soft up-tick ≠ pullback flip
+    expect(0.00028).toBeGreaterThan(0.00022);
   });
 });

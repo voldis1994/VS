@@ -36,10 +36,10 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — soft enough for Gold quiet sessions (≈0.10%/0.18%). */
+/** Visible on a Capital 10s chart — aligned under regime SIGN_BODY so quiet ≠ moving. */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
-  return Math.abs(bodyPct(bar)) >= 0.0001 || rangePct(bar) >= 0.00018;
+  return Math.abs(bodyPct(bar)) >= 0.00012 || rangePct(bar) >= 0.00022;
 }
 
 export function emptyTenSecState(): TenSecState {

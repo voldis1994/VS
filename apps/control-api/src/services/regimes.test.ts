@@ -201,16 +201,15 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     const book = {
       current: 'TREND_UP' as RegimeName,
       previous: 'UNKNOWN' as RegimeName,
-      bars_in_current: 2,
+      bars_in_current: 3,
       pending: null as RegimeName | null,
       pending_count: 0,
       since: new Date().toISOString(),
     };
-    // Before dwell — stay TREND_UP, accumulate pending
-    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP');
-    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP');
-    // bars_in_current was 2; two more soft candidates → dwellOk (4) + pending ≥1
-    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND');
+    // dwell checked before increment — need bars_in_current ≥ 5 at call start
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP'); // 3→4
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('TREND_UP'); // 4→5
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND'); // 5 + pend
   });
 
   it('does not freeze — pending survives dwell so RANGE can become TREND_UP', () => {
@@ -222,6 +221,8 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
       pending_count: 0,
       since: new Date().toISOString(),
     };
+    // dwell=5 + confirm=3 — switch on 5th agreeing candidate
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
