@@ -208,6 +208,21 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND');
   });
 
+  it('does not freeze — pending survives dwell so RANGE can become TREND_UP', () => {
+    const book = {
+      current: 'RANGE' as RegimeName,
+      previous: 'UNKNOWN' as RegimeName,
+      bars_in_current: 1,
+      pending: null as RegimeName | null,
+      pending_count: 0,
+      since: new Date().toISOString(),
+    };
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
+  });
+
   it('observeClosedBars does not visit every regime in one minute of 10s bars', () => {
     resetRegimeBook();
     // Seed a clear uptrend
