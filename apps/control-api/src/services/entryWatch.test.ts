@@ -67,7 +67,7 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/COMPRESSION/);
   });
 
-  it('FLIP FILTER blocks same direction after close', () => {
+  it('FLIP LOCK blocks same direction for 3 min after close', () => {
     const b = bar(2000, 2000.2, 1998.5, 1999); // dip → BUY in RANGE
     const w = buildEntryWatch({
       running: true,
@@ -78,10 +78,31 @@ describe('entryWatch', () => {
       forming_c: null,
       just_closed: true,
       last_closed_side: 'BUY',
+      closed_at_ms: Date.now() - 30_000,
     });
     expect(w.status).toBe('FLIP_FILTER');
     expect(w.need_side).toBe('SELL');
+    expect(w.lock_left_s).toBeGreaterThan(0);
+    expect(w.lock_left_s).toBeLessThanOrEqual(180);
     expect(w.armed).toBe(false);
-    expect(w.last_reason).toMatch(/FLIP FILTER/);
+    expect(w.last_reason).toMatch(/FLIP LOCK/);
+  });
+
+  it('same direction allowed again after 3 min lock', () => {
+    const b = bar(2000, 2000.2, 1998.5, 1999);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'RANGE',
+      last_closed: b,
+      forming_c: null,
+      just_closed: true,
+      last_closed_side: 'BUY',
+      closed_at_ms: Date.now() - 3 * 60_000 - 1,
+    });
+    expect(w.status).not.toBe('FLIP_FILTER');
+    expect(w.need_side).toBeNull();
+    expect(w.lock_left_s).toBe(0);
   });
 });
