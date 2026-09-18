@@ -187,6 +187,24 @@ describe('PROOF: fanout resolveFanoutIdempotencyKey (exported real fn)', () => {
   });
 });
 
+describe('PROOF: fresh fill prefers broker open_level over mid', () => {
+  it('open_level wins; missing open_level keeps provisional mid', async () => {
+    const { preferBrokerOpenLevel } = await import('./robotDesk.js');
+    expect(preferBrokerOpenLevel(2650.25, 2650.41)).toBe(2650.41);
+    expect(preferBrokerOpenLevel(2650.25, null)).toBe(2650.25);
+    expect(preferBrokerOpenLevel(2650.25, undefined)).toBe(2650.25);
+    expect(preferBrokerOpenLevel(null, null)).toBe(null);
+  });
+
+  it('enterTradeLocked source syncs open_level with stop_level after list', () => {
+    const src = readFileSync(join(__dirname, 'robotDesk.ts'), 'utf8');
+    expect(src).toContain('preferBrokerOpenLevel');
+    expect(src).toMatch(/pos\?\.open_level/);
+    expect(src).toMatch(/pos\?\.stop_level/);
+    expect(src).toContain('mid was only provisional entry');
+  });
+});
+
 describe('PROOF: source wiring — not comment-only', () => {
   const here = join(__dirname);
 

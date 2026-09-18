@@ -533,10 +533,31 @@ async function executeForSubscription(
       }
 
       noteBrokerOk(sub.client_id);
-      const entry =
-        referencePrice != null && Number.isFinite(referencePrice)
-          ? Number(referencePrice)
-          : mid;
+      // Provisional: live mid beats signal referencePrice; broker open_level wins after list
+      let entry =
+        mid != null && Number.isFinite(mid)
+          ? mid
+          : referencePrice != null && Number.isFinite(referencePrice)
+            ? Number(referencePrice)
+            : null;
+      let dealId: string | null = null;
+      // Capital list can lag the fill — short retries for real open_level (not signal ref)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const again = await listCapitalOpenPositions(session);
+          const pos = again.ok
+            ? again.positions.find((p) => p.epic.toUpperCase() === sub.epic.toUpperCase())
+            : null;
+          if (pos?.deal_id) dealId = pos.deal_id;
+          if (pos?.open_level != null && Number.isFinite(pos.open_level)) {
+            entry = pos.open_level;
+            break;
+          }
+        } catch {
+          /* keep provisional mid */
+        }
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+      }
 
       // Persist execution/position best-effort
       try {
@@ -573,6 +594,7 @@ async function executeForSubscription(
         sub,
         side: direction,
         entry_price: entry,
+        deal_id: dealId,
         deal_reference: result.deal_reference || null,
         regime,
         setupType,

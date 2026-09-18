@@ -58,6 +58,15 @@ vi.mock('./robotDesk.js', () => ({
   attachManageOnlyRobot: vi.fn(async () => undefined),
   listRobotSessions: () => [],
   robotIdFor: (accountId: number, epic: string) => `r${accountId}_${epic}`,
+  preferBrokerOpenLevel: (
+    provisional: number | null | undefined,
+    openLevel: number | null | undefined
+  ) =>
+    openLevel != null && Number.isFinite(openLevel)
+      ? openLevel
+      : provisional != null && Number.isFinite(provisional)
+        ? provisional
+        : null,
   stopRobotSession: vi.fn(async () => undefined),
 }));
 
@@ -316,6 +325,44 @@ describe('Idempotency', () => {
     await Promise.all([p1, p2]);
 
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('fresh fill syncs entry_price from broker open_level (not referencePrice)', async () => {
+    const { fanoutEntryIntent } = await import('./intentFanout.js');
+    listActiveSubscriptionsForEpic.mockResolvedValue([
+      sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
+    ]);
+    // Before order: flat; after fill: broker open_level (retries allowed)
+    listCapitalOpenPositions
+      .mockResolvedValueOnce({ ok: true, positions: [] })
+      .mockResolvedValue({
+        ok: true,
+        positions: [
+          {
+            epic: 'XAUUSD',
+            direction: 'BUY',
+            deal_id: 'D-99',
+            open_level: 2001.37,
+            stop_level: 1995,
+            size: 0.1,
+          },
+        ],
+      });
+
+    await fanoutEntryIntent({
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      decision: 'ENTRY_READY',
+      idempotency_key: 'mc-openlevel-1',
+      reference_price: 1999.0, // signal — must NOT be manage entry
+    });
+
+    const opened = emitToClient.mock.calls.find(
+      (c: unknown[]) => (c[1] as { type: string }).type === 'trade_opened'
+    );
+    expect(opened).toBeTruthy();
+    expect((opened![1] as { entry_price: number }).entry_price).toBe(2001.37);
+    expect((opened![1] as { entry_price: number }).entry_price).not.toBe(1999.0);
   });
 });
 
