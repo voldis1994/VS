@@ -18,6 +18,7 @@ import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
+  classifyRegime,
   normalizeRegime,
   REGIME_NAMES,
   type RegimeName,
@@ -306,11 +307,28 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
-  if (incoming.length) {
-    const snap = observeClosedBars(s.epic, incoming, s.display_name);
-    s.regime = snap.current;
-    if (bars?.length) s.closedBars = bars.slice(-24);
+  if (!incoming.length) return;
+
+  // Local closed-bar history — never shared across accounts
+  for (const bar of incoming) {
+    if (!bar || !Number.isFinite(bar.close)) continue;
+    const last = s.closedBars[s.closedBars.length - 1];
+    const same =
+      last &&
+      Math.abs(last.open - bar.open) < 1e-9 &&
+      Math.abs(last.close - bar.close) < 1e-9 &&
+      Math.abs(last.high - bar.high) < 1e-9;
+    if (same) continue;
+    s.closedBars.push(bar);
   }
+  if (s.closedBars.length > 24) s.closedBars.splice(0, s.closedBars.length - 24);
+
+  // Classify from THIS robot's bars only (multi-client same epic safe)
+  const prev = s.regime || 'UNKNOWN';
+  s.regime = classifyRegime(s.closedBars, prev);
+
+  // Account-scoped book for UI / diagnostics — other accounts use their own key
+  observeClosedBars(s.epic, incoming, s.display_name, s.account_id);
 }
 
 /** Last fully closed Capital 1m (not the forming minute). */

@@ -115,6 +115,19 @@ function epicKey(epic: string): string {
 }
 
 /**
+ * Book storage key.
+ * - Unscoped (`GOLD`) — optional market aggregate / pipeline stamp
+ * - Scoped (`a12::GOLD`) — per broker account so multi-client same epic never mixes
+ */
+export function regimeBookKey(epic: string, accountId?: number | string | null): string {
+  const e = epicKey(epic);
+  if (accountId === undefined || accountId === null || accountId === '') return e;
+  const n = Number(accountId);
+  if (Number.isFinite(n) && n > 0) return `a${n}::${e}`;
+  return `${String(accountId).trim()}::${e}`;
+}
+
+/**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
  * Failed-breakout variants are live here (reserved in C++).
  */
@@ -191,8 +204,12 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string): Book {
-  const key = epicKey(epic);
+function ensureBook(
+  epic: string,
+  displayName?: string,
+  accountId?: number | string | null
+): Book {
+  const key = regimeBookKey(epic, accountId);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
@@ -224,16 +241,16 @@ function applyClassify(epic: string, b: Book): RegimeSnapshot {
   b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
   if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
-  return toSnapshot(epic, b);
+  return toSnapshot(epicKey(epic), b);
 }
 
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string
+  displayName?: string,
+  accountId?: number | string | null
 ): RegimeSnapshot {
-  const key = epicKey(epic);
-  const b = ensureBook(epic, displayName);
+  const b = ensureBook(epic, displayName, accountId);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -246,15 +263,16 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(key, b);
+  return applyClassify(epic, b);
 }
 
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
-  displayName?: string
+  displayName?: string,
+  accountId?: number | string | null
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName);
+  const b = ensureBook(epic, displayName, accountId);
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -267,15 +285,21 @@ export function notePipelineRegime(
   return toSnapshot(epicKey(epic), b);
 }
 
-export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
+export function currentRegime(
+  epic: string | null | undefined,
+  accountId?: number | string | null
+): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(epicKey(epic));
+  const b = books.get(regimeBookKey(epic, accountId));
   if (!b) return null;
   return toSnapshot(epicKey(epic), b);
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
-  return [...books.entries()].map(([epic, b]) => toSnapshot(epic, b));
+  // Market board: unscoped books only (no a{id}:: prefix)
+  return [...books.entries()]
+    .filter(([k]) => !k.includes('::'))
+    .map(([epic, b]) => toSnapshot(epic, b));
 }
 
 export function regimeCatalog() {

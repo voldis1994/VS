@@ -234,7 +234,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
     const side = robot.open_side as 'BUY' | 'SELL';
-    const regime = robot.regime || currentRegime(robot.epic)?.current || null;
+    const regime = robot.regime || currentRegime(robot.epic, robot.account_id)?.current || null;
     live_trade = {
       market: robot.epic,
       display_name: robot.display_name,
@@ -290,7 +290,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             : null;
           if (match) {
             const side = match.direction;
-            const regime = currentRegime(match.epic)?.current || null;
+            const regime = currentRegime(match.epic, account.account_id)?.current || null;
             live_trade = {
               market: match.epic,
               display_name: c.panel_display_name || match.epic,
