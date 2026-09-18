@@ -29,7 +29,7 @@ export type DeskCalibration = {
 };
 
 const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
-  (r) => r !== 'UNKNOWN' && r !== 'TRANSITION'
+  (r) => r !== 'UNKNOWN'
 ) as RegimeName[];
 
 export function defaultDeskCalibration(): DeskCalibration {

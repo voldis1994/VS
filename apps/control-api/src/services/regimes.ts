@@ -152,7 +152,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 
   const trendingUp = persistence > 0.35 && lastVel > 0.00005;
   const trendingDown = persistence < -0.35 && lastVel < -0.00005;
-  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
+  // Stricter than before — old COMPRESSION ate RANGE and blocked all entries
+  const compressed = lastRange < avgRange * 0.4 && lastRange < 0.00014;
   const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
   const hi = Math.max(...prior.map((b) => b.high));
   const lo = Math.min(...prior.map((b) => b.low));
@@ -179,7 +180,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
   if (inRange) return 'RANGE';
-  if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
+  // Sticky prior regime instead of dead TRANSITION (null entry forever)
+  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
   return 'UNKNOWN';
 }
 

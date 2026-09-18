@@ -46,9 +46,20 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/RANGE/);
   });
 
-  it('COMPRESSION never arms entry recipe', () => {
+  it('COMPRESSION fades like RANGE when moving', () => {
     const r = watchRecipe('COMPRESSION');
-    expect(r.setup).toBeNull();
-    expect(r.looking_for).toMatch(/nav entry/i);
+    expect(r.setup).toBe('FADE');
+    expect(r.looking_for).toMatch(/fade/i);
+    const b = bar(2000, 2000.2, 1998.5, 1999);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'COMPRESSION',
+      last_closed: b,
+      forming_c: null,
+      just_closed: true,
+    });
+    expect(w.looking_for).toMatch(/COMPRESSION/);
   });
 });

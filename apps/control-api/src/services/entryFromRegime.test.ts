@@ -12,21 +12,26 @@ const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
 
 describe('10s + 14-regime suitable entry', () => {
-  it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
+  it('waits in UNKNOWN; TRANSITION / COMPRESSION can fade or follow when moving', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')?.setup).toBe('FADE');
+    expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'TRANSITION')?.direction).toBe('SELL');
   });
 
-  it('TREND_UP only dip-buys — never sells the rally', () => {
+  it('TREND_UP dip-buys pullback and rally-buys with-trend — never sells', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')?.setup).toBe('CONTINUATION');
   });
 
-  it('TREND_DOWN only rally-sells — never buys the dump', () => {
+  it('TREND_DOWN rally-sells pullback and dip-sells with-trend — never buys', () => {
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')?.setup).toBe('CONTINUATION');
   });
 
   it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
@@ -62,5 +67,6 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'COMPRESSION')).toBeNull();
   });
 });
