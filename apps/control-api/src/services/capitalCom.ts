@@ -834,7 +834,33 @@ export type CapitalOpenPosition = {
   open_level: number | null;
   upl: number | null;
   stop_level: number | null;
+  /** Broker open time (ISO) from createdDateUTC / createdDate — TimeDecay must use this */
+  created_at: string | null;
 };
+
+/** Parse Capital createdDate / createdDateUTC into ISO string (UTC). */
+export function parseCapitalCreatedAt(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const ms = raw > 1e12 ? raw : raw * 1000;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+  }
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s) return null;
+  // Capital often sends "2022-04-05T09:46:01.872" without Z — treat as UTC when labelled UTC field,
+  // otherwise Date.parse may assume local. Prefer appending Z if no timezone present.
+  const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(s);
+  const normalized = hasTz ? s : `${s}Z`;
+  const t = Date.parse(normalized);
+  if (!Number.isFinite(t)) {
+    const t2 = Date.parse(s);
+    if (!Number.isFinite(t2)) return null;
+    return new Date(t2).toISOString();
+  }
+  return new Date(t).toISOString();
+}
 
 /** All open Capital.com positions (REST). */
 export async function listCapitalOpenPositions(
@@ -869,6 +895,9 @@ export async function listCapitalOpenPositions(
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
+      created_at: parseCapitalCreatedAt(
+        pos.createdDateUTC ?? pos.createdDateUtc ?? pos.createdDate ?? pos.created_at
+      ),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };

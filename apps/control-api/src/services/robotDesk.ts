@@ -663,6 +663,26 @@ export function preferBrokerOpenLevel(
   return null;
 }
 
+/** Prefer Capital createdDate for entry_at so TimeDecay survives restart. */
+export function preferBrokerEntryAt(
+  localIso: string | null | undefined,
+  brokerCreatedAt: string | null | undefined,
+  nowIso = new Date().toISOString()
+): string {
+  // Broker open time is source of truth — never keep a recovery "now" stamp over it
+  if (brokerCreatedAt) return brokerCreatedAt;
+  return localIso || nowIso;
+}
+
+function syncFromBrokerOpen(
+  s: Internal,
+  broker: CapitalOpenPosition,
+  quoteMid: number | null
+): void {
+  if (s.entry_price == null) s.entry_price = broker.open_level ?? quoteMid;
+  s.entry_at = preferBrokerEntryAt(s.entry_at, broker.created_at);
+}
+
 async function resolveDealId(
   session: CapitalSession,
   s: Internal,
@@ -856,8 +876,7 @@ async function enterTradeLocked(
   if (existing) {
     s.open_side = existing.direction;
     s.deal_id = existing.deal_id;
-    s.entry_price = existing.open_level ?? quote.mid;
-    s.entry_at = s.entry_at || new Date().toISOString();
+    syncFromBrokerOpen(s, existing, quote.mid);
     s.mode = 'MANAGE';
     if (existing.stop_level != null) s.safety_sl = existing.stop_level;
     s.pending_entry = null;
@@ -1029,7 +1048,7 @@ async function enterTradeLocked(
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Sync broker truth: open_level + stopLevel (mid was only provisional entry)
+  // Sync broker truth: open_level + stopLevel + created_at (mid/now only provisional)
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
@@ -1042,6 +1061,7 @@ async function enterTradeLocked(
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
+      if (pos) s.entry_at = preferBrokerEntryAt(s.entry_at, pos.created_at);
     } catch {
       /* mid / computed SL remain as temporary fallback */
     }
@@ -1188,8 +1208,7 @@ async function robotCycleLocked(s: Internal) {
           if (brokerPark) {
             s.open_side = brokerPark.direction;
             s.deal_id = brokerPark.deal_id;
-            if (s.entry_price == null) s.entry_price = brokerPark.open_level ?? quote.mid;
-            if (!s.entry_at) s.entry_at = new Date().toISOString();
+            syncFromBrokerOpen(s, brokerPark, quote.mid);
             s.mode = 'MANAGE';
             if (brokerPark.upl != null) s.unrealized = brokerPark.upl;
           } else if (s.open_side) {
@@ -1297,8 +1316,7 @@ async function robotCycleLocked(s: Internal) {
       if (brokerOpen) {
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
-        if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
-        if (!s.entry_at) s.entry_at = new Date().toISOString();
+        syncFromBrokerOpen(s, brokerOpen, quote.mid);
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
@@ -1945,6 +1963,8 @@ export async function attachManageOnlyRobot(input: {
   lot_size: number;
   side: 'BUY' | 'SELL';
   entry_price: number | null;
+  /** Capital createdDate — required for TimeDecay after restart */
+  entry_at?: string | null;
   deal_reference?: string | null;
   deal_id?: string | null;
   regime?: string | null;
@@ -1970,7 +1990,7 @@ export async function attachManageOnlyRobot(input: {
     } else if (existing.entry_price == null) {
       existing.entry_price = input.entry_price;
     }
-    if (!existing.entry_at) existing.entry_at = new Date().toISOString();
+    existing.entry_at = preferBrokerEntryAt(existing.entry_at, input.entry_at);
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.deal_id) existing.deal_id = input.deal_id;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
@@ -1982,7 +2002,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · entry ${
         existing.entry_price ?? '—'
-      } · ${existing.regime} · manage open · entry_brain=OFF · MFE ${existing.mfe.toFixed(5)}`,
+      } · since ${existing.entry_at || '—'} · ${existing.regime} · manage open · entry_brain=OFF · MFE ${existing.mfe.toFixed(5)}`,
     });
     return publicSession(existing);
   }
@@ -1999,7 +2019,7 @@ export async function attachManageOnlyRobot(input: {
   if (internal) {
     internal.open_side = input.side;
     internal.entry_price = input.entry_price;
-    internal.entry_at = new Date().toISOString();
+    internal.entry_at = preferBrokerEntryAt(null, input.entry_at);
     internal.mode = 'MANAGE';
     internal.last_deal_reference = input.deal_reference || null;
     if (input.deal_id) internal.deal_id = input.deal_id;
@@ -2010,9 +2030,9 @@ export async function attachManageOnlyRobot(input: {
       bid: null,
       ask: null,
       mid: input.entry_price,
-      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
-        internal.regime
-      } · manage-only attached`,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · since ${
+        internal.entry_at || '—'
+      } · ${internal.regime} · manage-only attached`,
     });
   }
   return getRobotSession(session.id) || session;

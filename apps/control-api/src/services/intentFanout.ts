@@ -208,6 +208,7 @@ async function healManageForOpen(opts: {
   sub: ActiveSubscription;
   side: 'BUY' | 'SELL';
   entry_price: number | null;
+  entry_at?: string | null;
   deal_id?: string | null;
   deal_reference?: string | null;
   regime: string | null;
@@ -223,6 +224,7 @@ async function healManageForOpen(opts: {
         lot_size: opts.sub.lot_size,
         side: opts.side,
         entry_price: opts.entry_price,
+        entry_at: opts.entry_at || null,
         deal_reference: opts.deal_reference || null,
         deal_id: opts.deal_id || null,
         regime: opts.regime,
@@ -439,6 +441,7 @@ async function executeForSubscription(
           sub,
           side: existing.direction,
           entry_price: existing.open_level,
+          entry_at: existing.created_at,
           deal_id: existing.deal_id,
           deal_reference: existing.deal_reference,
           regime,
@@ -541,6 +544,7 @@ async function executeForSubscription(
             ? Number(referencePrice)
             : null;
       let dealId: string | null = null;
+      let createdAt: string | null = null;
       // Capital list can lag the fill — short retries for real open_level (not signal ref)
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -549,6 +553,7 @@ async function executeForSubscription(
             ? again.positions.find((p) => p.epic.toUpperCase() === sub.epic.toUpperCase())
             : null;
           if (pos?.deal_id) dealId = pos.deal_id;
+          if (pos?.created_at) createdAt = pos.created_at;
           if (pos?.open_level != null && Number.isFinite(pos.open_level)) {
             entry = pos.open_level;
             break;
@@ -594,6 +599,7 @@ async function executeForSubscription(
         sub,
         side: direction,
         entry_price: entry,
+        entry_at: createdAt,
         deal_id: dealId,
         deal_reference: result.deal_reference || null,
         regime,
