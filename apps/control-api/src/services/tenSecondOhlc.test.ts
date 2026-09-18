@@ -3,10 +3,13 @@ import {
   aggregateSecondsToTen,
   bodyPct,
   decideFromClosed10s,
+  expandMinutesToTen,
   isMoving10s,
+  rangePct,
   updateTenSecondOhlc,
   emptyTenSecState,
 } from './tenSecondOhlc.js';
+import { EXPAND_ABS } from './regimeBands.js';
 
 describe('10s OHLC', () => {
   it('closes a bar after 10 seconds and keeps forming the next', () => {
@@ -62,5 +65,21 @@ describe('10s OHLC', () => {
     expect(tens[0]!.open).toBe(4389);
     expect(tens[1]!.ticks).toBe(10);
     expect(isMoving10s(tens[1]!)).toBe(true);
+  });
+
+  it('expandMinutesToTen: 6×10s per minute, zone extremes kept, no 1m-range EXPANSION on every bar', () => {
+    const mins = [
+      { open: 2650, high: 2652, low: 2648, close: 2651 },
+      { open: 2651, high: 2653, low: 2650, close: 2652 },
+    ];
+    const bars = expandMinutesToTen(mins, 1_700_000_060_000);
+    expect(bars).toHaveLength(12);
+    expect(bars[0]!.open_time_ms % 10_000).toBe(0);
+    // Mid-bucket of first minute carries minute high/low
+    expect(Math.max(...bars.slice(0, 6).map((b) => b.high))).toBe(2652);
+    expect(Math.min(...bars.slice(0, 6).map((b) => b.low))).toBe(2648);
+    // Most synthetic bars must stay below expansion absolute range
+    const quiet = bars.filter((b) => rangePct(b) < EXPAND_ABS);
+    expect(quiet.length).toBeGreaterThanOrEqual(8);
   });
 });

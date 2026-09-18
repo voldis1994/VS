@@ -126,7 +126,12 @@ type Book = {
 const MAX_BARS = 216;
 const books = new Map<string, Book>();
 /** Structure zone ≈ 30 minutes of 10s bars (180 × 10s) — not last micro-candle only */
-const ZONE_BARS = 180;
+export const ZONE_BARS = 180;
+/**
+ * Do not trust zone hi/lo / BREAKOUT / RANGE until we have enough history.
+ * 90 × 10s = 15m — half zone; thinner books stay UNKNOWN (or sticky prior).
+ */
+export const MIN_BARS_FOR_ZONE = 90;
 /** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
 const MOM_BARS = 8;
 /** Stay in a regime ≥50s before soft switches — room between % bands to settle */
@@ -193,6 +198,12 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
+
+  // Thin book ≠ 30m zone — avoid false RANGE/BREAKOUT on a few SECOND/MINUTE seeds
+  if (bars.length < MIN_BARS_FOR_ZONE) {
+    if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+    return 'UNKNOWN';
+  }
 
   const zone = bars.slice(-ZONE_BARS);
   const mom = bars.slice(-MOM_BARS);
@@ -268,7 +279,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (trendingDown || lastVel < -TREND_ENTER)
   )
     return 'BREAKOUT_DOWN';
-  if (expanding) return 'EXPANSION';
+
+  // Violent in-range flip (≥ REVERSAL) before soft pullback / bare EXPANSION
+  if (reversal) return 'REVERSAL_CANDIDATE';
 
   // Pullbacks: against-body ≥ PULLBACK (> TREND_ENTER) so soft noise ≠ pullback
   if (
@@ -301,9 +314,10 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   )
     return 'TREND_DOWN';
 
+  if (expanding) return 'EXPANSION';
+
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
-  if (reversal) return 'REVERSAL_CANDIDATE';
 
   // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
@@ -454,13 +468,8 @@ export function observeClosedBars(
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
-    const same =
-      last &&
-      Math.abs(last.open - bar.open) < 1e-9 &&
-      Math.abs(last.close - bar.close) < 1e-9 &&
-      Math.abs(last.high - bar.high) < 1e-9 &&
-      Math.abs(last.low - bar.low) < 1e-9;
-    if (same) continue;
+    // Dedupe by bucket time — flat OHLC still counts toward the 30m zone
+    if (last && last.open_time_ms === bar.open_time_ms) continue;
     b.bars.push(bar);
     if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
     // Per-bar stabilize — batch classify once would skip dwell/confirm accumulation
@@ -489,17 +498,9 @@ export function notePipelineRegime(
     accountId !== undefined && accountId !== null && String(accountId).trim() !== '';
 
   if (scoped) {
-    if (next === b.current) {
-      b.bars_in_current += 1;
-      b.pending = null;
-      b.pending_count = 0;
-    } else if (next !== 'UNKNOWN') {
-      if (b.pending === next) b.pending_count += 1;
-      else {
-        b.pending = next;
-        b.pending_count = 1;
-      }
-    }
+    // Account-scoped: display/confidence only — never touch pending_count.
+    // Fanout stamps must not soft-confirm a stabilize flip on the next OHLC bar.
+    if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
   } else if (next !== b.current) {
     b.previous = b.current;
     b.current = next;
@@ -511,7 +512,7 @@ export function notePipelineRegime(
     b.bars_in_current += 1;
   }
   b.last_update = now;
-  if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
+  if (!scoped && next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
   return toSnapshot(epicKey(epic), b);
 }
 
