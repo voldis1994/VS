@@ -342,6 +342,29 @@ let lastLoginAt = 0;
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
 
+/** Per-connection mutex so concurrent robots on one broker never interleave switch+API. */
+const connectionLocks = new Map<string, Promise<unknown>>();
+
+async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+  const key = capitalPoolKey(connectionId);
+  const prev = connectionLocks.get(key) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const held = prev.then(() => gate);
+  connectionLocks.set(
+    key,
+    held.catch(() => undefined)
+  );
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
@@ -429,6 +452,18 @@ export async function acquireCapitalSession(input: {
     };
   }
 
+  return withConnectionLock(connectionId, () => acquireCapitalSessionUnlocked(input));
+}
+
+async function acquireCapitalSessionUnlocked(input: {
+  environment: string;
+  apiKey: string;
+  identifier: string;
+  password: string;
+  connectionId: number;
+  capitalAccountId?: string | null;
+}): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
+  const connectionId = Number(input.connectionId);
   const key = capitalPoolKey(connectionId);
   const now = Date.now();
   const cached = capitalSessionPool.get(key);

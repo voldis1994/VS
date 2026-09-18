@@ -80,6 +80,7 @@ export async function executePipelineIntent(
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
   const regime = intent.regime ? String(intent.regime) : null;
   if (!epic) throw new Error('epic required');
+  // Unscoped stamp for market board only — per-account books updated in executeForSubscription
   if (regime) notePipelineRegime(epic, regime);
   if (intent.decision && String(intent.decision).toUpperCase() !== 'ENTRY_READY') {
     throw new Error('Only EntryReady intents are executable');
@@ -169,6 +170,7 @@ async function executeForSubscription(
   };
 
   try {
+    if (regime) notePipelineRegime(sub.epic, regime, undefined, sub.account_id);
     // Per client/account idempotency — claim BEFORE Capital (blocks concurrent duplicates)
     if (idempotencyKey) {
       const claim = await claimExecution(idempotencyKey, sub.client_id, sub.account_id);
