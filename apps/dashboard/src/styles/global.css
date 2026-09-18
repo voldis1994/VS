@@ -1303,6 +1303,20 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
 .robot-deploy-bar {
   padding: 16px;
 }
+.robot-units-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(180, 255, 0, 0.2);
+}
+.robot-units-grid {
+  margin-bottom: 10px;
+  min-height: 120px;
+}
 .robot-board-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
