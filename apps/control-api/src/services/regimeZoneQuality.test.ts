@@ -1,6 +1,6 @@
 /**
  * Zone + regime quality probe — synthetic Gold ~2000 10s paths.
- * Scores whether structure zone (≈3m) and stabilize produce usable market state.
+ * Scores whether structure zone (≈30m) and stabilize produce usable market state.
  */
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
@@ -48,11 +48,11 @@ function feed(epic: string, bars: TenSecBar[], accountId = 1): RegimeName[] {
 describe('zone + regime quality probe (Gold ~2000)', () => {
   beforeEach(() => resetRegimeBook());
 
-  it('ZONE (~3m / 18 bars): RANGE holds inside structure; breakout needs pierce + expansion', () => {
-    // Flat chop inside 2648–2652 for ~3m
+  it('ZONE (~30m / 180 bars): RANGE holds inside structure; breakout needs pierce + expansion', () => {
+    // Flat chop inside 2648–2652 for ~30m of 10s bars
     const base = 2650;
     const chop: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 190; i++) {
       chop.push(base + ((i % 4) - 1.5) * 0.35);
     }
     const hist = path(chop);
@@ -150,7 +150,7 @@ describe('zone + regime quality probe (Gold ~2000)', () => {
     for (let i = 0; i < 16; i++) closes.push(2650 + Math.sin(i) * 0.8);
     const bars = path(closes);
     const last = bars[bars.length - 1]!;
-    const zonePrior = bars.slice(-18, -1);
+    const zonePrior = bars.slice(-180, -1);
     const hi = Math.max(...zonePrior.map((b) => b.high));
     const lo = Math.min(...zonePrior.map((b) => b.low));
     expect(last.close).toBeGreaterThanOrEqual(lo);

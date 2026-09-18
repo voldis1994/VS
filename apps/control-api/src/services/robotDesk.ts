@@ -361,7 +361,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     if (same) continue;
     s.closedBars.push(bar);
   }
-  if (s.closedBars.length > 36) s.closedBars.splice(0, s.closedBars.length - 36);
+  if (s.closedBars.length > 216) s.closedBars.splice(0, s.closedBars.length - 216);
 
   // Single path: zone + dwell/confirm stabilize via account-scoped book
   const snap = observeClosedBars(s.epic, feed, s.display_name, s.account_id);

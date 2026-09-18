@@ -123,11 +123,11 @@ type Book = {
   pending_count: number;
 };
 
-const MAX_BARS = 36;
+const MAX_BARS = 216;
 const books = new Map<string, Book>();
-/** Structure zone ≈ 3 minutes of 10s bars (not last micro-candle only) */
-const ZONE_BARS = 18;
-/** Momentum window */
+/** Structure zone ≈ 30 minutes of 10s bars (180 × 10s) — not last micro-candle only */
+const ZONE_BARS = 180;
+/** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
 const MOM_BARS = 8;
 /** Stay in a regime ≥50s before soft switches — room between % bands to settle */
 const MIN_DWELL_BARS = 5;
@@ -187,7 +187,7 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
 }
 
 /**
- * Classify from closed 10s OHLC using a wider structure zone (~3m) + shorter momentum.
+ * Classify from closed 10s OHLC using a 30m structure zone + short momentum.
  * Raw candidate only — live path must run through stabilizeRegime (dwell + confirm).
  * Enter vs stay thresholds keep hysteresis so borderline % ticks do not flip regimes.
  */
