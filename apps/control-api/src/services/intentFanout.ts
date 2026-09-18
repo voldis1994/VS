@@ -261,21 +261,29 @@ async function executeForSubscription(
     }
 
     const listed = await listCapitalOpenPositions(opened.session);
-    if (listed.ok) {
-      const existing = listed.positions.find(
-        (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
-      );
-      if (existing) {
-        noteBrokerOk(sub.client_id);
-        return finish({
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false,
-          detail: 'Already open on epic — skip',
-          entry_price: existing.open_level,
-        });
-      }
+    if (!listed.ok) {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: `Position list failed — fail-closed (${listed.detail})`,
+        entry_price: null,
+      });
+    }
+    const existing = listed.positions.find(
+      (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
+    );
+    if (existing) {
+      noteBrokerOk(sub.client_id);
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'Already open on epic — skip',
+        entry_price: existing.open_level,
+      });
     }
     // SAFETY SL cushion (~0.20%), not broker minimum
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);

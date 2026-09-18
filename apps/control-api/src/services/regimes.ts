@@ -180,7 +180,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
   if (inRange) return 'RANGE';
-  if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
+  // Sticky prior regime instead of dead TRANSITION (null entry forever)
+  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
   return 'UNKNOWN';
 }
 

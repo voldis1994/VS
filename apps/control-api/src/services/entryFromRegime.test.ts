@@ -12,12 +12,13 @@ const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
 
 describe('10s + 14-regime suitable entry', () => {
-  it('waits in UNKNOWN / TRANSITION; COMPRESSION fades like RANGE', () => {
+  it('waits in UNKNOWN; TRANSITION / COMPRESSION can fade or follow when moving', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')?.setup).toBe('FADE');
     expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'TRANSITION')?.direction).toBe('SELL');
   });
 
   it('TREND_UP dip-buys pullback and rally-buys with-trend — never sells', () => {

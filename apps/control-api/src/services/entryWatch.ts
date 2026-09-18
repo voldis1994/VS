@@ -157,8 +157,8 @@ export function watchRecipe(regime?: string | null): {
     case 'TRANSITION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'TRANSITION · nav entry (gaida skaidru režīmu)',
+        setup: 'BREAKOUT',
+        looking_for: 'TRANSITION · follow body · RALLY → BUY · DIP → SELL (MOVING 10s)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':
@@ -191,6 +191,10 @@ function barVsTrigger(
     bits.push(`✓ TRIGERIS · ${sig.direction} ${sig.setup}`);
   } else if (mkt === 'QUIET') {
     bits.push('kluss bars — gaida MOVING');
+  } else if (recipe.looking_for.includes('DIP') && recipe.looking_for.includes('RALLY')) {
+    if (body <= DIP) bits.push('DIP zona');
+    else if (body >= RALLY) bits.push('RALLY zona');
+    else bits.push('gaida DIP vai RALLY');
   } else if (recipe.looking_for.includes('DIP') && body > DIP) {
     bits.push(`nav DIP (vajag ≤ ${pctStr(DIP)})`);
   } else if (recipe.looking_for.includes('RALLY') && body < RALLY) {

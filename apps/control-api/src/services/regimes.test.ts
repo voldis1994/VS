@@ -167,13 +167,13 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
   });
 
-  it('TRANSITION when leaving a named regime without a clean next state', () => {
+  it('sticks prior regime instead of dead TRANSITION when leaving without a clean next state', () => {
     const bars = [
       bar(100.0, 100.1, 99.95, 100.02, 0),
       bar(100.02, 100.08, 99.96, 100.0, 1),
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
-    expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
+    expect(classifyRegime(bars, 'TREND_UP')).toBe('TREND_UP');
   });
 });
 

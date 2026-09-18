@@ -40,7 +40,17 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION') return null;
+  if (r === 'UNKNOWN') return null;
+
+  // TRANSITION (rare after sticky classify) — follow body like EXPANSION, not starve
+  if (r === 'TRANSITION') {
+    if (!movingOrNull(bar)) return null;
+    if (rally(bar))
+      return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
+    if (dip(bar))
+      return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
+    return null;
+  }
 
   // COMPRESSION used to always return null while classify hit it often → zero trades.
   // Fade like RANGE when the 10s bar actually moves (toggle in CONTROL then means something).

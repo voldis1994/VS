@@ -141,6 +141,8 @@ type Internal = RobotSession & {
   last_1m_profit_exit_key: string;
   /** Cached live entry watch for board UI */
   entry_watch: EntryWatch | null;
+  /** Consecutive EXIT blocked (no dealId) — clear ghost after broker flat */
+  exit_deal_fails: number;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -365,6 +367,7 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
+  s.exit_deal_fails = 0;
 }
 
 /**
@@ -596,16 +599,31 @@ async function exitTrade(
 ) {
   const dealId = await resolveDealId(session, s, s.last_deal_reference || undefined);
   if (!dealId) {
+    s.exit_deal_fails = (s.exit_deal_fails || 0) + 1;
+    const listed = await listCapitalOpenPositions(session);
+    if (listed.ok && !matchOpenOnEpic(listed.positions, s.epic)) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'EXIT: no dealId + broker flat — clear ghost · FLAT (entry allowed)',
+      });
+      s.closed_at_ms = Date.now();
+      clearTradeState(s);
+      return;
+    }
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: 'EXIT blocked — no dealId (cannot close). Will keep MANAGE, no new entry.',
+      detail: `EXIT blocked — no dealId (cannot close). MANAGE · fails=${s.exit_deal_fails}`,
     });
     s.mode = 'MANAGE';
     return;
   }
+  s.exit_deal_fails = 0;
 
   pushTick(s, {
     phase: 'DECIDE',
@@ -678,24 +696,32 @@ async function enterTrade(
 ) {
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
-  if (listed.ok) {
-    const existing = matchOpenOnEpic(listed.positions, s.epic);
-    if (existing) {
-      s.open_side = existing.direction;
-      s.deal_id = existing.deal_id;
-      s.entry_price = existing.open_level ?? quote.mid;
-      s.entry_at = s.entry_at || new Date().toISOString();
-      s.mode = 'MANAGE';
-      if (existing.stop_level != null) s.safety_sl = existing.stop_level;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
-      });
-      return;
-    }
+  if (!listed.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY blocked — position list failed (${listed.detail}) · fail-closed`,
+    });
+    return;
+  }
+  const existing = matchOpenOnEpic(listed.positions, s.epic);
+  if (existing) {
+    s.open_side = existing.direction;
+    s.deal_id = existing.deal_id;
+    s.entry_price = existing.open_level ?? quote.mid;
+    s.entry_at = s.entry_at || new Date().toISOString();
+    s.mode = 'MANAGE';
+    if (existing.stop_level != null) s.safety_sl = existing.stop_level;
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+    });
+    return;
   }
 
   pushTick(s, {
@@ -1063,6 +1089,7 @@ async function robotCycle(s: Internal) {
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
+    let positionsUncertain = false;
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
@@ -1085,12 +1112,13 @@ async function robotCycle(s: Internal) {
         clearTradeState(s);
       }
     } else {
+      positionsUncertain = true;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
+        detail: `Position sync warn: ${listed.detail} · fail-closed (no new entry until list OK)`,
       });
     }
 
@@ -1111,7 +1139,8 @@ async function robotCycle(s: Internal) {
       refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
     }
 
-    if (!s.trading_enabled) {
+    // Trading OFF: still manage/exit open trades; block only new entries
+    if (!s.trading_enabled && !(s.open_side || brokerOpen)) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1124,8 +1153,20 @@ async function robotCycle(s: Internal) {
 
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
+      if (!s.trading_enabled) {
+        // allow HardInv / Peak exits even when operator paused new entries
+      }
       s.mode = 'MANAGE';
-      if (quote.mid == null) return;
+      if (quote.mid == null) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'MANAGE · no mid — wait quote',
+        });
+        return;
+      }
 
       // LIVE loss: HardInv only — no thesis micro-scratch
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
@@ -1226,6 +1267,23 @@ async function robotCycle(s: Internal) {
     }
 
     // ——— FLAT: entry only after close (and only if entry_enabled) ———
+    if (!s.trading_enabled) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'Trading OFF — flat · no entry',
+      });
+      return;
+    }
+    if (positionsUncertain) {
+      refreshEntryWatch(s, {
+        status_override: 'WAITING_TRIGGER',
+        last_reason: 'Position list fail — no entry until sync OK',
+      });
+      return;
+    }
     if (!s.entry_enabled) {
       s.mode = s.open_side ? 'MANAGE' : 'FLAT';
       refreshEntryWatch(s, {
@@ -1265,9 +1323,11 @@ async function robotCycle(s: Internal) {
     if (quote.mid == null) return;
 
     // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
-    // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
+    // Never clear a live tick just_closed — that race dropped the only entry window each bar.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
+      const tickJustClosed = s.ohlcState.just_closed;
+      const tickLastClosed = s.ohlcState.last_closed;
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
@@ -1275,14 +1335,20 @@ async function robotCycle(s: Internal) {
         if (last) {
           const key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
           const isNew = key !== s.last_closed_bar_key;
-          s.ohlcState = {
-            forming: s.ohlcState.forming,
-            last_closed: last,
-            just_closed: isNew,
-          };
-          if (isNew) s.last_closed_bar_key = key;
-          s.ohlc_10s = publicOhlc10s(s.ohlcState);
-          applyRobotRegime(s, bars);
+          if (tickJustClosed && tickLastClosed) {
+            // Keep live close flag for entry this cycle; still absorb Capital history for regime
+            if (isNew) s.last_closed_bar_key = key;
+            applyRobotRegime(s, bars.filter((b) => b !== last));
+          } else {
+            s.ohlcState = {
+              forming: s.ohlcState.forming,
+              last_closed: last,
+              just_closed: isNew,
+            };
+            if (isNew) s.last_closed_bar_key = key;
+            s.ohlc_10s = publicOhlc10s(s.ohlcState);
+            applyRobotRegime(s, bars);
+          }
         }
       }
     }
@@ -1498,6 +1564,7 @@ export async function startRobotSession(input: {
     peak_protect_armed: false,
     last_1m_profit_exit_key: '',
     entry_watch: null,
+    exit_deal_fails: 0,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1558,7 +1625,8 @@ export async function attachManageOnlyRobot(input: {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
   if (existing?.running) {
-    existing.entry_enabled = false;
+    // Keep Admin entry brain — do not permanently flip to manage-only after one pipeline fill.
+    // While open_side is set, entry path is skipped anyway; after flat, Admin can enter again.
     existing.trading_enabled = true;
     existing.open_side = input.side;
     existing.mode = 'MANAGE';
@@ -1574,7 +1642,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         existing.regime
-      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
+      } · manage open · entry_brain=${existing.entry_enabled ? 'ON' : 'OFF'} · MFE ${existing.mfe.toFixed(5)}`,
     });
     return publicSession(existing);
   }
