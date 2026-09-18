@@ -100,10 +100,23 @@ type Book = {
   display_name: string;
   last_mid: number | null;
   last_update: string;
+  /** Bars spent in current regime (10s each) — dwell / anti-flicker */
+  bars_in_current: number;
+  /** Candidate waiting for confirmation bars */
+  pending: RegimeName | null;
+  pending_count: number;
 };
 
-const MAX_BARS = 24;
+const MAX_BARS = 36;
 const books = new Map<string, Book>();
+/** Structure zone ≈ 3 minutes of 10s bars (not last micro-candle only) */
+const ZONE_BARS = 18;
+/** Momentum window */
+const MOM_BARS = 8;
+/** Stay in a regime ≥60s before soft switches (6 × 10s) */
+const MIN_DWELL_BARS = 6;
+/** Soft family switches need this many agreeing candidates */
+const CONFIRM_BARS = 2;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -112,6 +125,179 @@ function mean(xs: number[]): number {
 
 function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
+}
+
+type RegimeFamily = 'UP' | 'DOWN' | 'CHOP' | 'VOL' | 'BRK_UP' | 'BRK_DOWN' | 'REV' | 'UNK';
+
+function regimeFamily(r: RegimeName): RegimeFamily {
+  switch (r) {
+    case 'TREND_UP':
+    case 'PULLBACK_UPTREND':
+      return 'UP';
+    case 'TREND_DOWN':
+    case 'PULLBACK_DOWNTREND':
+      return 'DOWN';
+    case 'RANGE':
+    case 'COMPRESSION':
+    case 'TRANSITION':
+      return 'CHOP';
+    case 'EXPANSION':
+      return 'VOL';
+    case 'BREAKOUT_UP':
+    case 'FAILED_BREAKOUT_UP':
+      return 'BRK_UP';
+    case 'BREAKOUT_DOWN':
+    case 'FAILED_BREAKOUT_DOWN':
+      return 'BRK_DOWN';
+    case 'REVERSAL_CANDIDATE':
+      return 'REV';
+    default:
+      return 'UNK';
+  }
+}
+
+/** Hard flips allowed before dwell completes (structure break / violent reverse). */
+function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
+  if (from === 'UNKNOWN' || from === 'TRANSITION') return true;
+  if (to === 'REVERSAL_CANDIDATE') return true;
+  if (to === 'FAILED_BREAKOUT_UP' || to === 'FAILED_BREAKOUT_DOWN') return true;
+  if (to === 'BREAKOUT_UP' || to === 'BREAKOUT_DOWN') return true;
+  // Opposite trend family
+  const a = regimeFamily(from);
+  const b = regimeFamily(to);
+  if ((a === 'UP' || a === 'BRK_UP') && (b === 'DOWN' || b === 'BRK_DOWN')) return true;
+  if ((a === 'DOWN' || a === 'BRK_DOWN') && (b === 'UP' || b === 'BRK_UP')) return true;
+  return false;
+}
+
+/**
+ * Classify from closed 10s OHLC using a wider structure zone (~3m) + shorter momentum.
+ * Raw candidate only — live path must run through stabilizeRegime (dwell + confirm).
+ */
+export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
+  if (!bars.length || bars.length < 2) return 'UNKNOWN';
+
+  const zone = bars.slice(-ZONE_BARS);
+  const mom = bars.slice(-MOM_BARS);
+  const last = mom[mom.length - 1]!;
+  const zonePrior = zone.slice(0, -1);
+  const momPrior = mom.slice(0, -1);
+  if (!zonePrior.length || !momPrior.length) return 'UNKNOWN';
+
+  const velocities = mom.map(bodyPct);
+  const ranges = mom.map(rangePct);
+  const priorRanges = momPrior.map(rangePct);
+  const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
+  const lastVel = bodyPct(last);
+  const lastRange = rangePct(last);
+  const persistWindow = velocities.slice(-6);
+  const persistence = mean(
+    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
+  );
+
+  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
+  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
+  const compressed = lastRange < avgRange * 0.4 && lastRange < 0.00014;
+  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
+
+  // Zone highs/lows — multi-minute structure, not last 7×10s chop
+  const hi = Math.max(...zonePrior.map((b) => b.high));
+  const lo = Math.min(...zonePrior.map((b) => b.low));
+  const zoneMid = (hi + lo) / 2;
+  const zoneWidth = Math.max(hi - lo, 1e-9);
+  const inRange = last.close <= hi && last.close >= lo;
+  const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < 0.35;
+  const breakoutUp = last.close > hi;
+  const breakoutDown = last.close < lo;
+  const reversal =
+    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
+    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
+
+  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
+  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
+  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  if (expanding) return 'EXPANSION';
+
+  // Pullbacks only inside the parent trend family (zone still respected)
+  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15 && inRange) {
+    return 'PULLBACK_UPTREND';
+  }
+  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15 && inRange) {
+    return 'PULLBACK_DOWNTREND';
+  }
+  if (previous === 'PULLBACK_UPTREND' && trendingUp) return 'TREND_UP';
+  if (previous === 'PULLBACK_DOWNTREND' && trendingDown) return 'TREND_DOWN';
+
+  if (trendingUp) return 'TREND_UP';
+  if (trendingDown) return 'TREND_DOWN';
+  if (reversal) return 'REVERSAL_CANDIDATE';
+
+  // Compression only when truly squeezed near zone mid — not every quiet 10s tick
+  if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
+  if (inRange) return 'RANGE';
+
+  // Sticky prior instead of dead TRANSITION
+  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+  return 'UNKNOWN';
+}
+
+/**
+ * Anti-flicker: min dwell (~60s) + confirm bars before leaving a regime family.
+ * Prevents cycling every 10s so a 1m window does not show all regimes.
+ */
+export function stabilizeRegime(
+  book: {
+    current: RegimeName;
+    previous: RegimeName;
+    bars_in_current: number;
+    pending: RegimeName | null;
+    pending_count: number;
+    since: string;
+  },
+  candidate: RegimeName,
+  nowIso = new Date().toISOString()
+): RegimeName {
+  if (candidate === book.current) {
+    book.bars_in_current += 1;
+    book.pending = null;
+    book.pending_count = 0;
+    return book.current;
+  }
+
+  const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
+  const strong = isStrongSwitch(book.current, candidate);
+  const dwellOk =
+    book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
+
+  // Soft cross-family flicker before dwell → ignore (keep market state)
+  if (!sameFamily && !strong && !dwellOk) {
+    book.bars_in_current += 1;
+    book.pending = null;
+    book.pending_count = 0;
+    return book.current;
+  }
+
+  if (book.pending === candidate) book.pending_count += 1;
+  else {
+    book.pending = candidate;
+    book.pending_count = 1;
+  }
+
+  // Same family (TREND↔PULLBACK) or strong structure: 1 confirm; else 2
+  const need = sameFamily || strong ? 1 : CONFIRM_BARS;
+  if (book.pending_count >= need && (dwellOk || strong || sameFamily)) {
+    book.previous = book.current;
+    book.current = candidate;
+    book.bars_in_current = 1;
+    book.pending = null;
+    book.pending_count = 0;
+    book.since = nowIso;
+    return book.current;
+  }
+
+  book.bars_in_current += 1;
+  return book.current;
 }
 
 /**
@@ -125,64 +311,6 @@ export function regimeBookKey(epic: string, accountId?: number | string | null):
   const n = Number(accountId);
   if (Number.isFinite(n) && n > 0) return `a${n}::${e}`;
   return `${String(accountId).trim()}::${e}`;
-}
-
-/**
- * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Failed-breakout variants are live here (reserved in C++).
- */
-export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
-  if (!bars.length || bars.length < 2) return 'UNKNOWN';
-
-  const window = bars.slice(-8);
-  const last = window[window.length - 1]!;
-  const prior = window.slice(0, -1);
-  if (!prior.length) return 'UNKNOWN';
-
-  const velocities = window.map(bodyPct);
-  const ranges = window.map(rangePct);
-  const priorRanges = prior.map(rangePct);
-  const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
-  const lastVel = bodyPct(last);
-  const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
-  const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
-  );
-
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
-  // Stricter than before — old COMPRESSION ate RANGE and blocked all entries
-  const compressed = lastRange < avgRange * 0.4 && lastRange < 0.00014;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
-  const hi = Math.max(...prior.map((b) => b.high));
-  const lo = Math.min(...prior.map((b) => b.low));
-  const inRange = last.close <= hi && last.close >= lo;
-  const breakoutUp = last.close > hi;
-  const breakoutDown = last.close < lo;
-  const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
-
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (compressed && inRange) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
-  if (expanding) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
-    return 'PULLBACK_UPTREND';
-  }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
-    return 'PULLBACK_DOWNTREND';
-  }
-  if (trendingUp) return 'TREND_UP';
-  if (trendingDown) return 'TREND_DOWN';
-  if (reversal) return 'REVERSAL_CANDIDATE';
-  if (inRange) return 'RANGE';
-  // Sticky prior regime instead of dead TRANSITION (null entry forever)
-  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
-  return 'UNKNOWN';
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
@@ -224,6 +352,9 @@ function ensureBook(
       display_name: displayName || epic,
       last_mid: null,
       last_update: now,
+      bars_in_current: 0,
+      pending: null,
+      pending_count: 0,
     };
     books.set(key, b);
   } else if (displayName) {
@@ -233,13 +364,9 @@ function ensureBook(
 }
 
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  const next = classifyRegime(b.bars, b.current);
+  const candidate = classifyRegime(b.bars, b.current);
   const now = new Date().toISOString();
-  if (next !== b.current) {
-    b.previous = b.current;
-    b.current = next;
-    b.since = now;
-  }
+  stabilizeRegime(b, candidate, now);
   b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
   if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
@@ -281,6 +408,11 @@ export function notePipelineRegime(
     b.previous = b.current;
     b.current = next;
     b.since = now;
+    b.bars_in_current = 1;
+    b.pending = null;
+    b.pending_count = 0;
+  } else {
+    b.bars_in_current += 1;
   }
   b.last_update = now;
   if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
