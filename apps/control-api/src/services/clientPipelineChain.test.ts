@@ -34,6 +34,8 @@ vi.mock('./capitalCom.js', () => ({
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
   computeSafetyCushionStopLevel: () => 1995,
   isLateMoveOnOneMinute: () => false,
+  parseCapitalCreatedAt: (raw: unknown) =>
+    typeof raw === 'string' && raw.trim() ? new Date(raw.endsWith('Z') ? raw : `${raw}Z`).toISOString() : null,
 }));
 
 vi.mock('./clientEvents.js', () => ({
@@ -345,6 +347,9 @@ describe('Idempotency', () => {
             open_level: 2001.37,
             stop_level: 1995,
             size: 0.1,
+            created_at: '2022-04-05T09:46:01.872Z',
+            deal_reference: null,
+            upl: null,
           },
         ],
       });
