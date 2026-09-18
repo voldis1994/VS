@@ -77,14 +77,22 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(run(bounce, 'TREND_DOWN')).toBe('PULLBACK_DOWNTREND');
   });
 
-  it('COMPRESSION on tiny in-range bars', () => {
-    const bars = [
+  it('COMPRESSION only on ultra-tight squeeze (mild squeeze → RANGE so entries are not starved)', () => {
+    const mild = [
       bar(100, 100.02, 99.98, 100.00, 0),
       bar(100.00, 100.015, 99.99, 100.005, 1),
       bar(100.005, 100.012, 99.995, 100.002, 2),
       bar(100.002, 100.01, 99.997, 100.004, 3),
     ];
-    expect(classifyRegime(bars)).toBe('COMPRESSION');
+    expect(classifyRegime(mild)).toBe('RANGE');
+
+    const tight = [
+      bar(100, 100.05, 99.95, 100.0, 0),
+      bar(100.0, 100.04, 99.96, 100.01, 1),
+      bar(100.01, 100.035, 99.97, 100.005, 2),
+      bar(100.005, 100.008, 100.002, 100.004, 3),
+    ];
+    expect(classifyRegime(tight)).toBe('COMPRESSION');
   });
 
   it('BREAKOUT_UP when expanding close leaves the prior range', () => {

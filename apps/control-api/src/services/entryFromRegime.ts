@@ -9,16 +9,20 @@ export type RegimeEntry = {
   reason: string;
 };
 
+/** Soft Gold-aware floors — old 0.015%/0.025% starved quiet 10s sessions. */
+const DIP = -0.0001;
+const RALLY = 0.0001;
+
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
 
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= -0.00015;
+  return bodyPct(bar) <= DIP;
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= 0.00015;
+  return bodyPct(bar) >= RALLY;
 }
 
 function describe(bar: TenSecBar): string {
@@ -37,15 +41,31 @@ export function decideEntryFrom10sRegime(
   const candle = describe(bar);
 
   if (r === 'UNKNOWN' || r === 'TRANSITION') return null;
-  if (r === 'COMPRESSION') return null; // wait for expansion / breakout
+
+  // COMPRESSION used to always return null while classify hit it often → zero trades.
+  // Fade like RANGE when the 10s bar actually moves (toggle in CONTROL then means something).
+  if (r === 'COMPRESSION') {
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    return null;
+  }
 
   if (r === 'TREND_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    // With-trend: do not starve a clean up-bar waiting forever for a pullback
+    if (rally(bar))
+      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} with-trend · ${candle}` };
+    return null;
   }
   if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    if (!movingOrNull(bar)) return null;
+    if (rally(bar))
+      return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    if (dip(bar))
+      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} with-trend · ${candle}` };
+    return null;
   }
 
   if (r === 'PULLBACK_UPTREND') {

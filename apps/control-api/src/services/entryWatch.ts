@@ -5,10 +5,10 @@ import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 
-const DIP = -0.00015;
-const RALLY = 0.00015;
-const MOVING_BODY = 0.00015;
-const MOVING_RANGE = 0.00025;
+const DIP = -0.0001;
+const RALLY = 0.0001;
+const MOVING_BODY = 0.0001;
+const MOVING_RANGE = 0.00018;
 
 export type EntryWatchStatus =
   | 'STOPPED'
@@ -74,14 +74,14 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
-        looking_for: 'TREND_UP · gaida DIP (body ≤ −0.015%) uz MOVING 10s → BUY',
+        looking_for: 'TREND_UP · DIP → BUY pullback · RALLY → BUY with-trend (MOVING 10s)',
         threshold_body_pct: DIP,
       };
     case 'TREND_DOWN':
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
-        looking_for: 'TREND_DOWN · gaida RALLY (body ≥ +0.015%) uz MOVING 10s → SELL',
+        looking_for: 'TREND_DOWN · RALLY → SELL pullback · DIP → SELL with-trend (MOVING 10s)',
         threshold_body_pct: RALLY,
       };
     case 'PULLBACK_UPTREND':
@@ -150,8 +150,8 @@ export function watchRecipe(regime?: string | null): {
     case 'COMPRESSION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'COMPRESSION · nav entry (gaida EXPANSION / BREAKOUT)',
+        setup: 'FADE',
+        looking_for: 'COMPRESSION · fade uz MOVING 10s · DIP → BUY · RALLY → SELL',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
