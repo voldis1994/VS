@@ -243,6 +243,8 @@ export function RobotDeskPage() {
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
   const [showDeploy, setShowDeploy] = useState(false);
+  const [showControl, setShowControl] = useState(true);
+  const [showFeeds, setShowFeeds] = useState(false);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -497,95 +499,6 @@ export function RobotDeskPage() {
         {error && <div className="error-state">{error}</div>}
         {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
 
-        <DeskControlPanel
-          variant="board"
-          onStarted={({ accountId: aid, epic: ep, lot: lt, name: nm }) => {
-            setBusy(true);
-            setError(null);
-            void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
-              method: 'POST',
-              body: JSON.stringify({
-                account_id: aid,
-                epic: ep,
-                display_name: nm,
-                lot_size: lt,
-                trading_enabled: true,
-              }),
-            })
-              .then((res) => {
-                setFocusId(res.session.id);
-                void refresh();
-              })
-              .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
-              .finally(() => setBusy(false));
-          }}
-        />
-
-        <div className="robot-wire-panel">
-          <div className="robot-wire-head">
-            <div className="robot-arena-kicker">WIRED CHAIN</div>
-            <div className="robot-wire-chain mono">{chainLabel}</div>
-          </div>
-          <div className="robot-wire-regimes">
-            {regimes.map((r) => {
-              const name = r.toUpperCase();
-              const live = activeRegimes.has(name);
-              const focusHit = (focused?.regime || '').toUpperCase() === name;
-              return (
-                <span
-                  key={name}
-                  className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
-                  title={live ? 'Active on a running robot' : 'Catalog regime'}
-                >
-                  {name}
-                </span>
-              );
-            })}
-          </div>
-          <div className="robot-wire-feeds">
-            <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
-            <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
-              {boardNote}
-            </div>
-            <div className="robot-feed-legs">
-              {publicSenders.map((s) => (
-                <div
-                  key={s.sender_id}
-                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
-                >
-                  <strong>{s.name}</strong>
-                  <span className="mono">
-                    {s.kind} · {s.status} · {s.trust}
-                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="robot-arena-kicker" style={{ marginTop: 10 }}>
-              CAPITAL EXECUTION PROVIDERS
-            </div>
-            {capitalSenders.length === 0 && (
-              <div className="mono robot-wire-empty">
-                Nav enabled Capital — orderiem vajag brokeri (Brokers). OHLC joprojām var nākt no public feeds.
-              </div>
-            )}
-            <div className="robot-feed-legs">
-              {capitalSenders.map((s) => (
-                <div
-                  key={s.sender_id}
-                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
-                >
-                  <strong>{s.name}</strong>
-                  <span className="mono">
-                    {s.kind} · {s.status} · {s.trust}
-                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
             <div className="section-title">DEPLOY CLIENT ROBOT</div>
@@ -639,17 +552,37 @@ export function RobotDeskPage() {
           </div>
         )}
 
+        <div className="robot-units-bar">
+          <div className="section-title" style={{ margin: 0 }}>
+            ROBOT UNITS · {sessions.length} ({runningCount} online)
+          </div>
+          <div className="actions" style={{ margin: 0 }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowControl((v) => !v)}
+            >
+              {showControl ? 'Hide CONTROL' : 'CONTROL'}
+            </button>
+            <button type="button" className="btn" onClick={() => setShowFeeds((v) => !v)}>
+              {showFeeds ? 'Hide feeds' : 'Feeds'}
+            </button>
+          </div>
+        </div>
+
         {sessions.length === 0 && !busy && (
           <div className="robot-empty">
             <div className="robot-arena-kicker">EMPTY BOARD</div>
-            <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY vai Trading → START ROBOT.</p>
+            <p style={{ marginBottom: 12 }}>
+              Vēl nav robotu kartiņu. Spied CONTROL → TRADING ON, vai + DEPLOY.
+            </p>
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
               + DEPLOY FIRST UNIT
             </button>
           </div>
         )}
 
-        <div className="robot-board-grid">
+        <div className="robot-board-grid robot-units-grid">
           {sessions.map((s) => {
             const p = posture(s);
             const active = focusId === s.id;
@@ -868,6 +801,99 @@ export function RobotDeskPage() {
                   </div>
                 ))}
                 {focused.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showControl && (
+          <DeskControlPanel
+            variant="board"
+            onStarted={({ accountId: aid, epic: ep, lot: lt, name: nm }) => {
+              setBusy(true);
+              setError(null);
+              void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+                method: 'POST',
+                body: JSON.stringify({
+                  account_id: aid,
+                  epic: ep,
+                  display_name: nm,
+                  lot_size: lt,
+                  trading_enabled: true,
+                }),
+              })
+                .then((res) => {
+                  setFocusId(res.session.id);
+                  void refresh();
+                })
+                .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
+                .finally(() => setBusy(false));
+            }}
+          />
+        )}
+
+        {showFeeds && (
+          <div className="robot-wire-panel">
+            <div className="robot-wire-head">
+              <div className="robot-arena-kicker">WIRED CHAIN</div>
+              <div className="robot-wire-chain mono">{chainLabel}</div>
+            </div>
+            <div className="robot-wire-regimes">
+              {regimes.map((r) => {
+                const name = r.toUpperCase();
+                const live = activeRegimes.has(name);
+                const focusHit = (focused?.regime || '').toUpperCase() === name;
+                return (
+                  <span
+                    key={name}
+                    className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
+                    title={live ? 'Active on a running robot' : 'Catalog regime'}
+                  >
+                    {name}
+                  </span>
+                );
+              })}
+            </div>
+            <div className="robot-wire-feeds">
+              <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
+              <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
+                {boardNote}
+              </div>
+              <div className="robot-feed-legs">
+                {publicSenders.map((s) => (
+                  <div
+                    key={s.sender_id}
+                    className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                  >
+                    <strong>{s.name}</strong>
+                    <span className="mono">
+                      {s.kind} · {s.status} · {s.trust}
+                      {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="robot-arena-kicker" style={{ marginTop: 10 }}>
+                CAPITAL EXECUTION PROVIDERS
+              </div>
+              {capitalSenders.length === 0 && (
+                <div className="mono robot-wire-empty">
+                  Nav enabled Capital — orderiem vajag brokeri (Brokers). OHLC joprojām var nākt no public feeds.
+                </div>
+              )}
+              <div className="robot-feed-legs">
+                {capitalSenders.map((s) => (
+                  <div
+                    key={s.sender_id}
+                    className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                  >
+                    <strong>{s.name}</strong>
+                    <span className="mono">
+                      {s.kind} · {s.status} · {s.trust}
+                      {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
