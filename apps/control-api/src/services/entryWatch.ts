@@ -1,6 +1,10 @@
 /** Live ENTRY WATCH — what the robot is reading / waiting for (all regimes). */
 import type { RegimeName } from './regimes.js';
-import { normalizeRegime } from './regimes.js';
+import {
+  MIN_BARS_FOR_ZONE,
+  ZONE_BARS,
+  normalizeRegime,
+} from './regimes.js';
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
@@ -48,6 +52,18 @@ export type EntryWatch = {
   need_side: 'BUY' | 'SELL' | null;
   /** Seconds left on same-direction lock (0 = expired / inactive) */
   lock_left_s: number;
+  /** Closed 10s candles already in the structure book */
+  zone_bars: number;
+  /** Min candles before regime trusts the zone (≈15m) */
+  zone_need: number;
+  /** Full structure zone target (≈30m) */
+  zone_full: number;
+  /** Candles still needed to reach zone_need (0 when ready) */
+  zone_left: number;
+  /** True once zone_bars ≥ zone_need */
+  zone_ready: boolean;
+  /** Human: e.g. "45/90 sveces · vēl 45 (≈8m)" */
+  zone_progress: string;
   threshold_body_pct: number;
   bar: {
     o: number | null;
@@ -62,6 +78,37 @@ export type EntryWatch = {
   };
   last_reason: string;
 };
+
+/** How many 10s candles the zone has vs min/full targets. */
+export function zoneBarProgress(have: number): {
+  zone_bars: number;
+  zone_need: number;
+  zone_full: number;
+  zone_left: number;
+  zone_ready: boolean;
+  zone_progress: string;
+} {
+  const n = Math.max(0, Math.floor(Number(have) || 0));
+  const left = Math.max(0, MIN_BARS_FOR_ZONE - n);
+  const ready = left === 0;
+  let zone_progress: string;
+  if (!ready) {
+    const mins = Math.max(1, Math.ceil((left * 10) / 60));
+    zone_progress = `${n}/${MIN_BARS_FOR_ZONE} sveces · vēl ${left} (≈${mins}m)`;
+  } else if (n < ZONE_BARS) {
+    zone_progress = `${n}/${ZONE_BARS} sveces · min OK · pilna zona vēl ${ZONE_BARS - n}`;
+  } else {
+    zone_progress = `${n}/${ZONE_BARS} sveces · zona pilna`;
+  }
+  return {
+    zone_bars: n,
+    zone_need: MIN_BARS_FOR_ZONE,
+    zone_full: ZONE_BARS,
+    zone_left: left,
+    zone_ready: ready,
+    zone_progress,
+  };
+}
 
 function pctStr(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
@@ -186,6 +233,17 @@ export function watchRecipe(regime?: string | null): {
   }
 }
 
+function lookingForWithZone(
+  base: string,
+  zone: ReturnType<typeof zoneBarProgress>,
+  regime: RegimeName
+): string {
+  if (!zone.zone_ready || regime === 'UNKNOWN') {
+    return `${base} · ${zone.zone_progress}`;
+  }
+  return `${base} · zona ${zone.zone_bars}/${zone.zone_full}`;
+}
+
 function barVsTrigger(
   bar: TenSecBar | null | undefined,
   recipe: ReturnType<typeof watchRecipe>,
@@ -225,6 +283,8 @@ export type BuildWatchInput = {
   last_closed: TenSecBar | null | undefined;
   forming_c: number | null | undefined;
   just_closed: boolean;
+  /** Closed 10s bars already in the robot structure book */
+  closed_bar_count?: number;
   last_closed_side?: 'BUY' | 'SELL' | null;
   closed_at_ms?: number | null;
   cooldown_left_s?: number;
@@ -237,6 +297,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const recipe = watchRecipe(regime);
   const enabled = getDeskCalibration().enabled_regimes;
   const regimeOn = regimeAllowedForEntry(regime);
+  const zone = zoneBarProgress(input.closed_bar_count ?? 0);
   const bar = input.last_closed || null;
   const body = bar ? bodyPct(bar) : null;
   const rng = bar ? rangePct(bar) : null;
@@ -246,7 +307,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const lockLeft = sameDirLockLeftSec(closedAtMs);
   const needSide = requiredFlipSide(lastClosedSide, closedAtMs);
   const rawSig =
-    bar && regimeOn && input.entry_enabled && !input.open_side
+    bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
       ? decideEntryFrom10sRegime(bar, regime)
       : null;
   const flipBlocked = Boolean(
@@ -261,7 +322,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   else if (input.cooldown_left_s && input.cooldown_left_s > 0) status = 'COOLDOWN';
   else if (input.status_override === 'FLIP_FILTER' || flipBlocked) status = 'FLIP_FILTER';
   else if (input.status_override) status = input.status_override;
-  else if (!bar) status = 'SEEDING';
+  else if (!zone.zone_ready || !bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';
   else if (!regimeOn) status = 'REGIME_OFF';
   else if (sig) status = 'ARMED';
@@ -281,7 +342,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     else if (status === 'MANAGE_ONLY') last_reason = 'Entry smadzenes OFF (manage-only)';
     else if (status === 'COOLDOWN')
       last_reason = `Cooldown ${input.cooldown_left_s}s pēc close`;
-    else if (status === 'SEEDING') last_reason = 'Lasīt 10s OHLC…';
+    else if (status === 'SEEDING')
+      last_reason = zone.zone_ready
+        ? 'Lasīt 10s OHLC…'
+        : `Lasa tirgu · ${zone.zone_progress}`;
     else if (status === 'STOPPED') last_reason = 'Robots STOP';
   }
 
@@ -294,7 +358,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: `${recipe.looking_for}${flipNote}`,
+    looking_for: lookingForWithZone(`${recipe.looking_for}${flipNote}`, zone, regime),
     bar_vs_trigger: vs,
     direction: sig?.direction ?? (flipBlocked ? needSide : recipe.direction),
     setup: sig?.setup ?? recipe.setup,
@@ -302,6 +366,12 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     last_closed_side: lastClosedSide,
     need_side: needSide,
     lock_left_s: lockLeft,
+    zone_bars: zone.zone_bars,
+    zone_need: zone.zone_need,
+    zone_full: zone.zone_full,
+    zone_left: zone.zone_left,
+    zone_ready: zone.zone_ready,
+    zone_progress: zone.zone_progress,
     threshold_body_pct: recipe.threshold_body_pct,
     bar: {
       o: bar?.open ?? null,

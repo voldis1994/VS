@@ -78,6 +78,12 @@ type EntryWatch = {
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
+  zone_bars?: number;
+  zone_need?: number;
+  zone_full?: number;
+  zone_left?: number;
+  zone_ready?: boolean;
+  zone_progress?: string;
   threshold_body_pct: number;
   bar: {
     o: number | null;
@@ -621,6 +627,11 @@ export function RobotDeskPage() {
                   <div className={`robot-mini-watch ${s.entry_watch.armed ? 'armed' : ''}`}>
                     <div className="mono">{s.entry_watch.status}</div>
                     <div className="robot-mini-watch-line">{s.entry_watch.looking_for}</div>
+                    {s.entry_watch.zone_progress && (
+                      <div className="robot-mini-watch-line mono">
+                        ZONA · {s.entry_watch.zone_progress}
+                      </div>
+                    )}
                     <div className="robot-mini-watch-line muted">
                       body {pctFmt(s.entry_watch.bar.body_pct)} · {s.entry_watch.bar.market}
                     </div>
@@ -750,6 +761,15 @@ export function RobotDeskPage() {
                     <div className="robot-entry-watch-look">
                       MEKLĒ · {focused.entry_watch.looking_for}
                     </div>
+                    {focused.entry_watch.zone_progress && (
+                      <div className="mono">
+                        ZONA · {focused.entry_watch.zone_bars ?? '—'}/
+                        {focused.entry_watch.zone_need ?? 90}
+                        {focused.entry_watch.zone_ready
+                          ? ` · gatavs · mērķis ${focused.entry_watch.zone_full ?? 180}`
+                          : ` · vēl ${focused.entry_watch.zone_left ?? '—'} sveces`}
+                      </div>
+                    )}
                     <div>
                       BARS · O {fmt(focused.entry_watch.bar.o, 2)} H {fmt(focused.entry_watch.bar.h, 2)} L{' '}
                       {fmt(focused.entry_watch.bar.l, 2)} C {fmt(focused.entry_watch.bar.c, 2)}

@@ -237,6 +237,7 @@ function refreshEntryWatch(
     last_closed: s.ohlcState.last_closed,
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),
+    closed_bar_count: s.closedBars.length,
     last_closed_side: s.last_closed_side,
     closed_at_ms: s.closed_at_ms,
     cooldown_left_s: opts?.cooldown_left_s,
@@ -300,7 +301,10 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     action = `FLIP LOCK · need ${w.need_side || 'opp'} · ${w.lock_left_s ?? 0}s (last ${w.last_closed_side || '—'})`;
   else if (w?.status === 'COOLDOWN') action = `COOLDOWN ${w.last_reason || ''}`.trim();
   else if (w?.status === 'MANAGE_ONLY') action = 'MANAGE-ONLY';
-  else if (w?.status === 'SEEDING') action = 'SEEDING';
+  else if (w?.status === 'SEEDING')
+    action = w.zone_ready
+      ? 'SEEDING'
+      : `SEEDING · ${w.zone_bars}/${w.zone_need} · vēl ${w.zone_left}`;
   else if (w?.status === 'FORMING') action = 'WATCH · forming 10s';
   else if (w?.status === 'WAITING_TRIGGER') action = 'WATCH · trigger';
   else if (w?.status === 'REGIME_OFF') action = 'REGIME OFF';

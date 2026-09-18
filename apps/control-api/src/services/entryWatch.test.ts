@@ -28,11 +28,13 @@ describe('entryWatch', () => {
       last_closed: b,
       forming_c: null,
       just_closed: true,
+      closed_bar_count: 90,
     });
     // may be REGIME_OFF if calibration empty in test env — at least recipe text present
     expect(w.looking_for).toMatch(/TREND_UP/);
     expect(w.bar.body_pct).not.toBeNull();
     expect(w.bar_vs_trigger.length).toBeGreaterThan(5);
+    expect(w.zone_ready).toBe(true);
   });
 
   it('shows FORMING while bar open', () => {
@@ -45,6 +47,7 @@ describe('entryWatch', () => {
       last_closed: b,
       forming_c: 2000.4,
       just_closed: false,
+      closed_bar_count: 120,
     });
     expect(w.status).toBe('FORMING');
     expect(w.looking_for).toMatch(/RANGE/);
@@ -63,6 +66,7 @@ describe('entryWatch', () => {
       last_closed: b,
       forming_c: null,
       just_closed: true,
+      closed_bar_count: 100,
     });
     expect(w.looking_for).toMatch(/COMPRESSION/);
   });
@@ -77,6 +81,7 @@ describe('entryWatch', () => {
       last_closed: b,
       forming_c: null,
       just_closed: true,
+      closed_bar_count: 90,
       last_closed_side: 'BUY',
       closed_at_ms: Date.now() - 30_000,
     });
@@ -98,11 +103,34 @@ describe('entryWatch', () => {
       last_closed: b,
       forming_c: null,
       just_closed: true,
+      closed_bar_count: 90,
       last_closed_side: 'BUY',
       closed_at_ms: Date.now() - 3 * 60_000 - 1,
     });
     expect(w.status).not.toBe('FLIP_FILTER');
     expect(w.need_side).toBeNull();
     expect(w.lock_left_s).toBe(0);
+  });
+
+  it('SEEDING shows how many 10s candles have vs still needed', () => {
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'UNKNOWN',
+      last_closed: bar(2000, 2001, 1999, 2000.5),
+      forming_c: null,
+      just_closed: true,
+      closed_bar_count: 45,
+    });
+    expect(w.status).toBe('SEEDING');
+    expect(w.zone_bars).toBe(45);
+    expect(w.zone_need).toBe(90);
+    expect(w.zone_left).toBe(45);
+    expect(w.zone_ready).toBe(false);
+    expect(w.zone_progress).toMatch(/45\/90/);
+    expect(w.zone_progress).toMatch(/vēl 45/);
+    expect(w.looking_for).toMatch(/45\/90/);
+    expect(w.last_reason).toMatch(/Lasa tirgu/);
   });
 });
