@@ -106,7 +106,12 @@ export function ClientPanelPage() {
           return;
         }
         const hit = mk.find((m) => m.epic === st.market);
-        if (hit) setLot(hit.min_lot);
+        // Prefer saved lot_size — never wipe operator/client choice with min_lot on boot
+        if (st.lot_size != null && Number.isFinite(Number(st.lot_size)) && Number(st.lot_size) > 0) {
+          setLot(Number(st.lot_size));
+        } else if (hit) {
+          setLot(hit.min_lot);
+        }
       })
       .catch((e) => {
         setError(e instanceof Error ? e.message : 'Session error');
@@ -141,12 +146,17 @@ export function ClientPanelPage() {
         setFlash(null);
         setClosedBanner(false);
       }, 2200);
+    } else if (msg.type === 'robot_error') {
+      setError(typeof msg.detail === 'string' ? msg.detail : 'Robot error');
+      void refresh();
     } else if (
       msg.type === 'robot_started' ||
       msg.type === 'robot_stopped' ||
       msg.type === 'client_status'
     ) {
       void refresh();
+    } else if (msg.type === 'error' && typeof msg.message === 'string') {
+      setError(msg.message);
     }
   });
 
@@ -387,8 +397,10 @@ export function ClientPanelPage() {
             {errorState
               ? status?.broker_error || status?.status_reason || 'SYSTEM ERROR — TAP TO STOP'
               : starting
-                ? 'WAITING FOR MARKET READER'
-                : hintLabel}
+                ? status?.status_reason || 'WAITING FOR MARKET READER'
+                : requestedActive
+                  ? 'TAP TO STOP · open trade stays managed'
+                  : hintLabel}
           </div>
         </section>
 
@@ -400,12 +412,14 @@ export function ClientPanelPage() {
             </div>
           ) : live ? (
             <div className="ccp-live-body">
-              <div className="ccp-live-state">TRADE OPENED</div>
+              <div className="ccp-live-state">
+                {requestedActive ? 'TRADE OPENED' : 'BROKER POSITION (MANAGED)'}
+              </div>
               <div className="ccp-live-market">{live.display_name || live.market}</div>
               <div className="ccp-live-type">{live.trade_type}</div>
-              {live.regime && live.regime !== 'UNKNOWN' && (
+              {live.regime && live.regime !== 'UNKNOWN' ? (
                 <div className="ccp-live-regime">{live.regime}</div>
-              )}
+              ) : null}
               <div className="ccp-live-lot">{fmtLot(live.lot_size)} LOT</div>
               {live.entry_price != null && (
                 <div className="ccp-live-entry">ENTRY {live.entry_price}</div>
@@ -414,6 +428,9 @@ export function ClientPanelPage() {
           ) : confirmedRunning ? (
             <div className="ccp-live-body">
               <div className="ccp-live-wait">WAITING FOR TRADE</div>
+              {status?.status_reason ? (
+                <div className="ccp-live-regime">{status.status_reason}</div>
+              ) : null}
             </div>
           ) : starting ? (
             <div className="ccp-live-body">

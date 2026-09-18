@@ -13,7 +13,7 @@ import {
 import { computeClientRobotStatus } from './clientPanel.js';
 
 const createCapitalPosition = vi.fn();
-const acquireCapitalSession = vi.fn();
+const withCapitalAccountSession = vi.fn();
 const listCapitalOpenPositions = vi.fn();
 const fetchCapitalMarketQuote = vi.fn();
 const fetchCapitalMinutePrices = vi.fn();
@@ -27,7 +27,8 @@ const intentDedupe = new Map<string, unknown>();
 
 vi.mock('./capitalCom.js', () => ({
   createCapitalPosition: (...a: unknown[]) => createCapitalPosition(...a),
-  acquireCapitalSession: (...a: unknown[]) => acquireCapitalSession(...a),
+  withCapitalAccountSession: (...a: unknown[]) => withCapitalAccountSession(...a),
+  acquireCapitalSession: vi.fn(),
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
@@ -56,6 +57,7 @@ vi.mock('../security/encryption.js', () => ({
 vi.mock('./robotDesk.js', () => ({
   attachManageOnlyRobot: vi.fn(async () => undefined),
   listRobotSessions: () => [],
+  robotIdFor: (accountId: number, epic: string) => `r${accountId}_${epic}`,
   stopRobotSession: vi.fn(async () => undefined),
 }));
 
@@ -153,7 +155,10 @@ beforeEach(() => {
     return { rows: [{ id: 1 }] };
   });
 
-  acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
+  withCapitalAccountSession.mockImplementation(async (_input: unknown, fn: (s: unknown) => Promise<unknown>) => {
+    const value = await fn({ token: 't' });
+    return { ok: true, value };
+  });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',
@@ -260,10 +265,21 @@ describe('Idempotency', () => {
     });
 
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
+    expect(withCapitalAccountSession).toHaveBeenCalled();
+    expect(withCapitalAccountSession.mock.calls[0]![0]).toMatchObject({
+      requireAccountId: true,
+      capitalAccountId: 'XYZ',
+    });
     const opened = emitToClient.mock.calls.filter(
       (c: unknown[]) => (c[1] as { type: string }).type === 'trade_opened'
     );
     expect(opened).toHaveLength(1);
+    // SAFETY SL was attached on the real create call
+    expect(createCapitalPosition.mock.calls[0]![1]).toMatchObject({
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      stopLevel: 1995,
+    });
   });
 
   it('concurrent same key → exactly ONE Capital execution', async () => {

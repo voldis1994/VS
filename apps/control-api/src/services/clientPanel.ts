@@ -15,7 +15,7 @@ import {
   isEpicBeingAnalyzed,
 } from './pipelineBridge.js';
 import {
-  acquireCapitalSession,
+  withCapitalAccountSession,
   listCapitalOpenPositions,
 } from './capitalCom.js';
 import { decrypt } from '../security/encryption.js';
@@ -272,17 +272,26 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
           `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
           [account.account_id]
         );
-        const opened = await acquireCapitalSession({
-          environment: conn.rows[0].environment as string,
-          apiKey: creds.api_key || '',
-          identifier: String(conn.rows[0].identifier || '').trim(),
-          password: creds.password || '',
-          connectionId: account.connection_id,
-          capitalAccountId: (accExt.rows[0]?.external_account_id as string | null) || null,
-        });
-        if (opened.ok) {
+        const capitalAccountId =
+          (accExt.rows[0]?.external_account_id as string | null) || null;
+        const leased = await withCapitalAccountSession(
+          {
+            environment: conn.rows[0].environment as string,
+            apiKey: creds.api_key || '',
+            identifier: String(conn.rows[0].identifier || '').trim(),
+            password: creds.password || '',
+            connectionId: account.connection_id,
+            capitalAccountId,
+            requireAccountId: Boolean(capitalAccountId),
+          },
+          async (session) => {
+            const listed = await listCapitalOpenPositions(session);
+            return listed;
+          }
+        );
+        if (leased.ok) {
           noteBrokerOk(clientId);
-          const listed = await listCapitalOpenPositions(opened.session);
+          const listed = leased.value;
           const match = listed.ok
             ? listed.positions.find(
                 (p) => p.epic.toUpperCase() === String(c.panel_epic).toUpperCase()
@@ -290,7 +299,14 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             : null;
           if (match) {
             const side = match.direction;
-            const regime = currentRegime(match.epic, account.account_id)?.current || null;
+            // Prefer manage robot regime (pipeline stamp), fall back to account book
+            const manage = listRobotSessions().find(
+              (r) => r.account_id === account.account_id && r.open_side
+            );
+            const regime =
+              manage?.regime ||
+              currentRegime(match.epic, account.account_id)?.current ||
+              null;
             live_trade = {
               market: match.epic,
               display_name: c.panel_display_name || match.epic,
@@ -308,7 +324,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             };
           }
         } else {
-          noteBrokerError(clientId, opened.result.detail);
+          noteBrokerError(clientId, leased.result.detail);
         }
       }
     } catch (err) {

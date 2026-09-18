@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSession,
+  withCapitalAccountSession,
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
@@ -98,6 +98,8 @@ export type RobotSession = {
   open_side: 'BUY' | 'SELL' | null;
   /** Last closed trade side — same direction blocked for 3 min after close */
   last_closed_side: 'BUY' | 'SELL' | null;
+  /** Epoch ms of last close — fanout + Admin share the 3m flip lock */
+  closed_at_ms: number;
   safety_sl: number | null;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
@@ -247,7 +249,6 @@ function publicSession(s: Internal): RobotSession {
   const {
     timer: _t,
     connection_id: _c,
-    closed_at_ms: _closed,
     peak_favorable: _peak,
     last_market_closed_tick_ms: _lmc,
     cadence_ms: _cad,
@@ -269,6 +270,7 @@ function publicSession(s: Internal): RobotSession {
   if (!rest.entry_watch) refreshEntryWatch(s);
   return {
     ...rest,
+    closed_at_ms: s.closed_at_ms,
     entry_watch: s.entry_watch,
     ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
@@ -380,10 +382,17 @@ function prevClosedCapitalMinute(
   return null;
 }
 
-function capitalMinuteCandleKey(c: CapitalPriceCandle): string {
-  // Wall-minute bucket so two flat identical OHLC minutes still re-arm Peak/continue
-  const bucket = Math.floor(Date.now() / 60_000);
-  return `${bucket}:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+function capitalMinuteCandleKey(c: CapitalPriceCandle, prev: CapitalPriceCandle | null = null): string {
+  // Prefer Capital snapshot time — never wall-clock (that re-armed Peak on stale close)
+  const t =
+    c.snapshot_time_ms != null && Number.isFinite(c.snapshot_time_ms)
+      ? String(c.snapshot_time_ms)
+      : `ohlc:${c.open.toFixed(4)}:${c.high.toFixed(4)}:${c.low.toFixed(4)}:${c.close.toFixed(4)}`;
+  const p =
+    prev != null
+      ? `${prev.open.toFixed(4)}:${prev.close.toFixed(4)}`
+      : 'noprev';
+  return `${t}|${p}`;
 }
 
 function clearTradeState(s: Internal) {
@@ -1115,35 +1124,19 @@ async function robotCycleLocked(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const opened = await acquireCapitalSession({
-    environment: conn.environment,
-    apiKey: creds.api_key || '',
-    identifier: (conn.identifier || '').trim(),
-    password: creds.password || '',
-    connectionId: s.connection_id,
-    capitalAccountId,
-  });
-  if (!opened.ok) {
-    s.reads_fail += 1;
-    s.error = opened.result.detail;
-    const rateLimited =
-      opened.result.status === 429 || /rate-limit|too-many|cooldown/i.test(opened.result.detail);
-    pushTick(s, {
-      phase: rateLimited ? 'WAIT' : 'ERROR',
-      bid: null,
-      ask: null,
-      mid: null,
-      detail: rateLimited
-        ? `RATE LIMIT — ${opened.result.detail}`
-        : `Session fail: ${opened.result.detail}`,
-    });
-    // Slow this robot while cooling down so control panel stays usable
-    if (rateLimited) setRobotCadence(s, 5_000);
-    return;
-  }
-
+  const leased = await withCapitalAccountSession(
+    {
+      environment: conn.environment,
+      apiKey: creds.api_key || '',
+      identifier: (conn.identifier || '').trim(),
+      password: creds.password || '',
+      connectionId: s.connection_id,
+      capitalAccountId,
+      requireAccountId: true,
+    },
+    async (session) => {
   try {
-    const quote = await fetchCapitalMarketQuote(opened.session, s.epic);
+    const quote = await fetchCapitalMarketQuote(session, s.epic);
     if (!quote.raw_ok) {
       s.reads_fail += 1;
       s.error = quote.detail || 'No quote';
@@ -1170,7 +1163,7 @@ async function robotCycleLocked(s: Internal) {
       if (s.open_side || s.deal_id) {
         // Keep fast cadence while managing — 90s park would delay HardInv
         setRobotCadence(s, ACTIVE_CADENCE_MS);
-        const listedPark = await listCapitalOpenPositions(opened.session);
+        const listedPark = await listCapitalOpenPositions(session);
         if (listedPark.ok) {
           const brokerPark = matchOpenOnEpic(listedPark.positions, s.epic);
           if (brokerPark) {
@@ -1200,13 +1193,13 @@ async function robotCycleLocked(s: Internal) {
           updateExcursion(s, quote.mid);
           const lossPark = decideBestOutcomeExit(s, quote.mid, 'live_loss');
           if (lossPark.exit) {
-            await exitTrade(opened.session, s, quote, lossPark.reason);
+            await exitTrade(session, s, quote, lossPark.reason);
             return;
           }
           if (s.peak_protect_armed) {
             const peakPark = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
             if (peakPark.exit) {
-              await exitTrade(opened.session, s, quote, peakPark.reason);
+              await exitTrade(session, s, quote, peakPark.reason);
               return;
             }
           }
@@ -1277,7 +1270,7 @@ async function robotCycleLocked(s: Internal) {
     }
 
     // Sync truth from broker — source of ONE TRADE ONLY
-    const listed = await listCapitalOpenPositions(opened.session);
+    const listed = await listCapitalOpenPositions(session);
     let brokerOpen: CapitalOpenPosition | null = null;
     let positionsUncertain = false;
     if (listed.ok) {
@@ -1363,7 +1356,7 @@ async function robotCycleLocked(s: Internal) {
       // LIVE loss: HardInv only — no thesis micro-scratch
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
       if (lossDec.exit) {
-        await exitTrade(opened.session, s, quote, lossDec.reason);
+        await exitTrade(session, s, quote, lossDec.reason);
         return;
       }
 
@@ -1371,7 +1364,7 @@ async function robotCycleLocked(s: Internal) {
       if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
         s.last_manage_minute_fetch_ms = Date.now();
         try {
-          const mins = await fetchCapitalMinutePrices(opened.session, s.epic, 8);
+          const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
           if (mins.ok && mins.candles.length) {
             s.last_minute_candles = mins.candles;
           }
@@ -1382,9 +1375,9 @@ async function robotCycleLocked(s: Internal) {
 
       const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
       if (closed1m && s.open_side && s.entry_price != null) {
-        const key = capitalMinuteCandleKey(closed1m);
+        const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+        const key = capitalMinuteCandleKey(closed1m, prev1m);
         if (key !== s.last_1m_profit_exit_key) {
-          const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
           const policy = closed1mProfitPolicy(
             s.open_side,
             { open: closed1m.open, close: closed1m.close },
@@ -1426,7 +1419,7 @@ async function robotCycleLocked(s: Internal) {
               'peak_protect_only'
             );
             if (peakAtClose.exit) {
-              await exitTrade(opened.session, s, quote, peakAtClose.reason);
+              await exitTrade(session, s, quote, peakAtClose.reason);
               return;
             }
           }
@@ -1437,8 +1430,20 @@ async function robotCycleLocked(s: Internal) {
       if (s.peak_protect_armed && s.open_side) {
         const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
         if (peakDec.exit) {
-          await exitTrade(opened.session, s, quote, peakDec.reason);
+          await exitTrade(session, s, quote, peakDec.reason);
           return;
+        }
+      }
+
+      // Green Target / TimeDecay — winners must not wait only for Peak/HardInv
+      if (s.open_side && s.entry_price != null && quote.mid != null) {
+        const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
+        if (favNow > 0) {
+          const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time');
+          if (tpDec.exit) {
+            await exitTrade(session, s, quote, tpDec.reason);
+            return;
+          }
         }
       }
 
@@ -1537,7 +1542,7 @@ async function robotCycleLocked(s: Internal) {
       Date.now() - s.last_second_fetch_ms >= 15_000
     ) {
       s.last_second_fetch_ms = Date.now();
-      const mins = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', 40);
+      const mins = await fetchCapitalPrices(session, s.epic, 'MINUTE', 40);
       if (mins.ok && mins.candles.length >= 10) {
         const bars = expandMinutesToTen(mins.candles);
         applyRobotRegime(s, bars);
@@ -1715,7 +1720,7 @@ async function robotCycleLocked(s: Internal) {
       setup: setupType,
       bar_key: barKey || closedBarKey(bar!),
     };
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -1723,6 +1728,25 @@ async function robotCycleLocked(s: Internal) {
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
+    }
+  );
+
+  if (!leased.ok) {
+    s.reads_fail += 1;
+    s.error = leased.result.detail;
+    const rateLimited =
+      leased.result.status === 429 || /rate-limit|too-many|cooldown/i.test(leased.result.detail);
+    pushTick(s, {
+      phase: rateLimited ? 'WAIT' : 'ERROR',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: rateLimited
+        ? `RATE LIMIT — ${leased.result.detail}`
+        : `Session fail: ${leased.result.detail}`,
+    });
+    if (rateLimited) setRobotCadence(s, 5_000);
+  }
 }
 
 export async function startRobotSession(input: {
@@ -1910,8 +1934,8 @@ export async function attachManageOnlyRobot(input: {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
   if (existing?.running) {
-    // Keep Admin entry brain — do not permanently flip to manage-only after one pipeline fill.
-    // While open_side is set, entry path is skipped anyway; after flat, Admin can enter again.
+    // Pipeline owns this fill — disable local entry brain so Admin + fanout never dual-arm
+    existing.entry_enabled = false;
     existing.trading_enabled = true;
     existing.open_side = input.side;
     existing.mode = 'MANAGE';
@@ -1928,7 +1952,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         existing.regime
-      } · manage open · entry_brain=${existing.entry_enabled ? 'ON' : 'OFF'} · MFE ${existing.mfe.toFixed(5)}`,
+      } · manage open · entry_brain=OFF · MFE ${existing.mfe.toFixed(5)}`,
     });
     return publicSession(existing);
   }
