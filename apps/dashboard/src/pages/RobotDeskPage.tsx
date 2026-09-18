@@ -272,31 +272,17 @@ export function RobotDeskPage() {
     }
   }, []);
 
-  // Auto-start from query once, then stay on board
+  // Legacy ?account_id&epic&lot on board → dedicated unit page
   useEffect(() => {
     if (booted) return;
     if (accountId && epic && lot) {
       setBooted(true);
-      setBusy(true);
-      void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
-        method: 'POST',
-        body: JSON.stringify({
-          account_id: Number(accountId),
-          epic,
-          display_name: name || undefined,
-          lot_size: Number(lot),
-          trading_enabled: true,
-        }),
-      })
-        .then((res) => {
-          setFocusId(res.session.id);
-          navigate('/robot', { replace: true });
-        })
-        .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
-        .finally(() => {
-          setBusy(false);
-          void refresh();
-        });
+      navigate(
+        `/robot/unit?account_id=${accountId}&epic=${encodeURIComponent(epic)}&lot=${lot}${
+          name ? `&name=${encodeURIComponent(name)}` : ''
+        }`,
+        { replace: true },
+      );
       return;
     }
     setBooted(true);
@@ -408,6 +394,11 @@ export function RobotDeskPage() {
         setFocusId(res.session.id);
         setShowDeploy(false);
         void refresh();
+        window.open(
+          `/robot/unit/${encodeURIComponent(res.session.id)}`,
+          `robot_${res.session.id}`,
+          'noopener,noreferrer',
+        );
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Deploy failed'))
       .finally(() => setBusy(false));
@@ -429,6 +420,11 @@ export function RobotDeskPage() {
       });
       setFocusId(res.session.id);
       await refresh();
+      window.open(
+        `/robot/unit/${encodeURIComponent(res.session.id)}`,
+        `robot_${res.session.id}`,
+        'noopener,noreferrer',
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Start failed');
     } finally {
@@ -592,11 +588,23 @@ export function RobotDeskPage() {
                 role="button"
                 tabIndex={0}
                 className={`robot-mini ${p.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
-                onClick={() => setFocusId(s.id)}
+                onClick={() => {
+                  setFocusId(s.id);
+                  window.open(
+                    `/robot/unit/${encodeURIComponent(s.id)}`,
+                    `robot_${s.id}`,
+                    'noopener,noreferrer',
+                  );
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     setFocusId(s.id);
+                    window.open(
+                      `/robot/unit/${encodeURIComponent(s.id)}`,
+                      `robot_${s.id}`,
+                      'noopener,noreferrer',
+                    );
                   }
                 }}
               >
@@ -822,10 +830,15 @@ export function RobotDeskPage() {
                   trading_enabled: true,
                 }),
               })
-                .then((res) => {
-                  setFocusId(res.session.id);
-                  void refresh();
-                })
+              .then((res) => {
+                setFocusId(res.session.id);
+                void refresh();
+                window.open(
+                  `/robot/unit/${encodeURIComponent(res.session.id)}`,
+                  `robot_${res.session.id}`,
+                  'noopener,noreferrer',
+                );
+              })
                 .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
                 .finally(() => setBusy(false));
             }}
@@ -903,7 +916,7 @@ export function RobotDeskPage() {
   );
 }
 
-/** Start robot and open/focus the shared multi-client board (one page). */
+/** Start robot and open dedicated fullscreen unit page (new tab). */
 export function openRobotWindow(opts: {
   accountId: number;
   epic: string;
@@ -916,7 +929,10 @@ export function openRobotWindow(opts: {
     lot: String(opts.lot),
     name: opts.name,
   });
-  // Same tab board — all clients visible together
-  window.location.href = `/robot?${q.toString()}`;
-  return null;
+  const url = `/robot/unit?${q.toString()}`;
+  const w = window.open(url, `robot_${opts.accountId}_${opts.epic}`, 'noopener,noreferrer');
+  if (!w) {
+    window.location.href = url;
+  }
+  return w;
 }

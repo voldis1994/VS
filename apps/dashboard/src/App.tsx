@@ -15,6 +15,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { TradingPage } from './pages/TradingPage';
 import { OrbitReaderPage } from './pages/OrbitReaderPage';
 import { RobotDeskPage } from './pages/RobotDeskPage';
+import { RobotUnitPage } from './pages/RobotUnitPage';
 import { ClientPanelPage } from './pages/ClientPanelPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
@@ -28,6 +29,8 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="/robot/unit/:id" element={<RobotUnitPage />} />
+      <Route path="/robot/unit" element={<RobotUnitPage />} />
       <Route path="/robot" element={<RobotDeskPage />} />
       <Route path="/client" element={<ClientPanelPage />} />
       <Route path="/" element={<Desk><OverviewPage /></Desk>} />
