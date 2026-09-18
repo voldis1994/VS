@@ -375,6 +375,7 @@ export function observeClosedBars(
   accountId?: number | string | null
 ): RegimeSnapshot {
   const b = ensureBook(epic, displayName, accountId);
+  let snap: RegimeSnapshot | null = null;
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -385,11 +386,20 @@ export function observeClosedBars(
       Math.abs(last.high - bar.high) < 1e-9;
     if (same) continue;
     b.bars.push(bar);
+    if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
+    // Per-bar stabilize — batch classify once would skip dwell/confirm accumulation
+    snap = applyClassify(epic, b);
   }
-  if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(epic, b);
+  return snap ?? toSnapshot(epicKey(epic), b);
 }
 
+/**
+ * Pipeline stamp:
+ * - Unscoped (market board): show pipeline regime for display
+ * - Account-scoped (robot desk books): advisory pending only — NEVER switch.
+ *   Robot OHLC observeClosedBars owns sticky dwell/confirm; strong flips here
+ *   were wiping TREND_UP → TREND_DOWN on a single intent stamp.
+ */
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
@@ -399,7 +409,22 @@ export function notePipelineRegime(
   const b = ensureBook(epic, displayName, accountId);
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
-  if (next !== b.current) {
+  const scoped =
+    accountId !== undefined && accountId !== null && String(accountId).trim() !== '';
+
+  if (scoped) {
+    if (next === b.current) {
+      b.bars_in_current += 1;
+      b.pending = null;
+      b.pending_count = 0;
+    } else if (next !== 'UNKNOWN') {
+      if (b.pending === next) b.pending_count += 1;
+      else {
+        b.pending = next;
+        b.pending_count = 1;
+      }
+    }
+  } else if (next !== b.current) {
     b.previous = b.current;
     b.current = next;
     b.since = now;

@@ -363,20 +363,41 @@ async function executeForSubscription(
     });
 
     // Manage-only robot: exits / health reads — no entry brain
-    try {
-      await attachManageOnlyRobot({
+    let manageAttached = false;
+    let manageDetail = '';
+    for (let attempt = 0; attempt < 3 && !manageAttached; attempt++) {
+      try {
+        await attachManageOnlyRobot({
+          account_id: sub.account_id,
+          epic: sub.epic,
+          display_name: sub.display_name,
+          lot_size: sub.lot_size,
+          side: direction,
+          entry_price: entry,
+          deal_reference: result.deal_reference || null,
+          regime,
+          setup_type: setupType,
+        });
+        manageAttached = true;
+      } catch (err) {
+        manageDetail = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (!manageAttached) {
+      emitToClient(sub.client_id, {
+        type: 'robot_error',
+        market: sub.epic,
         account_id: sub.account_id,
-        epic: sub.epic,
-        display_name: sub.display_name,
-        lot_size: sub.lot_size,
-        side: direction,
-        entry_price: entry,
-        deal_reference: result.deal_reference || null,
-        regime,
-        setup_type: setupType,
+        detail: `FILL OK but manage attach failed: ${manageDetail} · HardInv may be missing`,
       });
-    } catch {
-      /* manage attach best-effort */
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: `Position opened but manage attach failed: ${manageDetail}`,
+        entry_price: entry,
+      });
     }
 
     return finish({

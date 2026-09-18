@@ -5,6 +5,7 @@ import {
   OPERATING_MODES,
   classifyRegime,
   observeClosedBars,
+  notePipelineRegime,
   resetRegimeBook,
   stabilizeRegime,
   styleFromClassification,
@@ -247,6 +248,39 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     // One minute of noise must not cycle the whole catalog
     expect(seen.size).toBeLessThanOrEqual(3);
     expect(seen.has('TREND_UP') || seen.has('PULLBACK_UPTREND')).toBe(true);
+  });
+
+  it('observeClosedBars batch equals per-bar stabilize (dwell accumulates)', () => {
+    resetRegimeBook();
+    const seed = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, arr) =>
+      bar(i === 0 ? p : arr[i - 1]!, p + 0.4, p - 0.3, p, i)
+    );
+    observeClosedBars('GOLD-A', seed, 'Gold', 1);
+    observeClosedBars('GOLD-B', seed, 'Gold', 2);
+    const dip = [
+      bar(103.4, 103.5, 102.0, 102.2, 10),
+      bar(102.2, 102.3, 101.5, 101.7, 11),
+      bar(101.7, 101.8, 101.0, 101.2, 12),
+      bar(101.2, 101.3, 100.5, 100.8, 13),
+    ];
+    // Batch once vs one-by-one must both respect dwell (not hard-jump on last candle only)
+    const batch = observeClosedBars('GOLD-A', dip, 'Gold', 1);
+    let sequential = observeClosedBars('GOLD-B', [dip[0]!], 'Gold', 2);
+    for (let i = 1; i < dip.length; i++) {
+      sequential = observeClosedBars('GOLD-B', [dip[i]!], 'Gold', 2);
+    }
+    expect(batch.current).toBe(sequential.current);
+  });
+
+  it('notePipelineRegime does not hard-hijack sticky zone pending', () => {
+    resetRegimeBook();
+    const seed = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, arr) =>
+      bar(i === 0 ? p : arr[i - 1]!, p + 0.4, p - 0.3, p, i)
+    );
+    observeClosedBars('GOLD', seed, 'Gold', 99);
+    // Soft stamp TREND_DOWN while in TREND_UP early dwell — must stay UP (pending only)
+    const stamped = notePipelineRegime('GOLD', 'TREND_DOWN', 'Gold', 99);
+    expect(stamped.current).toBe('TREND_UP');
   });
 });
 
