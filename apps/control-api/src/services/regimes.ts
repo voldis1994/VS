@@ -544,3 +544,12 @@ export function regimeCatalog() {
 export function resetRegimeBook(): void {
   books.clear();
 }
+
+/** Clear one account-scoped book before replacing a thin live zone with MINUTE seed. */
+export function clearRegimeBookFor(
+  epic: string,
+  accountId?: number | string | null
+): void {
+  const key = regimeBookKey(epic, accountId);
+  books.delete(key);
+}

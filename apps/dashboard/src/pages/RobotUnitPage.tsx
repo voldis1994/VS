@@ -34,6 +34,12 @@ type EntryWatch = {
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
+  zone_bars?: number;
+  zone_need?: number;
+  zone_full?: number;
+  zone_left?: number;
+  zone_ready?: boolean;
+  zone_progress?: string;
   bar: {
     o: number | null;
     h: number | null;
@@ -396,6 +402,17 @@ export function RobotUnitPage() {
                   {w.regime_enabled ? ' · REGIME ON' : ' · REGIME OFF'}
                 </div>
                 <div className="robot-unit-watch-look">{w.looking_for}</div>
+                {w.zone_progress && (
+                  <div className="mono">
+                    ZONA · {w.zone_bars ?? '—'}/{w.zone_need ?? 90}
+                    {w.zone_ready
+                      ? ` · gatavs · mērķis ${w.zone_full ?? 180}`
+                      : ` · vēl ${w.zone_left ?? '—'} sveces (≈${Math.max(
+                          1,
+                          Math.ceil(((w.zone_left ?? 0) * 10) / 60)
+                        )}m)`}
+                  </div>
+                )}
                 <div className="mono">
                   O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C {fmt(w.bar.c, 2)}
                   {w.bar.forming_c != null ? ` · forming ${fmt(w.bar.forming_c, 2)}` : ''}
