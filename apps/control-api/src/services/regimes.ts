@@ -113,9 +113,9 @@ const books = new Map<string, Book>();
 const ZONE_BARS = 18;
 /** Momentum window */
 const MOM_BARS = 8;
-/** Stay in a regime ≥60s before soft switches (6 × 10s) */
-const MIN_DWELL_BARS = 6;
-/** Soft family switches need this many agreeing candidates */
+/** Stay in a regime ≥40s before soft switches (4 × 10s) — was 60s and over-stuck */
+const MIN_DWELL_BARS = 4;
+/** Soft family switches need this many agreeing candidates after dwell */
 const CONFIRM_BARS = 2;
 
 function mean(xs: number[]): number {
@@ -162,9 +162,9 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
   if (to === 'REVERSAL_CANDIDATE') return true;
   if (to === 'FAILED_BREAKOUT_UP' || to === 'FAILED_BREAKOUT_DOWN') return true;
   if (to === 'BREAKOUT_UP' || to === 'BREAKOUT_DOWN') return true;
-  // Opposite trend family
   const a = regimeFamily(from);
   const b = regimeFamily(to);
+  // Opposite trend family
   if ((a === 'UP' || a === 'BRK_UP') && (b === 'DOWN' || b === 'BRK_DOWN')) return true;
   if ((a === 'DOWN' || a === 'BRK_DOWN') && (b === 'UP' || b === 'BRK_UP')) return true;
   return false;
@@ -243,8 +243,10 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 }
 
 /**
- * Anti-flicker: min dwell (~60s) + confirm bars before leaving a regime family.
- * Prevents cycling every 10s so a 1m window does not show all regimes.
+ * Anti-flicker without freeze:
+ * - Soft noise before dwell stays on current regime
+ * - Pending candidate is NOT cleared on reject (so confirm survives dwell)
+ * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar
  */
 export function stabilizeRegime(
   book: {
@@ -265,28 +267,21 @@ export function stabilizeRegime(
     return book.current;
   }
 
-  const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
-  const strong = isStrongSwitch(book.current, candidate);
-  const dwellOk =
-    book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
-
-  // Soft cross-family flicker before dwell → ignore (keep market state)
-  if (!sameFamily && !strong && !dwellOk) {
-    book.bars_in_current += 1;
-    book.pending = null;
-    book.pending_count = 0;
-    return book.current;
-  }
-
+  // Always accumulate the pending candidate (even during dwell)
   if (book.pending === candidate) book.pending_count += 1;
   else {
     book.pending = candidate;
     book.pending_count = 1;
   }
 
-  // Same family (TREND↔PULLBACK) or strong structure: 1 confirm; else 2
+  const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
+  const strong = isStrongSwitch(book.current, candidate);
+  const dwellOk =
+    book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   const need = sameFamily || strong ? 1 : CONFIRM_BARS;
-  if (book.pending_count >= need && (dwellOk || strong || sameFamily)) {
+  const canSwitch = (dwellOk || strong || sameFamily) && book.pending_count >= need;
+
+  if (canSwitch) {
     book.previous = book.current;
     book.current = candidate;
     book.bars_in_current = 1;

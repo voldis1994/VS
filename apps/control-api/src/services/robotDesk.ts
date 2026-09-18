@@ -320,10 +320,17 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
-  if (!incoming.length) return;
+  // Never no-op on empty filter — still refresh from tick last_closed if present
+  const feed =
+    incoming.length > 0
+      ? incoming
+      : s.ohlcState.last_closed
+        ? [s.ohlcState.last_closed]
+        : [];
+  if (!feed.length) return;
 
   // Local closed-bar history — never shared across accounts
-  for (const bar of incoming) {
+  for (const bar of feed) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = s.closedBars[s.closedBars.length - 1];
     const same =
@@ -337,7 +344,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   if (s.closedBars.length > 36) s.closedBars.splice(0, s.closedBars.length - 36);
 
   // Single path: zone + dwell/confirm stabilize via account-scoped book
-  const snap = observeClosedBars(s.epic, incoming, s.display_name, s.account_id);
+  const snap = observeClosedBars(s.epic, feed, s.display_name, s.account_id);
   s.regime = snap.current;
 }
 
