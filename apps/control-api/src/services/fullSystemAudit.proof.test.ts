@@ -118,6 +118,30 @@ describe('PROOF: connection mutex serializes concurrent work', () => {
     expect(order).toContain('hung-start');
     expect(order).toContain('waiter');
   });
+
+  it('wait timeout fails fast when previous holder never releases', async () => {
+    let releaseStuck!: () => void;
+    const stuckGate = new Promise<void>((r) => {
+      releaseStuck = r;
+    });
+    const stuck = withConnectionLock(
+      9992,
+      async () => {
+        await stuckGate;
+        return 'stuck';
+      },
+      { holdMs: 60_000, waitMs: 60_000 }
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    const waiter = withConnectionLock(
+      9992,
+      async () => 'should-not-run',
+      { holdMs: 500, waitMs: 40 }
+    );
+    await expect(waiter).rejects.toThrow(/lock wait timeout/);
+    releaseStuck();
+    await expect(stuck).resolves.toBe('stuck');
+  });
 });
 
 describe('PROOF: target_time gate actually exits winners', () => {

@@ -406,22 +406,28 @@ export async function withConnectionLock<T>(
     held.catch(() => undefined)
   );
 
+  let waitTimer: ReturnType<typeof setTimeout> | undefined;
   const waited = await Promise.race([
     prev.then(() => 'ok' as const),
-    new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), waitMs)),
+    new Promise<'timeout'>((r) => {
+      waitTimer = setTimeout(() => r('timeout'), waitMs);
+    }),
   ]);
+  if (waitTimer) clearTimeout(waitTimer);
   if (waited === 'timeout') {
+    // Skip our slot so the chain can advance when the stuck holder finally ends
     release();
     throw new Error(
       `Capital connection ${connectionId} lock wait timeout ${waitMs}ms — previous holder stuck`
     );
   }
 
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       fn(),
-      new Promise<T>((_, rej) =>
-        setTimeout(
+      new Promise<T>((_, rej) => {
+        holdTimer = setTimeout(
           () =>
             rej(
               new Error(
@@ -429,10 +435,11 @@ export async function withConnectionLock<T>(
               )
             ),
           holdMs
-        )
-      ),
+        );
+      }),
     ]);
   } finally {
+    if (holdTimer) clearTimeout(holdTimer);
     release();
   }
 }
