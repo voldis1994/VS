@@ -17,6 +17,7 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
+import { withEpicEntryLock } from './epicEntryLock.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -149,6 +150,57 @@ async function completeExecutionClaim(
   );
 }
 
+/** Release claim so transient broker errors can retry the same idempotency key. */
+async function releaseExecutionClaim(
+  idem: string,
+  clientId: number,
+  accountId: number
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM pipeline_execution_claims
+     WHERE idempotency_key = $1 AND client_id = $2 AND account_id = $3`,
+    [idem, clientId, accountId]
+  );
+}
+
+function isRetryableFanoutDetail(detail: string): boolean {
+  return /rate-limit|too-many|cooldown|429|session|timeout|network|ECONN|ETIMEDOUT|list failed|fail-closed|manage attach|no mid|SAFETY SL|cannot compute/i.test(
+    detail
+  );
+}
+
+async function healManageForOpen(opts: {
+  sub: ActiveSubscription;
+  side: 'BUY' | 'SELL';
+  entry_price: number | null;
+  deal_id?: string | null;
+  deal_reference?: string | null;
+  regime: string | null;
+  setupType: string | null;
+}): Promise<{ ok: boolean; detail: string }> {
+  let last = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await attachManageOnlyRobot({
+        account_id: opts.sub.account_id,
+        epic: opts.sub.epic,
+        display_name: opts.sub.display_name,
+        lot_size: opts.sub.lot_size,
+        side: opts.side,
+        entry_price: opts.entry_price,
+        deal_reference: opts.deal_reference || null,
+        deal_id: opts.deal_id || null,
+        regime: opts.regime,
+        setup_type: opts.setupType,
+      });
+      return { ok: true, detail: 'manage healed' };
+    } catch (err) {
+      last = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return { ok: false, detail: last || 'manage attach failed' };
+}
+
 async function executeForSubscription(
   sub: ActiveSubscription,
   direction: 'BUY' | 'SELL',
@@ -158,10 +210,30 @@ async function executeForSubscription(
   idempotencyKey: string | null
 ): Promise<ExecRow> {
   let claimed = false;
-  const finish = async (row: ExecRow): Promise<ExecRow> => {
+  const finish = async (
+    row: ExecRow,
+    opts?: { durable?: boolean }
+  ): Promise<ExecRow> => {
     if (claimed && idempotencyKey) {
       try {
-        await completeExecutionClaim(idempotencyKey, sub.client_id, sub.account_id, row);
+        const durable =
+          opts?.durable !== undefined
+            ? opts.durable
+            : row.ok || !isRetryableFanoutDetail(row.detail);
+        if (durable) {
+          await completeExecutionClaim(
+            idempotencyKey,
+            sub.client_id,
+            sub.account_id,
+            row
+          );
+        } else {
+          await releaseExecutionClaim(
+            idempotencyKey,
+            sub.client_id,
+            sub.account_id
+          );
+        }
       } catch {
         /* best-effort */
       }
@@ -182,18 +254,50 @@ async function executeForSubscription(
         );
         const summary = prev.rows[0]?.result_summary as ExecRow | undefined;
         if (summary && typeof summary === 'object' && 'ok' in summary) {
-          return summary;
+          // Prior durable failure that left an unmanaged open → try heal, don't seal starve
+          if (
+            !summary.ok &&
+            /manage attach|Already open/i.test(String(summary.detail || ''))
+          ) {
+            /* fall through to re-run heal path after reclaim */
+            await releaseExecutionClaim(
+              idempotencyKey,
+              sub.client_id,
+              sub.account_id
+            );
+            const again = await claimExecution(
+              idempotencyKey,
+              sub.client_id,
+              sub.account_id
+            );
+            if (again === 'duplicate') return summary;
+            claimed = true;
+          } else {
+            return summary;
+          }
+        } else if (prev.rows[0]?.status === 'claimed') {
+          // In-flight peer — do not invent a completed result
+          return {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: 'Duplicate intent — execution still in progress',
+            entry_price: null,
+          };
+        } else {
+          return {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: 'Duplicate intent — already processed',
+            entry_price: null,
+          };
         }
-        return {
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false,
-          detail: 'Duplicate intent — already processed',
-          entry_price: null,
-        };
+      } else {
+        claimed = true;
       }
-      claimed = true;
     }
 
     // Security boundary: account must still belong to this client and be enabled
@@ -205,14 +309,17 @@ async function executeForSubscription(
       [sub.account_id, sub.client_id]
     );
     if (!own.rows.length) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Account ownership check failed',
-        entry_price: null,
-      });
+      return finish(
+        {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: 'Account ownership check failed',
+          entry_price: null,
+        },
+        { durable: true }
+      );
     }
 
     // ONE TRADE: skip if broker already open on this epic
@@ -221,14 +328,17 @@ async function executeForSubscription(
       [sub.connection_id]
     );
     if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Not Capital.com',
-        entry_price: null,
-      });
+      return finish(
+        {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: 'Not Capital.com',
+          entry_price: null,
+        },
+        { durable: true }
+      );
     }
     const creds = await loadCreds(sub.connection_id);
     const acc = await pool.query(
@@ -250,175 +360,227 @@ async function executeForSubscription(
         message: opened.result.detail,
         robot_status: 'RUNNING',
       });
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: opened.result.detail,
-        entry_price: null,
-      });
+      return finish(
+        {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: opened.result.detail,
+          entry_price: null,
+        },
+        { durable: false }
+      );
     }
 
-    const listed = await listCapitalOpenPositions(opened.session);
-    if (!listed.ok) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: `Position list failed — fail-closed (${listed.detail})`,
-        entry_price: null,
-      });
-    }
-    const existing = listed.positions.find(
-      (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
-    );
-    if (existing) {
-      noteBrokerOk(sub.client_id);
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Already open on epic — skip',
-        entry_price: existing.open_level,
-      });
-    }
-    // SAFETY SL cushion (~0.20%), not broker minimum
-    const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
-    const mid =
-      q.mid != null && Number.isFinite(q.mid)
-        ? q.mid
-        : referencePrice != null && Number.isFinite(referencePrice)
-          ? Number(referencePrice)
-          : null;
-    let stopLevel: number | undefined;
-    if (mid != null) {
-      stopLevel = computeSafetyCushionStopLevel(direction, mid, {
+    return await withEpicEntryLock(sub.account_id, sub.epic, async () => {
+      const listed = await listCapitalOpenPositions(opened.session);
+      if (!listed.ok) {
+        return finish(
+          {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: `Position list failed — fail-closed (${listed.detail})`,
+            entry_price: null,
+          },
+          { durable: false }
+        );
+      }
+      const existing = listed.positions.find(
+        (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
+      );
+      if (existing) {
+        // CRITICAL: orphan open after restart / attach fail — heal manage brain
+        const heal = await healManageForOpen({
+          sub,
+          side: existing.direction,
+          entry_price: existing.open_level,
+          deal_id: existing.deal_id,
+          deal_reference: existing.deal_reference,
+          regime,
+          setupType,
+        });
+        noteBrokerOk(sub.client_id);
+        if (!heal.ok) {
+          emitToClient(sub.client_id, {
+            type: 'robot_error',
+            market: sub.epic,
+            account_id: sub.account_id,
+            detail: `Already open but manage heal failed: ${heal.detail}`,
+          });
+          return finish(
+            {
+              client_id: sub.client_id,
+              account_id: sub.account_id,
+              lot_size: sub.lot_size,
+              ok: false,
+              detail: `Already open — manage attach failed: ${heal.detail}`,
+              entry_price: existing.open_level,
+            },
+            { durable: false }
+          );
+        }
+        return finish(
+          {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: true,
+            detail: 'Already open on epic — manage healed',
+            entry_price: existing.open_level,
+          },
+          { durable: true }
+        );
+      }
+
+      // SAFETY SL cushion (~0.20%), not broker minimum — fail closed if no mid
+      const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
+      const mid =
+        q.mid != null && Number.isFinite(q.mid)
+          ? q.mid
+          : referencePrice != null && Number.isFinite(referencePrice)
+            ? Number(referencePrice)
+            : null;
+      if (mid == null) {
+        return finish(
+          {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: 'ENTRY blocked — no mid · cannot compute SAFETY SL · no naked order',
+            entry_price: null,
+          },
+          { durable: false }
+        );
+      }
+      const stopLevel = computeSafetyCushionStopLevel(direction, mid, {
         bid: q.bid,
         ask: q.ask,
         spread: q.spread,
         minStopDistance: q.min_stop_distance,
       });
-    }
 
-    const result = await createCapitalPosition(opened.session, {
-      epic: sub.epic,
-      direction,
-      size: sub.lot_size,
-      ...(stopLevel != null ? { stopLevel } : {}),
-    });
-
-    if (!result.ok) {
-      noteBrokerError(sub.client_id, result.detail);
-      emitToClient(sub.client_id, {
-        type: 'error',
-        message: result.detail,
+      const result = await createCapitalPosition(opened.session, {
+        epic: sub.epic,
+        direction,
+        size: sub.lot_size,
+        stopLevel,
       });
-      // NO trade_opened on failure
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: result.detail,
-        entry_price: null,
-      });
-    }
 
-    noteBrokerOk(sub.client_id);
-    const entry =
-      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
-
-    // Persist execution/position best-effort
-    try {
-      await pool.query(
-        `INSERT INTO positions
-         (broker_account_id, instrument_id, direction, entry_price, quantity, status)
-         VALUES ($1, $2, $3, $4, $5, 'OPEN')`,
-        [
-          sub.account_id,
-          sub.instrument_id,
-          direction === 'BUY' ? 'LONG' : 'SHORT',
-          entry ?? 0,
-          sub.lot_size,
-        ]
-      );
-    } catch {
-      /* ignore */
-    }
-
-    emitToClient(sub.client_id, {
-      type: 'trade_opened',
-      market: sub.epic,
-      display_name: sub.display_name,
-      side: direction,
-      trade_type: formatTradeLabel(direction, setupType, regime),
-      lot_size: sub.lot_size,
-      entry_price: entry,
-      account_id: sub.account_id,
-      setup_type: setupType,
-      regime,
-    });
-
-    // Manage-only robot: exits / health reads — no entry brain
-    let manageAttached = false;
-    let manageDetail = '';
-    for (let attempt = 0; attempt < 3 && !manageAttached; attempt++) {
-      try {
-        await attachManageOnlyRobot({
-          account_id: sub.account_id,
-          epic: sub.epic,
-          display_name: sub.display_name,
-          lot_size: sub.lot_size,
-          side: direction,
-          entry_price: entry,
-          deal_reference: result.deal_reference || null,
-          regime,
-          setup_type: setupType,
+      if (!result.ok) {
+        noteBrokerError(sub.client_id, result.detail);
+        emitToClient(sub.client_id, {
+          type: 'error',
+          message: result.detail,
         });
-        manageAttached = true;
-      } catch (err) {
-        manageDetail = err instanceof Error ? err.message : String(err);
+        const durable = !isRetryableFanoutDetail(result.detail);
+        return finish(
+          {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: result.detail,
+            entry_price: null,
+          },
+          { durable }
+        );
       }
-    }
-    if (!manageAttached) {
-      emitToClient(sub.client_id, {
-        type: 'robot_error',
-        market: sub.epic,
-        account_id: sub.account_id,
-        detail: `FILL OK but manage attach failed: ${manageDetail} · HardInv may be missing`,
-      });
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: `Position opened but manage attach failed: ${manageDetail}`,
-        entry_price: entry,
-      });
-    }
 
-    return finish({
-      client_id: sub.client_id,
-      account_id: sub.account_id,
-      lot_size: sub.lot_size,
-      ok: true,
-      detail: result.detail,
-      entry_price: entry,
+      noteBrokerOk(sub.client_id);
+      const entry =
+        referencePrice != null && Number.isFinite(referencePrice)
+          ? Number(referencePrice)
+          : mid;
+
+      // Persist execution/position best-effort
+      try {
+        await pool.query(
+          `INSERT INTO positions
+           (broker_account_id, instrument_id, direction, entry_price, quantity, status)
+           VALUES ($1, $2, $3, $4, $5, 'OPEN')`,
+          [
+            sub.account_id,
+            sub.instrument_id,
+            direction === 'BUY' ? 'LONG' : 'SHORT',
+            entry ?? 0,
+            sub.lot_size,
+          ]
+        );
+      } catch {
+        /* ignore */
+      }
+
+      emitToClient(sub.client_id, {
+        type: 'trade_opened',
+        market: sub.epic,
+        display_name: sub.display_name,
+        side: direction,
+        trade_type: formatTradeLabel(direction, setupType, regime),
+        lot_size: sub.lot_size,
+        entry_price: entry,
+        account_id: sub.account_id,
+        setup_type: setupType,
+        regime,
+      });
+
+      const heal = await healManageForOpen({
+        sub,
+        side: direction,
+        entry_price: entry,
+        deal_reference: result.deal_reference || null,
+        regime,
+        setupType,
+      });
+      if (!heal.ok) {
+        emitToClient(sub.client_id, {
+          type: 'robot_error',
+          market: sub.epic,
+          account_id: sub.account_id,
+          detail: `FILL OK but manage attach failed: ${heal.detail} · HardInv may be missing`,
+        });
+        return finish(
+          {
+            client_id: sub.client_id,
+            account_id: sub.account_id,
+            lot_size: sub.lot_size,
+            ok: false,
+            detail: `Position opened but manage attach failed: ${heal.detail}`,
+            entry_price: entry,
+          },
+          { durable: false }
+        );
+      }
+
+      return finish(
+        {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: true,
+          detail: result.detail,
+          entry_price: entry,
+        },
+        { durable: true }
+      );
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);
-    return finish({
-      client_id: sub.client_id,
-      account_id: sub.account_id,
-      lot_size: sub.lot_size,
-      ok: false,
-      detail,
-      entry_price: null,
-    });
+    return finish(
+      {
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail,
+        entry_price: null,
+      },
+      { durable: !isRetryableFanoutDetail(detail) }
+    );
   }
 }
 
@@ -440,7 +602,7 @@ export async function ingestAndExecuteIntent(
       [idem]
     );
     if (!claimed.rows.length) {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 100; i++) {
         const existing = await pool.query(
           `SELECT fanout_summary FROM pipeline_intent_dedupe WHERE idempotency_key = $1`,
           [idem]
@@ -451,18 +613,10 @@ export async function ingestAndExecuteIntent(
         }
         await new Promise((r) => setTimeout(r, 50));
       }
-      return {
-        intent_id: null,
-        fanout: {
-          epic: String(intent.epic || ''),
-          direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
-          setup_type: intent.setup_type ? String(intent.setup_type) : null,
-          regime: intent.regime ? String(intent.regime) : null,
-          subscribers: 0,
-          executed: [],
-        },
-        deduped: true,
-      };
+      // Never invent empty success — peer may still be running or may have failed
+      throw new Error(
+        `Intent dedupe pending — peer fanout not ready after 5s (key=${idem.slice(0, 40)})`
+      );
     }
   }
 

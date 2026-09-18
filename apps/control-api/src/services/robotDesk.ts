@@ -52,6 +52,7 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import { withEpicEntryLock } from './epicEntryLock.js';
 
 export type RobotTick = {
   at: string;
@@ -355,7 +356,8 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       last &&
       Math.abs(last.open - bar.open) < 1e-9 &&
       Math.abs(last.close - bar.close) < 1e-9 &&
-      Math.abs(last.high - bar.high) < 1e-9;
+      Math.abs(last.high - bar.high) < 1e-9 &&
+      Math.abs(last.low - bar.low) < 1e-9;
     if (same) continue;
     s.closedBars.push(bar);
   }
@@ -404,7 +406,14 @@ function clearTradeState(s: Internal) {
 }
 
 function closedBarKey(bar: TenSecBar): string {
-  return `${bar.open.toFixed(4)}:${bar.close.toFixed(4)}:${bar.high.toFixed(4)}`;
+  return `${bar.open_time_ms}:${bar.open.toFixed(4)}:${bar.close.toFixed(4)}:${bar.high.toFixed(4)}:${bar.low.toFixed(4)}`;
+}
+
+async function waitCycleIdle(s: Internal, maxMs = 30_000): Promise<void> {
+  const start = Date.now();
+  while (s.cycle_busy && Date.now() - start < maxMs) {
+    await new Promise((r) => setTimeout(r, 40));
+  }
 }
 
 /**
@@ -563,12 +572,14 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   s.running = false;
   s.trading_enabled = false;
   s.pending_entry = null;
-  s.cycle_busy = false;
   s.stopped_at = new Date().toISOString();
   if (s.timer) {
     clearInterval(s.timer);
     s.timer = null;
   }
+  // Drain in-flight Capital create/close so restart cannot race a second entry
+  await waitCycleIdle(s);
+  s.cycle_busy = false;
   pushTick(s, {
     phase: 'INFO',
     bid: null,
@@ -728,6 +739,19 @@ async function exitTrade(
 }
 
 async function enterTrade(
+  session: CapitalSession,
+  s: Internal,
+  direction: 'BUY' | 'SELL',
+  quote: CapitalMarketQuote,
+  reason: string,
+  setupType?: string | null
+) {
+  return withEpicEntryLock(s.account_id, s.epic, () =>
+    enterTradeLocked(session, s, direction, quote, reason, setupType)
+  );
+}
+
+async function enterTradeLocked(
   session: CapitalSession,
   s: Internal,
   direction: 'BUY' | 'SELL',
@@ -1721,6 +1745,10 @@ export async function startRobotSession(input: {
   const existing = sessions.get(id);
   if (existing?.running) {
     await stopRobotSession(id);
+  } else if (existing?.cycle_busy) {
+    existing.running = false;
+    await waitCycleIdle(existing);
+    existing.cycle_busy = false;
   }
   sessions.delete(id);
 
@@ -1838,6 +1866,7 @@ export async function attachManageOnlyRobot(input: {
   side: 'BUY' | 'SELL';
   entry_price: number | null;
   deal_reference?: string | null;
+  deal_id?: string | null;
   regime?: string | null;
   setup_type?: string | null;
 }): Promise<RobotSession> {
@@ -1852,6 +1881,7 @@ export async function attachManageOnlyRobot(input: {
     if (existing.entry_price == null) existing.entry_price = input.entry_price;
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
+    if (input.deal_id) existing.deal_id = input.deal_id;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
@@ -1881,6 +1911,7 @@ export async function attachManageOnlyRobot(input: {
     internal.entry_at = new Date().toISOString();
     internal.mode = 'MANAGE';
     internal.last_deal_reference = input.deal_reference || null;
+    if (input.deal_id) internal.deal_id = input.deal_id;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
     pushTick(internal, {

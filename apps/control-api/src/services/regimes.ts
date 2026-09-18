@@ -383,7 +383,8 @@ export function observeClosedBars(
       last &&
       Math.abs(last.open - bar.open) < 1e-9 &&
       Math.abs(last.close - bar.close) < 1e-9 &&
-      Math.abs(last.high - bar.high) < 1e-9;
+      Math.abs(last.high - bar.high) < 1e-9 &&
+      Math.abs(last.low - bar.low) < 1e-9;
     if (same) continue;
     b.bars.push(bar);
     if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
