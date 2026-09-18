@@ -16,6 +16,39 @@ export interface CapitalComSessionResult {
   accountType?: string;
 }
 
+/** Default Capital HTTP timeout — never hang a robot cycle forever. */
+export const CAPITAL_HTTP_TIMEOUT_MS = 12_000;
+/** Max time one robot may hold the per-connection mutex (multi-request cycle). */
+export const CAPITAL_LOCK_HOLD_MS = 45_000;
+/** Max wait to acquire the per-connection mutex. */
+export const CAPITAL_LOCK_WAIT_MS = 30_000;
+
+function abortSignalMs(ms: number): AbortSignal {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
+async function capitalFetch(
+  url: string,
+  init: RequestInit & { timeoutMs?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = CAPITAL_HTTP_TIMEOUT_MS, ...rest } = init;
+  try {
+    return await fetch(url, { ...rest, signal: abortSignalMs(timeoutMs) });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    const msg = err instanceof Error ? err.message : String(err);
+    if (name === 'AbortError' || /aborted|timeout/i.test(msg)) {
+      throw new Error(`Capital.com HTTP timeout after ${timeoutMs}ms · ${url.replace(/\?.*/, '')}`);
+    }
+    throw err;
+  }
+}
+
 export interface CapitalSession {
   base: string;
   apiKey: string;
@@ -106,8 +139,9 @@ async function createSession(
   password: string,
   encryptedPassword: boolean
 ): Promise<{ res: Response; text: string; json: Record<string, unknown> }> {
-  const res = await fetch(`${base}/api/v1/session`, {
+  const res = await capitalFetch(`${base}/api/v1/session`, {
     method: 'POST',
+    timeoutMs: 15_000,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -136,8 +170,9 @@ async function resolveLoginPassword(
 ): Promise<Array<{ encrypted: boolean; password: string; label: string }>> {
   const attempts: Array<{ encrypted: boolean; password: string; label: string }> = [];
   try {
-    const encRes = await fetch(`${base}/api/v1/session/encryptionKey`, {
+    const encRes = await capitalFetch(`${base}/api/v1/session/encryptionKey`, {
       method: 'GET',
+      timeoutMs: 10_000,
       headers: { Accept: 'application/json', 'X-CAP-API-KEY': apiKey },
     });
     const encText = await encRes.text();
@@ -267,19 +302,25 @@ export async function openCapitalSession(input: {
 
     const request = async (method: string, path: string, body?: unknown) => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
-      const r = await fetch(url, {
-        method,
-        headers: authHeaders,
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const t = await r.text();
-      let j: any = {};
       try {
-        j = t ? JSON.parse(t) : {};
-      } catch {
-        j = {};
+        const r = await capitalFetch(url, {
+          method,
+          timeoutMs: CAPITAL_HTTP_TIMEOUT_MS,
+          headers: authHeaders,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const t = await r.text();
+        let j: any = {};
+        try {
+          j = t ? JSON.parse(t) : {};
+        } catch {
+          j = {};
+        }
+        return { ok: r.ok, status: r.status, json: j, text: t };
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return { ok: false, status: 0, json: { errorCode: 'TIMEOUT' }, text: detail };
       }
-      return { ok: r.ok, status: r.status, json: j, text: t };
     };
 
     const session: CapitalSession = {
@@ -296,8 +337,9 @@ export async function openCapitalSession(input: {
             : null,
       async close() {
         try {
-          await fetch(`${base}/api/v1/session`, {
+          await capitalFetch(`${base}/api/v1/session`, {
             method: 'DELETE',
+            timeoutMs: 8_000,
             headers: {
               'X-CAP-API-KEY': apiKey,
               CST: cst,
@@ -345,7 +387,13 @@ const COOLDOWN_429_MS = 120_000;
 /** Per-connection mutex so concurrent robots on one broker never interleave switch+API. */
 const connectionLocks = new Map<string, Promise<unknown>>();
 
-export async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+export async function withConnectionLock<T>(
+  connectionId: number,
+  fn: () => Promise<T>,
+  opts?: { holdMs?: number; waitMs?: number }
+): Promise<T> {
+  const holdMs = opts?.holdMs ?? CAPITAL_LOCK_HOLD_MS;
+  const waitMs = opts?.waitMs ?? CAPITAL_LOCK_WAIT_MS;
   const key = capitalPoolKey(connectionId);
   const prev = connectionLocks.get(key) || Promise.resolve();
   let release!: () => void;
@@ -357,9 +405,33 @@ export async function withConnectionLock<T>(connectionId: number, fn: () => Prom
     key,
     held.catch(() => undefined)
   );
-  await prev;
+
+  const waited = await Promise.race([
+    prev.then(() => 'ok' as const),
+    new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), waitMs)),
+  ]);
+  if (waited === 'timeout') {
+    release();
+    throw new Error(
+      `Capital connection ${connectionId} lock wait timeout ${waitMs}ms — previous holder stuck`
+    );
+  }
+
   try {
-    return await fn();
+    return await Promise.race([
+      fn(),
+      new Promise<T>((_, rej) =>
+        setTimeout(
+          () =>
+            rej(
+              new Error(
+                `Capital connection ${connectionId} lock hold timeout ${holdMs}ms — releasing mutex`
+              )
+            ),
+          holdMs
+        )
+      ),
+    ]);
   } finally {
     release();
   }
@@ -491,18 +563,30 @@ export async function withCapitalAccountSession<T>(
     };
   }
 
-  return withConnectionLock(connectionId, async () => {
-    const acquired = await acquireCapitalSessionUnlocked(input);
-    if (!acquired.ok) return { ok: false, result: acquired.result };
-    if (wanted) {
-      const sw = await switchCapitalAccount(acquired.session, wanted);
-      if (!sw.ok) {
-        return { ok: false, result: { ok: false, status: 400, detail: sw.detail } };
+  try {
+    return await withConnectionLock(connectionId, async () => {
+      const acquired = await acquireCapitalSessionUnlocked(input);
+      if (!acquired.ok) return { ok: false, result: acquired.result };
+      if (wanted) {
+        const sw = await switchCapitalAccount(acquired.session, wanted);
+        if (!sw.ok) {
+          return { ok: false, result: { ok: false, status: 400, detail: sw.detail } };
+        }
       }
-    }
-    const value = await fn(acquired.session);
-    return { ok: true, value };
-  });
+      const value = await fn(acquired.session);
+      return { ok: true, value };
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: /timeout/i.test(detail) ? 408 : 0,
+        detail,
+      },
+    };
+  }
 }
 
 async function acquireCapitalSessionUnlocked(input: {

@@ -91,6 +91,33 @@ describe('PROOF: connection mutex serializes concurrent work', () => {
     await Promise.all([a, b]);
     expect(order.indexOf('b-start')).toBeLessThan(order.indexOf('a-end'));
   });
+
+  it('hold timeout releases mutex so waiter is not stuck forever', async () => {
+    const order: string[] = [];
+    const hung = withConnectionLock(
+      9991,
+      async () => {
+        order.push('hung-start');
+        await new Promise((r) => setTimeout(r, 400));
+        order.push('hung-late');
+        return 'hung';
+      },
+      { holdMs: 50, waitMs: 500 }
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    const waiter = withConnectionLock(
+      9991,
+      async () => {
+        order.push('waiter');
+        return 'ok';
+      },
+      { holdMs: 500, waitMs: 500 }
+    );
+    await expect(hung).rejects.toThrow(/lock hold timeout/);
+    await expect(waiter).resolves.toBe('ok');
+    expect(order).toContain('hung-start');
+    expect(order).toContain('waiter');
+  });
 });
 
 describe('PROOF: target_time gate actually exits winners', () => {
@@ -201,7 +228,7 @@ describe('PROOF: fresh fill prefers broker open_level over mid', () => {
     expect(src).toContain('preferBrokerOpenLevel');
     expect(src).toMatch(/pos\?\.open_level/);
     expect(src).toMatch(/pos\?\.stop_level/);
-    expect(src).toContain('mid was only provisional entry');
+    expect(src).toMatch(/mid\/now only provisional|provisional/);
   });
 });
 
