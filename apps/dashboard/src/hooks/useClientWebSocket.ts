@@ -46,7 +46,8 @@ export function useClientWebSocket(
         try {
           const msg = JSON.parse(ev.data) as WsMessage;
           if (msg.type === 'connection_status') setOnline(true);
-          if (msg.type === 'error') setOnline(false);
+          // Business/Capital errors must NOT flip CONNECTION LOST — robot may still be RUNNING
+          if (msg.type === 'error' && msg.fatal === true) setOnline(false);
           cb.current?.(msg);
         } catch {
           /* ignore */

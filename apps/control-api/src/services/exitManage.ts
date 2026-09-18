@@ -21,9 +21,10 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
  * Desk gates:
  * - live_loss: Soft HardInv only (no thesis micro-scratch)
  * - peak_protect_only: PeakProtect giveback only (armed after reverse 1m)
+ * - target_time: Target + TimeDecay only (green winners without waiting Peak)
  * - all: both (tests / fallback)
  */
-export type ExitDecideGate = 'all' | 'live_loss' | 'peak_protect_only';
+export type ExitDecideGate = 'all' | 'live_loss' | 'peak_protect_only' | 'target_time';
 
 /** Keep 75% of MFE → give back at most 25% (all scalps). */
 export const PEAK_MFE_RETENTION = 0.75;
@@ -161,7 +162,7 @@ export function decideBestOutcomeExit(
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
-  const wantFullProfit = gate === 'all';
+  const wantFullProfit = gate === 'all' || gate === 'target_time';
 
   if (wantLoss) {
     if (fav <= -sl) {
@@ -186,7 +187,7 @@ export function decideBestOutcomeExit(
   }
 
   if (wantFullProfit) {
-    if (peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
+    if (gate === 'all' && peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
       return {
         exit: true,
         reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,

@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import { withCapitalAccountSession, fetchCapitalMarketQuote, computeSafetyCushionStopLevel } from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -520,25 +521,62 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      const opened = await acquireCapitalSession({
-        environment: conn.environment,
-        apiKey,
-        identifier,
-        password,
-        connectionId: conn.connection_id,
-        capitalAccountId: conn.external_account_id,
-      });
+      const opened = await withCapitalAccountSession(
+        {
+          environment: conn.environment,
+          apiKey,
+          identifier,
+          password,
+          connectionId: conn.connection_id,
+          capitalAccountId: conn.external_account_id,
+          requireAccountId: true,
+        },
+        async (session) => {
+          let stopLevel =
+            body.stop_level != null && Number.isFinite(Number(body.stop_level))
+              ? Number(body.stop_level)
+              : null;
+          if (stopLevel == null) {
+            const q = await fetchCapitalMarketQuote(session, epic);
+            const mid = q.mid;
+            if (mid == null || !Number.isFinite(mid)) {
+              return {
+                ok: false as const,
+                detail: 'stop_level required — no mid to compute SAFETY SL · refuse naked order',
+                status: 400,
+                json: null,
+                deal_reference: null,
+              };
+            }
+            stopLevel = computeSafetyCushionStopLevel(direction as 'BUY' | 'SELL', mid, {
+              bid: q.bid,
+              ask: q.ask,
+              spread: q.spread,
+              minStopDistance: q.min_stop_distance,
+            });
+            if (stopLevel == null) {
+              return {
+                ok: false as const,
+                detail: 'Cannot compute SAFETY SL — refuse naked admin order',
+                status: 400,
+                json: null,
+                deal_reference: null,
+              };
+            }
+          }
+          return createCapitalPosition(session, {
+            epic,
+            direction: direction as 'BUY' | 'SELL',
+            size,
+            stopLevel,
+            profitLevel: body.profit_level,
+          });
+        }
+      );
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
       }
-
-      const result = await createCapitalPosition(opened.session, {
-        epic,
-        direction: direction as 'BUY' | 'SELL',
-        size,
-        stopLevel: body.stop_level,
-        profitLevel: body.profit_level,
-      });
+      const result = opened.value;
 
       if (!result.ok) {
         return reply.code(400).send({

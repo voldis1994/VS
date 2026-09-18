@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSession,
+  withCapitalAccountSession,
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
@@ -16,8 +16,9 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot } from './robotDesk.js';
+import { attachManageOnlyRobot, listRobotSessions, robotIdFor } from './robotDesk.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
+import { sameDirectionBlocked, sameDirLockLeftSec, flipFilterReason } from './flipFilter.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -87,10 +88,7 @@ export async function executePipelineIntent(
     throw new Error('Only EntryReady intents are executable');
   }
 
-  const idem =
-    intent.idempotency_key && String(intent.idempotency_key).trim()
-      ? String(intent.idempotency_key).trim().slice(0, 190)
-      : null;
+  const idem = resolveFanoutIdempotencyKey(intent);
 
   const subs = await listActiveSubscriptionsForEpic(epic);
   const executed: FanoutResult['executed'] = [];
@@ -167,6 +165,43 @@ function isRetryableFanoutDetail(detail: string): boolean {
   return /rate-limit|too-many|cooldown|429|session|timeout|network|ECONN|ETIMEDOUT|list failed|fail-closed|manage attach|no mid|SAFETY SL|cannot compute/i.test(
     detail
   );
+}
+
+/** Always produce a stable key — missing reader key → 10s bucket hash (retry-safe). */
+function resolveFanoutIdempotencyKey(intent: PipelineIntentInput): string {
+  const raw = intent.idempotency_key && String(intent.idempotency_key).trim();
+  if (raw) return raw.slice(0, 190);
+  const epic = String(intent.epic || '').trim().toUpperCase();
+  const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
+  const bucket = Math.floor(Date.now() / 10_000);
+  const ref =
+    intent.reference_price != null && Number.isFinite(Number(intent.reference_price))
+      ? Number(intent.reference_price).toFixed(2)
+      : 'noref';
+  return `auto:${epic}:${direction}:${ref}:${bucket}`.slice(0, 190);
+}
+
+/** Unstick crashed claims / NULL dedupe rows so fanout cannot starve forever. */
+async function expireStaleFanoutLocks(): Promise<void> {
+  try {
+    await pool.query(
+      `DELETE FROM pipeline_execution_claims
+       WHERE status = 'claimed'
+         AND completed_at IS NULL
+         AND created_at < NOW() - INTERVAL '3 minutes'`
+    );
+  } catch {
+    /* schema may omit created_at — best effort */
+  }
+  try {
+    await pool.query(
+      `DELETE FROM pipeline_intent_dedupe
+       WHERE fanout_summary IS NULL
+         AND created_at < NOW() - INTERVAL '3 minutes'`
+    );
+  } catch {
+    /* best effort */
+  }
 }
 
 async function healManageForOpen(opts: {
@@ -345,36 +380,43 @@ async function executeForSubscription(
       `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
       [sub.account_id]
     );
-    const opened = await acquireCapitalSession({
-      environment: connRow.rows[0].environment as string,
-      apiKey: creds.api_key || '',
-      identifier: String(connRow.rows[0].identifier || '').trim(),
-      password: creds.password || '',
-      connectionId: sub.connection_id,
-      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
-    });
-    if (!opened.ok) {
-      noteBrokerError(sub.client_id, opened.result.detail);
-      emitToClient(sub.client_id, {
-        type: 'error',
-        message: opened.result.detail,
-        robot_status: 'RUNNING',
-      });
+    const capitalAccountId = (acc.rows[0]?.external_account_id as string | null) || null;
+
+    // 3m same-dir lock — parity with Admin robot brain
+    const manageId = robotIdFor(sub.account_id, sub.epic);
+    const manage = listRobotSessions().find((r) => r.id === manageId);
+    if (
+      manage &&
+      sameDirectionBlocked(direction, manage.last_closed_side, manage.closed_at_ms)
+    ) {
+      const left = sameDirLockLeftSec(manage.closed_at_ms);
+      const detail = flipFilterReason(direction, manage.last_closed_side!, left);
       return finish(
         {
           client_id: sub.client_id,
           account_id: sub.account_id,
           lot_size: sub.lot_size,
           ok: false,
-          detail: opened.result.detail,
+          detail,
           entry_price: null,
         },
-        { durable: false }
+        { durable: true }
       );
     }
 
+    const leased = await withCapitalAccountSession(
+      {
+        environment: connRow.rows[0].environment as string,
+        apiKey: creds.api_key || '',
+        identifier: String(connRow.rows[0].identifier || '').trim(),
+        password: creds.password || '',
+        connectionId: sub.connection_id,
+        capitalAccountId,
+        requireAccountId: true,
+      },
+      async (session) => {
     return await withEpicEntryLock(sub.account_id, sub.epic, async () => {
-      const listed = await listCapitalOpenPositions(opened.session);
+      const listed = await listCapitalOpenPositions(session);
       if (!listed.ok) {
         return finish(
           {
@@ -436,7 +478,7 @@ async function executeForSubscription(
       }
 
       // SAFETY SL cushion (~0.20%), not broker minimum — fail closed if no mid
-      const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
+      const q = await fetchCapitalMarketQuote(session, sub.epic);
       const mid =
         q.mid != null && Number.isFinite(q.mid)
           ? q.mid
@@ -463,7 +505,7 @@ async function executeForSubscription(
         minStopDistance: q.min_stop_distance,
       });
 
-      const result = await createCapitalPosition(opened.session, {
+      const result = await createCapitalPosition(session, {
         epic: sub.epic,
         direction,
         size: sub.lot_size,
@@ -567,6 +609,29 @@ async function executeForSubscription(
         { durable: true }
       );
     });
+      }
+    );
+
+    if (!leased.ok) {
+      noteBrokerError(sub.client_id, leased.result.detail);
+      emitToClient(sub.client_id, {
+        type: 'error',
+        message: leased.result.detail,
+        robot_status: 'RUNNING',
+      });
+      return finish(
+        {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: leased.result.detail,
+          entry_price: null,
+        },
+        { durable: false }
+      );
+    }
+    return leased.value;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);
@@ -587,13 +652,11 @@ async function executeForSubscription(
 export async function ingestAndExecuteIntent(
   intent: PipelineIntentInput
 ): Promise<{ intent_id: number | null; fanout: FanoutResult; deduped?: boolean }> {
-  const idem =
-    intent.idempotency_key && String(intent.idempotency_key).trim()
-      ? String(intent.idempotency_key).trim().slice(0, 190)
-      : null;
+  await expireStaleFanoutLocks();
+  const idem = resolveFanoutIdempotencyKey(intent);
 
   // Claim intent slot early (before Capital) so concurrent HTTP retries share one fanout
-  if (idem) {
+  {
     const claimed = await pool.query(
       `INSERT INTO pipeline_intent_dedupe (idempotency_key, fanout_summary)
        VALUES ($1, NULL)
@@ -613,7 +676,11 @@ export async function ingestAndExecuteIntent(
         }
         await new Promise((r) => setTimeout(r, 50));
       }
-      // Never invent empty success — peer may still be running or may have failed
+      // Drop stale NULL peer claim so next retry can proceed
+      await pool.query(
+        `DELETE FROM pipeline_intent_dedupe WHERE idempotency_key = $1 AND fanout_summary IS NULL`,
+        [idem]
+      );
       throw new Error(
         `Intent dedupe pending — peer fanout not ready after 5s (key=${idem.slice(0, 40)})`
       );

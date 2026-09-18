@@ -345,7 +345,7 @@ const COOLDOWN_429_MS = 120_000;
 /** Per-connection mutex so concurrent robots on one broker never interleave switch+API. */
 const connectionLocks = new Map<string, Promise<unknown>>();
 
-async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+export async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
   const key = capitalPoolKey(connectionId);
   const prev = connectionLocks.get(key) || Promise.resolve();
   let release!: () => void;
@@ -453,6 +453,56 @@ export async function acquireCapitalSession(input: {
   }
 
   return withConnectionLock(connectionId, () => acquireCapitalSessionUnlocked(input));
+}
+
+/**
+ * Hold the connection mutex for the FULL Capital call chain (quote/list/create/close).
+ * Prevents account A switch → account B API mid-flight on a shared connection pool.
+ */
+export async function withCapitalAccountSession<T>(
+  input: {
+    environment: string;
+    apiKey: string;
+    identifier: string;
+    password: string;
+    connectionId: number;
+    capitalAccountId?: string | null;
+    /** Trading paths must fail closed when Capital account id is missing */
+    requireAccountId?: boolean;
+  },
+  fn: (session: CapitalSession) => Promise<T>
+): Promise<{ ok: true; value: T } | { ok: false; result: CapitalComSessionResult }> {
+  const connectionId = Number(input.connectionId);
+  if (!Number.isFinite(connectionId) || connectionId <= 0) {
+    return {
+      ok: false,
+      result: { ok: false, status: 0, detail: 'connectionId required for multi-account session pool' },
+    };
+  }
+  const wanted = (input.capitalAccountId || '').trim();
+  if (input.requireAccountId && !wanted) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: 0,
+        detail: 'capitalAccountId required — refuse trade on ambiguous pooled session',
+      },
+    };
+  }
+
+  return withConnectionLock(connectionId, async () => {
+    const acquired = await acquireCapitalSessionUnlocked(input);
+    if (!acquired.ok) return { ok: false, result: acquired.result };
+    if (wanted) {
+      const sw = await switchCapitalAccount(acquired.session, wanted);
+      if (!sw.ok) {
+        return { ok: false, result: { ok: false, status: 400, detail: sw.detail } };
+      }
+    }
+    const value = await fn(acquired.session);
+    return { ok: true, value };
+  });
 }
 
 async function acquireCapitalSessionUnlocked(input: {
@@ -991,6 +1041,8 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
+  /** Capital snapshotTime when present — Peak/seed identity */
+  snapshot_time_ms?: number | null;
 };
 
 /** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
@@ -1024,7 +1076,15 @@ export async function fetchCapitalPrices(
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    candles.push({ open, high, low, close });
+    const snapRaw = p.snapshotTime ?? p.snapshot_time ?? p.from ?? p.timestamp;
+    let snapshot_time_ms: number | null = null;
+    if (typeof snapRaw === 'string' && snapRaw.trim()) {
+      const t = Date.parse(snapRaw);
+      if (Number.isFinite(t)) snapshot_time_ms = t;
+    } else if (typeof snapRaw === 'number' && Number.isFinite(snapRaw)) {
+      snapshot_time_ms = snapRaw > 1e12 ? snapRaw : snapRaw * 1000;
+    }
+    candles.push({ open, high, low, close, snapshot_time_ms });
   }
   return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }
