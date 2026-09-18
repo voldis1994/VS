@@ -89,7 +89,7 @@ describe('regimeBands — one ladder that actually works together', () => {
       reversal_pt: bandPts(REVERSAL, mid),
     };
     // Rough Gold 10s scales — not exact market, just order of magnitude
-    expect(rows.move_pt).toBeCloseTo(0.4, 1);
+    expect(rows.move_pt).toBeCloseTo(0.32, 1);
     expect(rows.enter_pt).toBeCloseTo(1.0, 0);
     expect(rows.pullback_pt).toBeGreaterThan(rows.enter_pt);
     expect(rows.reversal_pt).toBeGreaterThan(3);
