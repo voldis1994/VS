@@ -1,6 +1,7 @@
 /** 10s OHLC + 14-regime entry — regime is the classifier; this picks the suitable setup. */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
+import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 
 export type RegimeEntry = {
@@ -9,9 +10,9 @@ export type RegimeEntry = {
   reason: string;
 };
 
-/** Soft Gold-aware floors — old 0.015%/0.025% starved quiet 10s sessions. */
-const DIP = -0.0001;
-const RALLY = 0.0001;
+/** Same MOVE floor as isMoving / persist — shared regimeBands ladder */
+const DIP = ENTRY_DIP;
+const RALLY = ENTRY_RALLY;
 
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);

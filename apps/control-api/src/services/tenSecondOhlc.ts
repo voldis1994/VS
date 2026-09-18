@@ -1,5 +1,7 @@
 /** Native 10-second OHLC — same TF as Capital.com 10s chart. */
 
+import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
+
 export type TenSecBar = {
   open_time_ms: number;
   open: number;
@@ -36,10 +38,10 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — soft enough for Gold quiet sessions (≈0.10%/0.18%). */
+/** Visible on a Capital 10s chart — MOVE / MOVE_RANGE from shared regimeBands ladder. */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
-  return Math.abs(bodyPct(bar)) >= 0.0001 || rangePct(bar) >= 0.00018;
+  return Math.abs(bodyPct(bar)) >= MOVE || rangePct(bar) >= MOVE_RANGE;
 }
 
 export function emptyTenSecState(): TenSecState {
@@ -105,13 +107,13 @@ export function decideFromClosed10s(
   const bp = bodyPct(bar);
   const rng = rangePct(bar);
   if (!isMoving10s(bar)) return null;
-  if (bp <= -0.0001) {
+  if (bp <= ENTRY_DIP) {
     return {
       direction: 'BUY',
       reason: `10s OHLC pullback O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
     };
   }
-  if (bp >= 0.0001) {
+  if (bp >= ENTRY_RALLY) {
     return {
       direction: 'SELL',
       reason: `10s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,

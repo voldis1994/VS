@@ -1,6 +1,22 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import {
+  CLEAR_BREAK_FRAC,
+  COMPRESS_ABS,
+  COMPRESS_AVG_MULT,
+  EXPAND_ABS,
+  EXPAND_AVG_MULT,
+  MOVE,
+  NEAR_ZONE_MID,
+  PERSIST_ENTER,
+  PERSIST_PULLBACK,
+  PERSIST_STAY,
+  PULLBACK,
+  REVERSAL,
+  TREND_ENTER,
+  TREND_STAY,
+} from './regimeBands.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -107,16 +123,16 @@ type Book = {
   pending_count: number;
 };
 
-const MAX_BARS = 36;
+const MAX_BARS = 216;
 const books = new Map<string, Book>();
-/** Structure zone ≈ 3 minutes of 10s bars (not last micro-candle only) */
-const ZONE_BARS = 18;
-/** Momentum window */
+/** Structure zone ≈ 30 minutes of 10s bars (180 × 10s) — not last micro-candle only */
+const ZONE_BARS = 180;
+/** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
 const MOM_BARS = 8;
-/** Stay in a regime ≥40s before soft switches (4 × 10s) — was 60s and over-stuck */
-const MIN_DWELL_BARS = 4;
-/** Soft family switches need this many agreeing candidates after dwell */
-const CONFIRM_BARS = 2;
+/** Stay in a regime ≥50s before soft switches — room between % bands to settle */
+const MIN_DWELL_BARS = 5;
+/** Cross-family soft switches need this many agreeing candidates after dwell */
+const CONFIRM_BARS = 3;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -171,8 +187,9 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
 }
 
 /**
- * Classify from closed 10s OHLC using a wider structure zone (~3m) + shorter momentum.
+ * Classify from closed 10s OHLC using a 30m structure zone + short momentum.
  * Raw candidate only — live path must run through stabilizeRegime (dwell + confirm).
+ * Enter vs stay thresholds keep hysteresis so borderline % ticks do not flip regimes.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -192,48 +209,103 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const lastRange = rangePct(last);
   const persistWindow = velocities.slice(-6);
   const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
+    persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
-  const compressed = lastRange < avgRange * 0.4 && lastRange < 0.00014;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
+  const inUpFamily = previous === 'TREND_UP' || previous === 'PULLBACK_UPTREND';
+  const inDownFamily = previous === 'TREND_DOWN' || previous === 'PULLBACK_DOWNTREND';
+  // Hysteresis: already-in-trend stays on TREND_STAY; fresh enter needs TREND_ENTER (> stay)
+  const trendingUp = inUpFamily
+    ? persistence > PERSIST_STAY && lastVel > TREND_STAY
+    : persistence > PERSIST_ENTER && lastVel > TREND_ENTER;
+  const trendingDown = inDownFamily
+    ? persistence < -PERSIST_STAY && lastVel < -TREND_STAY
+    : persistence < -PERSIST_ENTER && lastVel < -TREND_ENTER;
+  const compressed =
+    lastRange < avgRange * COMPRESS_AVG_MULT && lastRange < COMPRESS_ABS;
+  const expanding =
+    lastRange > avgRange * EXPAND_AVG_MULT && lastRange >= EXPAND_ABS;
 
-  // Zone highs/lows — multi-minute structure, not last 7×10s chop
+  // Zone highs/lows — multi-minute structure, not last micro-candle chop
   const hi = Math.max(...zonePrior.map((b) => b.high));
   const lo = Math.min(...zonePrior.map((b) => b.low));
   const zoneMid = (hi + lo) / 2;
   const zoneWidth = Math.max(hi - lo, 1e-9);
   const inRange = last.close <= hi && last.close >= lo;
-  const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < 0.35;
+  const nearZoneMid = Math.abs(last.close - zoneMid) / zoneWidth < NEAR_ZONE_MID;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
+  /** Quiet pierce of a chop zone — not a continuation of an existing trend */
+  const fromChop =
+    previous === 'RANGE' ||
+    previous === 'COMPRESSION' ||
+    previous === 'TRANSITION' ||
+    previous === 'UNKNOWN' ||
+    previous === 'EXPANSION' ||
+    previous === 'REVERSAL_CANDIDATE';
+  const clearBreakUp =
+    fromChop && breakoutUp && (last.close - hi) / zoneWidth >= CLEAR_BREAK_FRAC;
+  const clearBreakDown =
+    fromChop && breakoutDown && (lo - last.close) / zoneWidth >= CLEAR_BREAK_FRAC;
   const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
+    (previous === 'TREND_UP' &&
+      lastVel < -REVERSAL &&
+      lastRange > avgRange &&
+      !breakoutDown) ||
+    (previous === 'TREND_DOWN' &&
+      lastVel > REVERSAL &&
+      lastRange > avgRange &&
+      !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  if (previous === 'BREAKOUT_UP' && inRange && lastVel < -MOVE) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > MOVE) return 'FAILED_BREAKOUT_DOWN';
+  // Expansion OR clear pierce out of chop — body must clear TREND_ENTER
+  if ((expanding || clearBreakUp) && breakoutUp && (trendingUp || lastVel > TREND_ENTER))
+    return 'BREAKOUT_UP';
+  if (
+    (expanding || clearBreakDown) &&
+    breakoutDown &&
+    (trendingDown || lastVel < -TREND_ENTER)
+  )
+    return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
 
-  // Pullbacks only inside the parent trend family (zone still respected)
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15 && inRange) {
+  // Pullbacks: against-body ≥ PULLBACK (> TREND_ENTER) so soft noise ≠ pullback
+  if (
+    previous === 'TREND_UP' &&
+    lastVel <= -PULLBACK &&
+    persistence > PERSIST_PULLBACK &&
+    inRange
+  ) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15 && inRange) {
+  if (
+    previous === 'TREND_DOWN' &&
+    lastVel >= PULLBACK &&
+    persistence < -PERSIST_PULLBACK &&
+    inRange
+  ) {
     return 'PULLBACK_DOWNTREND';
   }
-  if (previous === 'PULLBACK_UPTREND' && trendingUp) return 'TREND_UP';
-  if (previous === 'PULLBACK_DOWNTREND' && trendingDown) return 'TREND_DOWN';
+  // Resume trend from pullback only on enter-band strength
+  if (
+    previous === 'PULLBACK_UPTREND' &&
+    persistence > PERSIST_ENTER &&
+    lastVel > TREND_ENTER
+  )
+    return 'TREND_UP';
+  if (
+    previous === 'PULLBACK_DOWNTREND' &&
+    persistence < -PERSIST_ENTER &&
+    lastVel < -TREND_ENTER
+  )
+    return 'TREND_DOWN';
 
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
 
-  // Compression only when truly squeezed near zone mid — not every quiet 10s tick
+  // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
   if (inRange) return 'RANGE';
 
@@ -246,7 +318,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
  * Anti-flicker without freeze:
  * - Soft noise before dwell stays on current regime
  * - Pending candidate is NOT cleared on reject (so confirm survives dwell)
- * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar
+ * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar after dwell
+ * - Strong (opposite family / breakout) may switch before dwell completes
+ * - Same-family (TREND↔PULLBACK) no longer bypasses dwell — that caused 10s recipe flicker
  */
 export function stabilizeRegime(
   book: {
@@ -279,7 +353,8 @@ export function stabilizeRegime(
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   const need = sameFamily || strong ? 1 : CONFIRM_BARS;
-  const canSwitch = (dwellOk || strong || sameFamily) && book.pending_count >= need;
+  // sameFamily must still wait for dwell — only strong structure breaks skip it
+  const canSwitch = (dwellOk || strong) && book.pending_count >= need;
 
   if (canSwitch) {
     book.previous = book.current;
@@ -375,6 +450,7 @@ export function observeClosedBars(
   accountId?: number | string | null
 ): RegimeSnapshot {
   const b = ensureBook(epic, displayName, accountId);
+  let snap: RegimeSnapshot | null = null;
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -382,14 +458,24 @@ export function observeClosedBars(
       last &&
       Math.abs(last.open - bar.open) < 1e-9 &&
       Math.abs(last.close - bar.close) < 1e-9 &&
-      Math.abs(last.high - bar.high) < 1e-9;
+      Math.abs(last.high - bar.high) < 1e-9 &&
+      Math.abs(last.low - bar.low) < 1e-9;
     if (same) continue;
     b.bars.push(bar);
+    if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
+    // Per-bar stabilize — batch classify once would skip dwell/confirm accumulation
+    snap = applyClassify(epic, b);
   }
-  if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(epic, b);
+  return snap ?? toSnapshot(epicKey(epic), b);
 }
 
+/**
+ * Pipeline stamp:
+ * - Unscoped (market board): show pipeline regime for display
+ * - Account-scoped (robot desk books): advisory pending only — NEVER switch.
+ *   Robot OHLC observeClosedBars owns sticky dwell/confirm; strong flips here
+ *   were wiping TREND_UP → TREND_DOWN on a single intent stamp.
+ */
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
@@ -399,7 +485,22 @@ export function notePipelineRegime(
   const b = ensureBook(epic, displayName, accountId);
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
-  if (next !== b.current) {
+  const scoped =
+    accountId !== undefined && accountId !== null && String(accountId).trim() !== '';
+
+  if (scoped) {
+    if (next === b.current) {
+      b.bars_in_current += 1;
+      b.pending = null;
+      b.pending_count = 0;
+    } else if (next !== 'UNKNOWN') {
+      if (b.pending === next) b.pending_count += 1;
+      else {
+        b.pending = next;
+        b.pending_count = 1;
+      }
+    }
+  } else if (next !== b.current) {
     b.previous = b.current;
     b.current = next;
     b.since = now;
