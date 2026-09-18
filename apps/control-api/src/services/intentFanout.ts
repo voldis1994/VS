@@ -16,7 +16,7 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot, listRobotSessions, robotIdFor } from './robotDesk.js';
+import { attachManageOnlyRobot, listRobotSessions, robotIdFor, preferBrokerOpenLevel } from './robotDesk.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
 import { sameDirectionBlocked, sameDirLockLeftSec, flipFilterReason } from './flipFilter.js';
 
@@ -533,10 +533,23 @@ async function executeForSubscription(
       }
 
       noteBrokerOk(sub.client_id);
-      const entry =
+      // Provisional mid/ref — prefer broker open_level after list (fresh fill path)
+      let entry =
         referencePrice != null && Number.isFinite(referencePrice)
           ? Number(referencePrice)
           : mid;
+      let dealId: string | null = null;
+      try {
+        const again = await listCapitalOpenPositions(session);
+        const pos = again.ok
+          ? again.positions.find((p) => p.epic.toUpperCase() === sub.epic.toUpperCase())
+          : null;
+        const brokerEntry = preferBrokerOpenLevel(entry, pos?.open_level);
+        if (brokerEntry != null) entry = brokerEntry;
+        if (pos?.deal_id) dealId = pos.deal_id;
+      } catch {
+        /* mid/ref remain temporary fallback */
+      }
 
       // Persist execution/position best-effort
       try {
@@ -573,6 +586,7 @@ async function executeForSubscription(
         sub,
         side: direction,
         entry_price: entry,
+        deal_id: dealId,
         deal_reference: result.deal_reference || null,
         regime,
         setupType,
