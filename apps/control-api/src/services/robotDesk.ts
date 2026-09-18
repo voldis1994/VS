@@ -18,7 +18,6 @@ import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
-  classifyRegime,
   normalizeRegime,
   REGIME_NAMES,
   type RegimeName,
@@ -335,14 +334,11 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     if (same) continue;
     s.closedBars.push(bar);
   }
-  if (s.closedBars.length > 24) s.closedBars.splice(0, s.closedBars.length - 24);
+  if (s.closedBars.length > 36) s.closedBars.splice(0, s.closedBars.length - 36);
 
-  // Classify from THIS robot's bars only (multi-client same epic safe)
-  const prev = s.regime || 'UNKNOWN';
-  s.regime = classifyRegime(s.closedBars, prev);
-
-  // Account-scoped book for UI / diagnostics — other accounts use their own key
-  observeClosedBars(s.epic, incoming, s.display_name, s.account_id);
+  // Single path: zone + dwell/confirm stabilize via account-scoped book
+  const snap = observeClosedBars(s.epic, incoming, s.display_name, s.account_id);
+  s.regime = snap.current;
 }
 
 /** Last fully closed Capital 1m (not the forming minute). */

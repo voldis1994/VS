@@ -6,6 +6,7 @@ import {
   classifyRegime,
   observeClosedBars,
   resetRegimeBook,
+  stabilizeRegime,
   styleFromClassification,
   type RegimeName,
 } from './regimes.js';
@@ -174,6 +175,63 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
     expect(classifyRegime(bars, 'TREND_UP')).toBe('TREND_UP');
+  });
+});
+
+describe('stabilizeRegime — no flicker inside 1m', () => {
+  it('holds TREND_UP through noisy 10s bars until dwell + confirm', () => {
+    const book = {
+      current: 'TREND_UP' as RegimeName,
+      previous: 'UNKNOWN' as RegimeName,
+      bars_in_current: 1,
+      pending: null as RegimeName | null,
+      pending_count: 0,
+      since: new Date().toISOString(),
+    };
+    // Soft chop candidates before 60s dwell → stay TREND_UP
+    for (const cand of ['RANGE', 'COMPRESSION', 'EXPANSION', 'RANGE'] as RegimeName[]) {
+      expect(stabilizeRegime(book, cand)).toBe('TREND_UP');
+    }
+    expect(book.current).toBe('TREND_UP');
+    expect(new Set(['RANGE', 'COMPRESSION', 'EXPANSION', 'TREND_UP']).size).toBe(4);
+  });
+
+  it('allows TREND_UP → PULLBACK_UPTREND same-family without long dwell', () => {
+    const book = {
+      current: 'TREND_UP' as RegimeName,
+      previous: 'UNKNOWN' as RegimeName,
+      bars_in_current: 2,
+      pending: null as RegimeName | null,
+      pending_count: 0,
+      since: new Date().toISOString(),
+    };
+    expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND');
+  });
+
+  it('observeClosedBars does not visit every regime in one minute of 10s bars', () => {
+    resetRegimeBook();
+    // Seed a clear uptrend
+    const seed = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, arr) =>
+      bar(i === 0 ? p : arr[i - 1]!, p + 0.4, p - 0.3, p, i)
+    );
+    observeClosedBars('GOLD', seed, 'Gold');
+    const seen = new Set<string>(['TREND_UP']);
+    // Next 6 bars (~1m): mix of tiny dips / quiet / mild expansion — must not paint all regimes
+    const noisy: TenSecBar[] = [
+      bar(103.4, 103.5, 103.2, 103.25, 10),
+      bar(103.25, 103.35, 103.15, 103.2, 11),
+      bar(103.2, 103.4, 103.1, 103.35, 12),
+      bar(103.35, 103.45, 103.2, 103.28, 13),
+      bar(103.28, 103.5, 103.2, 103.42, 14),
+      bar(103.42, 103.55, 103.3, 103.5, 15),
+    ];
+    for (const b of noisy) {
+      const snap = observeClosedBars('GOLD', [b], 'Gold');
+      seen.add(snap.current);
+    }
+    // One minute of noise must not cycle the whole catalog
+    expect(seen.size).toBeLessThanOrEqual(3);
+    expect(seen.has('TREND_UP') || seen.has('PULLBACK_UPTREND')).toBe(true);
   });
 });
 
