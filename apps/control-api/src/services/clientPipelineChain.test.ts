@@ -327,15 +327,15 @@ describe('Idempotency', () => {
     expect(createCapitalPosition).toHaveBeenCalledTimes(1);
   });
 
-  it('fresh fill syncs entry_price from broker open_level (not mid)', async () => {
+  it('fresh fill syncs entry_price from broker open_level (not referencePrice)', async () => {
     const { fanoutEntryIntent } = await import('./intentFanout.js');
     listActiveSubscriptionsForEpic.mockResolvedValue([
       sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
     ]);
-    // 1st list: flat before order; 2nd list: after fill with broker open_level
+    // Before order: flat; after fill: broker open_level (retries allowed)
     listCapitalOpenPositions
       .mockResolvedValueOnce({ ok: true, positions: [] })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         ok: true,
         positions: [
           {
@@ -354,7 +354,7 @@ describe('Idempotency', () => {
       direction: 'BUY',
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-openlevel-1',
-      reference_price: 2000.25,
+      reference_price: 1999.0, // signal — must NOT be manage entry
     });
 
     const opened = emitToClient.mock.calls.find(
@@ -362,6 +362,7 @@ describe('Idempotency', () => {
     );
     expect(opened).toBeTruthy();
     expect((opened![1] as { entry_price: number }).entry_price).toBe(2001.37);
+    expect((opened![1] as { entry_price: number }).entry_price).not.toBe(1999.0);
   });
 });
 

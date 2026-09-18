@@ -1958,7 +1958,18 @@ export async function attachManageOnlyRobot(input: {
     existing.trading_enabled = true;
     existing.open_side = input.side;
     existing.mode = 'MANAGE';
-    if (existing.entry_price == null) existing.entry_price = input.entry_price;
+    // Always take broker/pipeline fill price for HardInv/Peak/MFE (never keep stale mid/ref)
+    if (input.entry_price != null && Number.isFinite(input.entry_price)) {
+      if (existing.entry_price != null && existing.entry_price !== input.entry_price) {
+        existing.mfe = 0;
+        existing.mae = 0;
+        existing.peak_retention = null;
+      }
+      existing.entry_price = input.entry_price;
+      existing.peak_favorable = input.entry_price;
+    } else if (existing.entry_price == null) {
+      existing.entry_price = input.entry_price;
+    }
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.deal_id) existing.deal_id = input.deal_id;
@@ -1969,9 +1980,9 @@ export async function attachManageOnlyRobot(input: {
       bid: null,
       ask: null,
       mid: input.entry_price,
-      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
-        existing.regime
-      } · manage open · entry_brain=OFF · MFE ${existing.mfe.toFixed(5)}`,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · entry ${
+        existing.entry_price ?? '—'
+      } · ${existing.regime} · manage open · entry_brain=OFF · MFE ${existing.mfe.toFixed(5)}`,
     });
     return publicSession(existing);
   }
