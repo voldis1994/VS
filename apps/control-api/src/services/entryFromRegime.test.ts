@@ -26,12 +26,13 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')?.reason).toMatch(/SPIKE follow/);
   });
 
-  it('micro MOVE in RANGE/COMPRESSION does NOT fade (pushback catch OFF)', () => {
+  it('micro MOVE in COMPRESSION/RANGE still fades', () => {
     expect(isSpike10s(microDip)).toBe(false);
-    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(microRally, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(microDip, 'RANGE')).toBeNull();
-    expect(decideEntryFrom10sRegime(microRally, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')?.setup).toBe('FADE');
+    expect(decideEntryFrom10sRegime(microRally, 'COMPRESSION')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(microDip, 'RANGE')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(microRally, 'RANGE')?.direction).toBe('SELL');
   });
 
   it('waits in UNKNOWN; TRANSITION follows body', () => {
