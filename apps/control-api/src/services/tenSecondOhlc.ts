@@ -1,6 +1,6 @@
 /** Native 10-second OHLC — same TF as Capital.com 10s chart. */
 
-import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
+import { ENTRY_DIP, ENTRY_RALLY, EXPAND_ABS, MOVE, MOVE_RANGE, TREND_ENTER } from './regimeBands.js';
 
 export type TenSecBar = {
   open_time_ms: number;
@@ -42,6 +42,15 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
   return Math.abs(bodyPct(bar)) >= MOVE || rangePct(bar) >= MOVE_RANGE;
+}
+
+/**
+ * Spike / impulse bar — follow immediately (BUY up / SELL down).
+ * Do NOT fade these in RANGE/COMPRESSION (pushback fades lose into HardInv on trends).
+ */
+export function isSpike10s(bar: TenSecBar | null | undefined): boolean {
+  if (!bar) return false;
+  return Math.abs(bodyPct(bar)) >= TREND_ENTER || rangePct(bar) >= EXPAND_ABS;
 }
 
 export function emptyTenSecState(): TenSecState {

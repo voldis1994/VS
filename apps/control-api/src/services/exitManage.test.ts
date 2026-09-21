@@ -3,8 +3,6 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
-  HARDINV_ABS_FLOOR,
-  PEAK_MIN_GIVEBACK_ABS,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -132,7 +130,8 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('PeakProtect needs ≥0.75pt giveback after real MFE', () => {
+  it('PeakProtect needs real giveback after MFE (scalp min giveback)', () => {
+    const minGb = defaultDeskCalibration().peak_min_giveback_abs;
     const tinyGiveback = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -140,7 +139,7 @@ describe('decideBestOutcomeExit', () => {
         mfe: 8,
         peak_retention: 0.7,
       }),
-      2000 + 8 - (PEAK_MIN_GIVEBACK_ABS - 0.1),
+      2000 + 8 - (minGb - 0.1),
       'peak_protect_only'
     );
     const enough = decideBestOutcomeExit(
@@ -181,8 +180,8 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('target at ≥ max(0.35%, 4pt) so wins can outsize HardInv', () => {
-    // entry 2000 → TP = max(7, 4) = 7
+  it('target banks wins at scalp TP (max pct/abs)', () => {
+    // scalp defaults: entry 2000 → TP = max(5, 2.25) = 5
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',

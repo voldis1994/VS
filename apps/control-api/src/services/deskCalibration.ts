@@ -34,14 +34,15 @@ const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
 
 export function defaultDeskCalibration(): DeskCalibration {
   return {
-    hardinv_abs: 1.5,
-    peak_mfe_abs: 1.5,
-    peak_retention: 0.75,
-    peak_min_giveback_abs: 0.75,
-    target_abs: 4.0,
+    // Scalp-tuned: bank small +R; Peak arms earlier; HardInv slightly wider than Target
+    hardinv_abs: 2.0,
+    peak_mfe_abs: 0.9,
+    peak_retention: 0.8,
+    peak_min_giveback_abs: 0.45,
+    target_abs: 2.25,
     hardinv_pct: 0.0015,
-    target_pct: 0.0035,
-    peak_mfe_pct: 0.0008,
+    target_pct: 0.0025,
+    peak_mfe_pct: 0.00045,
     enabled_regimes: [...TRADABLE_DEFAULT],
     updated_at: new Date().toISOString(),
   };
