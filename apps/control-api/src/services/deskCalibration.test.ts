@@ -11,13 +11,13 @@ describe('deskCalibration', () => {
     setDeskCalibration(defaultDeskCalibration());
   });
 
-  it('defaults scalp HardInv 2 / Peak keep 80% / Target 2.25', () => {
+  it('defaults positive R:R — HardInv CAP 2.2 / Peak MFE ≥3 / Target ≥5', () => {
     const c = getDeskCalibration();
-    expect(c.hardinv_abs).toBe(2);
-    expect(c.peak_retention).toBe(0.8);
-    expect(c.peak_mfe_abs).toBe(0.9);
-    expect(c.peak_min_giveback_abs).toBe(0.45);
-    expect(c.target_abs).toBe(2.25);
+    expect(c.hardinv_abs).toBe(2.2);
+    expect(c.peak_retention).toBe(0.65);
+    expect(c.peak_mfe_abs).toBe(3.0);
+    expect(c.peak_min_giveback_abs).toBe(0.85);
+    expect(c.target_abs).toBe(5.0);
     expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
     expect(c.enabled_regimes.includes('UNKNOWN')).toBe(false);
   });

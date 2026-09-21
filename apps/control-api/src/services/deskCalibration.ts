@@ -4,17 +4,17 @@ import path from 'node:path';
 import { REGIME_NAMES, type RegimeName } from './regimes.js';
 
 export type DeskCalibration = {
-  /** Soft HardInv absolute floor (price points) */
+  /** Soft HardInv absolute CAP (price points) — not a floor */
   hardinv_abs: number;
-  /** PeakProtect arms / cuts only after this MFE (pts) */
+  /** PeakProtect arms / cuts only after this MFE (pts) — must be > hardinv */
   peak_mfe_abs: number;
-  /** Keep this fraction of MFE (0.75 = 25% giveback) */
+  /** Keep this fraction of MFE (0.65 ≈ 35% giveback) */
   peak_retention: number;
   /** Min absolute giveback before Peak cuts (pts) */
   peak_min_giveback_abs: number;
   /** Soft Target absolute floor (pts) — should be > hardinv */
   target_abs: number;
-  /** Soft HardInv as fraction of price (Gold ~0.15%) */
+  /** Soft HardInv as fraction of price (capped by hardinv_abs) */
   hardinv_pct: number;
   /** Target as fraction of price */
   target_pct: number;
@@ -34,15 +34,16 @@ const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
 
 export function defaultDeskCalibration(): DeskCalibration {
   return {
-    // Scalp-tuned: bank small +R; Peak arms earlier; HardInv slightly wider than Target
-    hardinv_abs: 2.0,
-    peak_mfe_abs: 0.9,
-    peak_retention: 0.8,
-    peak_min_giveback_abs: 0.45,
-    target_abs: 2.25,
-    hardinv_pct: 0.0015,
+    // Positive R:R — Soft HardInv CAP ~2.2; Peak only after real ≥3pt leg; Target ≥4–5
+    // (old scalp profile banked +0.5 Peak vs −4 Soft HardInv → 80% wins, net minus)
+    hardinv_abs: 2.2,
+    peak_mfe_abs: 3.0,
+    peak_retention: 0.65,
+    peak_min_giveback_abs: 0.85,
+    target_abs: 5.0,
+    hardinv_pct: 0.0008,
     target_pct: 0.0025,
-    peak_mfe_pct: 0.00045,
+    peak_mfe_pct: 0.0009,
     enabled_regimes: [...TRADABLE_DEFAULT],
     updated_at: new Date().toISOString(),
   };
@@ -96,6 +97,21 @@ function loadFromDisk(): DeskCalibration {
     const file = calibrationPath();
     if (!fs.existsSync(file)) return defaultDeskCalibration();
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<DeskCalibration>;
+    // One-shot upgrade: scalp asymmetry (Peak <2pt + wide HardInv %) → positive R:R defaults
+    const peakAbs = Number(raw.peak_mfe_abs);
+    const hiPct = Number(raw.hardinv_pct);
+    if (
+      Number.isFinite(peakAbs) &&
+      peakAbs > 0 &&
+      peakAbs < 2.0 &&
+      Number.isFinite(hiPct) &&
+      hiPct >= 0.0012
+    ) {
+      return sanitize({
+        ...defaultDeskCalibration(),
+        enabled_regimes: raw.enabled_regimes,
+      });
+    }
     return sanitize(raw);
   } catch {
     return defaultDeskCalibration();
