@@ -78,7 +78,7 @@ async function main() {
 
   if (!isEncryptionKeyConfigured()) {
     console.warn(
-      '[security] MASTER_ENCRYPTION_KEY missing/placeholder — broker credential encrypt/decrypt will fail'
+      '[security] MASTER_ENCRYPTION_KEY is placeholder/legacy — OK for existing installs'
     );
   }
   if (!isAdminTokenConfigured() && process.env.ALLOW_INSECURE_DEV !== 'true') {

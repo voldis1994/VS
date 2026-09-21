@@ -16,8 +16,16 @@ describe('encryption', () => {
     expect(masked.endsWith('2345')).toBe(true);
   });
 
-  it('refuses placeholder MASTER_ENCRYPTION_KEY', () => {
+  it('still decrypts legacy CHANGE_ME envelope key', () => {
     process.env.MASTER_ENCRYPTION_KEY = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
-    expect(() => encrypt('x')).toThrow(/MASTER_ENCRYPTION_KEY/);
+    const enc = encrypt('broker-secret');
+    expect(decrypt(enc.ciphertext, enc.iv, enc.tag)).toBe('broker-secret');
+  });
+
+  it('decrypt falls back to legacy key after rotation', () => {
+    process.env.MASTER_ENCRYPTION_KEY = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+    const enc = encrypt('old-sealed');
+    process.env.MASTER_ENCRYPTION_KEY = 'rotated-random-key-abcdef';
+    expect(decrypt(enc.ciphertext, enc.iv, enc.tag)).toBe('old-sealed');
   });
 });

@@ -368,12 +368,13 @@ describe('PROOF: public surface hardening (2026-09 audit)', () => {
     else process.env.ALLOW_INSECURE_DEV = prev.ALLOW_INSECURE_DEV;
   });
 
-  it('encryption refuses CHANGE_ME master key', async () => {
-    const { encrypt, isEncryptionKeyConfigured } = await import('../security/encryption.js');
+  it('encryption still opens CHANGE_ME / rotated legacy envelopes', async () => {
+    const { encrypt, decrypt } = await import('../security/encryption.js');
     const prev = process.env.MASTER_ENCRYPTION_KEY;
     process.env.MASTER_ENCRYPTION_KEY = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
-    expect(isEncryptionKeyConfigured()).toBe(false);
-    expect(() => encrypt('secret')).toThrow(/MASTER_ENCRYPTION_KEY/);
+    const enc = encrypt('desk-broker');
+    process.env.MASTER_ENCRYPTION_KEY = 'post-rotation-key';
+    expect(decrypt(enc.ciphertext, enc.iv, enc.tag)).toBe('desk-broker');
     process.env.MASTER_ENCRYPTION_KEY = prev;
   });
 });

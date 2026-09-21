@@ -106,10 +106,9 @@ if errorlevel 1 (
 if not exist "%ROOT%\.env" (
   copy /Y "%ROOT%\.env.example" "%ROOT%\.env" >nul
 )
-call :ensure_secret MASTER_ENCRYPTION_KEY
+REM Do NOT rotate MASTER_ENCRYPTION_KEY — that bricks existing broker ciphertext.
 call :ensure_secret API_ADMIN_TOKEN
 call :ensure_secret PIPELINE_TOKEN
-call :ensure_secret JWT_SECRET
 call :sync_vite_admin_token
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
@@ -190,9 +189,23 @@ if exist "%MC%" (
   call :read_env_var PIPELINE_TOKEN
   call :read_env_var PIPELINE_SERVICE_TOKEN
   call :read_env_var CONTROL_API_URL
+  call :read_env_var CAPITAL_API_KEY
+  call :read_env_var CAPITAL_API_PASSWORD
+  call :read_env_var CAPITAL_IDENTIFIER
+  call :read_env_var CAPITAL_ENVIRONMENT
   if not defined CONTROL_API_URL set "CONTROL_API_URL=http://127.0.0.1:3000"
-  start "MR-MarketCore" /D "%ROOT%" cmd /k set MARKET_CORE_BRIDGE=1^& set OPERATING_MODE=LIVE^& set LIVE_TRADING_ENABLED=true^& set PIPELINE_TOKEN=!PIPELINE_TOKEN!^& set PIPELINE_SERVICE_TOKEN=!PIPELINE_SERVICE_TOKEN!^& set CONTROL_API_URL=!CONTROL_API_URL!^& "%MC%" --mode LIVE --bridge
-  echo [OK] market-core
+  if not defined CAPITAL_ENVIRONMENT set "CAPITAL_ENVIRONMENT=demo"
+  if "!CAPITAL_API_KEY!"=="" (
+    echo [WARN] CAPITAL_API_KEY nav .env — market-core bridge IZLAIZU.
+    echo        Desk/roboti strada caur Brokers DB ^(control-api^). Nav kludas.
+  ) else if "!CAPITAL_API_PASSWORD!"=="" (
+    echo [WARN] CAPITAL_API_PASSWORD nav .env — market-core bridge IZLAIZU.
+  ) else if "!CAPITAL_IDENTIFIER!"=="" (
+    echo [WARN] CAPITAL_IDENTIFIER nav .env — market-core bridge IZLAIZU.
+  ) else (
+    start "MR-MarketCore" /D "%ROOT%" cmd /k set MARKET_CORE_BRIDGE=1^& set OPERATING_MODE=LIVE^& set LIVE_TRADING_ENABLED=true^& set PIPELINE_TOKEN=!PIPELINE_TOKEN!^& set PIPELINE_SERVICE_TOKEN=!PIPELINE_SERVICE_TOKEN!^& set CONTROL_API_URL=!CONTROL_API_URL!^& set CAPITAL_API_KEY=!CAPITAL_API_KEY!^& set CAPITAL_API_PASSWORD=!CAPITAL_API_PASSWORD!^& set CAPITAL_IDENTIFIER=!CAPITAL_IDENTIFIER!^& set CAPITAL_ENVIRONMENT=!CAPITAL_ENVIRONMENT!^& "%MC%" --mode LIVE --bridge
+    echo [OK] market-core bridge
+  )
 ) else (
   echo [WARN] market-core.exe nav
 )

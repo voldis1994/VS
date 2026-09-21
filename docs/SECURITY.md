@@ -8,7 +8,7 @@ Control-api encrypts broker secrets with **AES-256-GCM** (`apps/control-api/src/
 - Random 16-byte IV per encryption  
 - Auth tag stored with ciphertext  
 - DB columns: `ciphertext`, `iv`, `tag`, plus `masked_value` for UI  
-- **Placeholder keys are refused** — `encrypt`/`decrypt` throw if `MASTER_ENCRYPTION_KEY` is missing or still `CHANGE_ME*`
+- **Placeholder keys** still decrypt (legacy installs used `CHANGE_ME…` as the live key). New installs should set a unique `MASTER_ENCRYPTION_KEY`. Decrypt also falls back to the legacy placeholder key if VS.bat previously rotated it.
 
 On `POST /api/brokers`, `api_key` and `password` are encrypted before insert into `api_credential_metadata`. Listing brokers returns masked values only (`••••••••••` + last 4).
 
