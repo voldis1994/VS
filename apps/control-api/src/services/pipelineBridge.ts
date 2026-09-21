@@ -47,19 +47,21 @@ function safeEqual(a: string, b: string): boolean {
 /**
  * Authorize internal pipeline requests.
  * - Only x-pipeline-token (not client session, not admin browser token).
- * - Production: missing secret → reject (fail closed).
- * - Dev without secret: allow only when NODE_ENV !== 'production' (local DX).
+ * - Always fail-closed without a real PIPELINE_TOKEN (no open fanout on CHANGE_ME).
+ * - Escape hatch: ALLOW_INSECURE_DEV=true and NODE_ENV !== production.
  */
 export function authorizePipelineRequest(headers: Record<string, unknown>): boolean {
   const expected = getPipelineServiceSecret();
   const got = String(headers['x-pipeline-token'] || '').trim();
 
   if (!expected) {
-    if (process.env.NODE_ENV === 'production') {
-      return false; // fail closed — never open pipeline without secret
+    if (
+      process.env.ALLOW_INSECURE_DEV === 'true' &&
+      process.env.NODE_ENV !== 'production'
+    ) {
+      return true;
     }
-    // Non-production + unset secret: allow local bridge without token
-    return true;
+    return false;
   }
 
   if (!got) return false;

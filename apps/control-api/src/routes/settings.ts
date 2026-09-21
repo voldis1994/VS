@@ -1,16 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import { logAudit } from '../services/audit.js';
 
-/** Risk accepted by operator: no confirm gates, LIVE ready by default. */
+/** LIVE requires explicit LIVE_TRADING_ENABLED=true (safe default: off). */
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
-  if (v === undefined || v === '') return true;
+  if (v === undefined || v === '') return false;
   return v !== 'false' && v !== '0';
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/settings', async () => ({
-    operating_mode: process.env.OPERATING_MODE || 'LIVE',
+    operating_mode: process.env.OPERATING_MODE || 'PAPER',
     live_trading_enabled: liveEnabled(),
     operating_modes: ['REPLAY', 'PAPER', 'DEMO', 'LIVE'],
     primary_horizon_ms: 10000,
@@ -50,7 +50,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     return {
       success: true,
-      operating_mode: process.env.OPERATING_MODE || 'LIVE',
+      operating_mode: process.env.OPERATING_MODE || 'PAPER',
       live_trading_enabled: liveEnabled(),
       log_level: process.env.LOG_LEVEL || 'info',
     };

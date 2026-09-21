@@ -106,6 +106,11 @@ if errorlevel 1 (
 if not exist "%ROOT%\.env" (
   copy /Y "%ROOT%\.env.example" "%ROOT%\.env" >nul
 )
+call :ensure_secret MASTER_ENCRYPTION_KEY
+call :ensure_secret API_ADMIN_TOKEN
+call :ensure_secret PIPELINE_TOKEN
+call :ensure_secret JWT_SECRET
+call :sync_vite_admin_token
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
 call :upsert_env MARKET_CORE_BRIDGE 1
@@ -182,7 +187,11 @@ if not exist "%MC%" (
   if not exist "!MC!" set "MC=%ROOT%\build\windows-release\apps\market-core\market-core.exe"
 )
 if exist "%MC%" (
-  start "MR-MarketCore" /D "%ROOT%" cmd /k set MARKET_CORE_BRIDGE=1^& set OPERATING_MODE=LIVE^& set LIVE_TRADING_ENABLED=true^& "%MC%" --mode LIVE --bridge
+  call :read_env_var PIPELINE_TOKEN
+  call :read_env_var PIPELINE_SERVICE_TOKEN
+  call :read_env_var CONTROL_API_URL
+  if not defined CONTROL_API_URL set "CONTROL_API_URL=http://127.0.0.1:3000"
+  start "MR-MarketCore" /D "%ROOT%" cmd /k set MARKET_CORE_BRIDGE=1^& set OPERATING_MODE=LIVE^& set LIVE_TRADING_ENABLED=true^& set PIPELINE_TOKEN=!PIPELINE_TOKEN!^& set PIPELINE_SERVICE_TOKEN=!PIPELINE_SERVICE_TOKEN!^& set CONTROL_API_URL=!CONTROL_API_URL!^& "%MC%" --mode LIVE --bridge
   echo [OK] market-core
 ) else (
   echo [WARN] market-core.exe nav
@@ -330,6 +339,20 @@ goto :wait_port_loop
 
 :upsert_env
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) ; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
+exit /b 0
+
+:ensure_secret
+REM Generate a unique secret if missing or still CHANGE_ME*
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType File -Path $p | Out-Null }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; $m=[regex]::Match($c,('(?m)^'+[regex]::Escape($k)+'=(.*)$')); $cur= if($m.Success){$m.Groups[1].Value.Trim()}else{''}; if ($cur -and $cur -notmatch '^CHANGE_ME') { exit 0 }; $bytes=New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); $v=[BitConverter]::ToString($bytes).Replace('-','').ToLowerInvariant(); if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline; Write-Host ('[OK] generated '+$k)"
+exit /b 0
+
+:sync_vite_admin_token
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$root='!ROOT!'; $envFile=Join-Path $root '.env'; $dash=Join-Path $root 'apps\dashboard\.env.local'; $c=Get-Content -LiteralPath $envFile -Raw; $m=[regex]::Match($c,'(?m)^API_ADMIN_TOKEN=(.*)$'); if(-not $m.Success){exit 0}; $tok=$m.Groups[1].Value.Trim(); $out=@('VITE_ADMIN_TOKEN='+$tok,'VITE_API_URL=http://localhost:3000','VITE_WS_URL=ws://localhost:3000/ws'); Set-Content -LiteralPath $dash -Value ($out -join \"`r`n\")"
+exit /b 0
+
+:read_env_var
+set "%~1="
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"%~1=" "%ROOT%\.env" 2^>nul`) do set "%~1=%%B"
 exit /b 0
 
 :try_build_core
