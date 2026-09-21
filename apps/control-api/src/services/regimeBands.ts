@@ -9,19 +9,21 @@
  *   COMPRESS_ABS < MOVE < MOVE_RANGE ≤ TREND_STAY < TREND_ENTER < EXPAND_ABS
  *
  * Gold ~2650 reference (points ≈ pct × 2650):
- *   MOVE        0.012% → 0.32 pt
+ *   MOVE        0.008% → 0.21 pt
  *   TREND_STAY  0.022% → 0.58 pt
  *   TREND_ENTER 0.038% → 1.01 pt
  *   PULLBACK    0.055% → 1.46 pt
  *   REVERSAL    0.160% → 4.24 pt
- *   COMPRESS    0.009% → 0.24 pt
+ *   COMPRESS    0.0055% → 0.15 pt
  *   EXPAND      0.060% → 1.59 pt
+ *
+ * Softened for real 10s scalps (Asia/quiet Gold): prior MOVE 0.012% / range 0.018%
+ * starved overnight entries even when Capital 1m moved.
  */
 
 /** Shared “real 10s move” floor — persist vote, isMoving body, entry dip/rally.
- *  Slightly below the first coherent ladder (0.015%) so quiet Gold sessions
- *  still arm — COMPRESS must stay strictly below this. */
-export const MOVE = 0.00012;
+ *  Soft floor so quiet Gold 10s bars still arm — COMPRESS must stay strictly below. */
+export const MOVE = 0.00008;
 /** Stay in an existing trend (must be > MOVE) */
 export const TREND_STAY = 0.00022;
 /** Enter a fresh trend (must be > TREND_STAY) */
@@ -31,10 +33,10 @@ export const PULLBACK = 0.00055;
 /** Violent reversal body (must be > PULLBACK) */
 export const REVERSAL = 0.0016;
 
-/** isMoving range floor (≥ MOVE, ≤ TREND_STAY) — matches prior anti-starve range */
-export const MOVE_RANGE = 0.00018;
+/** isMoving range floor (≥ MOVE, ≤ TREND_STAY) — soft anti-starve for 10s entry */
+export const MOVE_RANGE = 0.00012;
 /** Compression absolute range (must be < MOVE) */
-export const COMPRESS_ABS = 0.00009;
+export const COMPRESS_ABS = 0.000055;
 /** Expansion absolute range (must be > TREND_ENTER) */
 export const EXPAND_ABS = 0.0006;
 

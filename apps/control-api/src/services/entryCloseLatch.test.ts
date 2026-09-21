@@ -20,7 +20,7 @@ describe('entry close latch / zone-seed race', () => {
     expect(shouldAttemptZoneSeed(10, 0, 20_000)).toBe(true);
   });
 
-  it('quiet Gold body ~0.010% is MOVING with softened MOVE floor', () => {
+  it('quiet Gold body ~0.008% is MOVING with soft 10s MOVE floor', () => {
     const mid = 2650;
     const bar: TenSecBar = {
       open_time_ms: 0,
@@ -33,6 +33,23 @@ describe('entry close latch / zone-seed race', () => {
     expect(Math.abs(bodyPct(bar))).toBeGreaterThanOrEqual(MOVE);
     expect(isMoving10s(bar)).toBe(true);
     expect(decideEntryFrom10sRegime(bar, 'RANGE')?.direction).toBe('SELL');
+  });
+
+  it('Asia-scale ~0.35pt Gold body arms MOVING on live ~4360 mid', () => {
+    const mid = 4360;
+    // Soft MOVE 0.008% ≈ 0.35 pt at live Gold — prior 0.012% needed ~0.52 pt
+    const bodyPts = mid * MOVE * 1.02;
+    const bar: TenSecBar = {
+      open_time_ms: 0,
+      open: mid,
+      high: mid + bodyPts,
+      low: mid - 0.05,
+      close: mid + bodyPts,
+      ticks: 8,
+    };
+    expect(Math.abs(bodyPct(bar))).toBeGreaterThanOrEqual(MOVE);
+    expect(isMoving10s(bar)).toBe(true);
+    expect(decideEntryFrom10sRegime(bar, 'COMPRESSION')?.direction).toBe('SELL');
   });
 
   it('range-only micro bar below MOVE_RANGE stays QUIET (no false arm)', () => {

@@ -33,9 +33,9 @@ describe('regimeBands — one ladder that actually works together', () => {
     for (let i = 1; i < ladder.length; i++) {
       expect(ladder[i]![1]).toBeGreaterThan(ladder[i - 1]![1]);
     }
-    // Stay must be ABOVE move (old bug: stay 0.010% < sign 0.012%)
+    // Stay must be ABOVE move (old bug: stay below move floor)
     expect(TREND_STAY).toBeGreaterThan(MOVE);
-    expect(bandPts(TREND_STAY, mid) - bandPts(MOVE, mid)).toBeGreaterThanOrEqual(0.15);
+    expect(bandPts(TREND_STAY, mid) - bandPts(MOVE, mid)).toBeGreaterThanOrEqual(0.25);
     expect(bandPts(TREND_ENTER, mid) - bandPts(TREND_STAY, mid)).toBeGreaterThanOrEqual(0.35);
     expect(bandPts(PULLBACK, mid) - bandPts(TREND_ENTER, mid)).toBeGreaterThanOrEqual(0.35);
     expect(bandPts(REVERSAL, mid) - bandPts(PULLBACK, mid)).toBeGreaterThanOrEqual(2.5);
@@ -58,12 +58,13 @@ describe('regimeBands — one ladder that actually works together', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,
       open: 2650,
-      high: 2650.1,
-      low: 2649.95,
-      close: 2650.05,
+      high: 2650.05,
+      low: 2649.97,
+      close: 2650.02,
       ticks: 5,
     };
     expect(Math.abs((quiet.close - quiet.open) / quiet.open)).toBeLessThan(MOVE);
+    expect((quiet.high - quiet.low) / quiet.open).toBeLessThan(MOVE_RANGE);
     expect(isMoving10s(quiet)).toBe(false);
 
     const moving: TenSecBar = {
@@ -88,8 +89,8 @@ describe('regimeBands — one ladder that actually works together', () => {
       expand_pt: bandPts(EXPAND_ABS, mid),
       reversal_pt: bandPts(REVERSAL, mid),
     };
-    // Rough Gold 10s scales — not exact market, just order of magnitude
-    expect(rows.move_pt).toBeCloseTo(0.32, 1);
+    // Soft 10s scalp floor — ~0.21 pt at Gold~2650 (~0.35 pt at ~4360)
+    expect(rows.move_pt).toBeCloseTo(0.21, 1);
     expect(rows.enter_pt).toBeCloseTo(1.0, 0);
     expect(rows.pullback_pt).toBeGreaterThan(rows.enter_pt);
     expect(rows.reversal_pt).toBeGreaterThan(3);
