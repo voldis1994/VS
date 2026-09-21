@@ -132,4 +132,37 @@ describe('10s OHLC', () => {
     expect(isMoving10s(enriched.last_closed)).toBe(true);
     expect(Math.abs(bodyPct(enriched.last_closed!))).toBeGreaterThanOrEqual(MOVE * 0.5);
   });
+
+  it('replaces a NEWER flat poll bar with an OLDER SECOND bar that has real range', () => {
+    const now = 1_700_000_030_000;
+    const flatNewer = {
+      open_time_ms: now - 10_000,
+      open: 4354.65,
+      high: 4354.65,
+      low: 4354.65,
+      close: 4354.65,
+      ticks: 1,
+    };
+    const seconds = [];
+    for (let i = 0; i < 10; i++) {
+      const t = now - 20_000 + i * 1000; // previous 10s bucket vs flat poll
+      const o = 4354.0 + i * 0.05;
+      seconds.push({
+        open: o,
+        high: o + 0.15,
+        low: o - 0.05,
+        close: o + 0.04,
+        snapshot_time_ms: t,
+      });
+    }
+    const enriched = enrichOhlcWithSecondCandles(
+      { forming: null, last_closed: flatNewer, just_closed: false },
+      seconds,
+      now
+    );
+    expect(enriched.just_closed).toBe(true);
+    expect(enriched.last_closed!.open_time_ms).toBe(now - 20_000);
+    expect(isMoving10s(enriched.last_closed)).toBe(true);
+    expect(rangePct(enriched.last_closed!)).toBeGreaterThan(0);
+  });
 });
