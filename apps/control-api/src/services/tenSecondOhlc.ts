@@ -149,7 +149,8 @@ export function buildTenSecBarsFromSeconds(
 
 /**
  * Upgrade flat poll-built bars with Capital SECOND truth.
- * Sets just_closed when a completed SECOND bar is new or replaces a flat last_closed.
+ * Sparse polls often close a NEWER flat wall-clock bar; SECOND may describe the
+ * previous bucket with real H/L — always prefer SECOND over a flat last_closed.
  */
 export function enrichOhlcWithSecondCandles(
   state: TenSecState,
@@ -168,19 +169,22 @@ export function enrichOhlcWithSecondCandles(
       !prev ||
       (Math.abs(bodyPct(prev)) < 1e-12 && rangePct(prev) < 1e-12) ||
       prev.ticks <= 2;
-    const richer =
-      !prev ||
-      fromSec.open_time_ms > prev.open_time_ms ||
-      (fromSec.open_time_ms === prev.open_time_ms &&
-        (rangePct(fromSec) > rangePct(prev) + 1e-12 ||
-          Math.abs(bodyPct(fromSec)) > Math.abs(bodyPct(prev)) + 1e-12 ||
-          fromSec.ticks > prev.ticks));
-    if (richer) {
-      justClosed =
-        !prev ||
-        fromSec.open_time_ms > prev.open_time_ms ||
-        (prevFlat && (rangePct(fromSec) > 0 || Math.abs(bodyPct(fromSec)) > 0));
+    const secHasMove = rangePct(fromSec) > 1e-12 || Math.abs(bodyPct(fromSec)) > 1e-12;
+    const richerSameBucket =
+      !!prev &&
+      fromSec.open_time_ms === prev.open_time_ms &&
+      (rangePct(fromSec) > rangePct(prev) + 1e-12 ||
+        Math.abs(bodyPct(fromSec)) > Math.abs(bodyPct(prev)) + 1e-12 ||
+        fromSec.ticks > prev.ticks);
+    const newerSec = !prev || fromSec.open_time_ms > prev.open_time_ms;
+
+    // Critical: replace flat poll bars even when SECOND bucket is older/equal
+    if (prevFlat && (secHasMove || fromSec.ticks >= 3)) {
       lastClosed = fromSec;
+      justClosed = true;
+    } else if (newerSec || richerSameBucket) {
+      lastClosed = fromSec;
+      justClosed = newerSec || richerSameBucket;
     }
   }
 
@@ -192,7 +196,7 @@ export function enrichOhlcWithSecondCandles(
     } else {
       nextForming = {
         open_time_ms: forming.open_time_ms,
-        open: live.open,
+        open: live.ticks <= 1 ? forming.open : live.open,
         high: Math.max(live.high, forming.high),
         low: Math.min(live.low, forming.low),
         close: live.close,

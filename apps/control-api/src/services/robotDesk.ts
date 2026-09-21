@@ -46,10 +46,12 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
+  bodyPct,
   emptyTenSecState,
   enrichOhlcWithSecondCandles,
   expandMinutesToTen,
   publicOhlc10s,
+  rangePct,
   updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
@@ -220,6 +222,13 @@ function setRobotCadence(s: Internal, ms: number) {
     }
     void robotCycle(s);
   }, ms);
+}
+
+function isFlatTenBar(bar: TenSecBar | null | undefined): boolean {
+  if (!bar) return true;
+  return (
+    (Math.abs(bodyPct(bar)) < 1e-12 && rangePct(bar) < 1e-12) || bar.ticks <= 2
+  );
 }
 
 /** Whether to attempt Capital MINUTE→10s zone seed (multi-feed never fills history). */
@@ -1416,8 +1425,10 @@ async function robotCycleLocked(s: Internal) {
     s.last_bid = quote.bid;
     s.last_ask = quote.ask;
 
-    // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+    // Multi-provider read — skip while 10s bar is flat so Capital lock frees faster
+    // for SECOND enrich (flat O=H=L=C is the zero-trade failure mode).
+    const flatNow = isFlatTenBar(s.ohlcState.last_closed);
+    if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
       try {
         s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
@@ -1444,35 +1455,86 @@ async function robotCycleLocked(s: Internal) {
       }
     }
 
-    // Sparse REST polls (~1 mid / 10–30s under lock) → CLOSED O=H=L=C forever.
-    // Capital SECOND history restores real 10s body/range (same TF as entry).
-    if (Date.now() - s.last_second_ohlc_ms >= SECOND_OHLC_ENRICH_MS) {
+    // Sparse REST polls → flat CLOSED bars. SECOND (or MINUTE fallback) restores range.
+    // When flat: enrich EVERY cycle (ignore 8s throttle) — otherwise zero trades forever.
+    const needEnrich =
+      isFlatTenBar(s.ohlcState.last_closed) ||
+      Date.now() - s.last_second_ohlc_ms >= SECOND_OHLC_ENRICH_MS;
+    if (needEnrich) {
       s.last_second_ohlc_ms = Date.now();
       try {
-        const secs = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
+        const secs = await fetchCapitalPrices(session, s.epic, 'SECOND', 50);
         if (secs.ok && secs.candles.length >= 2) {
           const beforeKey = s.ohlcState.last_closed
             ? closedBarKey(s.ohlcState.last_closed)
             : '';
+          const beforeFlat = isFlatTenBar(s.ohlcState.last_closed);
           s.ohlcState = enrichOhlcWithSecondCandles(s.ohlcState, secs.candles, Date.now());
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
-          if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-            const afterKey = closedBarKey(s.ohlcState.last_closed);
-            s.entry_close_latch = s.ohlcState.last_closed;
+          const after = s.ohlcState.last_closed;
+          const afterKey = after ? closedBarKey(after) : '';
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `10s SECOND enrich · candles=${secs.candles.length} · flatWas=${beforeFlat} · justClosed=${s.ohlcState.just_closed} · O=${after?.open.toFixed(2) ?? '—'} H=${after?.high.toFixed(2) ?? '—'} L=${after?.low.toFixed(2) ?? '—'} C=${after?.close.toFixed(2) ?? '—'} · body=${after ? (bodyPct(after) * 100).toFixed(3) : '—'}% · rng=${after ? (rangePct(after) * 100).toFixed(3) : '—'}% · ticks=${after?.ticks ?? 0} · ${secs.detail}`,
+          });
+          if (s.ohlcState.just_closed && after) {
+            s.entry_close_latch = after;
             if (afterKey !== beforeKey || afterKey !== s.last_closed_bar_key) {
-              applyRobotRegime(s, [s.ohlcState.last_closed]);
+              applyRobotRegime(s, [after]);
             }
+          }
+        } else {
+          // SECOND unavailable — last-resort: last Capital MINUTE → synthetic 10s with real range
+          const mins = await fetchCapitalPrices(session, s.epic, 'MINUTE', 3);
+          if (mins.ok && mins.candles.length >= 1) {
+            const syn = expandMinutesToTen(mins.candles.slice(-2), Date.now());
+            const lastSyn = syn.length >= 2 ? syn[syn.length - 2]! : syn[syn.length - 1];
+            if (lastSyn && isFlatTenBar(s.ohlcState.last_closed) && !isFlatTenBar(lastSyn)) {
+              s.ohlcState = {
+                forming: s.ohlcState.forming,
+                last_closed: lastSyn,
+                just_closed: true,
+              };
+              s.ohlc_10s = publicOhlc10s(s.ohlcState);
+              s.entry_close_latch = lastSyn;
+              applyRobotRegime(s, [lastSyn]);
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `10s MINUTE fallback enrich · SECOND failed (${secs.detail || 'no candles'}) · O=${lastSyn.open.toFixed(2)} H=${lastSyn.high.toFixed(2)} L=${lastSyn.low.toFixed(2)} C=${lastSyn.close.toFixed(2)} · body=${(bodyPct(lastSyn) * 100).toFixed(3)}%`,
+              });
+            } else {
+              pushTick(s, {
+                phase: 'WAIT',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
+              });
+            }
+          } else {
             pushTick(s, {
-              phase: 'INFO',
+              phase: 'WAIT',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `10s SECOND enrich · O=${s.ohlcState.last_closed.open.toFixed(2)} H=${s.ohlcState.last_closed.high.toFixed(2)} L=${s.ohlcState.last_closed.low.toFixed(2)} C=${s.ohlcState.last_closed.close.toFixed(2)} · ticks=${s.ohlcState.last_closed.ticks} · ${secs.detail}`,
+              detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
             });
           }
         }
-      } catch {
-        /* keep poll-built OHLC */
+      } catch (e) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `10s enrich ERROR · ${e instanceof Error ? e.message : String(e)}`,
+        });
       }
     }
 
