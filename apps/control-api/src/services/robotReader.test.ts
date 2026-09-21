@@ -6,15 +6,15 @@ import {
 } from './robotReader.js';
 
 describe('multi-feed OHLC mid pick (Capital-anchored)', () => {
-  it('uses MULTI blend when multi mid is near Capital local', () => {
+  it('always prefers pure Capital LOCAL mid when available (no public blend)', () => {
     const p = pickOhlcMid(2000, {
       mid: 2000.4,
       contributing: 3,
       agreement: 'STRONG',
       anchored_to_capital: true,
     });
-    expect(p.source).toBe('MULTI');
-    expect(p.mid).toBeCloseTo(2000 * 0.65 + 2000.4 * 0.35, 5);
+    expect(p.source).toBe('LOCAL');
+    expect(p.mid).toBe(2000);
   });
 
   it('keeps LOCAL when public/multi mid is far from Capital', () => {

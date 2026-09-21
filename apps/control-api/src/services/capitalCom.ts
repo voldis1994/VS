@@ -1191,10 +1191,11 @@ export async function fetchCapitalPrices(
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
   const candles: CapitalPriceCandle[] = [];
   for (const p of prices) {
-    const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
-    const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
-    const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
-    const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
+    // Prefer mid of bid+ask so seeded 10s bars match live Capital mid (not bid-only path)
+    const open = capitalOhlcFieldMid(p.openPrice) ?? numOrNull(p.open ?? p.o);
+    const high = capitalOhlcFieldMid(p.highPrice) ?? numOrNull(p.high ?? p.h);
+    const low = capitalOhlcFieldMid(p.lowPrice) ?? numOrNull(p.low ?? p.l);
+    const close = capitalOhlcFieldMid(p.closePrice) ?? numOrNull(p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
     const snapRaw = p.snapshotTime ?? p.snapshot_time ?? p.from ?? p.timestamp;
     let snapshot_time_ms: number | null = null;
@@ -1238,6 +1239,23 @@ export function isLateMoveOnOneMinute(
 function numOrNull(v: unknown): number | null {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;
+}
+
+/** Prefer Capital snapshot time for 10s buckets — wall clock drifted vs live chart. */
+export function parseCapitalUpdateMs(updateTime: string | null | undefined): number | null {
+  if (!updateTime || typeof updateTime !== 'string') return null;
+  const t = Date.parse(updateTime.trim());
+  return Number.isFinite(t) ? t : null;
+}
+
+/** Capital history OHLC often has bid+ask — average so zone seed matches CFD mid. */
+export function capitalOhlcFieldMid(field: unknown): number | null {
+  if (field == null || typeof field !== 'object') return numOrNull(field);
+  const o = field as Record<string, unknown>;
+  const bid = numOrNull(o.bid);
+  const ask = numOrNull(o.ask ?? o.offer);
+  if (bid != null && ask != null) return (bid + ask) / 2;
+  return bid ?? ask ?? numOrNull(o.mid ?? o.lastTraded);
 }
 
 function strOrNull(v: unknown): string | null {

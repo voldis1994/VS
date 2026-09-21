@@ -975,8 +975,9 @@ export async function readMultiFeedPrice(
 }
 
 /**
- * Prefer MULTI only when it stays near the robot's Capital mid.
- * Never let Yahoo/Aurum spot rewrite CFD OHLC when scales differ.
+ * Prefer Capital LOCAL mid for OHLC always.
+ * Public/multi feeds stay advisory (FEEDS panel) — blending them into 10s bars
+ * made BODY/RANGE/% disagree with Capital live mid and Sell/Buy buttons.
  */
 export function pickOhlcMid(
   localMid: number | null | undefined,
@@ -986,21 +987,6 @@ export function pickOhlcMid(
   > | null | undefined
 ): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
   const localOk = localMid != null && Number.isFinite(localMid);
-  const multiOk =
-    multi &&
-    multi.mid != null &&
-    Number.isFinite(multi.mid) &&
-    multi.contributing >= 2 &&
-    (multi.agreement === 'STRONG' || multi.agreement === 'OK');
-
-  if (multiOk && localOk) {
-    if (nearAnchor(multi.mid as number, localMid as number, ANCHOR_MAX_REL)) {
-      // Blend slightly toward Capital for execution safety
-      const blended = (multi.mid as number) * 0.35 + (localMid as number) * 0.65;
-      return { mid: blended, source: 'MULTI' };
-    }
-    return { mid: localMid as number, source: 'LOCAL' };
-  }
   if (localOk) return { mid: localMid as number, source: 'LOCAL' };
   if (multi?.mid != null && Number.isFinite(multi.mid)) {
     return { mid: multi.mid, source: 'MULTI' };
