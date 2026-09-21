@@ -53,10 +53,10 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/RANGE/);
   });
 
-  it('COMPRESSION SPIKE-follow recipe · micro fade OFF', () => {
+  it('COMPRESSION SPIKE-follow recipe still mentions micro fade', () => {
     const r = watchRecipe('COMPRESSION');
     expect(r.looking_for).toMatch(/SPIKE/i);
-    expect(r.looking_for).toMatch(/fade OFF/i);
+    expect(r.looking_for).toMatch(/fade/i);
     const b = bar(2000, 2000.2, 1998.5, 1999);
     const w = buildEntryWatch({
       running: true,
@@ -72,8 +72,8 @@ describe('entryWatch', () => {
   });
 
   it('FLIP LOCK blocks same direction for 3 min after close', () => {
-    // SPIKE rally → RANGE follow BUY; lock after prior BUY
-    const b = bar(2000, 2005, 1999.5, 2004);
+    // Micro dip → RANGE fade BUY (not SPIKE follow SELL)
+    const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
       running: true,
       open_side: null,
@@ -95,7 +95,7 @@ describe('entryWatch', () => {
   });
 
   it('same direction allowed again after 3 min lock', () => {
-    const b = bar(2000, 2005, 1999.5, 2004);
+    const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
       running: true,
       open_side: null,

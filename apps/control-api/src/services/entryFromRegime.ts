@@ -71,9 +71,14 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // COMPRESSION: SPIKE follow only — micro fade pushbacks = magic minus in trends
+  // COMPRESSION: SPIKE → follow now; micro move → fade
   if (r === 'COMPRESSION') {
-    return followSpike(bar, r);
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    return null;
   }
 
   if (r === 'TREND_UP') {
@@ -134,9 +139,14 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // RANGE — SPIKE follow only (no micro fade pushbacks into HardInv / TimeDecay scratch)
+  // RANGE — SPIKE follow immediately; only micro bars still fade pushbacks
   if (r === 'RANGE') {
-    return followSpike(bar, r);
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    return null;
   }
 
   return null;
