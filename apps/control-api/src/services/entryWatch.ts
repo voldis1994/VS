@@ -204,17 +204,15 @@ export function watchRecipe(regime?: string | null): {
     case 'RANGE':
       return {
         direction: null,
-        setup: 'FADE',
-        looking_for:
-          'RANGE · SPIKE → follow BUY/SELL · micro fade DIP→BUY RALLY→SELL',
+        setup: 'BREAKOUT',
+        looking_for: 'RANGE · SPIKE → follow BUY/SELL · micro fade OFF',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
-        setup: 'FADE',
-        looking_for:
-          'COMPRESSION · SPIKE → follow uzreiz · micro fade uz MOVING 10s',
+        setup: 'BREAKOUT',
+        looking_for: 'COMPRESSION · SPIKE → follow uzreiz · micro fade OFF',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
