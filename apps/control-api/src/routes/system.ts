@@ -4,7 +4,7 @@ import { TelemetryBroadcaster } from '../ws/telemetry.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
-  if (v === undefined || v === '') return true;
+  if (v === undefined || v === '') return false;
   return v !== 'false' && v !== '0';
 }
 
@@ -69,7 +69,7 @@ export async function registerSystemRoutes(
       capital_markets: capitalMarkets,
       open_positions: openPositions,
       today_executions: todayExecutions,
-      mode: process.env.OPERATING_MODE || 'LIVE',
+      mode: process.env.OPERATING_MODE || 'PAPER',
       live_enabled: liveEnabled(),
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
@@ -78,7 +78,7 @@ export async function registerSystemRoutes(
   });
 
   app.get('/api/system/mode', async () => ({
-    mode: process.env.OPERATING_MODE || 'LIVE',
+    mode: process.env.OPERATING_MODE || 'PAPER',
     live_enabled: liveEnabled(),
     allowed: ['REPLAY', 'PAPER', 'DEMO', 'LIVE'],
   }));
@@ -90,11 +90,13 @@ export async function registerSystemRoutes(
     if (!allowed.includes(body.mode)) {
       return reply.code(400).send({ error: `Invalid mode. Use: ${allowed.join(', ')}` });
     }
-    // No LIVE gate — operator accepts risk
-    process.env.OPERATING_MODE = body.mode;
-    if (body.mode === 'LIVE') {
-      process.env.LIVE_TRADING_ENABLED = 'true';
+    if (body.mode === 'LIVE' && !liveEnabled()) {
+      return reply.code(403).send({
+        error: 'LIVE refused — set LIVE_TRADING_ENABLED=true first',
+        message: 'LIVE refused — set LIVE_TRADING_ENABLED=true first',
+      });
     }
+    process.env.OPERATING_MODE = body.mode;
     return { mode: body.mode, previous: prev, live_enabled: liveEnabled() };
   });
 

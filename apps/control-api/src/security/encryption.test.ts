@@ -15,4 +15,9 @@ describe('encryption', () => {
     expect(masked).toContain('••••');
     expect(masked.endsWith('2345')).toBe(true);
   });
+
+  it('refuses placeholder MASTER_ENCRYPTION_KEY', () => {
+    process.env.MASTER_ENCRYPTION_KEY = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+    expect(() => encrypt('x')).toThrow(/MASTER_ENCRYPTION_KEY/);
+  });
 });

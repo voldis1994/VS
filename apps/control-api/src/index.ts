@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
@@ -22,11 +24,18 @@ import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
-import { authMiddleware } from './middleware/auth.js';
+import { authMiddleware, isAdminTokenConfigured } from './middleware/auth.js';
+import { isEncryptionKeyConfigured } from './security/encryption.js';
+import { isPipelineSecretConfigured } from './services/pipelineBridge.js';
 import {
   extractClientToken,
   resolveClientSession,
 } from './security/clientSession.js';
+
+// Load repo-root .env first (VS.bat writes there), then local override.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config();
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
@@ -40,7 +49,10 @@ function corsOrigins(): boolean | string | string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (list.includes('*')) return true;
+  // credentials:true + origin:* is unsafe — reject wildcard
+  if (list.includes('*')) {
+    return list.filter((o) => o !== '*');
+  }
   return list.length === 1 ? list[0]! : list;
 }
 
@@ -56,11 +68,28 @@ function trustProxyOption(): boolean | string | string[] | number {
 }
 
 async function main() {
+  // Safe defaults — operator must opt into LIVE (VS.bat still sets LIVE explicitly).
   if (process.env.LIVE_TRADING_ENABLED === undefined || process.env.LIVE_TRADING_ENABLED === '') {
-    process.env.LIVE_TRADING_ENABLED = 'true';
+    process.env.LIVE_TRADING_ENABLED = 'false';
   }
   if (process.env.OPERATING_MODE === undefined || process.env.OPERATING_MODE === '') {
-    process.env.OPERATING_MODE = 'LIVE';
+    process.env.OPERATING_MODE = 'PAPER';
+  }
+
+  if (!isEncryptionKeyConfigured()) {
+    console.warn(
+      '[security] MASTER_ENCRYPTION_KEY missing/placeholder — broker credential encrypt/decrypt will fail'
+    );
+  }
+  if (!isAdminTokenConfigured() && process.env.ALLOW_INSECURE_DEV !== 'true') {
+    console.warn(
+      '[security] API_ADMIN_TOKEN missing/placeholder — admin API returns 401 until configured'
+    );
+  }
+  if (!isPipelineSecretConfigured() && process.env.ALLOW_INSECURE_DEV !== 'true') {
+    console.warn(
+      '[security] PIPELINE_TOKEN missing/placeholder — market-core bridge intents rejected'
+    );
   }
 
   await runMigrations();

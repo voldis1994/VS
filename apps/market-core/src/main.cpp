@@ -237,7 +237,16 @@ int main(int argc, char* argv[]) {
 
     auto mode = parse_mode(mode_str);
     if (mode == mr::OperatingMode::Live) {
-        spdlog::warn("LIVE mode — operator risk accepted");
+        const std::string live_flag = env_or("LIVE_TRADING_ENABLED", "false");
+        if (live_flag != "true" && live_flag != "1") {
+            spdlog::error(
+                "LIVE refused — set LIVE_TRADING_ENABLED=true (got '{}')",
+                live_flag);
+            curl_global_cleanup();
+            return 1;
+        }
+        spdlog::warn("LIVE mode — operator risk accepted (LIVE_TRADING_ENABLED={})",
+                     live_flag);
     }
 
     mr::MarketCorePipeline pipeline;

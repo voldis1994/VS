@@ -56,5 +56,9 @@ describe('multi-client isolation invariants', () => {
     expect(isPublicUnauthedPath('GET', '/api/clients')).toBe(false);
     expect(isPublicUnauthedPath('POST', '/')).toBe(false);
     expect(isPublicUnauthedPath('GET', '/api/client-auth/login')).toBe(true);
+    // POST mode must require admin — previously public and could force LIVE
+    expect(isPublicUnauthedPath('GET', '/api/system/mode')).toBe(true);
+    expect(isPublicUnauthedPath('POST', '/api/system/mode')).toBe(false);
+    expect(isPublicUnauthedPath('POST', '/api/robot-desk/start')).toBe(false);
   });
 });

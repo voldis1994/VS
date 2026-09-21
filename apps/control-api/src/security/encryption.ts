@@ -1,9 +1,20 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
+const PLACEHOLDER = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+
+export function isEncryptionKeyConfigured(): boolean {
+  const secret = String(process.env.MASTER_ENCRYPTION_KEY || '').trim();
+  return Boolean(secret) && secret !== PLACEHOLDER && !secret.startsWith('CHANGE_ME');
+}
 
 function getKey(): Buffer {
-  const secret = process.env.MASTER_ENCRYPTION_KEY || 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+  const secret = String(process.env.MASTER_ENCRYPTION_KEY || '').trim();
+  if (!secret || secret === PLACEHOLDER || secret.startsWith('CHANGE_ME')) {
+    throw new Error(
+      'MASTER_ENCRYPTION_KEY is not configured — refuse encrypt/decrypt with default key'
+    );
+  }
   return scryptSync(secret, 'market-reader-salt', 32);
 }
 

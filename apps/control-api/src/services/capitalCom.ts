@@ -422,16 +422,19 @@ export async function withConnectionLock<T>(
     );
   }
 
+  // Hold mutex until fn settles — even if the caller times out — so a second
+  // chain cannot interleave Capital switch/order while the first is still in flight.
+  const work = fn();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      fn(),
+      work,
       new Promise<T>((_, rej) => {
         holdTimer = setTimeout(
           () =>
             rej(
               new Error(
-                `Capital connection ${connectionId} lock hold timeout ${holdMs}ms — releasing mutex`
+                `Capital connection ${connectionId} lock hold timeout ${holdMs}ms — waiter rejected; mutex held until work settles`
               )
             ),
           holdMs
@@ -440,6 +443,7 @@ export async function withConnectionLock<T>(
     ]);
   } finally {
     if (holdTimer) clearTimeout(holdTimer);
+    await work.catch(() => undefined);
     release();
   }
 }

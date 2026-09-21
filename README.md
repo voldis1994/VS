@@ -111,10 +111,13 @@ VS.bat          one-click launcher (git pull, stack, client tunnel)
 
 ## Security
 
-- API credentials encrypted at rest (AES-256-GCM)
-- Secrets never in frontend, git, or plaintext DB
+- API credentials encrypted at rest (AES-256-GCM); placeholder master keys refused
+- Secrets never in frontend bundles, git, or plaintext DB
 - Masked credential display in dashboard
-- Admin token required for API (production)
+- Admin token required for API (`x-admin-token`); public Cloudflare panel proxies client routes only
+- LIVE off by default; `LIVE_TRADING_ENABLED=true` required (enforced in control-api + market-core)
+
+See [docs/SECURITY.md](docs/SECURITY.md) and [docs/FULL_SYSTEM_AUDIT.md](docs/FULL_SYSTEM_AUDIT.md).
 
 ## License
 

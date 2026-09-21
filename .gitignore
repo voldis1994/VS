@@ -19,6 +19,9 @@ dist-client/
 
 # Environment
 .env
+.env.local
+apps/dashboard/.env.local
+*.local
 !.env.example
 
 # Data

@@ -1,6 +1,9 @@
 /**
  * Public Client Control Panel — port 18080.
  * Cloudflare talks ONLY to this Node server. Vite is never on this port.
+ *
+ * SECURITY: proxy allowlists client-panel routes only.
+ * Admin / pipeline / trading / robot-desk must NEVER be reachable via the tunnel.
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -31,9 +34,14 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-function isApiPath(url) {
-  const p = (url || '/').split('?')[0];
-  return p === '/api' || p.startsWith('/api/') || p === '/ws' || p.startsWith('/ws/');
+/** Paths safe to expose on the Cloudflare / public panel port. */
+export function isPublicClientProxyPath(url) {
+  const p = (url || '/').split('?')[0] || '/';
+  if (p === '/health') return true;
+  if (p === '/api/client-auth' || p.startsWith('/api/client-auth/')) return true;
+  if (p === '/api/client' || p.startsWith('/api/client/')) return true;
+  if (p === '/ws/client' || p.startsWith('/ws/client')) return true;
+  return false;
 }
 
 function panelHeaders(extra = {}) {
@@ -46,6 +54,11 @@ function proxyHeaders(req) {
   headers['x-forwarded-host'] = req.headers.host || '';
   headers['x-forwarded-proto'] = 'https';
   return headers;
+}
+
+function rejectProxy(res, code, msg) {
+  res.writeHead(code, panelHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }));
+  res.end(msg);
 }
 
 function proxyHttp(req, res) {
@@ -118,7 +131,17 @@ function sendIndexOrHelp(res) {
 }
 
 const server = http.createServer((req, res) => {
-  if (isApiPath(req.url)) {
+  const p = (req.url || '/').split('?')[0] || '/';
+  const looksApi = p === '/api' || p.startsWith('/api/') || p === '/ws' || p.startsWith('/ws/');
+  if (looksApi) {
+    if (!isPublicClientProxyPath(req.url)) {
+      rejectProxy(
+        res,
+        404,
+        'Not found — public panel only proxies /api/client-auth, /api/client, /ws/client\n'
+      );
+      return;
+    }
     proxyHttp(req, res);
     return;
   }
@@ -131,14 +154,15 @@ const server = http.createServer((req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (isApiPath(req.url)) {
-    proxyUpgrade(req, socket, head);
+  if (!isPublicClientProxyPath(req.url)) {
+    socket.destroy();
     return;
   }
-  socket.destroy();
+  proxyUpgrade(req, socket, head);
 });
 
 server.listen(LISTEN_PORT, '0.0.0.0', () => {
   const ready = fs.existsSync(path.join(DIST, 'index.html'));
   console.log(`[vs-public] :${LISTEN_PORT} panel=${PANEL} dist=${DIST} built=${ready}`);
+  console.log(`[vs-public] proxy allowlist: /health /api/client-auth/* /api/client/* /ws/client`);
 });

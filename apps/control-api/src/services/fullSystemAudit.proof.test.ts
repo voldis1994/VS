@@ -92,7 +92,7 @@ describe('PROOF: connection mutex serializes concurrent work', () => {
     expect(order.indexOf('b-start')).toBeLessThan(order.indexOf('a-end'));
   });
 
-  it('hold timeout releases mutex so waiter is not stuck forever', async () => {
+  it('hold timeout rejects caller but keeps mutex until work settles', async () => {
     const order: string[] = [];
     const hung = withConnectionLock(
       9991,
@@ -111,12 +111,11 @@ describe('PROOF: connection mutex serializes concurrent work', () => {
         order.push('waiter');
         return 'ok';
       },
-      { holdMs: 500, waitMs: 500 }
+      { holdMs: 500, waitMs: 800 }
     );
     await expect(hung).rejects.toThrow(/lock hold timeout/);
     await expect(waiter).resolves.toBe('ok');
-    expect(order).toContain('hung-start');
-    expect(order).toContain('waiter');
+    expect(order).toEqual(['hung-start', 'hung-late', 'waiter']);
   });
 
   it('wait timeout fails fast when previous holder never releases', async () => {
@@ -300,5 +299,71 @@ describe('PROOF: source wiring — not comment-only', () => {
     const attach = src.slice(src.indexOf('export async function attachManageOnlyRobot'));
     expect(attach).toContain('existing.entry_enabled = false');
     expect(attach).toContain('entry_brain=OFF');
+  });
+
+  it('admin orders use withEpicEntryLock + listCapitalOpenPositions', () => {
+    const src = readFileSync(join(here, '../routes/trading.ts'), 'utf8');
+    expect(src).toContain('withEpicEntryLock');
+    expect(src).toContain('listCapitalOpenPositions');
+    expect(src).toMatch(/ONE TRADE ONLY/);
+  });
+
+  it('Capital lock holds mutex until work settles after hold timeout', () => {
+    const src = readFileSync(join(here, 'capitalCom.ts'), 'utf8');
+    expect(src).toContain('await work.catch(() => undefined)');
+    expect(src).toMatch(/mutex held until work settles/);
+  });
+});
+
+describe('PROOF: public surface hardening (2026-09 audit)', () => {
+  it('public proxy allowlists only client routes', async () => {
+    const { isPublicClientProxyPath } = await import('../../../../tools/client-public.mjs');
+    expect(isPublicClientProxyPath('/api/client-auth/login')).toBe(true);
+    expect(isPublicClientProxyPath('/api/client/status')).toBe(true);
+    expect(isPublicClientProxyPath('/ws/client')).toBe(true);
+    expect(isPublicClientProxyPath('/health')).toBe(true);
+    expect(isPublicClientProxyPath('/api/robot-desk/start')).toBe(false);
+    expect(isPublicClientProxyPath('/api/pipeline/intents')).toBe(false);
+    expect(isPublicClientProxyPath('/api/trading/accounts')).toBe(false);
+    expect(isPublicClientProxyPath('/api/brokers')).toBe(false);
+    expect(isPublicClientProxyPath('/ws')).toBe(false);
+    expect(isPublicClientProxyPath('/api/system/mode')).toBe(false);
+  });
+
+  it('POST /api/system/mode is not public; GET is', async () => {
+    const { isPublicUnauthedPath } = await import('../middleware/auth.js');
+    expect(isPublicUnauthedPath('GET', '/api/system/mode')).toBe(true);
+    expect(isPublicUnauthedPath('POST', '/api/system/mode')).toBe(false);
+  });
+
+  it('pipeline fails closed without secret even outside production', async () => {
+    const { authorizePipelineRequest } = await import('./pipelineBridge.js');
+    const prev = {
+      NODE_ENV: process.env.NODE_ENV,
+      PIPELINE_TOKEN: process.env.PIPELINE_TOKEN,
+      PIPELINE_SERVICE_TOKEN: process.env.PIPELINE_SERVICE_TOKEN,
+      ALLOW_INSECURE_DEV: process.env.ALLOW_INSECURE_DEV,
+    };
+    process.env.NODE_ENV = 'development';
+    delete process.env.PIPELINE_TOKEN;
+    delete process.env.PIPELINE_SERVICE_TOKEN;
+    delete process.env.ALLOW_INSECURE_DEV;
+    expect(authorizePipelineRequest({ 'x-pipeline-token': 'x' })).toBe(false);
+    process.env.ALLOW_INSECURE_DEV = 'true';
+    expect(authorizePipelineRequest({ 'x-pipeline-token': 'x' })).toBe(true);
+    process.env.NODE_ENV = prev.NODE_ENV;
+    process.env.PIPELINE_TOKEN = prev.PIPELINE_TOKEN;
+    process.env.PIPELINE_SERVICE_TOKEN = prev.PIPELINE_SERVICE_TOKEN;
+    if (prev.ALLOW_INSECURE_DEV === undefined) delete process.env.ALLOW_INSECURE_DEV;
+    else process.env.ALLOW_INSECURE_DEV = prev.ALLOW_INSECURE_DEV;
+  });
+
+  it('encryption refuses CHANGE_ME master key', async () => {
+    const { encrypt, isEncryptionKeyConfigured } = await import('../security/encryption.js');
+    const prev = process.env.MASTER_ENCRYPTION_KEY;
+    process.env.MASTER_ENCRYPTION_KEY = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+    expect(isEncryptionKeyConfigured()).toBe(false);
+    expect(() => encrypt('secret')).toThrow(/MASTER_ENCRYPTION_KEY/);
+    process.env.MASTER_ENCRYPTION_KEY = prev;
   });
 });
