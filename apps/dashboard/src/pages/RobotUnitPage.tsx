@@ -66,6 +66,9 @@ type RobotSession = {
   running: boolean;
   ticks: RobotTick[];
   last_mid: number | null;
+  last_bid?: number | null;
+  last_ask?: number | null;
+  last_deal_reference?: string | null;
   deal_id: string | null;
   entry_price: number | null;
   mfe: number;
@@ -86,7 +89,10 @@ type RobotSession = {
     last_l: number | null;
     last_c: number | null;
     forming_c: number | null;
+    forming_body_pct?: number | null;
+    forming_range_pct?: number | null;
     body_pct: number | null;
+    range_pct?: number | null;
     market: string;
   };
   orders_placed: number;
@@ -330,6 +336,14 @@ export function RobotUnitPage() {
                 </div>
                 <div className="robot-unit-metrics">
                   <div>
+                    <span>SELL / BID</span>
+                    <strong>{fmt(session.last_bid)}</strong>
+                  </div>
+                  <div>
+                    <span>BUY / ASK</span>
+                    <strong>{fmt(session.last_ask)}</strong>
+                  </div>
+                  <div>
                     <span>MID</span>
                     <strong>{fmt(session.last_mid)}</strong>
                   </div>
@@ -414,13 +428,21 @@ export function RobotUnitPage() {
                   </div>
                 )}
                 <div className="mono">
-                  O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C {fmt(w.bar.c, 2)}
-                  {w.bar.forming_c != null ? ` · forming ${fmt(w.bar.forming_c, 2)}` : ''}
+                  CLOSED 10s · O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C{' '}
+                  {fmt(w.bar.c, 2)}
+                  {w.bar.forming_c != null ? ` · LIVE ${fmt(w.bar.forming_c, 2)}` : ''}
                 </div>
                 <div className="mono">
-                  BODY {pctFmt(w.bar.body_pct)} · RANGE {pctFmt(w.bar.range_pct)} · {w.bar.market}
-                  {w.bar.closed ? ' · CLOSED' : ' · FORMING'}
+                  CLOSED BODY {pctFmt(w.bar.body_pct)} · RANGE {pctFmt(w.bar.range_pct)} ·{' '}
+                  {w.bar.market}
+                  {w.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}
                 </div>
+                {session?.ohlc_10s?.forming_body_pct != null && (
+                  <div className="mono muted">
+                    LIVE forming body {pctFmt(session.ohlc_10s.forming_body_pct)} · range{' '}
+                    {pctFmt(session.ohlc_10s.forming_range_pct)}
+                  </div>
+                )}
                 <div className="robot-unit-watch-vs">{w.bar_vs_trigger}</div>
                 <div className="muted">{w.last_reason}</div>
               </>
@@ -430,7 +452,7 @@ export function RobotUnitPage() {
             {session && (
               <>
                 <div className="robot-unit-ohlc mono" style={{ marginTop: 8 }}>
-                  10s · O {fmt(session.ohlc_10s?.last_o, 2)} H {fmt(session.ohlc_10s?.last_h, 2)} L{' '}
+                  10s CLOSED · O {fmt(session.ohlc_10s?.last_o, 2)} H {fmt(session.ohlc_10s?.last_h, 2)} L{' '}
                   {fmt(session.ohlc_10s?.last_l, 2)} C {fmt(session.ohlc_10s?.last_c, 2)} ·{' '}
                   {session.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(session.ohlc_10s?.body_pct)}
                 </div>

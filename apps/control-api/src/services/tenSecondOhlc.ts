@@ -164,18 +164,27 @@ export function publicOhlc10s(state: TenSecState): {
   last_l: number | null;
   last_c: number | null;
   forming_c: number | null;
+  forming_body_pct: number | null;
+  forming_range_pct: number | null;
   body_pct: number | null;
+  range_pct: number | null;
   market: 'MOVING' | 'QUIET' | 'SEEDING';
 } {
   const last = state.last_closed;
+  const forming = state.forming;
+  const formingBody = forming ? bodyPct(forming) : null;
+  const formingRange = forming ? rangePct(forming) : null;
   if (!last) {
     return {
       last_o: null,
       last_h: null,
       last_l: null,
       last_c: null,
-      forming_c: state.forming?.close ?? null,
+      forming_c: forming?.close ?? null,
+      forming_body_pct: formingBody,
+      forming_range_pct: formingRange,
       body_pct: null,
+      range_pct: null,
       market: 'SEEDING',
     };
   }
@@ -184,8 +193,11 @@ export function publicOhlc10s(state: TenSecState): {
     last_h: last.high,
     last_l: last.low,
     last_c: last.close,
-    forming_c: state.forming?.close ?? null,
+    forming_c: forming?.close ?? null,
+    forming_body_pct: formingBody,
+    forming_range_pct: formingRange,
     body_pct: bodyPct(last),
+    range_pct: rangePct(last),
     market: isMoving10s(last) ? 'MOVING' : 'QUIET',
   };
 }

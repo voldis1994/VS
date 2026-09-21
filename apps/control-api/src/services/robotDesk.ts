@@ -9,6 +9,7 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  parseCapitalUpdateMs,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalPriceCandle,
@@ -81,6 +82,8 @@ export type RobotSession = {
   ticks: RobotTick[];
   last_quote_at: string | null;
   last_mid: number | null;
+  last_bid: number | null;
+  last_ask: number | null;
   last_deal_reference: string | null;
   deal_id: string | null;
   entry_price: number | null;
@@ -110,7 +113,10 @@ export type RobotSession = {
     last_l: number | null;
     last_c: number | null;
     forming_c: number | null;
+    forming_body_pct: number | null;
+    forming_range_pct: number | null;
     body_pct: number | null;
+    range_pct: number | null;
     market: 'MOVING' | 'QUIET' | 'SEEDING';
   };
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
@@ -172,7 +178,7 @@ type Internal = RobotSession & {
   entry_close_latch: TenSecBar | null;
 };
 
-const ACTIVE_CADENCE_MS = 2_000;
+const ACTIVE_CADENCE_MS = 1_250;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 /** If a Capital await hangs, force-clear so the robot keeps polling */
@@ -1402,6 +1408,8 @@ async function robotCycleLocked(s: Internal) {
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
     setRobotCadence(s, ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
+    s.last_bid = quote.bid;
+    s.last_ask = quote.ask;
 
     // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
@@ -1420,10 +1428,11 @@ async function robotCycleLocked(s: Internal) {
     s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
     s.feed_agreement = s.multiFeed?.agreement ?? null;
 
-    // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
+    // OHLC from pure Capital mid only (pickOhlcMid no longer blends public spot)
     const ohlcMid = picked.mid ?? quote.mid;
     if (ohlcMid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
+      const quoteTs = parseCapitalUpdateMs(quote.update_time) ?? Date.now();
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, quoteTs);
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         // Latch before seed / position-list — those paths used to drop the only entry window
@@ -2011,6 +2020,8 @@ export async function startRobotSession(input: {
     ticks: [],
     last_quote_at: null,
     last_mid: null,
+    last_bid: null,
+    last_ask: null,
     last_deal_reference: null,
     deal_id: null,
     entry_price: null,

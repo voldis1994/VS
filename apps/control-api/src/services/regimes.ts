@@ -8,6 +8,7 @@ import {
   EXPAND_ABS,
   EXPAND_AVG_MULT,
   MOVE,
+  MOVE_RANGE,
   NEAR_ZONE_MID,
   PERSIST_ENTER,
   PERSIST_PULLBACK,
@@ -400,7 +401,11 @@ export function regimeBookKey(epic: string, accountId?: number | string | null):
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   if (regime === 'UNKNOWN' || bars.length < 2) return 0;
   const last = bars[bars.length - 1]!;
-  const strength = Math.min(1, Math.abs(bodyPct(last)) / 0.0008 + rangePct(last) / 0.001);
+  // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
+  const strength = Math.min(
+    1,
+    Math.abs(bodyPct(last)) / (MOVE * 4) + rangePct(last) / (MOVE_RANGE * 4)
+  );
   return Math.max(0.2, Math.min(0.95, 0.35 + strength * 0.5));
 }
 

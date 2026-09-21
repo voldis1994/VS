@@ -115,6 +115,8 @@ type RobotSession = {
   ticks: RobotTick[];
   last_quote_at: string | null;
   last_mid: number | null;
+  last_bid?: number | null;
+  last_ask?: number | null;
   last_deal_reference: string | null;
   deal_id: string | null;
   entry_price: number | null;
@@ -138,7 +140,10 @@ type RobotSession = {
     last_l: number | null;
     last_c: number | null;
     forming_c: number | null;
+    forming_body_pct?: number | null;
+    forming_range_pct?: number | null;
     body_pct: number | null;
+    range_pct?: number | null;
     market: 'MOVING' | 'QUIET' | 'SEEDING';
   };
   orders_placed: number;
@@ -633,10 +638,18 @@ export function RobotDeskPage() {
                       </div>
                     )}
                     <div className="robot-mini-watch-line muted">
-                      body {pctFmt(s.entry_watch.bar.body_pct)} · {s.entry_watch.bar.market}
+                      CLOSED body {pctFmt(s.entry_watch.bar.body_pct)} · {s.entry_watch.bar.market}
                     </div>
                   </div>
                 )}
+                <div className="robot-mini-row">
+                  <span>SELL</span>
+                  <strong>{fmt(s.last_bid)}</strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>BUY</span>
+                  <strong>{fmt(s.last_ask)}</strong>
+                </div>
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -771,17 +784,24 @@ export function RobotDeskPage() {
                       </div>
                     )}
                     <div>
-                      BARS · O {fmt(focused.entry_watch.bar.o, 2)} H {fmt(focused.entry_watch.bar.h, 2)} L{' '}
-                      {fmt(focused.entry_watch.bar.l, 2)} C {fmt(focused.entry_watch.bar.c, 2)}
+                      CLOSED 10s · O {fmt(focused.entry_watch.bar.o, 2)} H{' '}
+                      {fmt(focused.entry_watch.bar.h, 2)} L {fmt(focused.entry_watch.bar.l, 2)} C{' '}
+                      {fmt(focused.entry_watch.bar.c, 2)}
                       {focused.entry_watch.bar.forming_c != null
-                        ? ` · forming ${fmt(focused.entry_watch.bar.forming_c, 2)}`
+                        ? ` · LIVE ${fmt(focused.entry_watch.bar.forming_c, 2)}`
                         : ''}
                     </div>
                     <div>
-                      BODY · {pctFmt(focused.entry_watch.bar.body_pct)} · RANGE{' '}
+                      CLOSED BODY · {pctFmt(focused.entry_watch.bar.body_pct)} · RANGE{' '}
                       {pctFmt(focused.entry_watch.bar.range_pct)} · {focused.entry_watch.bar.market}
-                      {focused.entry_watch.bar.closed ? ' · CLOSED' : ' · FORMING'}
+                      {focused.entry_watch.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}
                     </div>
+                    {focused.ohlc_10s?.forming_body_pct != null && (
+                      <div className="muted">
+                        LIVE forming body {pctFmt(focused.ohlc_10s.forming_body_pct)} · range{' '}
+                        {pctFmt(focused.ohlc_10s.forming_range_pct)}
+                      </div>
+                    )}
                     <div className="robot-entry-watch-vs">
                       VS TRIGGER · {focused.entry_watch.bar_vs_trigger}
                     </div>
@@ -789,7 +809,11 @@ export function RobotDeskPage() {
                   </div>
                 )}
                 <div>
-                  10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
+                  Capital · SELL {fmt(focused.last_bid)} · BUY {fmt(focused.last_ask)} · MID{' '}
+                  {fmt(focused.last_mid)}
+                </div>
+                <div>
+                  10s CLOSED · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
                   {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
                   {focused.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(focused.ohlc_10s?.body_pct)}
                 </div>
