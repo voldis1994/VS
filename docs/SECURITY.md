@@ -31,16 +31,19 @@ Escape hatch for local DX only: `ALLOW_INSECURE_DEV=true` (ignored when `NODE_EN
 
 ## API authentication
 
-`authMiddleware` requires header `x-admin-token` matching `API_ADMIN_TOKEN` for non-public routes (timing-safe compare).
+`authMiddleware` requires header `x-admin-token` matching `API_ADMIN_TOKEN` for non-public routes (timing-safe compare), **except**:
+
+- **Trusted local desk** — requests from loopback / RFC1918 LAN (`127.0.0.1`, `10/8`, `192.168/16`, `172.16–31`) skip the admin token. This is the VS.bat COMMAND desk (`:5173` → `:3000`). The Cloudflare public panel **never** proxies `/api/clients` (allowlist only).
+- Escape hatch: `ALLOW_INSECURE_DEV=true` (ignored when `NODE_ENV=production`).
 
 Public without token:
 
 - `GET /health`  
 - `GET /api/system/status`  
-- `GET /api/system/mode` (read only — **POST requires admin**)  
+- `GET /api/system/mode` (read only — **POST requires admin / local desk**)  
 - `/api/client-auth/*`, `/api/client/*`, `/ws/client`  
 
-If the token is unset or still `CHANGE_ME*`: **401** unless `ALLOW_INSECURE_DEV=true` in non-production.
+If the token is unset or still `CHANGE_ME*` **and** the caller is not local: **401**.
 
 Pipeline (`/api/pipeline/*`) always requires a real `PIPELINE_TOKEN` (fail-closed).
 

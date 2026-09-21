@@ -44,14 +44,27 @@ export function Layout({ children }: { children: ReactNode }) {
 
   const load = useCallback(async () => {
     try {
-      const [s, c, a] = await Promise.all([
+      const [s, cRes, aRes] = await Promise.all([
         apiFetch<DeskStatus>('/api/system/status'),
-        apiFetch<DeskClient[]>('/api/clients').catch(() => [] as DeskClient[]),
-        apiFetch<DeskAccount[]>('/api/trading/accounts').catch(() => [] as DeskAccount[]),
+        apiFetch<DeskClient[]>('/api/clients').then(
+          (rows) => ({ ok: true as const, rows }),
+          (err: unknown) => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'clients failed',
+          })
+        ),
+        apiFetch<DeskAccount[]>('/api/trading/accounts').then(
+          (rows) => ({ ok: true as const, rows }),
+          (err: unknown) => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'accounts failed',
+          })
+        ),
       ]);
       setStatus(s);
-      setClients(c);
-      setAccounts(a);
+      // Never wipe a known client list on transient/auth errors (401 looked like “all clients gone”)
+      if (cRes.ok) setClients(cRes.rows);
+      if (aRes.ok) setAccounts(aRes.rows);
     } catch {
       /* keep last snapshot */
     }

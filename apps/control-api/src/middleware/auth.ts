@@ -36,6 +36,23 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb);
 }
 
+/**
+ * Admin COMMAND desk is local (Vite :5173 → :3000). Cloudflare public panel
+ * never proxies /api/clients — only client-auth/client/ws/client.
+ * Without this, a fresh API_ADMIN_TOKEN + missing VITE_ADMIN_TOKEN makes the
+ * desk show an empty client list (401 swallowed → []).
+ */
+export function isTrustedLocalDesk(request: FastifyRequest): boolean {
+  const ip = String(request.ip || '')
+    .trim()
+    .replace(/^::ffff:/i, '');
+  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') return true;
+  if (/^10\.\d+\.\d+\.\d+$/.test(ip)) return true;
+  if (/^192\.168\.\d+\.\d+$/.test(ip)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(ip)) return true;
+  return false;
+}
+
 /** Static client panel (GET / /assets /logo.svg) is public — not Vite, not admin. */
 export function isPublicUnauthedPath(method: string, urlPath: string): boolean {
   const path = urlPath.split('?')[0] || '/';
@@ -67,6 +84,9 @@ export async function authMiddleware(
   }
 
   if (isPublicUnauthedPath(request.method, path)) return;
+
+  // Local / LAN admin desk — do not blank CLIENTS when Vite env lags behind .env
+  if (isTrustedLocalDesk(request)) return;
 
   if (!isAdminTokenConfigured()) {
     if (allowInsecureDev()) return;

@@ -61,4 +61,15 @@ describe('multi-client isolation invariants', () => {
     expect(isPublicUnauthedPath('POST', '/api/system/mode')).toBe(false);
     expect(isPublicUnauthedPath('POST', '/api/robot-desk/start')).toBe(false);
   });
+
+  it('trusted local desk IPs cover loopback + RFC1918 (admin CLIENTS list)', async () => {
+    const { isTrustedLocalDesk } = await import('../middleware/auth.js');
+    const asReq = (ip: string) => ({ ip } as never);
+    expect(isTrustedLocalDesk(asReq('127.0.0.1'))).toBe(true);
+    expect(isTrustedLocalDesk(asReq('::1'))).toBe(true);
+    expect(isTrustedLocalDesk(asReq('::ffff:127.0.0.1'))).toBe(true);
+    expect(isTrustedLocalDesk(asReq('192.168.1.10'))).toBe(true);
+    expect(isTrustedLocalDesk(asReq('10.0.0.5'))).toBe(true);
+    expect(isTrustedLocalDesk(asReq('8.8.8.8'))).toBe(false);
+  });
 });
