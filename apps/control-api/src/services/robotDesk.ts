@@ -9,7 +9,6 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
-  parseCapitalUpdateMs,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalPriceCandle,
@@ -48,6 +47,7 @@ import {
 } from './robotReader.js';
 import {
   emptyTenSecState,
+  enrichOhlcWithSecondCandles,
   expandMinutesToTen,
   publicOhlc10s,
   updateTenSecondOhlc,
@@ -145,6 +145,8 @@ type Internal = RobotSession & {
   cadence_ms: number;
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
+  /** Throttle Capital SECOND → 10s OHLC enrich (anti flat-bar) */
+  last_second_ohlc_ms: number;
   last_closed_bar_key: string;
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
@@ -179,6 +181,8 @@ type Internal = RobotSession & {
 };
 
 const ACTIVE_CADENCE_MS = 1_250;
+/** How often to pull Capital SECOND candles to rebuild flat 10s bars */
+const SECOND_OHLC_ENRICH_MS = 8_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 /** If a Capital await hangs, force-clear so the robot keeps polling */
@@ -296,6 +300,7 @@ function publicSession(s: Internal): RobotSession {
     cadence_ms: _cad,
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
+    last_second_ohlc_ms: _secOhlc,
     last_closed_bar_key: _bar,
     closedBars: _bars,
     last_multi_feed_ms: _mf,
@@ -1428,16 +1433,46 @@ async function robotCycleLocked(s: Internal) {
     s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
     s.feed_agreement = s.multiFeed?.agreement ?? null;
 
-    // OHLC from pure Capital mid only (pickOhlcMid no longer blends public spot)
+    // Live mid on wall clock — Capital updateTime jumps with price and closed flat bars
     const ohlcMid = picked.mid ?? quote.mid;
     if (ohlcMid != null) {
-      const quoteTs = parseCapitalUpdateMs(quote.update_time) ?? Date.now();
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, quoteTs);
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        // Latch before seed / position-list — those paths used to drop the only entry window
         s.entry_close_latch = s.ohlcState.last_closed;
         applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
+    }
+
+    // Sparse REST polls (~1 mid / 10–30s under lock) → CLOSED O=H=L=C forever.
+    // Capital SECOND history restores real 10s body/range (same TF as entry).
+    if (Date.now() - s.last_second_ohlc_ms >= SECOND_OHLC_ENRICH_MS) {
+      s.last_second_ohlc_ms = Date.now();
+      try {
+        const secs = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
+        if (secs.ok && secs.candles.length >= 2) {
+          const beforeKey = s.ohlcState.last_closed
+            ? closedBarKey(s.ohlcState.last_closed)
+            : '';
+          s.ohlcState = enrichOhlcWithSecondCandles(s.ohlcState, secs.candles, Date.now());
+          s.ohlc_10s = publicOhlc10s(s.ohlcState);
+          if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+            const afterKey = closedBarKey(s.ohlcState.last_closed);
+            s.entry_close_latch = s.ohlcState.last_closed;
+            if (afterKey !== beforeKey || afterKey !== s.last_closed_bar_key) {
+              applyRobotRegime(s, [s.ohlcState.last_closed]);
+            }
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `10s SECOND enrich · O=${s.ohlcState.last_closed.open.toFixed(2)} H=${s.ohlcState.last_closed.high.toFixed(2)} L=${s.ohlcState.last_closed.low.toFixed(2)} C=${s.ohlcState.last_closed.close.toFixed(2)} · ticks=${s.ohlcState.last_closed.ticks} · ${secs.detail}`,
+            });
+          }
+        }
+      } catch {
+        /* keep poll-built OHLC */
       }
     }
 
@@ -2047,6 +2082,7 @@ export async function startRobotSession(input: {
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
+    last_second_ohlc_ms: 0,
     last_closed_bar_key: '',
     closedBars: [],
     last_multi_feed_ms: 0,

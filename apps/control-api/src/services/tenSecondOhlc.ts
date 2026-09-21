@@ -82,6 +82,128 @@ export function updateTenSecondOhlc(state: TenSecState, price: number, tsMs: num
   return { forming, last_closed: lastClosed, just_closed: justClosed };
 }
 
+export type SecondCandleLike = {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  snapshot_time_ms?: number | null;
+};
+
+function mergeCandleIntoBar(bar: TenSecBar | undefined, c: SecondCandleLike, bucket: number): TenSecBar {
+  if (!bar) {
+    return {
+      open_time_ms: bucket,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      ticks: 1,
+    };
+  }
+  return {
+    open_time_ms: bucket,
+    open: bar.open,
+    high: Math.max(bar.high, c.high, c.open, c.close),
+    low: Math.min(bar.low, c.low, c.open, c.close),
+    close: c.close,
+    ticks: bar.ticks + 1,
+  };
+}
+
+/**
+ * Build aligned 10s bars from Capital SECOND candles.
+ * Sparse REST mid polls (often 1 tick / 10–30s) close flat O=H=L=C and starve MOVING.
+ * SECOND history restores real body/range like the Capital 10s chart.
+ */
+export function buildTenSecBarsFromSeconds(
+  candles: SecondCandleLike[],
+  nowMs = Date.now()
+): { closed: TenSecBar[]; forming: TenSecBar | null } {
+  const currentBucket = tenSecBucketMs(nowMs);
+  const byBucket = new Map<number, TenSecBar>();
+  const ordered = candles
+    .map((c, i) => {
+      const snap = c.snapshot_time_ms;
+      const ts =
+        snap != null && Number.isFinite(snap) ? snap : nowMs - (candles.length - i) * 1000;
+      return { c, ts };
+    })
+    .filter(({ ts }) => Number.isFinite(ts) && ts > 0)
+    .sort((a, b) => a.ts - b.ts);
+
+  for (const { c, ts } of ordered) {
+    const bucket = tenSecBucketMs(ts);
+    byBucket.set(bucket, mergeCandleIntoBar(byBucket.get(bucket), c, bucket));
+  }
+
+  const closed: TenSecBar[] = [];
+  let forming: TenSecBar | null = null;
+  for (const bucket of [...byBucket.keys()].sort((a, b) => a - b)) {
+    const bar = byBucket.get(bucket)!;
+    if (bucket >= currentBucket) forming = bar;
+    else closed.push(bar);
+  }
+  return { closed, forming };
+}
+
+/**
+ * Upgrade flat poll-built bars with Capital SECOND truth.
+ * Sets just_closed when a completed SECOND bar is new or replaces a flat last_closed.
+ */
+export function enrichOhlcWithSecondCandles(
+  state: TenSecState,
+  candles: SecondCandleLike[],
+  nowMs = Date.now()
+): TenSecState {
+  if (!candles.length) return { ...state, just_closed: false };
+  const { closed, forming } = buildTenSecBarsFromSeconds(candles, nowMs);
+  const fromSec = closed.length ? closed[closed.length - 1]! : null;
+  let lastClosed = state.last_closed;
+  let justClosed = false;
+
+  if (fromSec) {
+    const prev = state.last_closed;
+    const prevFlat =
+      !prev ||
+      (Math.abs(bodyPct(prev)) < 1e-12 && rangePct(prev) < 1e-12) ||
+      prev.ticks <= 2;
+    const richer =
+      !prev ||
+      fromSec.open_time_ms > prev.open_time_ms ||
+      (fromSec.open_time_ms === prev.open_time_ms &&
+        (rangePct(fromSec) > rangePct(prev) + 1e-12 ||
+          Math.abs(bodyPct(fromSec)) > Math.abs(bodyPct(prev)) + 1e-12 ||
+          fromSec.ticks > prev.ticks));
+    if (richer) {
+      justClosed =
+        !prev ||
+        fromSec.open_time_ms > prev.open_time_ms ||
+        (prevFlat && (rangePct(fromSec) > 0 || Math.abs(bodyPct(fromSec)) > 0));
+      lastClosed = fromSec;
+    }
+  }
+
+  let nextForming = state.forming;
+  if (forming) {
+    const live = state.forming;
+    if (!live || live.open_time_ms !== forming.open_time_ms) {
+      nextForming = forming;
+    } else {
+      nextForming = {
+        open_time_ms: forming.open_time_ms,
+        open: live.open,
+        high: Math.max(live.high, forming.high),
+        low: Math.min(live.low, forming.low),
+        close: live.close,
+        ticks: Math.max(live.ticks, forming.ticks),
+      };
+    }
+  }
+
+  return { forming: nextForming, last_closed: lastClosed, just_closed: justClosed };
+}
+
 /** Fold Capital 1-second candles into completed 10-second bars (oldest → newest). */
 export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
   if (seconds.length < 2) return [];

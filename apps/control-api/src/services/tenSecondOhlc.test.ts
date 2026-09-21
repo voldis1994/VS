@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateSecondsToTen,
   bodyPct,
+  buildTenSecBarsFromSeconds,
   decideFromClosed10s,
+  emptyTenSecState,
+  enrichOhlcWithSecondCandles,
   expandMinutesToTen,
   isMoving10s,
   rangePct,
   updateTenSecondOhlc,
-  emptyTenSecState,
 } from './tenSecondOhlc.js';
-import { EXPAND_ABS } from './regimeBands.js';
+import { EXPAND_ABS, MOVE } from './regimeBands.js';
 
 describe('10s OHLC', () => {
   it('closes a bar after 10 seconds and keeps forming the next', () => {
@@ -81,5 +83,53 @@ describe('10s OHLC', () => {
     // Most synthetic bars must stay below expansion absolute range
     const quiet = bars.filter((b) => rangePct(b) < EXPAND_ABS);
     expect(quiet.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('SECOND candles rebuild a moving 10s bar that sparse mid polls left flat', () => {
+    const now = 1_700_000_020_000; // bucket boundary-ish
+    const flatPoll = {
+      open_time_ms: now - 10_000,
+      open: 4351.97,
+      high: 4351.97,
+      low: 4351.97,
+      close: 4351.97,
+      ticks: 1,
+    };
+    const state = {
+      forming: {
+        open_time_ms: now,
+        open: 4352.35,
+        high: 4352.35,
+        low: 4352.35,
+        close: 4352.35,
+        ticks: 1,
+      },
+      last_closed: flatPoll,
+      just_closed: false,
+    };
+    const seconds = [];
+    for (let i = 0; i < 10; i++) {
+      const t = now - 10_000 + i * 1000;
+      const o = 4351.5 + i * 0.08;
+      const c = o + 0.05;
+      seconds.push({
+        open: o,
+        high: c + 0.1,
+        low: o - 0.1,
+        close: c,
+        snapshot_time_ms: t,
+      });
+    }
+    const { closed } = buildTenSecBarsFromSeconds(seconds, now);
+    expect(closed.length).toBeGreaterThanOrEqual(1);
+    const bar = closed[closed.length - 1]!;
+    expect(rangePct(bar)).toBeGreaterThan(0);
+    expect(isMoving10s(bar)).toBe(true);
+
+    const enriched = enrichOhlcWithSecondCandles(state, seconds, now);
+    expect(enriched.just_closed).toBe(true);
+    expect(enriched.last_closed).not.toBeNull();
+    expect(isMoving10s(enriched.last_closed)).toBe(true);
+    expect(Math.abs(bodyPct(enriched.last_closed!))).toBeGreaterThanOrEqual(MOVE * 0.5);
   });
 });
