@@ -176,6 +176,10 @@ type Internal = RobotSession & {
     bar_key: string;
   } | null;
   /**
+   * Soft HardInv first saw breach (ms) — confirm debounce vs wick “magic minus”.
+   */
+  hardinv_breach_since_ms: number;
+  /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
    */
@@ -539,6 +543,7 @@ function clearTradeState(s: Internal) {
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
+  s.hardinv_breach_since_ms = 0;
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -1363,6 +1368,11 @@ async function robotCycleLocked(s: Internal) {
           if (s.entry_price == null) s.entry_price = quote.mid;
           updateExcursion(s, quote.mid);
           const lossPark = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+          if (lossPark.hardinv_breaching) {
+            if (!s.hardinv_breach_since_ms) s.hardinv_breach_since_ms = Date.now();
+          } else {
+            s.hardinv_breach_since_ms = 0;
+          }
           if (lossPark.exit) {
             await exitTrade(session, s, quote, lossPark.reason);
             return;
@@ -1627,8 +1637,22 @@ async function robotCycleLocked(s: Internal) {
         return;
       }
 
-      // LIVE loss: HardInv only — no thesis micro-scratch
+      // LIVE loss: Soft HardInv with grace + confirm (no single-wick magic minus)
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+      if (lossDec.hardinv_breaching) {
+        if (!s.hardinv_breach_since_ms) {
+          s.hardinv_breach_since_ms = Date.now();
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HardInv BREACH · waiting confirm (anti wick) · ${lossDec.reason || 'beyond SL'}`,
+          });
+        }
+      } else {
+        s.hardinv_breach_since_ms = 0;
+      }
       if (lossDec.exit) {
         await exitTrade(session, s, quote, lossDec.reason);
         return;
@@ -2164,6 +2188,7 @@ export async function startRobotSession(input: {
     cycle_busy_since: 0,
     pending_entry: null,
     entry_close_latch: null,
+    hardinv_breach_since_ms: 0,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
