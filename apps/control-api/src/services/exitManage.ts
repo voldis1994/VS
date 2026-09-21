@@ -1,4 +1,4 @@
-/** Live Capital exit — HardInv live; PeakProtect after reverse 1m (25% giveback). */
+/** Live Capital exit — cut losers fast; let winners run / lock real +R. */
 import { getDeskCalibration } from './deskCalibration.js';
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -35,36 +35,46 @@ export type ExitDecision = {
   hardinv_breaching?: boolean;
 };
 
-/** Keep 75% of MFE → give back at most 25% (all scalps). */
-export const PEAK_MFE_RETENTION = 0.75;
-export const MAX_MFE_GIVEBACK = 0.25;
+/** Keep ~65% of MFE → give back at most ~35% once a real leg exists. */
+export const PEAK_MFE_RETENTION = 0.65;
+export const MAX_MFE_GIVEBACK = 0.35;
 
-/** Gold-scale absolute floors — % alone allowed 0.08–0.15pt micro-scratches. */
+/**
+ * Gold-scale floors / caps.
+ * Soft HardInv CAP (~2.2) must stay WELL BELOW Target / Peak MFE floors —
+ * otherwise 80% tiny Peak wins + few large HardInv losses = negative expectancy.
+ */
 export const HARDINV_ABS_FLOOR = 1.5;
-export const PEAK_MFE_ABS_FLOOR = 1.5;
+/** Cap Soft HardInv — `hardinv_abs` calibration knob is a CAP, not a floor. */
+export const HARDINV_ABS_CAP = 2.2;
+export const PEAK_MFE_ABS_FLOOR = 3.0;
 /** Need real giveback in price pts before Peak cuts (chop-safe). */
-export const PEAK_MIN_GIVEBACK_ABS = 0.75;
+export const PEAK_MIN_GIVEBACK_ABS = 0.85;
 export const TARGET_ABS_FLOOR = 4.0;
 
 /**
  * First seconds after fill — spread settle + first pushback wick.
  * Broker SAFETY SL still protects; Soft HardInv waits.
+ * Kept short so losers are not allowed to run for half a minute.
  */
-export const HARDINV_GRACE_MS = 25_000;
+export const HARDINV_GRACE_MS = 12_000;
 /**
- * Soft HardInv must stay breached this long (anti “magic minus” on 1m wick
- * that immediately reverses — classic RANGE half-buy then green).
+ * Soft HardInv must stay breached this long (anti single-wick “magic minus”).
+ * Short confirm — still debounce, but do not gift 37s of free adverse travel.
  */
-export const HARDINV_CONFIRM_MS = 12_000;
-/** RANGE/COMPRESSION noise multiplier on Soft HardInv distance */
-export const HARDINV_RANGE_MULT = 1.6;
-/** TimeDecay min hold — was 8m and collided with chop exits */
+export const HARDINV_CONFIRM_MS = 5_000;
+/**
+ * RANGE/COMPRESSION noise — slight widen only.
+ * Was 1.6 and pushed Soft HardInv past SAFETY (~6pt Gold) while Peak banked +0.5.
+ */
+export const HARDINV_RANGE_MULT = 1.15;
+/** TimeDecay min hold */
 export const TIMEDECAY_MIN_HOLD_MS = 12 * 60_000;
 /**
- * TimeDecay must lock REAL mid edge past spread, or covering a short/buying
- * a long at ask/bid prints a tiny broker minus (“magic minus” at fav≈0).
+ * TimeDecay must lock REAL mid edge — at least ~half Soft HardInv,
+ * never +0.75 winners against −4 Soft losses.
  */
-export const TIMEDECAY_MIN_FAV_ABS = 0.75;
+export const TIMEDECAY_MIN_FAV_ABS = 2.0;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -93,8 +103,8 @@ export function minuteReversesSide(side: ExitSide, c: CandleOHLC): boolean {
 
 /**
  * Profit-side policy on a newly closed Capital 1m:
- * - continue: same direction → HOLD (PeakProtect stays OFF)
- * - reverse: flipped against side → PeakProtect % ARMS (live trail)
+ * - continue: same direction → HOLD (PeakProtect stays armed if already on)
+ * - reverse: flipped against side → PeakProtect ARMS (live trail)
  * - wait: doji / no clear signal
  */
 export function closed1mProfitPolicy(
@@ -153,27 +163,49 @@ function peakShouldCut(
   return true;
 }
 
-/** Soft HardInv distance in price pts — wider in RANGE/COMPRESSION chop. */
+/**
+ * Soft HardInv distance in price pts.
+ * `hardinv_abs` is a CAP (positive R:R) — Gold % must not push Soft SL to 4–6pt
+ * while Peak banks +0.5–2pt.
+ */
 export function hardInvStopDistance(
   entry: number,
   regime?: string | null
 ): number {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
-  let sl = Math.max(absEntry * cal.hardinv_pct, cal.hardinv_abs || HARDINV_ABS_FLOOR);
+  const pct = absEntry * cal.hardinv_pct;
+  const floor = HARDINV_ABS_FLOOR;
+  const cap =
+    cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
+  let sl = Math.min(Math.max(pct, floor), cap);
   const r = String(regime || '')
     .trim()
     .toUpperCase();
   if (r === 'RANGE' || r === 'COMPRESSION') {
     sl *= HARDINV_RANGE_MULT;
+    // Still never explode past ~1.25× cap after RANGE widen
+    sl = Math.min(sl, cap * 1.25);
   }
   return sl;
 }
 
 /**
- * Manage exit — winners hold on 1m continue; Peak 25% giveback after reverse.
- * Soft HardInv caps losers with grace + confirm (no single-wick “magic minus”).
- * Peak never cuts red — only green with ≥0.75pt giveback after real MFE.
+ * After a real favorable excursion (≥ Soft HardInv), Soft line moves to a
+ * small BE lock so greens cannot fully reverse into a max Soft loss.
+ */
+export function softLossLine(sl: number, mfe: number): number {
+  if (mfe >= sl) {
+    // BE / tiny lock — cut when fav drops back to ≤ +0.25 (or −0 if flat)
+    return Math.min(0.25, sl * 0.12);
+  }
+  return -sl;
+}
+
+/**
+ * Manage exit — winners hold on 1m continue; Peak giveback after reverse.
+ * Soft HardInv caps losers with short grace + confirm.
+ * Peak never cuts red — only green after real MFE (≥3pt floor).
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
@@ -191,12 +223,17 @@ export function decideBestOutcomeExit(
   const peakRet = cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
   const minGiveback =
     cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS;
-  // Asymmetric + Gold floors from desk calibration (Control panel knobs)
-  const tp = Math.max(absEntry * cal.target_pct, cal.target_abs || TARGET_ABS_FLOOR);
+  // Target: enforce absolute floor so % never undercuts positive R:R vs Soft HardInv
+  const tp = Math.max(
+    absEntry * cal.target_pct,
+    cal.target_abs || 0,
+    TARGET_ABS_FLOOR
+  );
   const sl = hardInvStopDistance(entry, s.regime);
   const mfeFloor = Math.max(
     absEntry * cal.peak_mfe_pct,
-    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR
+    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR,
+    PEAK_MFE_ABS_FLOOR
   );
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
@@ -213,15 +250,17 @@ export function decideBestOutcomeExit(
 
   if (wantLoss) {
     let breaching = false;
-    if (heldMs >= HARDINV_GRACE_MS && fav <= -sl) {
+    const lossLine = softLossLine(sl, mfe);
+    if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
       breaching = true;
       const since = s.hardinv_breach_since_ms;
       if (since != null && Number.isFinite(since) && since > 0) {
         const breachedFor = nowMs - since;
         if (breachedFor >= HARDINV_CONFIRM_MS) {
+          const beTag = mfe >= sl ? ' · BE-lock' : '';
           return {
             exit: true,
-            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)})${beTag} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
             hardinv_breaching: true,
           };
         }
@@ -233,7 +272,7 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Armed after reverse 1m — PeakProtect giveback only (25%), green only
+  // Armed after reverse 1m — PeakProtect giveback only, green only, real MFE
   if (wantPeakOnly) {
     if (peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
       const givePct = ((1 - peakRet) * 100).toFixed(0);
@@ -260,11 +299,12 @@ export function decideBestOutcomeExit(
       };
     }
 
-    // Never TimeDecay at fav≈0 — mid flat + spread on close = tiny broker loss (user −£0.06)
+    // Never TimeDecay at fav≈0 — mid flat + spread on close = tiny broker loss
     const minFav = Math.max(
       TIMEDECAY_MIN_FAV_ABS,
-      absEntry * 0.0002,
-      (cal.target_abs || TARGET_ABS_FLOOR) * 0.3
+      absEntry * 0.00035,
+      sl * 0.9,
+      (cal.target_abs || TARGET_ABS_FLOOR) * 0.4
     );
     if (heldMs > TIMEDECAY_MIN_HOLD_MS && fav >= minFav && mfe >= mfeFloor) {
       return {

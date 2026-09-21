@@ -396,7 +396,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     chain:
       'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback',
     note:
-      'Public feeds confirm near Capital CFD mid; no late-1m / stale-quote entry blocks. Peak giveback 25% all scalps.',
+      'Public feeds confirm near Capital CFD mid; no late-1m / stale-quote entry blocks. Peak trail after real MFE (≥3pt).',
   };
 }
 
@@ -1684,13 +1684,16 @@ async function robotCycleLocked(s: Internal) {
           s.last_1m_profit_exit_key = key;
 
           if (policy === 'continue') {
-            s.peak_protect_armed = false;
+            // Keep Peak armed if already trailing — do NOT disarm on green 1m
+            // (old: Peak OFF threw away the trail and re-scalped tiny givebacks).
             pushTick(s, {
               phase: 'MANAGE',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: '1m continue · HOLD profit · PeakProtect OFF',
+              detail: `1m continue · HOLD profit · PeakProtect ${
+                s.peak_protect_armed ? 'ON (keep trail)' : 'OFF'
+              }`,
             });
           } else if (policy === 'wait') {
             pushTick(s, {
@@ -1709,7 +1712,7 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: '1m reverse · PeakProtect ARMED · trailing live giveback 25%',
+              detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
             });
             const peakAtClose = decideBestOutcomeExit(
               s,
@@ -1754,7 +1757,7 @@ async function robotCycleLocked(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak25%)·peakLive=${
+        } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
           s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });

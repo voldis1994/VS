@@ -313,6 +313,16 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('await work.catch(() => undefined)');
     expect(src).toMatch(/mutex held until work settles/);
   });
+
+  it('1m continue does NOT disarm PeakProtect (keep trail)', () => {
+    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
+    const block = src.slice(
+      src.indexOf("if (policy === 'continue')"),
+      src.indexOf("} else if (policy === 'wait')")
+    );
+    expect(block).not.toMatch(/peak_protect_armed\s*=\s*false/);
+    expect(block).toMatch(/keep trail|KEEP trail|PeakProtect \$\{/i);
+  });
 });
 
 describe('PROOF: public surface hardening (2026-09 audit)', () => {
