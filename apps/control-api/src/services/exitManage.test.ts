@@ -3,6 +3,14 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
+  hardInvStopDistance,
+  softLossLine,
+  HARDINV_ABS_CAP,
+  HARDINV_CONFIRM_MS,
+  HARDINV_GRACE_MS,
+  PEAK_MFE_ABS_FLOOR,
+  TARGET_ABS_FLOOR,
+  TIMEDECAY_MIN_FAV_ABS,
   thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
@@ -65,6 +73,33 @@ describe('closed1mProfitPolicy', () => {
   });
 });
 
+describe('positive R:R Soft HardInv', () => {
+  it('caps Soft HardInv near ~2.2 on Gold (not 4–6pt % runaway)', () => {
+    const trend = hardInvStopDistance(2650, 'TREND_UP');
+    const range = hardInvStopDistance(2650, 'RANGE');
+    expect(trend).toBeLessThanOrEqual(HARDINV_ABS_CAP + 0.01);
+    expect(trend).toBeGreaterThanOrEqual(1.5);
+    // RANGE may widen slightly but stays near cap
+    expect(range).toBeLessThanOrEqual(HARDINV_ABS_CAP * 1.25 + 0.01);
+    expect(range).toBeGreaterThan(trend - 0.01);
+  });
+
+  it('softLossLine moves to BE-lock after real MFE ≥ Soft SL', () => {
+    const sl = 2.0;
+    expect(softLossLine(sl, 0.5)).toBe(-sl);
+    expect(softLossLine(sl, 2.0)).toBeGreaterThan(0);
+    expect(softLossLine(sl, 2.0)).toBeLessThanOrEqual(0.25);
+  });
+
+  it('Peak MFE floor ≥ Soft HardInv so winners are not micro-scalped', () => {
+    const cal = defaultDeskCalibration();
+    expect(cal.peak_mfe_abs).toBeGreaterThanOrEqual(PEAK_MFE_ABS_FLOOR);
+    expect(cal.peak_mfe_abs).toBeGreaterThan(cal.hardinv_abs);
+    expect(cal.target_abs).toBeGreaterThan(cal.hardinv_abs);
+    expect(TARGET_ABS_FLOOR).toBeGreaterThan(cal.hardinv_abs);
+  });
+});
+
 describe('decideBestOutcomeExit', () => {
   it('holds a young BUY in TREND_UP with small noise', () => {
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4 }), 2000.5);
@@ -99,19 +134,27 @@ describe('decideBestOutcomeExit', () => {
     expect(microRed.exit).toBe(false);
   });
 
-  it('HardInv needs grace + confirm; RANGE SL is wider (anti magic-minus wick)', () => {
+  it('HardInv needs grace + confirm; RANGE only slightly wider', () => {
     const now = Date.now();
     const aged = {
       entry_at: new Date(now - 60_000).toISOString(),
-      hardinv_breach_since_ms: now - 15_000,
+      hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 1_000),
     };
-    // TREND: SL = max(3.0, 2.0) = 3.0
+    const slTrend = hardInvStopDistance(2000, 'TREND_UP');
+    // Inside SL — hold
     const hold = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', ...aged }),
-      1997.2,
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        ...aged,
+      }),
+      2000 - slTrend + 0.3,
       'live_loss',
       now
     );
+    expect(hold.exit).toBe(false);
+
     // First tick beyond SL — stamp breach, do not cut yet
     const pending = decideBestOutcomeExit(
       snap({
@@ -121,7 +164,7 @@ describe('decideBestOutcomeExit', () => {
         entry_at: aged.entry_at,
         hardinv_breach_since_ms: 0,
       }),
-      1996.5,
+      2000 - slTrend - 0.2,
       'live_loss',
       now
     );
@@ -131,43 +174,32 @@ describe('decideBestOutcomeExit', () => {
     // TREND confirmed cut
     const cutTrend = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', ...aged }),
-      1996.5,
+      2000 - slTrend - 0.2,
       'live_loss',
       now
     );
-    expect(hold.exit).toBe(false);
     expect(cutTrend.exit).toBe(true);
     expect(cutTrend.reason).toMatch(/HardInvalidation/);
 
-    // RANGE: SL *= 1.6 → 4.8; same -3.5pt wick must HOLD (the magic-minus case)
-    const rangeWick = decideBestOutcomeExit(
+    // Shallow wick that was −3.5 under old 4.8 RANGE SL now cuts (capped Soft)
+    const shallow = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', ...aged }),
       1996.5,
       'live_loss',
       now
     );
-    expect(rangeWick.exit).toBe(false);
-
-    // RANGE deep adverse still cuts after confirm
-    const rangeCut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', ...aged }),
-      1994.5,
-      'live_loss',
-      now
-    );
-    expect(rangeCut.exit).toBe(true);
-    expect(rangeCut.reason).toMatch(/HardInvalidation/);
+    expect(shallow.exit).toBe(true);
   });
 
-  it('HardInv grace skips soft cut in first 25s (SAFETY SL still live)', () => {
+  it('HardInv grace skips soft cut in first seconds (SAFETY SL still live)', () => {
     const now = Date.now();
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         regime: 'TREND_UP',
-        entry_at: new Date(now - 5_000).toISOString(),
-        hardinv_breach_since_ms: now - 5_000,
+        entry_at: new Date(now - Math.floor(HARDINV_GRACE_MS / 2)).toISOString(),
+        hardinv_breach_since_ms: now - Math.floor(HARDINV_GRACE_MS / 2),
       }),
       1990,
       'live_loss',
@@ -175,6 +207,26 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(d.exit).toBe(false);
     expect(d.hardinv_breaching).toBe(false);
+  });
+
+  it('BE-lock cuts when MFE reached Soft SL then price returns near flat', () => {
+    const now = Date.now();
+    const sl = hardInvStopDistance(2000, 'TREND_UP');
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: sl + 0.5,
+        entry_at: new Date(now - 60_000).toISOString(),
+        hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 500),
+      }),
+      2000.1, // fav ~0.1 ≤ BE lock (~0.25)
+      'live_loss',
+      now
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/BE-lock/);
   });
 
   it('PeakProtect never cuts red after reverse (screenshot micro-loss bug)', () => {
@@ -191,26 +243,41 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('PeakProtect needs real giveback after MFE (scalp min giveback)', () => {
+  it('PeakProtect ignores sub-floor MFE (no micro-scalp winners)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 1.2, // below PEAK_MFE_ABS_FLOOR 3.0
+        peak_retention: 0.5,
+      }),
+      2000.6,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('PeakProtect needs real giveback after MFE', () => {
     const minGb = defaultDeskCalibration().peak_min_giveback_abs;
+    const mfe = 8;
     const tinyGiveback = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.7,
+        mfe,
+        peak_retention: 0.5,
       }),
-      2000 + 8 - (minGb - 0.1),
+      2000 + mfe - (minGb - 0.1),
       'peak_protect_only'
     );
     const enough = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.7,
+        mfe,
+        peak_retention: 0.5,
       }),
-      2000 + 8 * 0.7,
+      2000 + mfe * 0.5,
       'peak_protect_only'
     );
     expect(tinyGiveback.exit).toBe(false);
@@ -241,8 +308,8 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('target banks wins at scalp TP (max pct/abs)', () => {
-    // scalp defaults: entry 2000 → TP = max(5, 2.25) = 5
+  it('target banks wins at ≥ TARGET_ABS_FLOOR (positive R:R)', () => {
+    // entry 2000 → TP = max(5.0 pct*?, 5.0 abs, 4.0 floor) ≥ 4
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -257,9 +324,8 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/Target/);
   });
 
-  it('TimeDecay does NOT scratch fav≈0 after 8m (broker spread magic-minus)', () => {
+  it('TimeDecay does NOT scratch fav≈0 after hold (broker spread magic-minus)', () => {
     const now = Date.now();
-    // Old bug: held >8m + fav>=0 → close; short cover at ask printed −£0.06
     const flat = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -275,12 +341,13 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(flat.exit).toBe(false);
 
-    const realLock = decideBestOutcomeExit(
+    // Small +1.2 fav must NOT TimeDecay — below TIMEDECAY_MIN_FAV_ABS / Soft SL
+    const tooSmall = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
         entry_price: 4352.73,
         regime: 'RANGE',
-        mfe: 2.5,
+        mfe: 3.5,
         peak_retention: 1,
         entry_at: new Date(now - 13 * 60_000).toISOString(),
       }),
@@ -288,7 +355,34 @@ describe('decideBestOutcomeExit', () => {
       'target_time',
       now
     );
+    expect(tooSmall.exit).toBe(false);
+    expect(TIMEDECAY_MIN_FAV_ABS).toBeGreaterThanOrEqual(2);
+
+    const realLock = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4352.73,
+        regime: 'RANGE',
+        mfe: 6.0,
+        peak_retention: 1,
+        entry_at: new Date(now - 13 * 60_000).toISOString(),
+      }),
+      4352.73 - 3.0,
+      'target_time',
+      now
+    );
     expect(realLock.exit).toBe(true);
     expect(realLock.reason).toMatch(/TimeDecay/);
+  });
+
+  it('asymmetry proof: Peak lock ≥ Soft HardInv (no 80%-win net-minus profile)', () => {
+    const entry = 2650;
+    const sl = hardInvStopDistance(entry, 'TREND_UP');
+    const cal = defaultDeskCalibration();
+    // Earliest Peak lock ≈ mfeFloor * retention after min giveback
+    const earliestPeakLock = cal.peak_mfe_abs - cal.peak_min_giveback_abs;
+    // Soft max loss ≈ sl (before BE). Peak earliest lock should not be << Soft loss.
+    expect(cal.peak_mfe_abs).toBeGreaterThan(sl);
+    expect(earliestPeakLock).toBeGreaterThan(sl * 0.7);
   });
 });

@@ -301,4 +301,14 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(attach).toContain('existing.entry_enabled = false');
     expect(attach).toContain('entry_brain=OFF');
   });
+
+  it('1m continue does NOT disarm PeakProtect (keep trail)', () => {
+    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
+    const block = src.slice(
+      src.indexOf("if (policy === 'continue')"),
+      src.indexOf("} else if (policy === 'wait')")
+    );
+    expect(block).not.toMatch(/peak_protect_armed\s*=\s*false/);
+    expect(block).toMatch(/keep trail|KEEP trail|PeakProtect \$\{/i);
+  });
 });
