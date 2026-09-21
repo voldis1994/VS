@@ -205,14 +205,16 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'RANGE · fade · DIP → BUY · RALLY → SELL',
+        looking_for:
+          'RANGE · SPIKE → follow BUY/SELL · micro fade DIP→BUY RALLY→SELL',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'COMPRESSION · fade uz MOVING 10s · DIP → BUY · RALLY → SELL',
+        looking_for:
+          'COMPRESSION · SPIKE → follow uzreiz · micro fade uz MOVING 10s',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':

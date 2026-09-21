@@ -2,7 +2,13 @@
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
-import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import {
+  bodyPct,
+  isMoving10s,
+  isSpike10s,
+  rangePct,
+  type TenSecBar,
+} from './tenSecondOhlc.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -30,9 +36,21 @@ function describe(bar: TenSecBar): string {
   return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
+/** Impulse follow — used on SPIKE inside RANGE/COMPRESSION (no fade into HardInv). */
+function followSpike(bar: TenSecBar, regime: string): RegimeEntry | null {
+  if (!isSpike10s(bar) || !movingOrNull(bar)) return null;
+  const candle = describe(bar);
+  if (rally(bar))
+    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${regime} SPIKE follow up · ${candle}` };
+  if (dip(bar))
+    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${regime} SPIKE follow down · ${candle}` };
+  return null;
+}
+
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
+ * SPIKE bars in RANGE/COMPRESSION follow immediately (not fade pushbacks).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -53,9 +71,10 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // COMPRESSION used to always return null while classify hit it often → zero trades.
-  // Fade like RANGE when the 10s bar actually moves (toggle in CONTROL then means something).
+  // COMPRESSION: SPIKE → follow now; micro move → fade
   if (r === 'COMPRESSION') {
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
@@ -120,8 +139,10 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // RANGE — mean-reversion fade on a real 10s body
+  // RANGE — SPIKE follow immediately; only micro bars still fade pushbacks
   if (r === 'RANGE') {
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
