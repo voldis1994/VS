@@ -128,11 +128,12 @@ describe('classifyRegime from 10s OHLC', () => {
     ]);
     expect(classifyRegime(mild)).toBe('RANGE');
 
+    // Last range must sit under COMPRESS_ABS (soft MOVE ladder ≈ 0.0055%)
     const tight = padBars([
       bar(100, 100.05, 99.95, 100.0, 0),
       bar(100.0, 100.04, 99.96, 100.01, 1),
       bar(100.01, 100.035, 99.97, 100.005, 2),
-      bar(100.005, 100.008, 100.002, 100.004, 3),
+      bar(100.005, 100.0055, 100.0015, 100.003, 3),
     ]);
     expect(classifyRegime(tight)).toBe('COMPRESSION');
   });
