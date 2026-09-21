@@ -130,39 +130,45 @@ function sendIndexOrHelp(res) {
   res.end('Client panel nav uzbuivets. Palaid VS.bat velreiz.\n');
 }
 
-const server = http.createServer((req, res) => {
-  const p = (req.url || '/').split('?')[0] || '/';
-  const looksApi = p === '/api' || p.startsWith('/api/') || p === '/ws' || p.startsWith('/ws/');
-  if (looksApi) {
-    if (!isPublicClientProxyPath(req.url)) {
-      rejectProxy(
-        res,
-        404,
-        'Not found — public panel only proxies /api/client-auth, /api/client, /ws/client\n'
-      );
+const isMain =
+  process.argv[1] &&
+  path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
+
+if (isMain) {
+  const server = http.createServer((req, res) => {
+    const p = (req.url || '/').split('?')[0] || '/';
+    const looksApi = p === '/api' || p.startsWith('/api/') || p === '/ws' || p.startsWith('/ws/');
+    if (looksApi) {
+      if (!isPublicClientProxyPath(req.url)) {
+        rejectProxy(
+          res,
+          404,
+          'Not found — public panel only proxies /api/client-auth, /api/client, /ws/client\n'
+        );
+        return;
+      }
+      proxyHttp(req, res);
       return;
     }
-    proxyHttp(req, res);
-    return;
-  }
-  const file = safeFileFromUrl(req.url);
-  if (file && fs.existsSync(file) && fs.statSync(file).isFile()) {
-    sendFile(res, file);
-    return;
-  }
-  sendIndexOrHelp(res);
-});
+    const file = safeFileFromUrl(req.url);
+    if (file && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      sendFile(res, file);
+      return;
+    }
+    sendIndexOrHelp(res);
+  });
 
-server.on('upgrade', (req, socket, head) => {
-  if (!isPublicClientProxyPath(req.url)) {
-    socket.destroy();
-    return;
-  }
-  proxyUpgrade(req, socket, head);
-});
+  server.on('upgrade', (req, socket, head) => {
+    if (!isPublicClientProxyPath(req.url)) {
+      socket.destroy();
+      return;
+    }
+    proxyUpgrade(req, socket, head);
+  });
 
-server.listen(LISTEN_PORT, '0.0.0.0', () => {
-  const ready = fs.existsSync(path.join(DIST, 'index.html'));
-  console.log(`[vs-public] :${LISTEN_PORT} panel=${PANEL} dist=${DIST} built=${ready}`);
-  console.log(`[vs-public] proxy allowlist: /health /api/client-auth/* /api/client/* /ws/client`);
-});
+  server.listen(LISTEN_PORT, '0.0.0.0', () => {
+    const ready = fs.existsSync(path.join(DIST, 'index.html'));
+    console.log(`[vs-public] :${LISTEN_PORT} panel=${PANEL} dist=${DIST} built=${ready}`);
+    console.log(`[vs-public] proxy allowlist: /health /api/client-auth/* /api/client/* /ws/client`);
+  });
+}
