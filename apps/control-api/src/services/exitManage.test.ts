@@ -99,21 +99,82 @@ describe('decideBestOutcomeExit', () => {
     expect(microRed.exit).toBe(false);
   });
 
-  it('HardInv only after soft SL (≥1.5pt floor; ~0.15% on Gold)', () => {
-    // entry 2000 → SL = max(3.0, 1.5) = 3.0
+  it('HardInv needs grace + confirm; RANGE SL is wider (anti magic-minus wick)', () => {
+    const now = Date.now();
+    const aged = {
+      entry_at: new Date(now - 60_000).toISOString(),
+      hardinv_breach_since_ms: now - 15_000,
+    };
+    // TREND: SL = max(3.0, 2.0) = 3.0
     const hold = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN' }),
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', ...aged }),
       1997.2,
-      'live_loss'
+      'live_loss',
+      now
     );
-    const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }),
-      1996.9,
-      'live_loss'
+    // First tick beyond SL — stamp breach, do not cut yet
+    const pending = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        entry_at: aged.entry_at,
+        hardinv_breach_since_ms: 0,
+      }),
+      1996.5,
+      'live_loss',
+      now
+    );
+    expect(pending.exit).toBe(false);
+    expect(pending.hardinv_breaching).toBe(true);
+
+    // TREND confirmed cut
+    const cutTrend = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', ...aged }),
+      1996.5,
+      'live_loss',
+      now
     );
     expect(hold.exit).toBe(false);
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/HardInvalidation/);
+    expect(cutTrend.exit).toBe(true);
+    expect(cutTrend.reason).toMatch(/HardInvalidation/);
+
+    // RANGE: SL *= 1.6 → 4.8; same -3.5pt wick must HOLD (the magic-minus case)
+    const rangeWick = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', ...aged }),
+      1996.5,
+      'live_loss',
+      now
+    );
+    expect(rangeWick.exit).toBe(false);
+
+    // RANGE deep adverse still cuts after confirm
+    const rangeCut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', ...aged }),
+      1994.5,
+      'live_loss',
+      now
+    );
+    expect(rangeCut.exit).toBe(true);
+    expect(rangeCut.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('HardInv grace skips soft cut in first 25s (SAFETY SL still live)', () => {
+    const now = Date.now();
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        entry_at: new Date(now - 5_000).toISOString(),
+        hardinv_breach_since_ms: now - 5_000,
+      }),
+      1990,
+      'live_loss',
+      now
+    );
+    expect(d.exit).toBe(false);
+    expect(d.hardinv_breaching).toBe(false);
   });
 
   it('PeakProtect never cuts red after reverse (screenshot micro-loss bug)', () => {

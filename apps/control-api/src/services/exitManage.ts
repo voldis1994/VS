@@ -11,6 +11,8 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
+  /** Wall ms when Soft HardInv first saw breach — null/0 = not breaching */
+  hardinv_breach_since_ms?: number | null;
 };
 
 export type CandleOHLC = { open: number; close: number };
@@ -26,6 +28,13 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
  */
 export type ExitDecideGate = 'all' | 'live_loss' | 'peak_protect_only' | 'target_time';
 
+export type ExitDecision = {
+  exit: boolean;
+  reason: string;
+  /** Soft HardInv currently beyond SL — desk should stamp/clear breach timer */
+  hardinv_breaching?: boolean;
+};
+
 /** Keep 75% of MFE → give back at most 25% (all scalps). */
 export const PEAK_MFE_RETENTION = 0.75;
 export const MAX_MFE_GIVEBACK = 0.25;
@@ -36,6 +45,19 @@ export const PEAK_MFE_ABS_FLOOR = 1.5;
 /** Need real giveback in price pts before Peak cuts (chop-safe). */
 export const PEAK_MIN_GIVEBACK_ABS = 0.75;
 export const TARGET_ABS_FLOOR = 4.0;
+
+/**
+ * First seconds after fill — spread settle + first pushback wick.
+ * Broker SAFETY SL still protects; Soft HardInv waits.
+ */
+export const HARDINV_GRACE_MS = 25_000;
+/**
+ * Soft HardInv must stay breached this long (anti “magic minus” on 1m wick
+ * that immediately reverses — classic RANGE half-buy then green).
+ */
+export const HARDINV_CONFIRM_MS = 12_000;
+/** RANGE/COMPRESSION noise multiplier on Soft HardInv distance */
+export const HARDINV_RANGE_MULT = 1.6;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -124,17 +146,35 @@ function peakShouldCut(
   return true;
 }
 
+/** Soft HardInv distance in price pts — wider in RANGE/COMPRESSION chop. */
+export function hardInvStopDistance(
+  entry: number,
+  regime?: string | null
+): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const cal = getDeskCalibration();
+  let sl = Math.max(absEntry * cal.hardinv_pct, cal.hardinv_abs || HARDINV_ABS_FLOOR);
+  const r = String(regime || '')
+    .trim()
+    .toUpperCase();
+  if (r === 'RANGE' || r === 'COMPRESSION') {
+    sl *= HARDINV_RANGE_MULT;
+  }
+  return sl;
+}
+
 /**
  * Manage exit — winners hold on 1m continue; Peak 25% giveback after reverse.
- * Soft HardInv (≥1.5pt) caps losers. No thesis micro-scratch.
+ * Soft HardInv caps losers with grace + confirm (no single-wick “magic minus”).
  * Peak never cuts red — only green with ≥0.75pt giveback after real MFE.
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
-  gate: ExitDecideGate = 'all'
-): { exit: boolean; reason: string } {
+  gate: ExitDecideGate = 'all',
+  nowMs = Date.now()
+): ExitDecision {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
   const entry = s.entry_price;
@@ -146,7 +186,7 @@ export function decideBestOutcomeExit(
     cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS;
   // Asymmetric + Gold floors from desk calibration (Control panel knobs)
   const tp = Math.max(absEntry * cal.target_pct, cal.target_abs || TARGET_ABS_FLOOR);
-  const sl = Math.max(absEntry * cal.hardinv_pct, cal.hardinv_abs || HARDINV_ABS_FLOOR);
+  const sl = hardInvStopDistance(entry, s.regime);
   const mfeFloor = Math.max(
     absEntry * cal.peak_mfe_pct,
     cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR
@@ -158,20 +198,32 @@ export function decideBestOutcomeExit(
       : mfe > 0
         ? Math.max(0, fav / mfe)
         : null;
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
   const wantFullProfit = gate === 'all' || gate === 'target_time';
 
   if (wantLoss) {
-    if (fav <= -sl) {
-      return {
-        exit: true,
-        reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
-      };
+    let breaching = false;
+    if (heldMs >= HARDINV_GRACE_MS && fav <= -sl) {
+      breaching = true;
+      const since = s.hardinv_breach_since_ms;
+      if (since != null && Number.isFinite(since) && since > 0) {
+        const breachedFor = nowMs - since;
+        if (breachedFor >= HARDINV_CONFIRM_MS) {
+          return {
+            exit: true,
+            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+            hardinv_breaching: true,
+          };
+        }
+      }
     }
     // Thesis is diagnostic only — micro-red regime flicker must NOT scratch
+    if (gate === 'live_loss') {
+      return { exit: false, reason: '', hardinv_breaching: breaching };
+    }
   }
 
   // Armed after reverse 1m — PeakProtect giveback only (25%), green only
