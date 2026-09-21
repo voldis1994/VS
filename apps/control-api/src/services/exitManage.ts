@@ -58,6 +58,13 @@ export const HARDINV_GRACE_MS = 25_000;
 export const HARDINV_CONFIRM_MS = 12_000;
 /** RANGE/COMPRESSION noise multiplier on Soft HardInv distance */
 export const HARDINV_RANGE_MULT = 1.6;
+/** TimeDecay min hold — was 8m and collided with chop exits */
+export const TIMEDECAY_MIN_HOLD_MS = 12 * 60_000;
+/**
+ * TimeDecay must lock REAL mid edge past spread, or covering a short/buying
+ * a long at ask/bid prints a tiny broker minus (“magic minus” at fav≈0).
+ */
+export const TIMEDECAY_MIN_FAV_ABS = 0.75;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -253,10 +260,16 @@ export function decideBestOutcomeExit(
       };
     }
 
-    if (heldMs > 480_000 && fav >= 0 && mfe >= mfeFloor * 0.5) {
+    // Never TimeDecay at fav≈0 — mid flat + spread on close = tiny broker loss (user −£0.06)
+    const minFav = Math.max(
+      TIMEDECAY_MIN_FAV_ABS,
+      absEntry * 0.0002,
+      (cal.target_abs || TARGET_ABS_FLOOR) * 0.3
+    );
+    if (heldMs > TIMEDECAY_MIN_HOLD_MS && fav >= minFav && mfe >= mfeFloor) {
       return {
         exit: true,
-        reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
+        reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · lock UPL ${fav.toFixed(5)} ≥ min ${minFav.toFixed(5)}`,
       };
     }
   }

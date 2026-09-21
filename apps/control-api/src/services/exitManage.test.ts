@@ -256,4 +256,39 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
   });
+
+  it('TimeDecay does NOT scratch fav≈0 after 8m (broker spread magic-minus)', () => {
+    const now = Date.now();
+    // Old bug: held >8m + fav>=0 → close; short cover at ask printed −£0.06
+    const flat = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4352.73,
+        regime: 'RANGE',
+        mfe: 1.2,
+        peak_retention: 1,
+        entry_at: new Date(now - 8 * 60_000).toISOString(),
+      }),
+      4352.7,
+      'target_time',
+      now
+    );
+    expect(flat.exit).toBe(false);
+
+    const realLock = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4352.73,
+        regime: 'RANGE',
+        mfe: 2.5,
+        peak_retention: 1,
+        entry_at: new Date(now - 13 * 60_000).toISOString(),
+      }),
+      4351.5,
+      'target_time',
+      now
+    );
+    expect(realLock.exit).toBe(true);
+    expect(realLock.reason).toMatch(/TimeDecay/);
+  });
 });
