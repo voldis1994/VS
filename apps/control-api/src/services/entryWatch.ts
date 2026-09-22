@@ -135,14 +135,14 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
-        looking_for: 'TREND_UP · DIP → BUY pullback · RALLY → BUY with-trend (MOVING 10s)',
+        looking_for: 'TREND_UP · gaida DIP → BUY pullback (ne chase zaļo sveci)',
         threshold_body_pct: DIP,
       };
     case 'TREND_DOWN':
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
-        looking_for: 'TREND_DOWN · RALLY → SELL pullback · DIP → SELL with-trend (MOVING 10s)',
+        looking_for: 'TREND_DOWN · gaida RALLY → SELL pullback (ne chase sarkano)',
         threshold_body_pct: RALLY,
       };
     case 'PULLBACK_UPTREND':
@@ -205,16 +205,14 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for:
-          'RANGE · SPIKE → follow BUY/SELL · micro fade DIP→BUY RALLY→SELL',
+        looking_for: 'RANGE · micro fade DIP→BUY RALLY→SELL · SPIKE → WAIT (no chase)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for:
-          'COMPRESSION · SPIKE → follow uzreiz · micro fade uz MOVING 10s',
+        looking_for: 'COMPRESSION · micro fade uz MOVING 10s · SPIKE → WAIT (no chase)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
