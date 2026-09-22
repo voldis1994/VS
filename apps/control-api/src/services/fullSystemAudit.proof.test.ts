@@ -335,6 +335,16 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).not.toContain('PeakProtect ARMED by MFE');
     expect(src).toContain('1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)');
   });
+
+  it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {
+    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
+    expect(src).toMatch(/Public multi-feed — NEVER under Capital connection mutex/);
+    expect(src).toMatch(/short quote lease → multi-feed OUTSIDE mutex/);
+    const cap = readFileSync(join(here, 'capitalCom.ts'), 'utf8');
+    expect(cap).toMatch(/Per-connection login spacing/);
+    expect(cap).toContain('loginChains');
+    expect(cap).not.toMatch(/let loginChain: Promise/);
+  });
 });
 
 describe('PROOF: public surface hardening (2026-09 audit)', () => {

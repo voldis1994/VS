@@ -1627,157 +1627,103 @@ async function robotCycleLocked(s: Internal) {
     return;
   }
 
-  const leased = await withCapitalAccountSession(
-    leaseInput,
-    async (
-      session
-    ): Promise<{ pendingExit: { reason: string; quote: CapitalMarketQuote } } | null> => {
-  try {
-    const quote = await fetchCapitalMarketQuote(session, s.epic);
-    if (!quote.raw_ok) {
-      s.reads_fail += 1;
-      s.error = quote.detail || 'No quote';
-      pushTick(s, {
-        phase: 'ERROR',
-        bid: null,
-        ask: null,
-        mid: null,
-        detail: quote.detail || `No quote for ${s.display_name} (${s.epic})`,
-      });
-      return null;
-    }
+  // ——— FLAT: short quote lease → multi-feed OUTSIDE mutex → enrich/list/entry lease ———
+  // Multi-account same connection: holding Capital lock during Yahoo/Aurum feeds starves
+  // every other account's Peak/Soft/quote (one client "works", others look dead).
+  const quoteLease = await withCapitalAccountSession(leaseInput, async (session) => {
+    return fetchCapitalMarketQuote(session, s.epic);
+  });
+  if (!quoteLease.ok) {
+    reportCapitalLeaseFail(s, quoteLease.result);
+    return;
+  }
+  const quote0 = quoteLease.value;
+  if (!quote0.raw_ok) {
+    s.reads_fail += 1;
+    s.error = quote0.detail || 'No quote';
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: quote0.detail || `No quote for ${s.display_name} (${s.epic})`,
+    });
+    return;
+  }
 
-    s.reads_ok += 1;
-    s.error = null;
-    s.last_quote_at = new Date().toISOString();
-    if (quote.epic && quote.epic !== s.epic) {
-      s.epic = quote.epic;
-    }
+  s.reads_ok += 1;
+  s.error = null;
+  s.last_quote_at = new Date().toISOString();
+  if (quote0.epic && quote0.epic !== s.epic) s.epic = quote0.epic;
 
-    // Market closed / offline → park entries (anti-spam Capital).
-    // CRITICAL: if a trade is open, still sync + HardInv/Peak — never skip manage.
-    if (!marketAllowsTrading(quote.market_status)) {
-      if (s.open_side || s.deal_id) {
-        // Keep fast cadence while managing — 90s park would delay HardInv
-        setRobotCadence(s, ACTIVE_CADENCE_MS);
-        const listedPark = await listCapitalOpenPositions(session);
-        if (listedPark.ok) {
-          const brokerPark = matchOpenOnEpic(listedPark.positions, s.epic);
-          if (brokerPark) {
-            s.open_side = brokerPark.direction;
-            s.deal_id = brokerPark.deal_id;
-            syncFromBrokerOpen(s, brokerPark, quote.mid);
-            s.mode = 'MANAGE';
-            if (brokerPark.upl != null) s.unrealized = brokerPark.upl;
-          } else if (s.open_side) {
-            const closedSide = s.open_side;
-            s.last_closed_side = closedSide;
-            s.closed_at_ms = Date.now();
-            clearTradeState(s);
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
-            });
-            return null;
-          }
-        }
-        if (s.open_side && quote.mid != null) {
-          // Prefer returning exit to outer short close-lease (mutex free during decide)
-          if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
-            s.last_manage_minute_fetch_ms = Date.now();
-            try {
-              const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
-              if (mins.ok && mins.candles.length) s.last_minute_candles = mins.candles;
-            } catch {
-              /* keep */
-            }
-          }
-          const parkExit = decideOpenManageExit(s, quote, { includeTargetTime: false });
-          if (parkExit) return { pendingExit: { reason: parkExit, quote } };
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `MARKET ${quote.market_status || 'CLOSED'} · still MANAGE ${s.open_side} · HardInv/Peak live · no new entry`,
-          });
-          return null;
-        }
-        pushTick(s, {
-          phase: 'MANAGE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} · open ${s.open_side || '?'} · wait mid for HardInv`,
-        });
-        return null;
-      }
+  if (!marketAllowsTrading(quote0.market_status)) {
+    // Park / seed under a short lease — manage-open already returned above
+    const closedLease = await withCapitalAccountSession(leaseInput, async (session) => {
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
-      // Warm the 30m zone from history while closed — so TRADEABLE does not start at 0/90
       try {
-        await seedZoneFromMinuteHistory(session, s, quote);
+        await seedZoneFromMinuteHistory(session, s, quote0);
       } catch {
-        /* park tick below still runs */
+        /* park tick below */
       }
       const now = Date.now();
       if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
         s.last_market_closed_tick_ms = now;
         refreshEntryWatch(s, {
           status_override: 'SEEDING',
-          last_reason: `MARKET ${quote.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
         pushTick(s, {
           phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
+          bid: quote0.bid,
+          ask: quote0.ask,
+          mid: quote0.mid,
+          detail: `MARKET ${quote0.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
           }s until TRADEABLE · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
       }
-      return null;
+    });
+    if (!closedLease.ok) reportCapitalLeaseFail(s, closedLease.result);
+    return;
+  }
+
+  setRobotCadence(s, ACTIVE_CADENCE_MS);
+  s.last_mid = quote0.mid;
+  s.last_bid = quote0.bid;
+  s.last_ask = quote0.ask;
+
+  // Public multi-feed — NEVER under Capital connection mutex
+  const flatNow = isFlatTenBar(s.ohlcState.last_closed);
+  if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
+    s.last_multi_feed_ms = Date.now();
+    try {
+      s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote0.mid });
+    } catch {
+      /* keep previous multiFeed snapshot */
     }
-
-    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, ACTIVE_CADENCE_MS);
-    s.last_mid = quote.mid;
-    s.last_bid = quote.bid;
-    s.last_ask = quote.ask;
-
-    // Multi-provider read — skip while 10s bar is flat so Capital lock frees faster
-    // for SECOND enrich (flat O=H=L=C is the zero-trade failure mode).
-    const flatNow = isFlatTenBar(s.ohlcState.last_closed);
-    if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
-      } catch {
-        /* keep previous multiFeed snapshot */
-      }
-    } else if (s.multiFeed && quote.mid != null) {
-      // Re-anchor pick every tick even if multi snapshot is cached
+  }
+  const picked0 = pickOhlcMid(quote0.mid, s.multiFeed);
+  s.feed_source = picked0.source;
+  s.feed_contributing = s.multiFeed?.contributing ?? 0;
+  s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+  s.feed_agreement = s.multiFeed?.agreement ?? null;
+  const ohlcMid0 = picked0.mid ?? quote0.mid;
+  if (ohlcMid0 != null) {
+    s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid0, Date.now());
+    s.ohlc_10s = publicOhlc10s(s.ohlcState);
+    if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+      s.entry_close_latch = s.ohlcState.last_closed;
+      applyRobotRegime(s, [s.ohlcState.last_closed]);
     }
-    const picked = pickOhlcMid(quote.mid, s.multiFeed);
-    s.feed_source = picked.source;
-    s.feed_contributing = s.multiFeed?.contributing ?? 0;
-    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-    s.feed_agreement = s.multiFeed?.agreement ?? null;
+  }
 
-    // Live mid on wall clock — Capital updateTime jumps with price and closed flat bars
-    const ohlcMid = picked.mid ?? quote.mid;
-    if (ohlcMid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
-      s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        s.entry_close_latch = s.ohlcState.last_closed;
-        applyRobotRegime(s, [s.ohlcState.last_closed]);
-      }
-    }
-
+  const leased = await withCapitalAccountSession(
+    leaseInput,
+    async (
+      session
+    ): Promise<{ pendingExit: { reason: string; quote: CapitalMarketQuote } } | null> => {
+  try {
+    const quote = quote0;
     // Sparse REST polls → flat CLOSED bars. SECOND (or MINUTE fallback) restores range.
     // When flat: enrich EVERY cycle (ignore 8s throttle) — otherwise zero trades forever.
     const needEnrich =
