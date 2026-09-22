@@ -28,6 +28,7 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
+  peakMfeFloor,
 } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
@@ -1367,6 +1368,16 @@ async function robotCycleLocked(s: Internal) {
         if (s.open_side && quote.mid != null) {
           if (s.entry_price == null) s.entry_price = quote.mid;
           updateExcursion(s, quote.mid);
+          if (s.entry_price != null && s.mfe >= peakMfeFloor(s.entry_price)) {
+            s.peak_protect_armed = true;
+          }
+          if (s.peak_protect_armed) {
+            const peakPark = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+            if (peakPark.exit) {
+              await exitTrade(session, s, quote, peakPark.reason);
+              return;
+            }
+          }
           const lossPark = decideBestOutcomeExit(s, quote.mid, 'live_loss');
           if (lossPark.hardinv_breaching) {
             if (!s.hardinv_breach_since_ms) s.hardinv_breach_since_ms = Date.now();
@@ -1376,13 +1387,6 @@ async function robotCycleLocked(s: Internal) {
           if (lossPark.exit) {
             await exitTrade(session, s, quote, lossPark.reason);
             return;
-          }
-          if (s.peak_protect_armed) {
-            const peakPark = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
-            if (peakPark.exit) {
-              await exitTrade(session, s, quote, peakPark.reason);
-              return;
-            }
           }
           pushTick(s, {
             phase: 'MANAGE',
@@ -1637,6 +1641,31 @@ async function robotCycleLocked(s: Internal) {
         return;
       }
 
+      // Arm Peak as soon as MFE hits floor — do NOT wait reverse 1m.
+      // Multi-account same GOLD: reverse-1m fetch is serialized under Capital lock;
+      // waiting that minute lets Soft HardInv close red after a Peak-eligible leg.
+      if (s.entry_price != null && s.mfe >= peakMfeFloor(s.entry_price)) {
+        if (!s.peak_protect_armed) {
+          s.peak_protect_armed = true;
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `PeakProtect ARMED by MFE ${s.mfe.toFixed(2)} ≥ floor · trail live (no wait reverse 1m)`,
+          });
+        }
+      }
+
+      // Peak FIRST while green — before Soft HardInv confirm can run into red
+      if (s.peak_protect_armed && s.open_side) {
+        const peakFirst = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+        if (peakFirst.exit) {
+          await exitTrade(session, s, quote, peakFirst.reason);
+          return;
+        }
+      }
+
       // LIVE loss: Soft HardInv with grace + confirm (no single-wick magic minus)
       const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
       if (lossDec.hardinv_breaching) {
@@ -1658,7 +1687,7 @@ async function robotCycleLocked(s: Internal) {
         return;
       }
 
-      // PROFIT: hold on Capital 1m continue; reverse → PeakProtect 25% giveback arms + trails live
+      // PROFIT: hold on Capital 1m continue; reverse → PeakProtect arms + trails live
       if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
         s.last_manage_minute_fetch_ms = Date.now();
         try {
@@ -1685,7 +1714,6 @@ async function robotCycleLocked(s: Internal) {
 
           if (policy === 'continue') {
             // Keep Peak armed if already trailing — do NOT disarm on green 1m
-            // (old: Peak OFF threw away the trail and re-scalped tiny givebacks).
             pushTick(s, {
               phase: 'MANAGE',
               bid: quote.bid,
@@ -1712,7 +1740,7 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
+              detail: '1m reverse · PeakProtect ARMED · trail after real MFE',
             });
             const peakAtClose = decideBestOutcomeExit(
               s,
@@ -1727,7 +1755,7 @@ async function robotCycleLocked(s: Internal) {
         }
       }
 
-      // Once armed by reverse — PeakProtect-only on LIVE mark
+      // Peak trail (also armed by MFE above) — live mid
       if (s.peak_protect_armed && s.open_side) {
         const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
         if (peakDec.exit) {
