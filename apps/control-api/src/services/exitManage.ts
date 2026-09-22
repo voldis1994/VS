@@ -149,7 +149,7 @@ export function thesisFailureReason(
 function peakShouldCut(
   fav: number,
   mfe: number,
-  _retentionIgnored: number | null,
+  retention: number | null,
   mfeFloor: number,
   peakRet: number,
   minGiveback: number
@@ -157,23 +157,10 @@ function peakShouldCut(
   // Peak locks profit only — never micro-red after reverse 1m
   if (!(fav > 0)) return false;
   if (mfe < mfeFloor) return false;
-  // Always use LIVE fav/mfe — stale s.peak_retention (from prior mid) must not skip a cut
-  const liveRet = fav / mfe;
-  if (liveRet >= peakRet) return false;
+  if (retention == null || retention >= peakRet) return false;
   const giveback = mfe - fav;
   if (giveback < minGiveback) return false;
   return true;
-}
-
-/** Peak MFE floor for this entry (desk calibration + absolute floor). */
-export function peakMfeFloor(entry: number): number {
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const cal = getDeskCalibration();
-  return Math.max(
-    absEntry * cal.peak_mfe_pct,
-    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR,
-    PEAK_MFE_ABS_FLOOR
-  );
 }
 
 /**
@@ -216,22 +203,7 @@ export function softLossLine(sl: number, mfe: number): number {
 }
 
 /**
- * Peak-eligible trade approaching BE while still green — lock remaining +R
- * BEFORE Soft HardInv confirm lets price flip red (multi-account same-market race).
- */
-export function peakBeGuardShouldCut(
-  fav: number,
-  mfe: number,
-  mfeFloor: number,
-  sl: number
-): boolean {
-  if (!(fav > 0)) return false;
-  if (mfe < mfeFloor) return false;
-  return fav <= softLossLine(sl, mfe);
-}
-
-/**
- * Manage exit — winners hold on 1m continue; Peak giveback after reverse / MFE arm.
+ * Manage exit — winners hold on 1m continue; Peak giveback after reverse.
  * Soft HardInv caps losers with short grace + confirm.
  * Peak never cuts red — only green after real MFE (≥3pt floor).
  * Broker SAFETY SL remains the hard cushion outside this function.
@@ -258,12 +230,19 @@ export function decideBestOutcomeExit(
     TARGET_ABS_FLOOR
   );
   const sl = hardInvStopDistance(entry, s.regime);
-  const mfeFloor = peakMfeFloor(entry);
+  const mfeFloor = Math.max(
+    absEntry * cal.peak_mfe_pct,
+    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR,
+    PEAK_MFE_ABS_FLOOR
+  );
   const mfe = Math.max(s.mfe, Math.max(0, fav));
-  const liveRet = mfe > 0 ? Math.max(0, fav / mfe) : null;
-  const retention = liveRet;
+  const retention =
+    s.peak_retention != null
+      ? s.peak_retention
+      : mfe > 0
+        ? Math.max(0, fav / mfe)
+        : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
-  const peakEligible = mfe >= mfeFloor;
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
@@ -272,22 +251,12 @@ export function decideBestOutcomeExit(
   if (wantLoss) {
     let breaching = false;
     const lossLine = softLossLine(sl, mfe);
-    // Peak-eligible + still green near BE → Soft must NOT own the exit (Peak/BE-guard does).
-    // This stops Soft confirm from holding while price flips red after a real Peak MFE.
-    if (peakEligible && fav > 0 && fav <= lossLine) {
-      if (gate === 'live_loss') {
-        return { exit: false, reason: '', hardinv_breaching: false };
-      }
-    }
     if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
-      // Peak-eligible underwater: cut without inventing a green — Soft is last resort
       breaching = true;
       const since = s.hardinv_breach_since_ms;
       if (since != null && Number.isFinite(since) && since > 0) {
         const breachedFor = nowMs - since;
-        // Shorter confirm once Peak already had a real leg — don't gift more red travel
-        const needConfirm = peakEligible ? Math.min(HARDINV_CONFIRM_MS, 2_000) : HARDINV_CONFIRM_MS;
-        if (breachedFor >= needConfirm) {
+        if (breachedFor >= HARDINV_CONFIRM_MS) {
           const beTag = mfe >= sl ? ' · BE-lock' : '';
           return {
             exit: true,
@@ -303,35 +272,23 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // PeakProtect giveback / BE-guard — green only, real MFE
+  // Armed after reverse 1m — PeakProtect giveback only, green only, real MFE
   if (wantPeakOnly) {
-    if (peakBeGuardShouldCut(fav, mfe, mfeFloor, sl)) {
-      return {
-        exit: true,
-        reason: `PeakProtection · BE-guard · lock UPL ${fav.toFixed(5)} after MFE ${mfe.toFixed(5)} (no red giveback)`,
-      };
-    }
     if (peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
       const givePct = ((1 - peakRet) * 100).toFixed(0);
       return {
         exit: true,
-        reason: `PeakProtection · retention ${((retention ?? 0) * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}%`,
+        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}%`,
       };
     }
     return { exit: false, reason: '' };
   }
 
   if (wantFullProfit) {
-    if (gate === 'all' && peakBeGuardShouldCut(fav, mfe, mfeFloor, sl)) {
-      return {
-        exit: true,
-        reason: `PeakProtection · BE-guard · lock UPL ${fav.toFixed(5)} after MFE ${mfe.toFixed(5)}`,
-      };
-    }
     if (gate === 'all' && peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)) {
       return {
         exit: true,
-        reason: `PeakProtection · retention ${((retention ?? 0) * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,
+        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best`,
       };
     }
 
