@@ -8,7 +8,7 @@ function bar(open: number, close: number, pad = 0.15): TenSecBar {
   return { open_time_ms: 0, open, high, low, close, ticks: 12 };
 }
 
-/** ~0.2% — SPIKE (follow, not fade) */
+/** ~0.2% — SPIKE (must NOT chase in RANGE/COMPRESSION) */
 const spikeDip = bar(2000, 1996, 0.8);
 const spikeRally = bar(2000, 2004, 0.8);
 /** ~0.025% — MOVING micro (still fade in RANGE/COMPRESSION) */
@@ -16,14 +16,12 @@ const microDip = bar(2000, 1999.5, 0.12);
 const microRally = bar(2000, 2000.5, 0.12);
 
 describe('10s + 14-regime suitable entry', () => {
-  it('SPIKE in RANGE/COMPRESSION follows immediately (no fade pushback)', () => {
+  it('SPIKE in RANGE/COMPRESSION waits — no chase (skrien pakaļ tirgum)', () => {
     expect(isSpike10s(spikeRally)).toBe(true);
-    expect(decideEntryFrom10sRegime(spikeRally, 'RANGE')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(spikeRally, 'RANGE')?.setup).toBe('BREAKOUT');
-    expect(decideEntryFrom10sRegime(spikeDip, 'RANGE')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(spikeDip, 'COMPRESSION')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')?.reason).toMatch(/SPIKE follow/);
+    expect(decideEntryFrom10sRegime(spikeRally, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(spikeDip, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(spikeDip, 'COMPRESSION')).toBeNull();
   });
 
   it('micro MOVE in COMPRESSION/RANGE still fades', () => {
@@ -41,17 +39,15 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(spikeDip, 'TRANSITION')?.direction).toBe('SELL');
   });
 
-  it('TREND_UP dip-buys pullback and rally-buys with-trend — never sells', () => {
+  it('TREND_UP dip-buys pullback only — never chase rally / never sells', () => {
     expect(decideEntryFrom10sRegime(spikeDip, 'TREND_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(spikeDip, 'TREND_UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(spikeRally, 'TREND_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(spikeRally, 'TREND_UP')?.setup).toBe('CONTINUATION');
+    expect(decideEntryFrom10sRegime(spikeRally, 'TREND_UP')).toBeNull();
   });
 
-  it('TREND_DOWN rally-sells pullback and dip-sells with-trend — never buys', () => {
+  it('TREND_DOWN rally-sells pullback only — never chase dip / never buys', () => {
     expect(decideEntryFrom10sRegime(spikeRally, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(spikeDip, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(spikeDip, 'TREND_DOWN')?.setup).toBe('CONTINUATION');
+    expect(decideEntryFrom10sRegime(spikeDip, 'TREND_DOWN')).toBeNull();
   });
 
   it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {

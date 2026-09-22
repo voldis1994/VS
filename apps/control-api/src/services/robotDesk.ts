@@ -2029,7 +2029,7 @@ async function robotCycleLocked(s: Internal) {
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    const POST_CLOSE_COOLDOWN_MS = 8_000;
+    const POST_CLOSE_COOLDOWN_MS = 60_000;
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       const left = Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000);
       refreshEntryWatch(s, {
