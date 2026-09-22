@@ -399,13 +399,37 @@ type PooledCapital = {
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
-let loginChain: Promise<void> = Promise.resolve();
-let lastLoginAt = 0;
+/** Per-connection login spacing — never block other clients' API keys on a global queue. */
+const loginChains = new Map<string, { chain: Promise<void>; lastAt: number }>();
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
 
 /** Per-connection mutex so concurrent robots on one broker never interleave switch+API. */
 const connectionLocks = new Map<string, Promise<unknown>>();
+
+async function withLoginThrottle<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
+  const key = capitalPoolKey(connectionId);
+  let slot = loginChains.get(key);
+  if (!slot) {
+    slot = { chain: Promise.resolve(), lastAt: 0 };
+    loginChains.set(key, slot);
+  }
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const prev = slot.chain;
+  slot.chain = prev.then(() => gate);
+  await prev;
+  try {
+    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - slot.lastAt));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    slot.lastAt = Date.now();
+    return await fn();
+  } finally {
+    release();
+  }
+}
 
 export async function withConnectionLock<T>(
   connectionId: number,
@@ -471,24 +495,6 @@ export async function withConnectionLock<T>(
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
-}
-
-async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  const prev = loginChain;
-  loginChain = prev.then(() => gate);
-  await prev;
-  try {
-    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - lastLoginAt));
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastLoginAt = Date.now();
-    return await fn();
-  } finally {
-    release();
-  }
 }
 
 export async function listCapitalAccounts(
@@ -664,7 +670,7 @@ async function acquireCapitalSessionUnlocked(input: {
     }
     capitalSessionPool.delete(key);
 
-    const opened = await withLoginThrottle(() =>
+    const opened = await withLoginThrottle(connectionId, () =>
       openCapitalSession({
         environment: input.environment,
         apiKey: input.apiKey,

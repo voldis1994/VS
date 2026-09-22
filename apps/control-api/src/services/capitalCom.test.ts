@@ -48,7 +48,7 @@ describe('testCapitalComSession validation', () => {
     const src = readFileSync(join(here, 'capitalCom.ts'), 'utf8');
     expect(src).toMatch(/connectionId\?: number/);
     expect(src).toContain('await acquireCapitalSession');
-    expect(src).toContain('withLoginThrottle(() =>');
+    expect(src).toContain('withLoginThrottle(connectionId,');
     expect(src).toMatch(/Rate-limit \/ auth hard-fail/);
     expect(src).toMatch(/wait ~2 minutes before Test again/);
     const route = readFileSync(join(here, '../routes/brokers.ts'), 'utf8');
