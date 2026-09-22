@@ -539,8 +539,9 @@ export async function acquireCapitalSession(input: {
 }
 
 /**
- * Hold the connection mutex for the FULL Capital call chain (quote/list/create/close).
- * Prevents account A switch → account B API mid-flight on a shared connection pool.
+ * Hold the connection mutex only for the Capital HTTP call chain (quote/list/create/close).
+ * Callers managing open trades should use SHORT leases and run Peak/Soft decide OUTSIDE
+ * the lock so multi-account clients each get an individual exit — not a serial queue.
  */
 export async function withCapitalAccountSession<T>(
   input: {

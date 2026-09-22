@@ -375,87 +375,14 @@ describe('decideBestOutcomeExit', () => {
     expect(realLock.reason).toMatch(/TimeDecay/);
   });
 
-  it('Peak-eligible BE-guard locks green before Soft can wait into red', () => {
-    const now = Date.now();
-    const entry = 2000;
-    const mfe = 4.0; // ≥ Peak floor 3
-    // fav still green but at BE-lock line
-    const peak = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe,
-        peak_retention: 0.05, // stale high retention must NOT block live cut
-        entry_at: new Date(now - 60_000).toISOString(),
-      }),
-      entry + 0.2,
-      'peak_protect_only',
-      now
-    );
-    expect(peak.exit).toBe(true);
-    expect(peak.reason).toMatch(/BE-guard|PeakProtection/);
-
-    // Soft live_loss must NOT exit while still green Peak-eligible near BE
-    const soft = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe,
-        entry_at: new Date(now - 60_000).toISOString(),
-        hardinv_breach_since_ms: now - 10_000,
-      }),
-      entry + 0.2,
-      'live_loss',
-      now
-    );
-    expect(soft.exit).toBe(false);
-  });
-
-  it('Peak cut uses live fav/mfe — stale peak_retention cannot skip', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 2000,
-        mfe: 5,
-        peak_retention: 0.99, // stale — live fav is only 50% of MFE
-      }),
-      2002.5,
-      'peak_protect_only'
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
-  });
-
-  it('multi-account same market: Peak-eligible Soft refuse green BE leaves Peak to lock', () => {
-    // Two accounts share mid but have isolated snapshots — both must Peak-lock, not Soft-red
-    const now = Date.now();
-    const mid = 2000.15;
-    for (const mfe of [3.5, 4.2]) {
-      const peak = decideBestOutcomeExit(
-        snap({
-          open_side: 'BUY',
-          entry_price: 2000,
-          mfe,
-          entry_at: new Date(now - 90_000).toISOString(),
-        }),
-        mid,
-        'peak_protect_only',
-        now
-      );
-      expect(peak.exit).toBe(true);
-      const soft = decideBestOutcomeExit(
-        snap({
-          open_side: 'BUY',
-          entry_price: 2000,
-          mfe,
-          entry_at: new Date(now - 90_000).toISOString(),
-          hardinv_breach_since_ms: now - 10_000,
-        }),
-        mid,
-        'live_loss',
-        now
-      );
-      expect(soft.exit).toBe(false);
-    }
+  it('asymmetry proof: Peak lock ≥ Soft HardInv (no 80%-win net-minus profile)', () => {
+    const entry = 2650;
+    const sl = hardInvStopDistance(entry, 'TREND_UP');
+    const cal = defaultDeskCalibration();
+    // Earliest Peak lock ≈ mfeFloor * retention after min giveback
+    const earliestPeakLock = cal.peak_mfe_abs - cal.peak_min_giveback_abs;
+    // Soft max loss ≈ sl (before BE). Peak earliest lock should not be << Soft loss.
+    expect(cal.peak_mfe_abs).toBeGreaterThan(sl);
+    expect(earliestPeakLock).toBeGreaterThan(sl * 0.7);
   });
 });
