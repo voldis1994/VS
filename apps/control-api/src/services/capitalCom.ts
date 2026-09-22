@@ -113,6 +113,18 @@ function explainCapitalError(input: {
     `Capital.com ${env} login failed (HTTP ${input.status}, ${code}).`,
   ];
 
+  if (input.status === 429 || /too-many/i.test(input.errorCode)) {
+    parts.push(
+      `Capital rate-limited logins — wait ~2 minutes before Test again.`,
+      `Do not spam Test while robots are running (each Live key shares a login budget).`,
+      `Credentials are often fine; this is not usually a wrong password.`
+    );
+    if (input.bodyText && input.bodyText.length < 200) {
+      parts.push(`Raw: ${input.bodyText}`);
+    }
+    return parts.join(' ');
+  }
+
   if (input.message && input.message.toLowerCase() !== 'bad request') {
     parts.push(`Broker says: ${input.message}`);
   } else if (input.bodyText && input.bodyText.length < 300) {
@@ -277,6 +289,14 @@ export async function openCapitalSession(input: {
           bodyText: text,
         }),
       };
+      // Rate-limit / auth hard-fail — do NOT burn a second encrypted→plain login attempt
+      if (
+        res.status === 429 ||
+        res.status === 401 ||
+        /too-many|rate.?limit/i.test(errorCode)
+      ) {
+        return { ok: false, result: lastFail };
+      }
       continue;
     }
 
@@ -712,7 +732,29 @@ export async function testCapitalComSession(input: {
   apiKey: string;
   identifier: string;
   password: string;
+  /** Prefer pooled session — avoids a second login after Test succeeds */
+  connectionId?: number;
 }): Promise<CapitalComSessionResult> {
+  const connectionId = Number(input.connectionId);
+  if (Number.isFinite(connectionId) && connectionId > 0) {
+    const acquired = await acquireCapitalSession({
+      environment: input.environment,
+      apiKey: input.apiKey,
+      identifier: input.identifier,
+      password: input.password,
+      connectionId,
+    });
+    if (!acquired.ok) return acquired.result;
+    return {
+      ok: true,
+      status: 200,
+      detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK (pooled)`,
+      accountType: acquired.session.accountType,
+    };
+  }
+
+  // No connectionId (ad-hoc): validate/login without outer throttle stamp on validation fails.
+  // Broker Test always passes connectionId → pooled + withLoginThrottle inside acquire.
   const opened = await openCapitalSession(input);
   if (!opened.ok) return opened.result;
   await opened.session.close();
