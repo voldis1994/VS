@@ -323,6 +323,18 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(block).not.toMatch(/peak_protect_armed\s*=\s*false/);
     expect(block).toMatch(/keep trail|KEEP trail|PeakProtect \$\{/i);
   });
+
+  it('Peak arms by MFE floor and runs before Soft HardInv', () => {
+    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
+    expect(src).toContain('peakMfeFloor');
+    expect(src).toContain('PeakProtect ARMED by MFE');
+    const manage = src.slice(src.indexOf('// ——— MANAGE open trade'));
+    const peakFirst = manage.indexOf("decideBestOutcomeExit(s, quote.mid, 'peak_protect_only')");
+    const soft = manage.indexOf("decideBestOutcomeExit(s, quote.mid, 'live_loss')");
+    expect(peakFirst).toBeGreaterThan(-1);
+    expect(soft).toBeGreaterThan(-1);
+    expect(peakFirst).toBeLessThan(soft);
+  });
 });
 
 describe('PROOF: public surface hardening (2026-09 audit)', () => {
