@@ -205,14 +205,14 @@ export function readMarketStory(
   const recentSell = recentNet < 0 && redR >= 3;
   const recentBuy = recentNet > 0 && greenR >= 3;
 
-  // Require real trek for color-majority calls — tiny noise must not become SELLOFF
+  // Require real trek for ALL directional calls — tiny noise must not become SELLOFF
   const sellStruct =
-    swing === 'LL_LH' ||
+    (trek >= minPath && swing === 'LL_LH') ||
     (trek >= minPath && net < 0 && red >= green + 2) ||
     (trek >= minPath && recentSell && last.close <= midZone) ||
     (trek >= minPath && red >= green + 2 && pos <= 0.45);
   const buyStruct =
-    swing === 'HH_HL' ||
+    (trek >= minPath && swing === 'HH_HL') ||
     (trek >= minPath && net > 0 && green >= red + 2) ||
     (trek >= minPath && recentBuy && last.close >= midZone) ||
     (trek >= minPath && green >= red + 2 && pos >= 0.55);
