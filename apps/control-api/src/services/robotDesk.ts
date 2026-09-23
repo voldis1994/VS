@@ -32,6 +32,7 @@ import {
   shouldArmPeakProtect,
   type ExitZoneSnap,
 } from './exitManage.js';
+import { softExitMarketGate } from './softExitMarketGate.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
@@ -406,7 +407,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
     chain:
-      'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback',
+      'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · soft Peak/Target only on market change (next entry + 1m) · continue→HOLD',
     note:
       'Public feeds confirm near Capital CFD mid; no late-1m / stale-quote entry blocks. Peak trail after real MFE (≥3pt).',
   };
@@ -1319,6 +1320,8 @@ function reportCapitalLeaseFail(s: Internal, result: CapitalComSessionResult) {
 
 /**
  * Soft HardInv → structure kill → per-regime Peak arm → Peak trail → Target/TimeDecay.
+ * Soft profit exits are gated: peek next entry + closed 1m — HOLD while same thesis
+ * continues; soft exit only when the market changed on a full candle.
  * Pure CPU — runs OUTSIDE the Capital connection mutex so each client decides its
  * own exit independently (not queued behind another account's HTTP on the same key).
  */
@@ -1362,12 +1365,23 @@ function decideOpenManageExit(
   } else {
     s.hardinv_breach_since_ms = 0;
   }
+  // Hard safety — never blocked by next-entry / 1m continue gate
   if (lossDec.exit) return lossDec.reason;
 
-  // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
   const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+  const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+  const softGate = softExitMarketGate({
+    openSide: s.open_side,
+    regime: s.regime,
+    closedBars: s.closedBars,
+    closed1m: closed1m
+      ? { open: closed1m.open, close: closed1m.close }
+      : null,
+    prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
+  });
+
+  // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
   if (closed1m && s.open_side && s.entry_price != null) {
-    const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
     const key = capitalMinuteCandleKey(closed1m, prev1m);
     if (key !== s.last_1m_profit_exit_key) {
       const policy = closed1mProfitPolicy(
@@ -1426,14 +1440,24 @@ function decideOpenManageExit(
           mid: quote.mid,
           detail: `1m ${policy} · PeakProtect ARMED · ${s.entry_regime || s.regime} · trail after real MFE`,
         });
-        const peakAtClose = decideBestOutcomeExit(
-          s,
-          closed1m.close,
-          'peak_protect_only',
-          Date.now(),
-          quote
-        );
-        if (peakAtClose.exit) return peakAtClose.reason;
+        if (softGate.allow) {
+          const peakAtClose = decideBestOutcomeExit(
+            s,
+            closed1m.close,
+            'peak_protect_only',
+            Date.now(),
+            quote
+          );
+          if (peakAtClose.exit) return peakAtClose.reason;
+        } else {
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: softGate.hold_reason,
+          });
+        }
       }
     }
   }
@@ -1463,14 +1487,17 @@ function decideOpenManageExit(
   }
 
   if (s.peak_protect_armed && s.open_side) {
-    const peakDec = decideBestOutcomeExit(
-      s,
-      quote.mid,
-      'peak_protect_only',
-      Date.now(),
-      quote
-    );
-    if (peakDec.exit) return peakDec.reason;
+    if (softGate.allow) {
+      const peakDec = decideBestOutcomeExit(
+        s,
+        quote.mid,
+        'peak_protect_only',
+        Date.now(),
+        quote
+      );
+      if (peakDec.exit) return peakDec.reason;
+    }
+    // !allow → same thesis still alive; no Peak cut (tick already emitted on 1m key)
   }
 
   if (opts?.includeTargetTime === false) return null;
@@ -1478,6 +1505,10 @@ function decideOpenManageExit(
   if (s.open_side && s.entry_price != null && quote.mid != null) {
     const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
     if (favNow > 0) {
+      if (!softGate.allow) {
+        // Target/TimeDecay also wait for market change on full candle
+        return null;
+      }
       const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
       if (tpDec.exit) return tpDec.reason;
     }
@@ -1564,6 +1595,16 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
   s.last_ask = quote.ask;
   setRobotCadence(s, ACTIVE_CADENCE_MS);
 
+  // Keep 10s book + live regime alive while MANAGE — soft-exit peeks next entry
+  // on the last full closed candle (same recipe as flat entry).
+  if (quote.mid != null) {
+    s.ohlcState = updateTenSecondOhlc(s.ohlcState, quote.mid, Date.now());
+    s.ohlc_10s = publicOhlc10s(s.ohlcState);
+    if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+      applyRobotRegime(s, [s.ohlcState.last_closed]);
+    }
+  }
+
   if (listedOk) {
     if (brokerOpen) {
       s.open_side = brokerOpen.direction;
@@ -1648,7 +1689,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
       s.unrealized != null ? s.unrealized.toFixed(5) : '—'
     } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
       s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-    } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
+    } · loss=live · soft=nextEntry+1mChange · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
       s.peak_protect_armed ? 'ON' : 'OFF'
     } · no new orders`,
   });
@@ -2015,7 +2056,7 @@ async function robotCycleLocked(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
+        } · loss=live · soft=nextEntry+1mChange · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
           s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });
@@ -2471,7 +2512,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback · no late/stale entry blocks',
+      'Rules: max 1 open · HardInv live · soft exit only when market changes (next entry / 1m reverse) · continue→HOLD · no late/stale entry blocks',
   });
 
   sessions.set(id, session);

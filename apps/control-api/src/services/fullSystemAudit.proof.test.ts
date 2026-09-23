@@ -262,7 +262,7 @@ describe('PROOF: source wiring — not comment-only', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
     expect(src).toContain('snapshot_time_ms');
     expect(src).not.toMatch(/Date\.now\(\)\s*\/\s*60_000/);
-    expect(src).toContain("decideBestOutcomeExit(s, quote.mid, 'target_time')");
+    expect(src).toContain("decideBestOutcomeExit(s, quote.mid, 'target_time'");
     expect(src).toContain('withCapitalAccountSession');
     expect(src).toContain('requireAccountId: true');
   });
@@ -340,7 +340,11 @@ describe('PROOF: source wiring — not comment-only', () => {
     // #565 policy: Soft first, Peak armed by reverse 1m — NOT MFE-arm / Peak-first (#566)
     expect(src).not.toContain('peakMfeFloor');
     expect(src).not.toContain('PeakProtect ARMED by MFE');
-    expect(src).toContain('1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)');
+    expect(src).toMatch(/1m \$\{policy\} · PeakProtect ARMED/);
+    expect(src).toContain('trail after real MFE');
+    expect(src).toContain('softExitMarketGate');
+    expect(src).toMatch(/softGate\.allow/);
+    expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
   });
 
   it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {
