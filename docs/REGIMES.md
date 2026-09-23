@@ -21,6 +21,14 @@ Executable defaults (Gold reality):
 - FAILED_BREAKOUT: near the failed edge (upper half after failed up, etc.)
 - Chase reject only in extreme ~15% of zone with-trend
 
+## Market story (cilvēcīgs 30m stāsts)
+
+`readMarketStory` (`marketStory.ts`) reads ~30m of 1m candles from the same 10s book:
+
+- swings (HH/HL vs LH/LL), net path, red/green count  
+- chapters: SELLOFF, RALLY, BOUNCE_IN_SELL, DIP_IN_RALLY, BREAK_*, RANGE_CHOP, …  
+- ENTRY WATCH shows `STĀSTS · …`; entry **blocks** directions that fight the story  
+
 ## Regime types
 
 | Regime | Name | Typical conditions | Capital entry |

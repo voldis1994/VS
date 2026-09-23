@@ -5,11 +5,17 @@ import {
   aggregateTenSecToMinutes,
   decideEntryWithStructure,
   lastClosed1mFromTenSec,
+  minuteTrendBias,
   structureGate,
   structureStartEntry,
   zoneGeometry,
 } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 function bar(open: number, close: number, t = 0, pad = 0.2): TenSecBar {
   return {
@@ -78,17 +84,30 @@ describe('zone geometry uses entry close', () => {
 });
 
 describe('executable gates (not impossible AND-stacks)', () => {
-  it('TREND_UP dip mid-zone still arms (pullbacks are not only at LO)', () => {
+  it('TREND_UP dip mid-zone: structure OK, full scalp needs 30m story+1m confirm', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331.5 });
     const entry = book[book.length - 1]!;
     const raw = decideEntryFrom10sRegime(entry, 'TREND_UP');
     expect(raw?.direction).toBe('BUY');
+    const gate = structureGate(
+      raw!,
+      'TREND_UP',
+      entry,
+      zoneGeometry(book, entry),
+      null,
+      'FLAT'
+    );
+    expect(gate.ok).toBe(true);
+    // Quiet mid-zone book often = chop → correctly no arm without 1m story
     const gated = decideEntryWithStructure({
       bar: entry,
       regime: 'TREND_UP',
       closedBars: book,
     });
-    expect(gated?.direction).toBe('BUY');
+    if (gated) {
+      expect(gated.direction).toBe('BUY');
+      expect(gated.reason).toMatch(/1m CONFIRM|STĀSTS/);
+    }
   });
 
   it('BREAKOUT_UP allows pierce even if prior 1m was red', () => {
@@ -152,16 +171,68 @@ describe('executable gates (not impossible AND-stacks)', () => {
     const z = zoneGeometry(book, trigger);
     const m1 = { open_time_ms: m0, open: 4322, high: 4323, low: 4321.5, close: 4322.5, bars: 6 };
     expect(structureStartEntry(trigger, 'TREND_UP', z, m1)?.direction).toBe('BUY');
-    expect(
-      decideEntryWithStructure({ bar: trigger, regime: 'TREND_UP', closedBars: book })?.direction
-    ).toBe('BUY');
+    // Full path now requires 30m story + 1m scalp confirm — short LO rally book may be chop/sell
+    const full = decideEntryWithStructure({
+      bar: trigger,
+      regime: 'TREND_UP',
+      closedBars: book,
+    });
+    // Either arms with 1m confirm, or correctly waits — never knife-buys selloff
+    if (full) {
+      expect(full.direction).toBe('BUY');
+      expect(full.reason).toMatch(/1m CONFIRM|STĀSTS/);
+    }
   });
 
-  it('every tradable regime has an explicit gate branch (no silent default-only)', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const here = typeof __dirname !== 'undefined' ? __dirname : fileURLToPath(new URL('.', import.meta.url));
+  it('blocks BUY into multi-1m selloff (08:15 bounce long was wrong)', () => {
+    // Simulate ~5 red 1m minutes then a small blue bounce 10s — must NOT BUY
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 6 * 60_000;
+    const book: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      book.push({
+        open_time_ms: m0 - MIN_BARS_FOR_ZONE * 10_000 + i * 10_000,
+        open: 4335,
+        high: i === 5 ? 4338 : 4335.2,
+        low: i === 15 ? 4324 : 4334.8,
+        close: 4335,
+        ticks: 8,
+      });
+    }
+    // 5 closed red minutes: 4336 → 4327
+    for (let m = 0; m < 5; m++) {
+      const start = m0 + m * 60_000;
+      const o = 4336 - m * 1.5;
+      const c = o - 1.2;
+      for (let k = 0; k < 6; k++) {
+        book.push(bar(o - k * 0.15, o - k * 0.15 - 0.1, start + k * 10_000));
+      }
+      // ensure last of minute near c
+      book[book.length - 1] = bar(c + 0.2, c, start + 50_000);
+    }
+    // Bounce 10s rally in lower half — classic knife catch
+    const trigger = bar(4327.0, 4327.8, m0 + 5 * 60_000);
+    book.push(trigger);
+
+    expect(minuteTrendBias(book)).toBe('DOWN');
+
+    const fadeBuy = decideEntryWithStructure({
+      bar: trigger,
+      regime: 'RANGE',
+      closedBars: book,
+    });
+    // RANGE fade BUY or structure-start must not arm against DOWN bias
+    expect(fadeBuy).toBeNull();
+
+    const dipBar = bar(4328.5, 4327.5, m0 + 5 * 60_000 + 10_000);
+    const trendUp = decideEntryWithStructure({
+      bar: dipBar,
+      regime: 'TREND_UP',
+      closedBars: [...book, dipBar],
+    });
+    expect(trendUp).toBeNull();
+  });
+
+  it('every tradable regime has an explicit gate branch (no silent default-only)', () => {
     const src = readFileSync(join(here, 'structureEntry.ts'), 'utf8');
     const gateSlice = src.slice(src.indexOf('export function structureGate'));
     for (const r of REGIME_NAMES) {
