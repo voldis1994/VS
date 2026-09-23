@@ -256,7 +256,7 @@ export function readMarketStory(
     allow = 'SELL';
     summary_lv =
       chapter === 'EXHAUST_LO'
-        ? 'STĀSTS · selloff pie zonas grīdas · meklē SELL · BUY tikai failed-break / reversal'
+        ? 'STĀSTS · selloff pie zonas grīdas · tikai SELL · nepirkt bounce'
         : `STĀSTS · 30m selloff · trek ${trek.toFixed(1)}pt · tikai SELL · nepirkt`;
     confidence = 0.75;
   } else if (buyStruct) {
@@ -264,7 +264,7 @@ export function readMarketStory(
     allow = 'BUY';
     summary_lv =
       chapter === 'EXHAUST_HI'
-        ? 'STĀSTS · rally pie zonas griestiem · meklē BUY · SELL tikai failed-break / reversal'
+        ? 'STĀSTS · rally pie zonas griestiem · tikai BUY · nepārdot bounce'
         : `STĀSTS · 30m rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
     confidence = 0.75;
   } else if (recentSell && trek >= minPath) {
@@ -317,18 +317,43 @@ export function readMarketStory(
   };
 }
 
+/** Sell-side chapters — never BUY (incl. FAILED_BREAKOUT_DOWN / REVERSAL knife). */
+const SELL_STORY_CHAPTERS: ReadonlySet<StoryChapter> = new Set([
+  'SELLOFF',
+  'BOUNCE_IN_SELL',
+  'BREAK_DOWN',
+  'EXHAUST_LO',
+]);
+/** Buy-side chapters — never SELL against a live rally story. */
+const BUY_STORY_CHAPTERS: ReadonlySet<StoryChapter> = new Set([
+  'RALLY',
+  'DIP_IN_RALLY',
+  'BREAK_UP',
+  'EXHAUST_HI',
+]);
+
 export function storyAllowsDirection(
   story: MarketStory,
   direction: 'BUY' | 'SELL',
   regime?: string | null
 ): { ok: true } | { ok: false; reason: string } {
   const r = String(regime || '').toUpperCase();
-  if (direction === 'BUY' && (r === 'FAILED_BREAKOUT_DOWN' || r === 'REVERSAL_CANDIDATE')) {
-    return { ok: true };
+
+  // Hard tape rule: no regime may knife-buy a selloff story (or short a rally story).
+  // FAILED_BREAKOUT / REVERSAL used to bypass this and armed BUY into EXHAUST_LO.
+  if (direction === 'BUY' && SELL_STORY_CHAPTERS.has(story.chapter)) {
+    return {
+      ok: false,
+      reason: `${story.summary_lv} · bloķē BUY (stāsts=${story.chapter})`,
+    };
   }
-  if (direction === 'SELL' && (r === 'FAILED_BREAKOUT_UP' || r === 'REVERSAL_CANDIDATE')) {
-    return { ok: true };
+  if (direction === 'SELL' && BUY_STORY_CHAPTERS.has(story.chapter)) {
+    return {
+      ok: false,
+      reason: `${story.summary_lv} · bloķē SELL (stāsts=${story.chapter})`,
+    };
   }
+
   // Breakout follow: structure pierce is the confirm — don't starve on RANGE_CHOP allow=NONE
   if (
     (r === 'BREAKOUT_UP' && direction === 'BUY') ||
@@ -476,11 +501,21 @@ export function scalpStoryConfirms(
     if (direction === 'SELL' && d1 === 'UP' && rejection1m(m1, 'SELL')) {
       return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
     }
-    // Dip-buy / rally-sell: the adverse 1m IS the setup candle — allow when story agrees
-    if (direction === 'BUY' && d1 === 'DOWN' && story.chapter !== 'BOUNCE_IN_SELL') {
+    // Dip-buy only inside a live RALLY / DIP_IN_RALLY story (PR578 bare red 1m
+    // on any non-BOUNCE chapter knife-bought selloffs mislabeled as EXHAUST/etc).
+    // Trigger for TREND_UP is the red dip 10s itself — do not require green trigBuy.
+    if (
+      direction === 'BUY' &&
+      d1 === 'DOWN' &&
+      (story.chapter === 'RALLY' || story.chapter === 'DIP_IN_RALLY')
+    ) {
       return { ok: true, tag: `1m DIP OK · ${story.chapter} · pullback` };
     }
-    if (direction === 'SELL' && d1 === 'UP' && story.chapter !== 'DIP_IN_RALLY') {
+    if (
+      direction === 'SELL' &&
+      d1 === 'UP' &&
+      (story.chapter === 'SELLOFF' || story.chapter === 'BOUNCE_IN_SELL')
+    ) {
       return { ok: true, tag: `1m RALLY OK · ${story.chapter} · pullback` };
     }
   }

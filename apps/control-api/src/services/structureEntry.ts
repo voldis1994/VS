@@ -189,22 +189,20 @@ export function minuteTrendBias(
   return 'FLAT';
 }
 
-/** Counter-trend entries that may ignore 1m bias (structured fade / reversal). */
-function allowsAgainstBias(regime: RegimeName, direction: 'BUY' | 'SELL'): boolean {
-  if (direction === 'BUY' && regime === 'FAILED_BREAKOUT_DOWN') return true;
-  if (direction === 'SELL' && regime === 'FAILED_BREAKOUT_UP') return true;
-  if (regime === 'REVERSAL_CANDIDATE') return true;
-  return false;
-}
-
+/**
+ * No regime may ignore 1m bias.
+ * FAILED_BREAKOUT_DOWN / REVERSAL used to allowAgainstBias and knife-bought
+ * green bounces into SELLOFF/EXHAUST_LO (Funds tiny LONG scratches).
+ * Wait until bias flips FLAT/UP (and story leaves sell-side) before long.
+ */
 function against1mBias(
   direction: 'BUY' | 'SELL',
   bias: 'UP' | 'DOWN' | 'FLAT',
   regime: RegimeName,
   _zone: ZoneGeometry | null
 ): string | null {
-  if (bias === 'FLAT' || allowsAgainstBias(regime, direction)) return null;
-  // Never open against the 1m tape — LO/HI "turn" exceptions caused knife SL hits
+  if (bias === 'FLAT') return null;
+  // Never open against the 1m tape — no LO/HI or failed-break exceptions
   if (direction === 'BUY' && bias === 'DOWN') {
     return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
   }
@@ -253,8 +251,8 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      // Never start long into a multi-1m selloff (bounce knife)
-      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
+      // Never start long into a multi-1m selloff (bounce knife) — no regime exceptions
+      if (bias === 'DOWN') break;
       // 10s rally can start the leg before last closed 1m flips — bias must already agree
       if (zone.pos <= START_LO && rally(bar)) {
         return {
@@ -276,7 +274,7 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
+      if (bias === 'UP') break;
       if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',
@@ -468,19 +466,17 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
-  // Full 30m story ready → soft 1m/10s scalp (trigger bar starts the leg)
-  if (story.chapter !== 'SEEDING') {
-    const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
-    if (!scalp.ok) return null;
-    return {
-      ...candidate,
-      reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
-    };
+  // Never arm while story is SEEDING — that path skipped scalp confirm and let
+  // FAILED_BREAKOUT_DOWN / REVERSAL BUY into a selloff with only structureGate.
+  if (story.chapter === 'SEEDING') {
+    return null;
   }
 
+  const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
+  if (!scalp.ok) return null;
   return {
     ...candidate,
-    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv}`,
+    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
   };
 }
 

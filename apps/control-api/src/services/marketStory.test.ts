@@ -217,6 +217,72 @@ describe('30m market story — 1m scalp grade', () => {
     };
     expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
     expect(scalpStoryConfirms(story, 'BUY', 'TREND_UP').ok).toBe(false);
+    expect(scalpStoryConfirms(story, 'BUY', 'FAILED_BREAKOUT_DOWN').ok).toBe(false);
+    expect(scalpStoryConfirms(story, 'BUY', 'REVERSAL_CANDIDATE').ok).toBe(false);
+  });
+
+  it('selloff / EXHAUST_LO blocks FAILED_BREAKOUT_DOWN and REVERSAL BUY', () => {
+    const { book, last } = selloffBook({ endGreen1m: true });
+    const story = readMarketStory(book, last);
+    expect(['SELLOFF', 'BOUNCE_IN_SELL', 'BREAK_DOWN', 'EXHAUST_LO']).toContain(story.chapter);
+    expect(storyAllowsDirection(story, 'BUY', 'FAILED_BREAKOUT_DOWN').ok).toBe(false);
+    expect(storyAllowsDirection(story, 'BUY', 'REVERSAL_CANDIDATE').ok).toBe(false);
+    expect(scalpStoryConfirms(story, 'BUY', 'FAILED_BREAKOUT_DOWN', last).ok).toBe(false);
+    expect(
+      decideEntryWithStructure({
+        bar: last,
+        regime: 'FAILED_BREAKOUT_DOWN',
+        closedBars: book,
+      })
+    ).toBeNull();
+    expect(
+      decideEntryWithStructure({
+        bar: last,
+        regime: 'REVERSAL_CANDIDATE',
+        closedBars: book,
+      })
+    ).toBeNull();
+  });
+
+  it('1m DIP OK stays for RALLY TREND_UP; blocked on EXHAUST_HI bare red without reject', () => {
+    const rally = {
+      chapter: 'RALLY' as const,
+      allow: 'BUY' as const,
+      summary_lv: 'STĀSTS · 30m rally',
+      detail: 'test',
+      confidence: 0.75,
+      zone_pos: 0.4,
+      net_pts: 5,
+      red_1m: 2,
+      green_1m: 8,
+      swing: 'HH_HL' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4332,
+        high: 4332.5,
+        low: 4329,
+        close: 4329.5,
+        bars: 6,
+      },
+    };
+    expect(scalpStoryConfirms(rally, 'BUY', 'TREND_UP').ok).toBe(true);
+
+    const exhaust = {
+      ...rally,
+      chapter: 'EXHAUST_HI' as const,
+      zone_pos: 0.9,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4340,
+        high: 4340.2,
+        low: 4337,
+        close: 4337.5, // red, no lower reject
+        bars: 6,
+      },
+    };
+    // Chase edge at HI may also block — either way must not bare DIP OK
+    const ok = scalpStoryConfirms(exhaust, 'BUY', 'TREND_UP');
+    if (ok.ok) expect(ok.tag).not.toMatch(/DIP OK/);
   });
 
   it('10s trigger starts the leg — does not wait for green closed 1m', () => {

@@ -347,29 +347,14 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(structureGate(buy, 'UNKNOWN', entry, z, null).ok).toBe(false);
   });
 
-  it('no continuation regime knife-buys into V-bounce selloff bias', () => {
+  it('no regime knife-buys into V-bounce selloff bias (incl. FAILED_BREAKOUT / REVERSAL)', () => {
     const book = selloffVBook();
     const trigger = bar(4334.0, 4334.8, Math.floor(Date.now() / 60_000) * 60_000 - 10_000);
     book.push(trigger);
     expect(minuteTrendBias(book)).toBe('DOWN');
 
-    // Counter-trend fades (FAILED_BREAKOUT_DOWN / REVERSAL) may still BUY by design
-    const continuation = [
-      'RANGE',
-      'TREND_UP',
-      'TREND_DOWN',
-      'PULLBACK_UPTREND',
-      'PULLBACK_DOWNTREND',
-      'COMPRESSION',
-      'EXPANSION',
-      'BREAKOUT_UP',
-      'BREAKOUT_DOWN',
-      'FAILED_BREAKOUT_UP',
-      'TRANSITION',
-      'UNKNOWN',
-    ] as const;
-
-    for (const regime of continuation) {
+    // Every regime — FAILED_BREAKOUT_DOWN / REVERSAL used to allowAgainstBias
+    for (const regime of REGIME_NAMES) {
       const armed = decideEntryWithStructure({
         bar: trigger,
         regime,
@@ -400,12 +385,18 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     ).toBe(false);
   });
 
-  it('BUY vs DOWN bias is always blocked (no LO knife exception)', () => {
+  it('BUY vs DOWN bias is always blocked (no LO knife / failed-break exception)', () => {
     const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4322 });
     const lo = loBook[loBook.length - 1]!;
     const buy = { direction: 'BUY' as const, setup: 'PULLBACK' as const, reason: 'knife' };
     expect(
       structureGate(buy, 'TREND_UP', lo, zoneGeometry(loBook, lo), null, 'DOWN').ok
+    ).toBe(false);
+    expect(
+      structureGate(buy, 'FAILED_BREAKOUT_DOWN', lo, zoneGeometry(loBook, lo), null, 'DOWN').ok
+    ).toBe(false);
+    expect(
+      structureGate(buy, 'REVERSAL_CANDIDATE', lo, zoneGeometry(loBook, lo), null, 'DOWN').ok
     ).toBe(false);
 
     const midBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
@@ -413,6 +404,45 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(
       structureGate(buy, 'TREND_UP', mid, zoneGeometry(midBook, mid), null, 'DOWN').ok
     ).toBe(false);
+  });
+
+  it('SEEDING story never arms (no scalp-skip knife)', () => {
+    // Pack MIN_BARS into <8 closed minutes → story SEEDING, zone still computable
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 7 * 60_000;
+    const book: TenSecBar[] = [];
+    let n = 0;
+    for (let m = 0; m < 6; m++) {
+      for (let k = 0; k < 30; k++) {
+        book.push({
+          open_time_ms: m0 + m * 60_000 + (k % 6) * 10_000 + k,
+          open: 4332 - m * 0.5,
+          high: 4338,
+          low: 4320,
+          close: 4325 - m * 0.3,
+          ticks: 4,
+        });
+        n++;
+        if (n >= MIN_BARS_FOR_ZONE) break;
+      }
+      if (n >= MIN_BARS_FOR_ZONE) break;
+    }
+    const trigger = bar(4324, 4325.5, m0 + 6 * 60_000);
+    book.push(trigger);
+    expect(minuteTrendBias(book)).toBe('DOWN');
+    expect(
+      decideEntryWithStructure({
+        bar: trigger,
+        regime: 'FAILED_BREAKOUT_DOWN',
+        closedBars: book,
+      })
+    ).toBeNull();
+    expect(
+      decideEntryWithStructure({
+        bar: trigger,
+        regime: 'REVERSAL_CANDIDATE',
+        closedBars: book,
+      })
+    ).toBeNull();
   });
 
   it('structure start does not fire BUY into DOWN bias', () => {
