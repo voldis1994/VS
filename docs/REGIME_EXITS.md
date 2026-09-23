@@ -37,21 +37,14 @@ Faster than Soft (8s grace / 3s confirm):
 - **FAILED_BREAKOUT_UP SELL** — reclaim above failed hi  
 - **FAILED_BREAKOUT_DOWN BUY** — reclaim below failed lo  
 
-## Soft exit = market change only
+## SAFETY TP (broker)
 
-Peak / Target / TimeDecay are gated by `softExitMarketGate`:
+Same idea as SAFETY SL / Soft HardInv, but on the **profit** side:
 
-1. Closed Capital **1m still with our side** → HOLD (do not cut a continuing leg)
-2. Peek **next entry** on the last full closed 10s candle (`decideEntryWithStructure`) — same side → HOLD
-3. Soft exit only when the market changed: opposite next entry, or reverse 1m with no same-side peek
+- Attached at open as Capital `profitLevel` / `profitDistance`
+- Distance = desk Target (`target_abs` / `target_pct` × regime `target_mult`)
+- Soft Peak / Target / TimeDecay still manage earlier exits
+- Broker TP is the hard lock if manage is slow or feed drops
+- If Capital rejects TP, order falls back to SL-only (never naked)
 
-HardInv + structure kill are never gated. MANAGE keeps the 10s book alive so the peek stays live.
-
-## Code
-
-- `regimeExitProfile.ts` — profiles + structure + Peak arm helpers  
-- `exitManage.ts` — Soft/Peak/Target/TimeDecay × profile; structure path  
-- `softExitMarketGate.ts` — next-entry + 1m market-change gate for soft exits  
-- `robotDesk.ts` — freeze on fill; structure breach timer; Peak arm by profile; soft gate  
-
-BE-lock + executable bid/ask edge still apply to Soft/Peak/Target (no Funds magic-minus).
+Code: `safetyTakeProfitLevel` / `safetyTakeProfitDistancePts` in `exitManage.ts` · wired in `robotDesk` + `intentFanout`.
