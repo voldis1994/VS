@@ -240,3 +240,168 @@ describe('executable gates (not impossible AND-stacks)', () => {
     }
   });
 });
+
+describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
+  function selloffVBook(): TenSecBar[] {
+    // Dump then bounce: trek ~8pt, net near 0 — must stay DOWN bias
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 7 * 60_000;
+    const book: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      book.push({
+        open_time_ms: m0 - MIN_BARS_FOR_ZONE * 10_000 + i * 10_000,
+        open: 4335,
+        high: i === 5 ? 4338 : 4335.2,
+        low: i === 15 ? 4328 : 4334.8,
+        close: 4335,
+        ticks: 8,
+      });
+    }
+    // 4 red dump minutes
+    for (let m = 0; m < 4; m++) {
+      const start = m0 + m * 60_000;
+      const o = 4336 - m * 1.8;
+      const c = o - 1.5;
+      for (let k = 0; k < 6; k++) {
+        book.push(bar(o - k * 0.2, o - k * 0.2 - 0.12, start + k * 10_000));
+      }
+      book[book.length - 1] = bar(c + 0.2, c, start + 50_000);
+    }
+    // 2 green bounce minutes that recover most of the net
+    for (let m = 4; m < 6; m++) {
+      const start = m0 + m * 60_000;
+      const o = 4329 + (m - 4) * 2.5;
+      const c = o + 2.2;
+      for (let k = 0; k < 6; k++) {
+        book.push(bar(o + k * 0.3, o + k * 0.3 + 0.2, start + k * 10_000));
+      }
+      book[book.length - 1] = bar(c - 0.2, c, start + 50_000);
+    }
+    return book;
+  }
+
+  it('minuteTrendBias uses trek — V-bounce selloff stays DOWN (net≈0 ≠ FLAT)', () => {
+    const book = selloffVBook();
+    expect(minuteTrendBias(book)).toBe('DOWN');
+  });
+
+  it('BREAKOUT_UP mid-zone 0.55 is fake — rejected; pierce OK', () => {
+    const midBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4331, lastOpen: 4329.5 });
+    const midEntry = midBook[midBook.length - 1]!;
+    const sig = { direction: 'BUY' as const, setup: 'BREAKOUT' as const, reason: 'fake' };
+    expect(
+      structureGate(sig, 'BREAKOUT_UP', midEntry, zoneGeometry(midBook, midEntry), null).ok
+    ).toBe(false);
+
+    const pierceBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4341, lastOpen: 4339 });
+    const pierce = pierceBook[pierceBook.length - 1]!;
+    expect(
+      structureGate(sig, 'BREAKOUT_UP', pierce, zoneGeometry(pierceBook, pierce), null).ok
+    ).toBe(true);
+  });
+
+  it('BREAKOUT_DOWN mid-zone rejected; pierce OK', () => {
+    const midBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4329, lastOpen: 4330.5 });
+    const midEntry = midBook[midBook.length - 1]!;
+    const sig = { direction: 'SELL' as const, setup: 'BREAKOUT' as const, reason: 'fake' };
+    expect(
+      structureGate(sig, 'BREAKOUT_DOWN', midEntry, zoneGeometry(midBook, midEntry), null).ok
+    ).toBe(false);
+
+    const pierceBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4319, lastOpen: 4321 });
+    const pierce = pierceBook[pierceBook.length - 1]!;
+    expect(
+      structureGate(sig, 'BREAKOUT_DOWN', pierce, zoneGeometry(pierceBook, pierce), null).ok
+    ).toBe(true);
+  });
+
+  it('EXPANSION BUY not in lower half; SELL not in upper half', () => {
+    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4322.5 });
+    const lo = loBook[loBook.length - 1]!;
+    const buy = { direction: 'BUY' as const, setup: 'BREAKOUT' as const, reason: 'exp' };
+    expect(structureGate(buy, 'EXPANSION', lo, zoneGeometry(loBook, lo), null).ok).toBe(false);
+
+    const hiBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4337, lastOpen: 4338.5 });
+    const hi = hiBook[hiBook.length - 1]!;
+    const sell = { direction: 'SELL' as const, setup: 'BREAKOUT' as const, reason: 'exp' };
+    expect(structureGate(sell, 'EXPANSION', hi, zoneGeometry(hiBook, hi), null).ok).toBe(false);
+  });
+
+  it('COMPRESSION + TRANSITION + UNKNOWN are wait-only at the gate', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4325.5 });
+    const entry = book[book.length - 1]!;
+    const z = zoneGeometry(book, entry);
+    const buy = { direction: 'BUY' as const, setup: 'FADE' as const, reason: 'x' };
+    expect(structureGate(buy, 'COMPRESSION', entry, z, null).ok).toBe(false);
+    expect(structureGate(buy, 'TRANSITION', entry, z, null).ok).toBe(false);
+    expect(structureGate(buy, 'UNKNOWN', entry, z, null).ok).toBe(false);
+  });
+
+  it('no continuation regime knife-buys into V-bounce selloff bias', () => {
+    const book = selloffVBook();
+    const trigger = bar(4334.0, 4334.8, Math.floor(Date.now() / 60_000) * 60_000 - 10_000);
+    book.push(trigger);
+    expect(minuteTrendBias(book)).toBe('DOWN');
+
+    // Counter-trend fades (FAILED_BREAKOUT_DOWN / REVERSAL) may still BUY by design
+    const continuation = [
+      'RANGE',
+      'TREND_UP',
+      'TREND_DOWN',
+      'PULLBACK_UPTREND',
+      'PULLBACK_DOWNTREND',
+      'COMPRESSION',
+      'EXPANSION',
+      'BREAKOUT_UP',
+      'BREAKOUT_DOWN',
+      'FAILED_BREAKOUT_UP',
+      'TRANSITION',
+      'UNKNOWN',
+    ] as const;
+
+    for (const regime of continuation) {
+      const armed = decideEntryWithStructure({
+        bar: trigger,
+        regime,
+        closedBars: book,
+      });
+      if (armed) {
+        expect(armed.direction, regime).not.toBe('BUY');
+      }
+    }
+  });
+
+  it('TREND_UP / TREND_DOWN wrong-side and chase are rejected', () => {
+    const hiBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4338, lastOpen: 4336.5 });
+    const hi = hiBook[hiBook.length - 1]!;
+    const buy = { direction: 'BUY' as const, setup: 'CONTINUATION' as const, reason: 'chase' };
+    const sell = { direction: 'SELL' as const, setup: 'CONTINUATION' as const, reason: 'wrong' };
+    expect(
+      structureGate(sell, 'TREND_UP', hi, zoneGeometry(hiBook, hi), null, 'FLAT').ok
+    ).toBe(false);
+    expect(
+      structureGate(buy, 'TREND_UP', hi, zoneGeometry(hiBook, hi), { open_time_ms: 0, open: 4330, high: 4339, low: 4329, close: 4338, bars: 6 }, 'FLAT').ok
+    ).toBe(false);
+
+    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4322, lastOpen: 4323.5 });
+    const lo = loBook[loBook.length - 1]!;
+    expect(
+      structureGate(buy, 'TREND_DOWN', lo, zoneGeometry(loBook, lo), null, 'FLAT').ok
+    ).toBe(false);
+  });
+
+  it('FAILED_BREAKOUT sides stay near the failed edge', () => {
+    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4323, lastOpen: 4324.5 });
+    const lo = loBook[loBook.length - 1]!;
+    const sell = { direction: 'SELL' as const, setup: 'FADE' as const, reason: 'far' };
+    expect(
+      structureGate(sell, 'FAILED_BREAKOUT_UP', lo, zoneGeometry(loBook, lo), null).ok
+    ).toBe(false);
+
+    const hiBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4337, lastOpen: 4335.5 });
+    const hi = hiBook[hiBook.length - 1]!;
+    const buy = { direction: 'BUY' as const, setup: 'FADE' as const, reason: 'far' };
+    expect(
+      structureGate(buy, 'FAILED_BREAKOUT_DOWN', hi, zoneGeometry(hiBook, hi), null).ok
+    ).toBe(false);
+  });
+});

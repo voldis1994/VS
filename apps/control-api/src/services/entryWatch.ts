@@ -220,15 +220,15 @@ export function watchRecipe(regime?: string | null): {
     case 'COMPRESSION':
       return {
         direction: null,
-        setup: 'FADE',
-        looking_for: 'COMPRESSION · micro fade uz MOVING 10s · SPIKE → WAIT (no chase)',
+        setup: null,
+        looking_for: 'COMPRESSION · wait-only · gaida EXPANSION / BREAKOUT (nav fade)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
       return {
         direction: null,
-        setup: 'BREAKOUT',
-        looking_for: 'TRANSITION · follow body · RALLY → BUY · DIP → SELL (MOVING 10s)',
+        setup: null,
+        looking_for: 'TRANSITION · wait-only · neskaidrs nākamais režīms (nav entry)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':

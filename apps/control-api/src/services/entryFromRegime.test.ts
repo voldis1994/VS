@@ -16,27 +16,28 @@ const microDip = bar(2000, 1999.5, 0.12);
 const microRally = bar(2000, 2000.5, 0.12);
 
 describe('10s + 14-regime suitable entry', () => {
-  it('SPIKE in RANGE/COMPRESSION waits — no chase (skrien pakaļ tirgum)', () => {
+  it('SPIKE in RANGE waits — no chase; COMPRESSION/TRANSITION wait-only', () => {
     expect(isSpike10s(spikeRally)).toBe(true);
     expect(decideEntryFrom10sRegime(spikeRally, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(spikeDip, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')).toBeNull();
     expect(decideEntryFrom10sRegime(spikeDip, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(microRally, 'COMPRESSION')).toBeNull();
   });
 
-  it('micro MOVE in COMPRESSION/RANGE still fades', () => {
+  it('micro MOVE in RANGE fades; COMPRESSION stays wait-only', () => {
     expect(isSpike10s(microDip)).toBe(false);
-    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')?.setup).toBe('FADE');
-    expect(decideEntryFrom10sRegime(microRally, 'COMPRESSION')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(microDip, 'RANGE')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(microRally, 'RANGE')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(microDip, 'COMPRESSION')).toBeNull();
   });
 
-  it('waits in UNKNOWN; TRANSITION follows body', () => {
+  it('waits in UNKNOWN / TRANSITION / COMPRESSION', () => {
     expect(decideEntryFrom10sRegime(spikeDip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(spikeRally, 'TRANSITION')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(spikeDip, 'TRANSITION')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(spikeRally, 'TRANSITION')).toBeNull();
+    expect(decideEntryFrom10sRegime(spikeDip, 'TRANSITION')).toBeNull();
+    expect(decideEntryFrom10sRegime(spikeRally, 'COMPRESSION')).toBeNull();
   });
 
   it('TREND_UP dip-buys pullback only — never chase rally / never sells', () => {

@@ -16,10 +16,13 @@ Live Capital orders use `decideEntryWithStructure`:
 
 Executable defaults (Gold reality):
 - TREND pullbacks allowed mid-zone (not only at LO)
-- BREAKOUT does **not** require prior 1m same color (prior minute often still opposite)
-- RANGE/COMPRESSION fades: correct **half** only
+- BREAKOUT must **pierce** zone hi/lo (mid-zone 0.55 was a fake breakout — rejected)
+- EXPANSION follow only with impulse + correct half
+- RANGE fades: correct **half** only
+- COMPRESSION / TRANSITION / UNKNOWN: **wait-only** (no entry)
 - FAILED_BREAKOUT: near the failed edge (upper half after failed up, etc.)
 - Chase reject only in extreme ~15% of zone with-trend
+- `minuteTrendBias` uses **trek** (hi−lo), not open→close net (V-bounce ≠ FLAT)
 
 ## Market story (cilvēcīgs 30m stāsts)
 

@@ -144,6 +144,9 @@ export function minuteDir(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLA
 /**
  * Multi-1m bias from the same 10s book — blocks bounce-BUY into a selloff
  * (e.g. Gold 08:15 long while 1m has been red since ~08:00).
+ *
+ * Use **trek** (hi−lo), not open→close net — V-bounce selloffs often have net≈0
+ * while trek is several points (same bug class as marketStory "troksnis").
  */
 export function minuteTrendBias(
   bars: TenSecBar[],
@@ -162,11 +165,24 @@ export function minuteTrendBias(
     if (m.close > m.open) up += 1;
     else if (m.close < m.open) down += 1;
   }
-  const net = window[window.length - 1]!.close - window[0]!.open;
-  if (down >= 3 && net < 0) return 'DOWN';
-  if (up >= 3 && net > 0) return 'UP';
-  if (down > up && net < 0) return 'DOWN';
-  if (up > down && net > 0) return 'UP';
+  const first = window[0]!;
+  const last = window[window.length - 1]!;
+  const net = last.close - first.open;
+  const trek =
+    Math.max(...window.map((m) => m.high)) - Math.min(...window.map((m) => m.low));
+  const midPx = Math.abs(last.close) || 1;
+  const minPath = Math.max(3, midPx * 0.0007);
+  if (trek < minPath) return 'FLAT';
+
+  // Color majority + real trek wins even when net≈0 (dump→bounce)
+  if (down >= 3 && (net < 0 || down > up)) return 'DOWN';
+  if (up >= 3 && (net > 0 || up > down)) return 'UP';
+  if (down > up) return 'DOWN';
+  if (up > down) return 'UP';
+  // Tie colors: fall back to net only if it agrees with trek direction from mid
+  const midTrek = (Math.max(...window.map((m) => m.high)) + Math.min(...window.map((m) => m.low))) / 2;
+  if (net < 0 && last.close <= midTrek) return 'DOWN';
+  if (net > 0 && last.close >= midTrek) return 'UP';
   return 'FLAT';
 }
 
@@ -231,10 +247,9 @@ export function structureStartEntry(
     case 'BREAKOUT_UP':
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
-    case 'COMPRESSION':
-    case 'TRANSITION':
     case 'REVERSAL_CANDIDATE':
       // Never start long into a multi-1m selloff (bounce knife)
+      // COMPRESSION / TRANSITION / UNKNOWN — no structure-start (wait-only)
       if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
       if (zone.pos <= START_LO && md !== 'DOWN' && rally(bar)) {
         return {
@@ -255,8 +270,6 @@ export function structureStartEntry(
     case 'BREAKOUT_DOWN':
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
-    case 'COMPRESSION':
-    case 'TRANSITION':
     case 'REVERSAL_CANDIDATE':
       if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
       if (zone.pos >= START_HI && md !== 'UP' && dip(bar)) {
@@ -305,16 +318,23 @@ export function structureGate(
     case 'UNKNOWN':
       return { ok: false, reason: 'UNKNOWN · no entry' };
 
-    case 'RANGE':
     case 'COMPRESSION':
-      // Fade / structure only in the correct half (not mid-wrong-way)
+      // Wait for expansion/breakout — micro fade in thin range is noise, not a setup
+      return { ok: false, reason: `COMPRESSION wait-only · ${posTag}` };
+
+    case 'TRANSITION':
+      // Unclear next regime — never arm from structure path
+      return { ok: false, reason: `TRANSITION wait-only · ${posTag}` };
+
+    case 'RANGE':
+      // Fade only in the correct half (not mid-wrong-way)
       if (sig.direction === 'BUY' && zone.pos > HALF_LO) {
-        return { ok: false, reason: `${regime} BUY not in lower half (${posTag})` };
+        return { ok: false, reason: `RANGE BUY not in lower half (${posTag})` };
       }
       if (sig.direction === 'SELL' && zone.pos < HALF_HI) {
-        return { ok: false, reason: `${regime} SELL not in upper half (${posTag})` };
+        return { ok: false, reason: `RANGE SELL not in upper half (${posTag})` };
       }
-      return { ok: true, tag: `${regime} half-OK · ${posTag}` };
+      return { ok: true, tag: `RANGE half-OK · ${posTag}` };
 
     case 'TREND_UP':
       // Dip-buy: allow anywhere except extreme HI chase without a real dip context
@@ -355,30 +375,39 @@ export function structureGate(
       return { ok: true, tag: `PULLBACK_DOWNTREND OK · ${posTag}` };
 
     case 'BREAKOUT_UP':
-    case 'EXPANSION':
-      if (sig.direction === 'BUY') {
-        // Pierce or upper half — do NOT require 1m UP (prior 1m often still red)
-        if (bar.close >= zone.hi || zone.pos >= 0.55 || rally(bar)) {
-          return { ok: true, tag: `${regime} BUY OK · ${posTag}` };
-        }
-        return { ok: false, reason: `${regime} BUY weak vs zone (${posTag})` };
+      // Must actually pierce / sit on the hi — mid-zone 0.55 was a fake breakout
+      if (sig.direction !== 'BUY') {
+        return { ok: false, reason: `BREAKOUT_UP only BUY (${posTag})` };
       }
-      if (sig.direction === 'SELL' && regime === 'EXPANSION') {
-        if (bar.close <= zone.lo || zone.pos <= 0.45 || dip(bar)) {
-          return { ok: true, tag: `EXPANSION SELL OK · ${posTag}` };
-        }
-        return { ok: false, reason: `EXPANSION SELL weak vs zone (${posTag})` };
+      if (bar.close >= zone.hi || zone.pos >= 0.92) {
+        return { ok: true, tag: `BREAKOUT_UP pierce · ${posTag}` };
       }
-      return { ok: false, reason: `${regime} direction mismatch (${posTag})` };
+      return { ok: false, reason: `BREAKOUT_UP not at/through hi (${posTag})` };
 
     case 'BREAKOUT_DOWN':
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `BREAKOUT_DOWN only SELL (${posTag})` };
       }
-      if (bar.close <= zone.lo || zone.pos <= 0.45 || dip(bar)) {
-        return { ok: true, tag: `BREAKOUT_DOWN OK · ${posTag}` };
+      if (bar.close <= zone.lo || zone.pos <= 0.08) {
+        return { ok: true, tag: `BREAKOUT_DOWN pierce · ${posTag}` };
       }
-      return { ok: false, reason: `BREAKOUT_DOWN weak vs zone (${posTag})` };
+      return { ok: false, reason: `BREAKOUT_DOWN not at/through lo (${posTag})` };
+
+    case 'EXPANSION':
+      // Follow impulse — not mid-zone fade disguised as expansion
+      if (sig.direction === 'BUY') {
+        if ((rally(bar) || bar.close >= zone.hi) && zone.pos >= 0.45) {
+          return { ok: true, tag: `EXPANSION BUY · ${posTag}` };
+        }
+        return { ok: false, reason: `EXPANSION BUY weak / wrong half (${posTag})` };
+      }
+      if (sig.direction === 'SELL') {
+        if ((dip(bar) || bar.close <= zone.lo) && zone.pos <= 0.55) {
+          return { ok: true, tag: `EXPANSION SELL · ${posTag}` };
+        }
+        return { ok: false, reason: `EXPANSION SELL weak / wrong half (${posTag})` };
+      }
+      return { ok: false, reason: `EXPANSION direction mismatch (${posTag})` };
 
     case 'FAILED_BREAKOUT_UP':
       // Fade short after failed up — upper half is correct (not LO)
@@ -408,16 +437,6 @@ export function structureGate(
         return { ok: false, reason: `REVERSAL SELL chase LO (${posTag})` };
       }
       return { ok: true, tag: `REVERSAL OK · ${posTag}` };
-
-    case 'TRANSITION':
-      // Follow body only if not extreme chase
-      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && md === 'UP') {
-        return { ok: false, reason: `TRANSITION BUY chase HI (${posTag})` };
-      }
-      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && md === 'DOWN') {
-        return { ok: false, reason: `TRANSITION SELL chase LO (${posTag})` };
-      }
-      return { ok: true, tag: `TRANSITION OK · ${posTag}` };
 
     default:
       return { ok: true, tag: posTag };
