@@ -262,7 +262,7 @@ describe('PROOF: source wiring — not comment-only', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
     expect(src).toContain('snapshot_time_ms');
     expect(src).not.toMatch(/Date\.now\(\)\s*\/\s*60_000/);
-    expect(src).toContain("decideBestOutcomeExit(s, quote.mid, 'target_time'");
+    expect(src).toContain("decideBestOutcomeExit(s, quote.mid, 'target_time')");
     expect(src).toContain('withCapitalAccountSession');
     expect(src).toContain('requireAccountId: true');
   });
@@ -322,43 +322,6 @@ describe('PROOF: source wiring — not comment-only', () => {
     );
     expect(block).not.toMatch(/peak_protect_armed\s*=\s*false/);
     expect(block).toMatch(/keep trail|KEEP trail|PeakProtect \$\{/i);
-  });
-
-  it('entry uses decideEntryWithStructure (10s + zone + 1m), not raw 10s only', () => {
-    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toContain('decideEntryWithStructure');
-    expect(src).toMatch(/closedBars:\s*s\.closedBars/);
-    expect(src).not.toMatch(/decideEntryFrom10sRegime\(entryBar/);
-  });
-
-  it('open-trade manage uses short Capital leases — decide outside mutex', () => {
-    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toContain('robotManageShortLeaseCycle');
-    expect(src).toContain('decideOpenManageExit');
-    expect(src).toMatch(/Already in a trade: short Capital leases only/);
-    expect(src).toMatch(/Decide outside Capital lock/);
-    // #565 policy: Soft first, Peak armed by reverse 1m — NOT MFE-arm / Peak-first (#566)
-    expect(src).not.toContain('peakMfeFloor');
-    expect(src).not.toContain('PeakProtect ARMED by MFE');
-    expect(src).toMatch(/1m \$\{policy\} · PeakProtect ARMED/);
-    expect(src).toContain('trail after real MFE');
-    expect(src).toContain('softExitMarketGate');
-    expect(src).toMatch(/softGate\.allow/);
-    expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
-    // Broker SAFETY TP attached at open (opposite of SAFETY SL)
-    expect(src).toContain('safetyTakeProfitLevel');
-    expect(src).toContain('profitDistance');
-    expect(src).toContain('safety_tp');
-  });
-
-  it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {
-    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toMatch(/Public multi-feed — NEVER under Capital connection mutex/);
-    expect(src).toMatch(/short quote lease → multi-feed OUTSIDE mutex/);
-    const cap = readFileSync(join(here, 'capitalCom.ts'), 'utf8');
-    expect(cap).toMatch(/Per-connection login spacing/);
-    expect(cap).toContain('loginChains');
-    expect(cap).not.toMatch(/let loginChain: Promise/);
   });
 });
 

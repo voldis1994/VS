@@ -31,10 +31,6 @@ type EntryWatch = {
   status: string;
   looking_for: string;
   bar_vs_trigger: string;
-  market_story?: string;
-  story_chapter?: string;
-  story_allow?: string;
-  story_detail?: string;
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
@@ -420,13 +416,6 @@ export function RobotUnitPage() {
                   {w.regime_enabled ? ' · REGIME ON' : ' · REGIME OFF'}
                 </div>
                 <div className="robot-unit-watch-look">{w.looking_for}</div>
-                {(w.market_story || w.story_chapter) && (
-                  <div className="mono">
-                    {w.market_story || w.story_chapter}
-                    {w.story_allow ? ` · allow ${w.story_allow}` : ''}
-                    {w.story_detail ? ` · ${w.story_detail}` : ''}
-                  </div>
-                )}
                 {w.zone_progress && (
                   <div className="mono">
                     ZONA · {w.zone_bars ?? '—'}/{w.zone_need ?? 90}

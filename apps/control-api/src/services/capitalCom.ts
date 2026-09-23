@@ -113,18 +113,6 @@ function explainCapitalError(input: {
     `Capital.com ${env} login failed (HTTP ${input.status}, ${code}).`,
   ];
 
-  if (input.status === 429 || /too-many/i.test(input.errorCode)) {
-    parts.push(
-      `Capital rate-limited logins — wait ~2 minutes before Test again.`,
-      `Do not spam Test while robots are running (each Live key shares a login budget).`,
-      `Credentials are often fine; this is not usually a wrong password.`
-    );
-    if (input.bodyText && input.bodyText.length < 200) {
-      parts.push(`Raw: ${input.bodyText}`);
-    }
-    return parts.join(' ');
-  }
-
   if (input.message && input.message.toLowerCase() !== 'bad request') {
     parts.push(`Broker says: ${input.message}`);
   } else if (input.bodyText && input.bodyText.length < 300) {
@@ -289,14 +277,6 @@ export async function openCapitalSession(input: {
           bodyText: text,
         }),
       };
-      // Rate-limit / auth hard-fail — do NOT burn a second encrypted→plain login attempt
-      if (
-        res.status === 429 ||
-        res.status === 401 ||
-        /too-many|rate.?limit/i.test(errorCode)
-      ) {
-        return { ok: false, result: lastFail };
-      }
       continue;
     }
 
@@ -399,37 +379,13 @@ type PooledCapital = {
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
-/** Per-connection login spacing — never block other clients' API keys on a global queue. */
-const loginChains = new Map<string, { chain: Promise<void>; lastAt: number }>();
+let loginChain: Promise<void> = Promise.resolve();
+let lastLoginAt = 0;
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
 
 /** Per-connection mutex so concurrent robots on one broker never interleave switch+API. */
 const connectionLocks = new Map<string, Promise<unknown>>();
-
-async function withLoginThrottle<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
-  const key = capitalPoolKey(connectionId);
-  let slot = loginChains.get(key);
-  if (!slot) {
-    slot = { chain: Promise.resolve(), lastAt: 0 };
-    loginChains.set(key, slot);
-  }
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  const prev = slot.chain;
-  slot.chain = prev.then(() => gate);
-  await prev;
-  try {
-    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - slot.lastAt));
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    slot.lastAt = Date.now();
-    return await fn();
-  } finally {
-    release();
-  }
-}
 
 export async function withConnectionLock<T>(
   connectionId: number,
@@ -495,6 +451,24 @@ export async function withConnectionLock<T>(
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
+}
+
+async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const prev = loginChain;
+  loginChain = prev.then(() => gate);
+  await prev;
+  try {
+    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - lastLoginAt));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastLoginAt = Date.now();
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 export async function listCapitalAccounts(
@@ -565,9 +539,8 @@ export async function acquireCapitalSession(input: {
 }
 
 /**
- * Hold the connection mutex only for the Capital HTTP call chain (quote/list/create/close).
- * Callers managing open trades should use SHORT leases and run Peak/Soft decide OUTSIDE
- * the lock so multi-account clients each get an individual exit — not a serial queue.
+ * Hold the connection mutex for the FULL Capital call chain (quote/list/create/close).
+ * Prevents account A switch → account B API mid-flight on a shared connection pool.
  */
 export async function withCapitalAccountSession<T>(
   input: {
@@ -670,7 +643,7 @@ async function acquireCapitalSessionUnlocked(input: {
     }
     capitalSessionPool.delete(key);
 
-    const opened = await withLoginThrottle(connectionId, () =>
+    const opened = await withLoginThrottle(() =>
       openCapitalSession({
         environment: input.environment,
         apiKey: input.apiKey,
@@ -738,29 +711,7 @@ export async function testCapitalComSession(input: {
   apiKey: string;
   identifier: string;
   password: string;
-  /** Prefer pooled session — avoids a second login after Test succeeds */
-  connectionId?: number;
 }): Promise<CapitalComSessionResult> {
-  const connectionId = Number(input.connectionId);
-  if (Number.isFinite(connectionId) && connectionId > 0) {
-    const acquired = await acquireCapitalSession({
-      environment: input.environment,
-      apiKey: input.apiKey,
-      identifier: input.identifier,
-      password: input.password,
-      connectionId,
-    });
-    if (!acquired.ok) return acquired.result;
-    return {
-      ok: true,
-      status: 200,
-      detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK (pooled)`,
-      accountType: acquired.session.accountType,
-    };
-  }
-
-  // No connectionId (ad-hoc): validate/login without outer throttle stamp on validation fails.
-  // Broker Test always passes connectionId → pooled + withLoginThrottle inside acquire.
   const opened = await openCapitalSession(input);
   if (!opened.ok) return opened.result;
   await opened.session.close();
@@ -1110,10 +1061,7 @@ export async function createCapitalPosition(
     stopLevel?: number;
     /** Distance in Capital POINTS — preferred for tightest legal SL */
     stopDistance?: number;
-    /** Absolute price take-profit (Capital profitLevel) — SAFETY TP */
     profitLevel?: number;
-    /** Take-profit distance in Capital POINTS */
-    profitDistance?: number;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   let epic = input.epic.trim();
@@ -1139,14 +1087,7 @@ export async function createCapitalPosition(
   } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
     body.stopLevel = input.stopLevel;
   }
-  // Same for TP — prefer distance when SL used distance; else absolute level
-  if (
-    input.profitDistance != null &&
-    Number.isFinite(input.profitDistance) &&
-    input.profitDistance > 0
-  ) {
-    body.profitDistance = input.profitDistance;
-  } else if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
+  if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
     body.profitLevel = input.profitLevel;
   }
 
@@ -1168,20 +1109,14 @@ export async function createCapitalPosition(
       : input.stopLevel != null && Number.isFinite(input.stopLevel)
         ? ` stop=${input.stopLevel}`
         : '';
-  const tpNote =
-    input.profitDistance != null && Number.isFinite(input.profitDistance)
-      ? ` tpDist=${input.profitDistance}`
-      : input.profitLevel != null && Number.isFinite(input.profitLevel)
-        ? ` tp=${input.profitLevel}`
-        : '';
   return {
     ok: true,
     status: res.status,
     json: res.json,
     deal_reference: dealRef || undefined,
     detail: dealRef
-      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote}${tpNote} dealRef=${dealRef}`
-      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}${tpNote}`,
+      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
+      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
   };
 }
 

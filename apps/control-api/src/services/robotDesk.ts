@@ -9,7 +9,6 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
-  type CapitalComSessionResult,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalPriceCandle,
@@ -29,14 +28,9 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
-  safetyTakeProfitDistancePts,
-  safetyTakeProfitLevel,
-  shouldArmPeakProtect,
-  type ExitZoneSnap,
 } from './exitManage.js';
-import { softExitMarketGate } from './softExitMarketGate.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
-import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   flipFilterReason,
   requiredFlipSide,
@@ -112,8 +106,6 @@ export type RobotSession = {
   /** Epoch ms of last close — fanout + Admin share the 3m flip lock */
   closed_at_ms: number;
   safety_sl: number | null;
-  /** Broker SAFETY TP (profitLevel) attached at open — opposite of SAFETY SL */
-  safety_tp: number | null;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
@@ -187,14 +179,6 @@ type Internal = RobotSession & {
    * Soft HardInv first saw breach (ms) — confirm debounce vs wick “magic minus”.
    */
   hardinv_breach_since_ms: number;
-  /** Structure invalidation first saw breach (ms) */
-  structure_breach_since_ms: number;
-  /** Regime frozen at fill — exit thesis (not live classify flicker) */
-  entry_regime: RegimeName | null;
-  /** Setup frozen at fill */
-  entry_setup: string | null;
-  /** Zone frozen at fill — structure invalidation */
-  entry_zone: ExitZoneSnap | null;
   /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
@@ -312,7 +296,6 @@ function refreshEntryWatch(
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),
     closed_bar_count: s.closedBars.length,
-    closed_bars: s.closedBars,
     last_closed_side: s.last_closed_side,
     closed_at_ms: s.closed_at_ms,
     cooldown_left_s: opts?.cooldown_left_s,
@@ -411,7 +394,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
     chain:
-      'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · soft Peak/Target only on market change (next entry + 1m) · continue→HOLD',
+      'Capital OHLC → REGIME → ENTRY · EXIT: HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback',
     note:
       'Public feeds confirm near Capital CFD mid; no late-1m / stale-quote entry blocks. Peak trail after real MFE (≥3pt).',
   };
@@ -556,16 +539,11 @@ function clearTradeState(s: Internal) {
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
-  s.safety_tp = null;
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
   s.hardinv_breach_since_ms = 0;
-  s.structure_breach_since_ms = 0;
-  s.entry_regime = null;
-  s.entry_setup = null;
-  s.entry_zone = null;
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -1077,7 +1055,6 @@ async function enterTradeLocked(
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
-  let profitLevel: number | null = null;
   let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
 
   if (useDistance) {
@@ -1098,57 +1075,33 @@ async function enterTradeLocked(
         stopDistance,
         quote.point_size ?? null
       );
-      // TP always ≥ 1.5× THIS stopDistance — never TP < SL
-      const tpPts = safetyTakeProfitDistancePts(
-        mid,
-        s.regime,
-        minPts,
-        quote.point_size ?? null,
-        stopDistance
-      );
-      const expectTp =
-        quote.point_size != null && quote.point_size > 0
-          ? direction === 'BUY'
-            ? mid + tpPts * quote.point_size
-            : mid - tpPts * quote.point_size
-          : safetyTakeProfitLevel(
-              direction,
-              mid,
-              s.regime,
-              minPrice,
-              expect != null ? Math.abs(mid - expect) : null
-            );
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP stopDistance=${stopDistance} pts · profitDistance=${tpPts} (~TP ${
-          expectTp ?? 'n/a'
-        } · RR≥1.5 · x${loosen})`,
+        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
+          expect ?? 'n/a'
+        } · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopDistance,
-        profitDistance: tpPts,
       });
       if (result.ok) {
         usedStopDistance = stopDistance;
         stopLevel = expect;
-        if (expectTp != null && Number.isFinite(expectTp)) profitLevel = expectTp;
         break;
       }
-      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
-        break;
-      }
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL/TP distance rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
       });
     }
   }
@@ -1168,106 +1121,34 @@ async function enterTradeLocked(
         minPrice,
         loosen
       );
-      const slDist = Math.abs(mid - level);
-      const tp = safetyTakeProfitLevel(
-        direction,
-        mid,
-        s.regime,
-        minPrice != null ? minPrice * loosen : minPrice,
-        slDist
-      );
       const dist = direction === 'BUY' ? mid - level : level - mid;
-      const tpDist = direction === 'BUY' ? tp - mid : mid - tp;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP stopLevel=${level} · profitLevel=${tp} (SL≈${dist.toFixed(
-          5
-        )} · TP≈${tpDist.toFixed(5)} · RR=${(tpDist / Math.max(dist, 1e-9)).toFixed(2)} · x${loosen})`,
+        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+          minPrice ?? 'n/a'
+        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopLevel: level,
-        profitLevel: tp,
       });
       if (result.ok) {
         stopLevel = level;
-        profitLevel = tp;
         break;
       }
-      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
-        break;
-      }
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL/TP level rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
       });
-    }
-  }
-
-  // Last resort: SAFETY SL only (never naked) — TP soft manage still runs
-  if (!result?.ok && useDistance) {
-    const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-    const stopDistance =
-      basePts >= 10 ? Math.ceil(basePts) : Math.round(basePts * 100) / 100;
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `SAFETY TP not accepted — fallback SL-only stopDistance=${stopDistance}`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-      stopDistance,
-    });
-    if (result.ok) {
-      usedStopDistance = stopDistance;
-      stopLevel = expectedStopFromDistance(
-        direction,
-        mid,
-        quote.bid,
-        quote.ask,
-        stopDistance,
-        quote.point_size ?? null
-      );
-      profitLevel = null;
-    }
-  } else if (!result?.ok) {
-    const level = safetyStopLevel(
-      direction,
-      mid,
-      quote.bid,
-      quote.ask,
-      quote.spread ?? null,
-      minPrice,
-      1
-    );
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `SAFETY TP not accepted — fallback SL-only stopLevel=${level}`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-      stopLevel: level,
-    });
-    if (result.ok) {
-      stopLevel = level;
-      profitLevel = null;
     }
   }
 
@@ -1298,18 +1179,7 @@ async function enterTradeLocked(
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
-  s.safety_tp = profitLevel != null && Number.isFinite(profitLevel) ? profitLevel : null;
   s.error = null;
-  // Freeze exit thesis at fill — live classify must not rewrite Soft/Peak mid-trade
-  s.entry_regime = s.regime;
-  s.entry_setup = setupType ?? null;
-  const z = zoneGeometry(s.closedBars);
-  s.entry_zone = z
-    ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
-    : null;
-  s.structure_breach_since_ms = 0;
-  s.hardinv_breach_since_ms = 0;
-  s.peak_protect_armed = false;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
@@ -1342,7 +1212,7 @@ async function enterTradeLocked(
       s.entry_price ?? '—'
     } · SL ${s.safety_sl ?? 'none'}${
       usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''
-    } · TP ${s.safety_tp ?? 'none'} · ${result.detail}${dealId ? ` · dealId=${dealId}` : ''}`,
+    } · ${result.detail}${dealId ? ` · dealId=${dealId}` : ''}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1380,423 +1250,6 @@ async function enterTradeLocked(
   }
 }
 
-
-type CapitalLeaseInput = {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-  password: string;
-  connectionId: number;
-  capitalAccountId: string | null;
-  requireAccountId: true;
-};
-
-type QuoteLite = { bid: number | null; ask: number | null; mid: number | null };
-
-function reportCapitalLeaseFail(s: Internal, result: CapitalComSessionResult) {
-  s.reads_fail += 1;
-  s.error = result.detail;
-  const rateLimited =
-    result.status === 429 || /rate-limit|too-many|cooldown/i.test(result.detail);
-  const timedOut =
-    result.status === 408 || /timeout|hung|lock (wait|hold)/i.test(result.detail);
-  pushTick(s, {
-    phase: rateLimited || timedOut ? 'WAIT' : 'ERROR',
-    bid: null,
-    ask: null,
-    mid: null,
-    detail: rateLimited
-      ? `RATE LIMIT — ${result.detail}`
-      : timedOut
-        ? `CAPITAL TIMEOUT — ${result.detail} · retry next tick · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
-        : `Session fail: ${result.detail}`,
-  });
-  refreshEntryWatch(s, {
-    status_override: 'SEEDING',
-    last_reason: timedOut
-      ? `Capital timeout · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
-      : result.detail,
-  });
-  if (rateLimited) setRobotCadence(s, 5_000);
-  else if (timedOut) setRobotCadence(s, 3_000);
-}
-
-/**
- * Soft HardInv → structure kill → per-regime Peak arm → Peak trail → Target/TimeDecay.
- * Soft profit exits are gated: peek next entry + closed 1m — HOLD while same thesis
- * continues; soft exit only when the market changed on a full candle.
- * Pure CPU — runs OUTSIDE the Capital connection mutex so each client decides its
- * own exit independently (not queued behind another account's HTTP on the same key).
- */
-function decideOpenManageExit(
-  s: Internal,
-  quote: QuoteLite,
-  opts?: { includeTargetTime?: boolean }
-): string | null {
-  if (quote.mid == null || !s.open_side) return null;
-  if (s.entry_price == null) s.entry_price = quote.mid;
-  // If we attached without freeze (legacy), freeze now from live state
-  if (!s.entry_regime && s.regime) s.entry_regime = s.regime;
-  updateExcursion(s, quote.mid);
-
-  const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss', Date.now(), quote);
-  if (lossDec.structure_breaching) {
-    if (!s.structure_breach_since_ms) {
-      s.structure_breach_since_ms = Date.now();
-      pushTick(s, {
-        phase: 'MANAGE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `Structure BREACH · waiting confirm · ${s.entry_regime || s.regime}`,
-      });
-    }
-  } else {
-    s.structure_breach_since_ms = 0;
-  }
-  if (lossDec.hardinv_breaching) {
-    if (!s.hardinv_breach_since_ms) {
-      s.hardinv_breach_since_ms = Date.now();
-      pushTick(s, {
-        phase: 'MANAGE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `HardInv BREACH · waiting confirm (anti wick) · ${lossDec.reason || 'beyond SL'}`,
-      });
-    }
-  } else {
-    s.hardinv_breach_since_ms = 0;
-  }
-  // Hard safety — never blocked by next-entry / 1m continue gate
-  if (lossDec.exit) return lossDec.reason;
-
-  const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
-  const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
-  const softGate = softExitMarketGate({
-    openSide: s.open_side,
-    regime: s.regime,
-    closedBars: s.closedBars,
-    closed1m: closed1m
-      ? { open: closed1m.open, close: closed1m.close }
-      : null,
-    prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
-  });
-
-  // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
-  if (closed1m && s.open_side && s.entry_price != null) {
-    const key = capitalMinuteCandleKey(closed1m, prev1m);
-    if (key !== s.last_1m_profit_exit_key) {
-      const policy = closed1mProfitPolicy(
-        s.open_side,
-        { open: closed1m.open, close: closed1m.close },
-        prev1m ? { open: prev1m.open, close: prev1m.close } : null
-      );
-      s.last_1m_profit_exit_key = key;
-
-      const arm = shouldArmPeakProtect({
-        regime: s.entry_regime || s.regime,
-        policy,
-        side: s.open_side,
-        mid: quote.mid,
-        zone: s.entry_zone,
-        mfe: s.mfe,
-      });
-
-      if (policy === 'continue') {
-        pushTick(s, {
-          phase: 'MANAGE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `1m continue · HOLD profit · PeakProtect ${
-            s.peak_protect_armed ? 'ON (keep trail)' : 'OFF'
-          } · thesis=${s.entry_regime || s.regime}`,
-        });
-      } else if (policy === 'wait') {
-        if (arm && !s.peak_protect_armed) {
-          s.peak_protect_armed = true;
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `1m wait · PeakProtect ARMED (${s.entry_regime || s.regime} profile) · trail`,
-          });
-        } else {
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `1m wait · HOLD profit · PeakProtect ${
-              s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
-            }`,
-          });
-        }
-      } else if (policy === 'reverse' || arm) {
-        s.peak_protect_armed = true;
-        pushTick(s, {
-          phase: 'MANAGE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `1m ${policy} · PeakProtect ARMED · ${s.entry_regime || s.regime} · trail after real MFE`,
-        });
-        if (softGate.allow) {
-          const peakAtClose = decideBestOutcomeExit(
-            s,
-            closed1m.close,
-            'peak_protect_only',
-            Date.now(),
-            quote
-          );
-          if (peakAtClose.exit) return peakAtClose.reason;
-        } else {
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: softGate.hold_reason,
-          });
-        }
-      }
-    }
-  }
-
-  // Live mid through-mid on fade can arm Peak even between 1m closes
-  if (
-    !s.peak_protect_armed &&
-    s.open_side &&
-    quote.mid != null &&
-    shouldArmPeakProtect({
-      regime: s.entry_regime || s.regime,
-      policy: 'wait',
-      side: s.open_side,
-      mid: quote.mid,
-      zone: s.entry_zone,
-      mfe: s.mfe,
-    })
-  ) {
-    s.peak_protect_armed = true;
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `PeakProtect ARMED · structure/fade profile · ${s.entry_regime || s.regime}`,
-    });
-  }
-
-  if (s.peak_protect_armed && s.open_side) {
-    if (softGate.allow) {
-      const peakDec = decideBestOutcomeExit(
-        s,
-        quote.mid,
-        'peak_protect_only',
-        Date.now(),
-        quote
-      );
-      if (peakDec.exit) return peakDec.reason;
-    }
-    // !allow → same thesis still alive; no Peak cut (tick already emitted on 1m key)
-  }
-
-  if (opts?.includeTargetTime === false) return null;
-
-  if (s.open_side && s.entry_price != null && quote.mid != null) {
-    const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
-    if (favNow > 0) {
-      if (!softGate.allow) {
-        // Target/TimeDecay also wait for market change on full candle
-        return null;
-      }
-      const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
-      if (tpDec.exit) return tpDec.reason;
-    }
-  }
-  return null;
-}
-
-/**
- * Open-trade cycle: short Capital HTTP leases only (quote/list/minutes → release →
- * decide → close lease). Peak/Soft decide never holds the connection mutex, so
- * multi-account same market each get an individual exit — not sequential "pēc kārtas".
- */
-async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseInput) {
-  type SyncSnap =
-    | { kind: 'no_quote'; detail: string }
-    | {
-        kind: 'ok';
-        quote: CapitalMarketQuote;
-        brokerOpen: CapitalOpenPosition | null;
-        listedOk: boolean;
-        listDetail: string;
-      };
-
-  const leased = await withCapitalAccountSession(leaseInput, async (session): Promise<SyncSnap> => {
-    const quote = await fetchCapitalMarketQuote(session, s.epic);
-    if (!quote.raw_ok) {
-      return {
-        kind: 'no_quote',
-        detail: quote.detail || `No quote for ${s.display_name} (${s.epic})`,
-      };
-    }
-    const listed = await listCapitalOpenPositions(session);
-    let brokerOpen: CapitalOpenPosition | null = null;
-    if (listed.ok) {
-      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
-    }
-    const assumeOpen = Boolean(brokerOpen || (!listed.ok && (s.open_side || s.deal_id)));
-    if (assumeOpen && Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
-      s.last_manage_minute_fetch_ms = Date.now();
-      try {
-        const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
-        if (mins.ok && mins.candles.length) {
-          s.last_minute_candles = mins.candles;
-        }
-      } catch {
-        /* keep previous minutes */
-      }
-    }
-    return {
-      kind: 'ok',
-      quote,
-      brokerOpen,
-      listedOk: listed.ok,
-      listDetail: listed.detail,
-    };
-  });
-
-  if (!leased.ok) {
-    reportCapitalLeaseFail(s, leased.result);
-    return;
-  }
-
-  const snap = leased.value;
-  if (snap.kind === 'no_quote') {
-    s.reads_fail += 1;
-    s.error = snap.detail;
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: null,
-      ask: null,
-      mid: null,
-      detail: snap.detail,
-    });
-    return;
-  }
-
-  const { quote, brokerOpen, listedOk, listDetail } = snap;
-  s.reads_ok += 1;
-  s.error = null;
-  s.last_quote_at = new Date().toISOString();
-  if (quote.epic && quote.epic !== s.epic) s.epic = quote.epic;
-  s.last_mid = quote.mid;
-  s.last_bid = quote.bid;
-  s.last_ask = quote.ask;
-  setRobotCadence(s, ACTIVE_CADENCE_MS);
-
-  // Keep 10s book + live regime alive while MANAGE — soft-exit peeks next entry
-  // on the last full closed candle (same recipe as flat entry).
-  if (quote.mid != null) {
-    s.ohlcState = updateTenSecondOhlc(s.ohlcState, quote.mid, Date.now());
-    s.ohlc_10s = publicOhlc10s(s.ohlcState);
-    if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-      applyRobotRegime(s, [s.ohlcState.last_closed]);
-    }
-  }
-
-  if (listedOk) {
-    if (brokerOpen) {
-      s.open_side = brokerOpen.direction;
-      s.deal_id = brokerOpen.deal_id;
-      syncFromBrokerOpen(s, brokerOpen, quote.mid);
-      s.mode = 'MANAGE';
-      if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-    } else if (s.open_side) {
-      const closedSide = s.open_side;
-      s.last_closed_side = closedSide;
-      s.closed_at_ms = Date.now();
-      clearTradeState(s);
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 3m ≠ ${closedSide}`
-          : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
-      });
-      return;
-    }
-  } else {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Position sync warn: ${listDetail} · fail-closed (decide on local open if any)`,
-    });
-  }
-
-  if (!s.open_side) return;
-
-  s.mode = 'MANAGE';
-  refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
-
-  if (quote.mid == null) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: marketAllowsTrading(quote.market_status)
-        ? 'MANAGE · no mid — wait quote'
-        : `MARKET ${quote.market_status || 'CLOSED'} · open ${s.open_side || '?'} · wait mid for HardInv`,
-    });
-    return;
-  }
-
-  const marketOpen = marketAllowsTrading(quote.market_status);
-  // Decide outside Capital lock — each client individually
-  const exitReason = decideOpenManageExit(s, quote, {
-    includeTargetTime: marketOpen,
-  });
-  if (exitReason) {
-    const closed = await withCapitalAccountSession(leaseInput, async (session) => {
-      await exitTrade(session, s, quote, exitReason);
-    });
-    if (!closed.ok) reportCapitalLeaseFail(s, closed.result);
-    return;
-  }
-
-  if (!marketOpen) {
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `MARKET ${quote.market_status || 'CLOSED'} · still MANAGE ${s.open_side} · HardInv/Peak live · no new entry`,
-    });
-    return;
-  }
-
-  pushTick(s, {
-    phase: 'MANAGE',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
-      s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-    } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
-      s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-    } · loss=live · soft=nextEntry+1mChange · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
-      s.peak_protect_armed ? 'ON' : 'OFF'
-    } · no new orders`,
-  });
-}
 
 async function robotCycle(s: Internal) {
   if (!s.running || s.cycle_busy) return;
@@ -1848,119 +1301,170 @@ async function robotCycleLocked(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const leaseInput: CapitalLeaseInput = {
-    environment: conn.environment,
-    apiKey: creds.api_key || '',
-    identifier: (conn.identifier || '').trim(),
-    password: creds.password || '',
-    connectionId: s.connection_id,
-    capitalAccountId,
-    requireAccountId: true,
-  };
+  const leased = await withCapitalAccountSession(
+    {
+      environment: conn.environment,
+      apiKey: creds.api_key || '',
+      identifier: (conn.identifier || '').trim(),
+      password: creds.password || '',
+      connectionId: s.connection_id,
+      capitalAccountId,
+      requireAccountId: true,
+    },
+    async (session) => {
+  try {
+    const quote = await fetchCapitalMarketQuote(session, s.epic);
+    if (!quote.raw_ok) {
+      s.reads_fail += 1;
+      s.error = quote.detail || 'No quote';
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: null,
+        ask: null,
+        mid: null,
+        detail: quote.detail || `No quote for ${s.display_name} (${s.epic})`,
+      });
+      return;
+    }
 
-  // Already in a trade: short Capital leases only — do NOT hold mutex across Peak/Soft decide
-  if (s.open_side || s.deal_id) {
-    await robotManageShortLeaseCycle(s, leaseInput);
-    return;
-  }
+    s.reads_ok += 1;
+    s.error = null;
+    s.last_quote_at = new Date().toISOString();
+    if (quote.epic && quote.epic !== s.epic) {
+      s.epic = quote.epic;
+    }
 
-  // ——— FLAT: short quote lease → multi-feed OUTSIDE mutex → enrich/list/entry lease ———
-  // Multi-account same connection: holding Capital lock during Yahoo/Aurum feeds starves
-  // every other account's Peak/Soft/quote (one client "works", others look dead).
-  const quoteLease = await withCapitalAccountSession(leaseInput, async (session) => {
-    return fetchCapitalMarketQuote(session, s.epic);
-  });
-  if (!quoteLease.ok) {
-    reportCapitalLeaseFail(s, quoteLease.result);
-    return;
-  }
-  const quote0 = quoteLease.value;
-  if (!quote0.raw_ok) {
-    s.reads_fail += 1;
-    s.error = quote0.detail || 'No quote';
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: null,
-      ask: null,
-      mid: null,
-      detail: quote0.detail || `No quote for ${s.display_name} (${s.epic})`,
-    });
-    return;
-  }
-
-  s.reads_ok += 1;
-  s.error = null;
-  s.last_quote_at = new Date().toISOString();
-  if (quote0.epic && quote0.epic !== s.epic) s.epic = quote0.epic;
-
-  if (!marketAllowsTrading(quote0.market_status)) {
-    // Park / seed under a short lease — manage-open already returned above
-    const closedLease = await withCapitalAccountSession(leaseInput, async (session) => {
+    // Market closed / offline → park entries (anti-spam Capital).
+    // CRITICAL: if a trade is open, still sync + HardInv/Peak — never skip manage.
+    if (!marketAllowsTrading(quote.market_status)) {
+      if (s.open_side || s.deal_id) {
+        // Keep fast cadence while managing — 90s park would delay HardInv
+        setRobotCadence(s, ACTIVE_CADENCE_MS);
+        const listedPark = await listCapitalOpenPositions(session);
+        if (listedPark.ok) {
+          const brokerPark = matchOpenOnEpic(listedPark.positions, s.epic);
+          if (brokerPark) {
+            s.open_side = brokerPark.direction;
+            s.deal_id = brokerPark.deal_id;
+            syncFromBrokerOpen(s, brokerPark, quote.mid);
+            s.mode = 'MANAGE';
+            if (brokerPark.upl != null) s.unrealized = brokerPark.upl;
+          } else if (s.open_side) {
+            const closedSide = s.open_side;
+            s.last_closed_side = closedSide;
+            s.closed_at_ms = Date.now();
+            clearTradeState(s);
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
+            });
+            return;
+          }
+        }
+        if (s.open_side && quote.mid != null) {
+          if (s.entry_price == null) s.entry_price = quote.mid;
+          updateExcursion(s, quote.mid);
+          const lossPark = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+          if (lossPark.hardinv_breaching) {
+            if (!s.hardinv_breach_since_ms) s.hardinv_breach_since_ms = Date.now();
+          } else {
+            s.hardinv_breach_since_ms = 0;
+          }
+          if (lossPark.exit) {
+            await exitTrade(session, s, quote, lossPark.reason);
+            return;
+          }
+          if (s.peak_protect_armed) {
+            const peakPark = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+            if (peakPark.exit) {
+              await exitTrade(session, s, quote, peakPark.reason);
+              return;
+            }
+          }
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `MARKET ${quote.market_status || 'CLOSED'} · still MANAGE ${s.open_side} · HardInv/Peak live · no new entry`,
+          });
+          return;
+        }
+        pushTick(s, {
+          phase: 'MANAGE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `MARKET ${quote.market_status || 'CLOSED'} · open ${s.open_side || '?'} · wait mid for HardInv`,
+        });
+        return;
+      }
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
+      // Warm the 30m zone from history while closed — so TRADEABLE does not start at 0/90
       try {
-        await seedZoneFromMinuteHistory(session, s, quote0);
+        await seedZoneFromMinuteHistory(session, s, quote);
       } catch {
-        /* park tick below */
+        /* park tick below still runs */
       }
       const now = Date.now();
       if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
         s.last_market_closed_tick_ms = now;
         refreshEntryWatch(s, {
           status_override: 'SEEDING',
-          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+          last_reason: `MARKET ${quote.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
         pushTick(s, {
           phase: 'WAIT',
-          bid: quote0.bid,
-          ask: quote0.ask,
-          mid: quote0.mid,
-          detail: `MARKET ${quote0.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
           }s until TRADEABLE · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
       }
-    });
-    if (!closedLease.ok) reportCapitalLeaseFail(s, closedLease.result);
-    return;
-  }
-
-  setRobotCadence(s, ACTIVE_CADENCE_MS);
-  s.last_mid = quote0.mid;
-  s.last_bid = quote0.bid;
-  s.last_ask = quote0.ask;
-
-  // Public multi-feed — NEVER under Capital connection mutex
-  const flatNow = isFlatTenBar(s.ohlcState.last_closed);
-  if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
-    s.last_multi_feed_ms = Date.now();
-    try {
-      s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote0.mid });
-    } catch {
-      /* keep previous multiFeed snapshot */
+      return;
     }
-  }
-  const picked0 = pickOhlcMid(quote0.mid, s.multiFeed);
-  s.feed_source = picked0.source;
-  s.feed_contributing = s.multiFeed?.contributing ?? 0;
-  s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-  s.feed_agreement = s.multiFeed?.agreement ?? null;
-  const ohlcMid0 = picked0.mid ?? quote0.mid;
-  if (ohlcMid0 != null) {
-    s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid0, Date.now());
-    s.ohlc_10s = publicOhlc10s(s.ohlcState);
-    if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-      s.entry_close_latch = s.ohlcState.last_closed;
-      applyRobotRegime(s, [s.ohlcState.last_closed]);
-    }
-  }
 
-  const leased = await withCapitalAccountSession(
-    leaseInput,
-    async (
-      session
-    ): Promise<{ pendingExit: { reason: string; quote: CapitalMarketQuote } } | null> => {
-  try {
-    const quote = quote0;
+    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
+    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    s.last_mid = quote.mid;
+    s.last_bid = quote.bid;
+    s.last_ask = quote.ask;
+
+    // Multi-provider read — skip while 10s bar is flat so Capital lock frees faster
+    // for SECOND enrich (flat O=H=L=C is the zero-trade failure mode).
+    const flatNow = isFlatTenBar(s.ohlcState.last_closed);
+    if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous multiFeed snapshot */
+      }
+    } else if (s.multiFeed && quote.mid != null) {
+      // Re-anchor pick every tick even if multi snapshot is cached
+    }
+    const picked = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = picked.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+
+    // Live mid on wall clock — Capital updateTime jumps with price and closed flat bars
+    const ohlcMid = picked.mid ?? quote.mid;
+    if (ohlcMid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
+      s.ohlc_10s = publicOhlc10s(s.ohlcState);
+      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        s.entry_close_latch = s.ohlcState.last_closed;
+        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
+    }
+
     // Sparse REST polls → flat CLOSED bars. SECOND (or MINUTE fallback) restores range.
     // When flat: enrich EVERY cycle (ignore 8s throttle) — otherwise zero trades forever.
     const needEnrich =
@@ -2113,12 +1617,10 @@ async function robotCycleLocked(s: Internal) {
         mid: quote.mid,
         detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${s.regime}`,
       });
-      return null;
+      return;
     }
 
     // ——— MANAGE open trade: never send entry ———
-    // Broker just showed open while we thought flat — fetch minutes then return
-    // pendingExit so Soft/Peak decide + close run outside this long lease.
     if (s.open_side || brokerOpen) {
       if (!s.trading_enabled) {
         // allow HardInv / Peak exits even when operator paused new entries
@@ -2132,9 +1634,31 @@ async function robotCycleLocked(s: Internal) {
           mid: quote.mid,
           detail: 'MANAGE · no mid — wait quote',
         });
-        return null;
+        return;
       }
 
+      // LIVE loss: Soft HardInv with grace + confirm (no single-wick magic minus)
+      const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+      if (lossDec.hardinv_breaching) {
+        if (!s.hardinv_breach_since_ms) {
+          s.hardinv_breach_since_ms = Date.now();
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HardInv BREACH · waiting confirm (anti wick) · ${lossDec.reason || 'beyond SL'}`,
+          });
+        }
+      } else {
+        s.hardinv_breach_since_ms = 0;
+      }
+      if (lossDec.exit) {
+        await exitTrade(session, s, quote, lossDec.reason);
+        return;
+      }
+
+      // PROFIT: hold on Capital 1m continue; reverse → PeakProtect 25% giveback arms + trails live
       if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
         s.last_manage_minute_fetch_ms = Date.now();
         try {
@@ -2147,8 +1671,82 @@ async function robotCycleLocked(s: Internal) {
         }
       }
 
-      const manageExit = decideOpenManageExit(s, quote);
-      if (manageExit) return { pendingExit: { reason: manageExit, quote } };
+      const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+      if (closed1m && s.open_side && s.entry_price != null) {
+        const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+        const key = capitalMinuteCandleKey(closed1m, prev1m);
+        if (key !== s.last_1m_profit_exit_key) {
+          const policy = closed1mProfitPolicy(
+            s.open_side,
+            { open: closed1m.open, close: closed1m.close },
+            prev1m ? { open: prev1m.open, close: prev1m.close } : null
+          );
+          s.last_1m_profit_exit_key = key;
+
+          if (policy === 'continue') {
+            // Keep Peak armed if already trailing — do NOT disarm on green 1m
+            // (old: Peak OFF threw away the trail and re-scalped tiny givebacks).
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m continue · HOLD profit · PeakProtect ${
+                s.peak_protect_armed ? 'ON (keep trail)' : 'OFF'
+              }`,
+            });
+          } else if (policy === 'wait') {
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `1m wait · HOLD profit · PeakProtect ${
+                s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
+              }`,
+            });
+          } else if (policy === 'reverse') {
+            s.peak_protect_armed = true;
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
+            });
+            const peakAtClose = decideBestOutcomeExit(
+              s,
+              closed1m.close,
+              'peak_protect_only'
+            );
+            if (peakAtClose.exit) {
+              await exitTrade(session, s, quote, peakAtClose.reason);
+              return;
+            }
+          }
+        }
+      }
+
+      // Once armed by reverse — PeakProtect-only on LIVE mark
+      if (s.peak_protect_armed && s.open_side) {
+        const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+        if (peakDec.exit) {
+          await exitTrade(session, s, quote, peakDec.reason);
+          return;
+        }
+      }
+
+      // Green Target / TimeDecay — winners must not wait only for Peak/HardInv
+      if (s.open_side && s.entry_price != null && quote.mid != null) {
+        const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
+        if (favNow > 0) {
+          const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time');
+          if (tpDec.exit) {
+            await exitTrade(session, s, quote, tpDec.reason);
+            return;
+          }
+        }
+      }
 
       pushTick(s, {
         phase: 'MANAGE',
@@ -2159,11 +1757,11 @@ async function robotCycleLocked(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · loss=live · soft=nextEntry+1mChange · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
+        } · loss=live · plus=1mClose(continue→HOLD·reverse→Peak)·peakLive=${
           s.peak_protect_armed ? 'ON' : 'OFF'
         } · no new orders`,
       });
-      return null;
+      return;
     }
 
     // ——— FLAT: entry only after close (and only if entry_enabled) ———
@@ -2176,7 +1774,7 @@ async function robotCycleLocked(s: Internal) {
         mid: quote.mid,
         detail: 'Trading OFF — flat · no entry',
       });
-      return null;
+      return;
     }
     if (positionsUncertain) {
       // Still expire stale pending on bar rollover — don't keep a stuck setup across bars
@@ -2190,7 +1788,7 @@ async function robotCycleLocked(s: Internal) {
         status_override: 'WAITING_TRIGGER',
         last_reason: 'Position list fail — no entry until sync OK',
       });
-      return null;
+      return;
     }
     if (!s.entry_enabled) {
       s.entry_close_latch = null;
@@ -2207,12 +1805,12 @@ async function robotCycleLocked(s: Internal) {
         detail:
           'MANAGE-ONLY · waiting for central pipeline intent (no local BUY/SELL brain)',
       });
-      return null;
+      return;
     }
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    const POST_CLOSE_COOLDOWN_MS = 60_000;
+    const POST_CLOSE_COOLDOWN_MS = 8_000;
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       const left = Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000);
       refreshEntryWatch(s, {
@@ -2226,7 +1824,7 @@ async function robotCycleLocked(s: Internal) {
         mid: quote.mid,
         detail: `cooldown ${left}s after close · stop chop re-entry · ${s.entry_watch?.looking_for || ''}`,
       });
-      return null;
+      return;
     }
 
     if (quote.mid == null) {
@@ -2241,7 +1839,7 @@ async function robotCycleLocked(s: Internal) {
         mid: quote.mid,
         detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
       });
-      return null;
+      return;
     }
 
     // Soft advisory only — public feeds must never freeze Capital entries
@@ -2309,12 +1907,7 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        // 10s recipe + 30m zone + 1m (from same 10s book) — chase vs structure
-        const sig = decideEntryWithStructure({
-          bar: entryBar,
-          regime: s.regime,
-          closedBars: s.closedBars,
-        });
+        const sig = decideEntryFrom10sRegime(entryBar, s.regime);
         if (sig) {
           if (sameDirectionBlocked(sig.direction, s.last_closed_side, s.closed_at_ms)) {
             const need = requiredFlipSide(s.last_closed_side, s.closed_at_ms);
@@ -2420,8 +2013,8 @@ async function robotCycleLocked(s: Internal) {
       });
     }
 
-    if (!direction) return null;
-    if (!s.running) return null;
+    if (!direction) return;
+    if (!s.running) return;
     s.pending_entry = {
       direction,
       reason,
@@ -2429,29 +2022,42 @@ async function robotCycleLocked(s: Internal) {
       bar_key: barKey || (entryBar ? closedBarKey(entryBar) : ''),
     };
     await enterTrade(session, s, direction, quote, reason, setupType);
-    return null;
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
-    return null;
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
     }
   );
 
   if (!leased.ok) {
-    reportCapitalLeaseFail(s, leased.result);
-    return;
-  }
-
-  const pending = leased.value?.pendingExit;
-  if (pending) {
-    const closed = await withCapitalAccountSession(leaseInput, async (session) => {
-      await exitTrade(session, s, pending.quote, pending.reason);
+    s.reads_fail += 1;
+    s.error = leased.result.detail;
+    const rateLimited =
+      leased.result.status === 429 || /rate-limit|too-many|cooldown/i.test(leased.result.detail);
+    const timedOut =
+      leased.result.status === 408 || /timeout|hung|lock (wait|hold)/i.test(leased.result.detail);
+    pushTick(s, {
+      phase: rateLimited || timedOut ? 'WAIT' : 'ERROR',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: rateLimited
+        ? `RATE LIMIT — ${leased.result.detail}`
+        : timedOut
+          ? `CAPITAL TIMEOUT — ${leased.result.detail} · retry next tick · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+          : `Session fail: ${leased.result.detail}`,
     });
-    if (!closed.ok) reportCapitalLeaseFail(s, closed.result);
+    refreshEntryWatch(s, {
+      status_override: 'SEEDING',
+      last_reason: timedOut
+        ? `Capital timeout · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+        : leased.result.detail,
+    });
+    if (rateLimited) setRobotCadence(s, 5_000);
+    else if (timedOut) setRobotCadence(s, 3_000);
   }
 }
 
@@ -2556,7 +2162,6 @@ export async function startRobotSession(input: {
     open_side: null,
     last_closed_side: null,
     safety_sl: null,
-    safety_tp: null,
     error: null,
     entry_enabled: input.entry_enabled !== false,
     timer: null,
@@ -2587,10 +2192,6 @@ export async function startRobotSession(input: {
     pending_entry: null,
     entry_close_latch: null,
     hardinv_breach_since_ms: 0,
-    structure_breach_since_ms: 0,
-    entry_regime: null,
-    entry_setup: null,
-    entry_zone: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -2616,7 +2217,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · HardInv live · soft exit only when market changes (next entry / 1m reverse) · continue→HOLD · no late/stale entry blocks',
+      'Rules: max 1 open · HardInv live · profit HOLD on 1m continue · reverse→PeakProtect 25% giveback · no late/stale entry blocks',
   });
 
   sessions.set(id, session);
@@ -2675,14 +2276,6 @@ export async function attachManageOnlyRobot(input: {
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.deal_id) existing.deal_id = input.deal_id;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
-    if (!existing.entry_regime) {
-      existing.entry_regime = normalizeRegime(input.regime || existing.regime);
-      existing.entry_setup = input.setup_type ?? existing.entry_setup;
-      const z = zoneGeometry(existing.closedBars);
-      existing.entry_zone = z
-        ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
-        : existing.entry_zone;
-    }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -2714,12 +2307,6 @@ export async function attachManageOnlyRobot(input: {
     if (input.deal_id) internal.deal_id = input.deal_id;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
-    internal.entry_regime = normalizeRegime(input.regime || internal.regime);
-    internal.entry_setup = input.setup_type ?? null;
-    {
-      const z = zoneGeometry(internal.closedBars);
-      internal.entry_zone = z ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width } : null;
-    }
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,

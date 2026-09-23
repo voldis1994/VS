@@ -219,7 +219,6 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         apiKey,
         identifier,
         password,
-        connectionId: conn.id,
       });
 
       if (!result.ok) {
@@ -233,7 +232,6 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
       }
 
       // Sync Capital.com multi-accounts onto this connection (external_account_id)
-      // Reuse the pooled session from Test — do NOT open a second login.
       let syncedAccounts: Array<{ accountId: string; accountName: string }> = [];
       try {
         const opened = await acquireCapitalSession({
