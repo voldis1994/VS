@@ -1307,7 +1307,7 @@ function decideOpenManageExit(
   if (s.entry_price == null) s.entry_price = quote.mid;
   updateExcursion(s, quote.mid);
 
-  const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+  const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss', Date.now(), quote);
   if (lossDec.hardinv_breaching) {
     if (!s.hardinv_breach_since_ms) {
       s.hardinv_breach_since_ms = Date.now();
@@ -1368,7 +1368,13 @@ function decideOpenManageExit(
           mid: quote.mid,
           detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
         });
-        const peakAtClose = decideBestOutcomeExit(s, closed1m.close, 'peak_protect_only');
+        const peakAtClose = decideBestOutcomeExit(
+          s,
+          closed1m.close,
+          'peak_protect_only',
+          Date.now(),
+          quote
+        );
         if (peakAtClose.exit) return peakAtClose.reason;
       }
     }
@@ -1376,7 +1382,13 @@ function decideOpenManageExit(
 
   // Once armed by reverse — PeakProtect-only on LIVE mark
   if (s.peak_protect_armed && s.open_side) {
-    const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+    const peakDec = decideBestOutcomeExit(
+      s,
+      quote.mid,
+      'peak_protect_only',
+      Date.now(),
+      quote
+    );
     if (peakDec.exit) return peakDec.reason;
   }
 
@@ -1386,7 +1398,7 @@ function decideOpenManageExit(
   if (s.open_side && s.entry_price != null && quote.mid != null) {
     const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
     if (favNow > 0) {
-      const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time');
+      const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
       if (tpDec.exit) return tpDec.reason;
     }
   }
