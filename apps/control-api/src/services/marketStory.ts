@@ -422,11 +422,28 @@ export function scalpStoryConfirms(
   const trigSell = trigger != null && bodyPct(trigger) <= ENTRY_DIP;
 
   // 10s trigger already prints the start of the leg — do not wait for closed 1m color
+  // Still never chase zone extreme (that was Funds long scratches at HI into SL).
+  const chaseBuy =
+    direction === 'BUY' &&
+    pos != null &&
+    pos >= 1 - CHASE_EDGE &&
+    story.chapter !== 'BREAK_UP' &&
+    !isBreakoutRegime(regime);
+  const chaseSell =
+    direction === 'SELL' &&
+    pos != null &&
+    pos <= CHASE_EDGE &&
+    story.chapter !== 'BREAK_DOWN' &&
+    !isBreakoutRegime(regime);
   if (
     impulseOk &&
+    !chaseBuy &&
+    !chaseSell &&
     (story.allow === direction || story.allow === 'BOTH' || isBreakoutRegime(regime)) &&
     story.chapter !== 'BOUNCE_IN_SELL' &&
-    story.chapter !== 'DIP_IN_RALLY'
+    story.chapter !== 'DIP_IN_RALLY' &&
+    story.chapter !== 'EXHAUST_HI' &&
+    story.chapter !== 'EXHAUST_LO'
   ) {
     if (direction === 'BUY' && trigBuy) {
       return { ok: true, tag: `10s START GREEN · ${story.chapter}` };
@@ -476,19 +493,37 @@ export function scalpStoryConfirms(
     if (direction === 'SELL' && d1 === 'UP' && rejection1m(m1, 'SELL')) {
       return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
     }
-    // Dip-buy / rally-sell: the adverse 1m IS the setup candle — allow when story agrees
-    if (direction === 'BUY' && d1 === 'DOWN' && story.chapter !== 'BOUNCE_IN_SELL') {
+    // Dip-buy / rally-sell: adverse 1m IS the setup — ONLY in a live rally/selloff story.
+    // Bare "1m DIP OK" on EXHAUST_HI / MIXED / wrong chapter was knife-buy fuel.
+    // Also never DIP-buy already at HI chase edge (Funds long scratches).
+    if (
+      direction === 'BUY' &&
+      d1 === 'DOWN' &&
+      (story.chapter === 'RALLY' || story.chapter === 'DIP_IN_RALLY') &&
+      (pos == null || pos < 1 - CHASE_EDGE)
+    ) {
       return { ok: true, tag: `1m DIP OK · ${story.chapter} · pullback` };
     }
-    if (direction === 'SELL' && d1 === 'UP' && story.chapter !== 'DIP_IN_RALLY') {
+    if (
+      direction === 'SELL' &&
+      d1 === 'UP' &&
+      (story.chapter === 'SELLOFF' || story.chapter === 'BOUNCE_IN_SELL') &&
+      (pos == null || pos > CHASE_EDGE)
+    ) {
       return { ok: true, tag: `1m RALLY OK · ${story.chapter} · pullback` };
     }
   }
 
-  // Don't chase only the extreme edge without rejection (narrower than before)
+  // Don't chase extreme edge — need 1m rejection wick; bare 10s trig at HI/LO = Funds scratches
   if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
-    if (rejection1m(m1, 'SELL') || trigSell) {
-      return { ok: true, tag: `1m/10s REJECT at LO-zone · ${story.chapter}` };
+    if (story.chapter === 'EXHAUST_LO') {
+      return {
+        ok: false,
+        reason: `1m scalp · EXHAUST_LO · gaida bounce-reject · ne chase grīdu`,
+      };
+    }
+    if (rejection1m(m1, 'SELL')) {
+      return { ok: true, tag: `1m REJECT at LO-zone · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -496,8 +531,14 @@ export function scalpStoryConfirms(
     };
   }
   if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
-    if (rejection1m(m1, 'BUY') || trigBuy) {
-      return { ok: true, tag: `1m/10s REJECT at HI-zone · ${story.chapter}` };
+    if (story.chapter === 'EXHAUST_HI') {
+      return {
+        ok: false,
+        reason: `1m scalp · EXHAUST_HI · gaida dip-reject · ne chase griestus`,
+      };
+    }
+    if (rejection1m(m1, 'BUY')) {
+      return { ok: true, tag: `1m REJECT at HI-zone · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -525,16 +566,28 @@ export function scalpStoryConfirms(
     };
   }
 
-  // SELLOFF/RALLY continuation — reject OR same-side 10s starts the next push
-  if (direction === 'SELL' && (story.chapter === 'SELLOFF' || story.chapter === 'EXHAUST_LO')) {
+  // SELLOFF/RALLY continuation — NOT at EXHAUST (Funds chased HI/LO into SL scratches)
+  if (direction === 'SELL' && story.chapter === 'SELLOFF') {
     if (rejection1m(m1, 'SELL') || trigSell) {
       return { ok: true, tag: `1m/10s SELLOFF OK · ${story.chapter}` };
     }
   }
-  if (direction === 'BUY' && (story.chapter === 'RALLY' || story.chapter === 'EXHAUST_HI')) {
+  if (direction === 'BUY' && story.chapter === 'RALLY') {
     if (rejection1m(m1, 'BUY') || trigBuy) {
       return { ok: true, tag: `1m/10s RALLY OK · ${story.chapter}` };
     }
+  }
+  if (direction === 'SELL' && story.chapter === 'EXHAUST_LO') {
+    return {
+      ok: false,
+      reason: `1m scalp · EXHAUST_LO · gaida bounce vai BREAK · ne chase`,
+    };
+  }
+  if (direction === 'BUY' && story.chapter === 'EXHAUST_HI') {
+    return {
+      ok: false,
+      reason: `1m scalp · EXHAUST_HI · gaida dip vai BREAK · ne chase`,
+    };
   }
 
   return {

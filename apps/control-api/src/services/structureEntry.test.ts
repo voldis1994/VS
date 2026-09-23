@@ -447,4 +447,28 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
       structureGate(buy, 'FAILED_BREAKOUT_DOWN', hi, zoneGeometry(hiBook, hi), null).ok
     ).toBe(false);
   });
+
+  it('SEEDING story never arms (no scalp-skip knife)', () => {
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 90_000;
+    const book: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      book.push({
+        open_time_ms: m0 + i * 10_000,
+        open: 4330,
+        high: i === 5 ? 4340 : 4330.3,
+        low: i === 15 ? 4320 : 4329.7,
+        close: 4330,
+        ticks: 8,
+      });
+    }
+    const trigger = bar(4324, 4325, m0 + MIN_BARS_FOR_ZONE * 10_000);
+    book.push(trigger);
+    expect(
+      decideEntryWithStructure({
+        bar: trigger,
+        regime: 'FAILED_BREAKOUT_DOWN',
+        closedBars: book,
+      })
+    ).toBeNull();
+  });
 });
