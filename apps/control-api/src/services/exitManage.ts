@@ -69,6 +69,64 @@ export const PEAK_MIN_GIVEBACK_ABS = 0.85;
 export const TARGET_ABS_FLOOR = 4.0;
 
 /**
+ * Soft Target / broker SAFETY TP distance in price pts.
+ * Same math for manage Target and Capital profitLevel — opposite of Soft HardInv.
+ */
+export function targetTakeProfitDistance(
+  entry: number,
+  regime?: string | null
+): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const cal = getDeskCalibration();
+  const profile = regimeExitProfile(regime);
+  return (
+    Math.max(
+      absEntry * cal.target_pct,
+      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
+      scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
+    ) * profile.target_mult
+  );
+}
+
+/** Absolute Capital profitLevel — BUY above entry / SELL below entry. */
+export function safetyTakeProfitLevel(
+  side: ExitSide,
+  entry: number,
+  regime?: string | null,
+  minStopDistance?: number | null
+): number {
+  let dist = targetTakeProfitDistance(entry, regime);
+  const min =
+    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
+      ? minStopDistance
+      : 0;
+  if (min > 0) dist = Math.max(dist, min * 1.05);
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  const raw = side === 'BUY' ? entry + dist : entry - dist;
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
+}
+
+/**
+ * Capital profitDistance in POINTS (≥ broker min · same Target % language).
+ */
+export function safetyTakeProfitDistancePts(
+  entry: number,
+  regime: string | null | undefined,
+  minPts: number | null | undefined,
+  pointSize: number | null | undefined
+): number {
+  const distPrice = targetTakeProfitDistance(entry, regime);
+  const ps = pointSize != null && pointSize > 0 ? pointSize : null;
+  const min = minPts != null && minPts > 0 ? minPts : 0;
+  let pts = ps != null ? distPrice / ps : distPrice;
+  pts = Math.max(pts, min * 1.05, min + 1e-9);
+  return pts >= 10 ? Math.ceil(pts) : Math.round(pts * 100) / 100;
+}
+
+/**
  * First seconds after fill — spread settle + first pushback wick.
  * Broker SAFETY SL still protects; Soft HardInv waits.
  * Kept short so losers are not allowed to run for half a minute.
@@ -303,12 +361,7 @@ export function decideBestOutcomeExit(
       cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
       absEntry
     ) * profile.peak_giveback_mult;
-  const tp =
-    Math.max(
-      absEntry * cal.target_pct,
-      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
-      scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
-    ) * profile.target_mult;
+  const tp = targetTakeProfitDistance(entry, thesisRegime);
   const sl = hardInvStopDistance(entry, thesisRegime);
   const minExec = beLockMinExec(sl);
   const mfeFloor =

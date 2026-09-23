@@ -29,6 +29,8 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
+  safetyTakeProfitDistancePts,
+  safetyTakeProfitLevel,
   shouldArmPeakProtect,
   type ExitZoneSnap,
 } from './exitManage.js';
@@ -110,6 +112,8 @@ export type RobotSession = {
   /** Epoch ms of last close — fanout + Admin share the 3m flip lock */
   closed_at_ms: number;
   safety_sl: number | null;
+  /** Broker SAFETY TP (profitLevel) attached at open — opposite of SAFETY SL */
+  safety_tp: number | null;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
@@ -552,6 +556,7 @@ function clearTradeState(s: Internal) {
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
+  s.safety_tp = null;
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
@@ -1072,6 +1077,20 @@ async function enterTradeLocked(
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
+  let profitLevel: number | null = safetyTakeProfitLevel(
+    direction,
+    mid,
+    s.regime,
+    minPrice
+  );
+  let profitDistance: number | null = useDistance
+    ? safetyTakeProfitDistancePts(
+        mid,
+        s.regime,
+        minPts,
+        quote.point_size ?? null
+      )
+    : null;
   let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
 
   if (useDistance) {
@@ -1092,33 +1111,59 @@ async function enterTradeLocked(
         stopDistance,
         quote.point_size ?? null
       );
+      // TP loosen widens profit distance (harder to hit early — still locks a real Target)
+      const tpDist =
+        profitDistance != null
+          ? Math.max(
+              profitDistance * loosen,
+              (minPts ?? 0) * 1.05,
+              profitDistance
+            )
+          : null;
+      const tpPts =
+        tpDist != null
+          ? tpDist >= 10
+            ? Math.ceil(tpDist)
+            : Math.round(tpDist * 100) / 100
+          : null;
+      const expectTp =
+        tpPts != null && quote.point_size != null && quote.point_size > 0
+          ? direction === 'BUY'
+            ? mid + tpPts * quote.point_size
+            : mid - tpPts * quote.point_size
+          : profitLevel;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
-          expect ?? 'n/a'
-        } · x${loosen})`,
+        detail: `Capital SAFETY SL+TP cushion stopDistance=${stopDistance} pts · profitDistance=${
+          tpPts ?? 'n/a'
+        } (~TP ${expectTp ?? 'n/a'} · min=${minPts} · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopDistance,
+        ...(tpPts != null ? { profitDistance: tpPts } : {}),
       });
       if (result.ok) {
         usedStopDistance = stopDistance;
         stopLevel = expect;
+        if (expectTp != null && Number.isFinite(expectTp)) profitLevel = expectTp;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      // Profit rejected → retry wider TP; stop rejected → loosen as before
+      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
+        break;
+      }
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL/TP distance rejected — loosen x${loosen}: ${result.detail}`,
       });
     }
   }
@@ -1138,34 +1183,104 @@ async function enterTradeLocked(
         minPrice,
         loosen
       );
+      const tp = safetyTakeProfitLevel(
+        direction,
+        mid,
+        s.regime,
+        minPrice != null ? minPrice * loosen : minPrice
+      );
       const dist = direction === 'BUY' ? mid - level : level - mid;
+      const tpDist = direction === 'BUY' ? tp - mid : mid - tp;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
-          minPrice ?? 'n/a'
-        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+        detail: `Capital SAFETY SL+TP try stopLevel=${level} · profitLevel=${tp} (SL≈${dist.toFixed(
+          5
+        )} · TP≈${tpDist.toFixed(5)} · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopLevel: level,
+        profitLevel: tp,
       });
       if (result.ok) {
         stopLevel = level;
+        profitLevel = tp;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
+        break;
+      }
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL/TP level rejected — loosen x${loosen}: ${result.detail}`,
       });
+    }
+  }
+
+  // Last resort: SAFETY SL only (never naked) — TP soft manage still runs
+  if (!result?.ok && useDistance) {
+    const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
+    const stopDistance =
+      basePts >= 10 ? Math.ceil(basePts) : Math.round(basePts * 100) / 100;
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `SAFETY TP not accepted — fallback SL-only stopDistance=${stopDistance}`,
+    });
+    result = await createCapitalPosition(session, {
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+      stopDistance,
+    });
+    if (result.ok) {
+      usedStopDistance = stopDistance;
+      stopLevel = expectedStopFromDistance(
+        direction,
+        mid,
+        quote.bid,
+        quote.ask,
+        stopDistance,
+        quote.point_size ?? null
+      );
+      profitLevel = null;
+    }
+  } else if (!result?.ok) {
+    const level = safetyStopLevel(
+      direction,
+      mid,
+      quote.bid,
+      quote.ask,
+      quote.spread ?? null,
+      minPrice,
+      1
+    );
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `SAFETY TP not accepted — fallback SL-only stopLevel=${level}`,
+    });
+    result = await createCapitalPosition(session, {
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+      stopLevel: level,
+    });
+    if (result.ok) {
+      stopLevel = level;
+      profitLevel = null;
     }
   }
 
@@ -1196,6 +1311,7 @@ async function enterTradeLocked(
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
+  s.safety_tp = profitLevel != null && Number.isFinite(profitLevel) ? profitLevel : null;
   s.error = null;
   // Freeze exit thesis at fill — live classify must not rewrite Soft/Peak mid-trade
   s.entry_regime = s.regime;
@@ -1239,7 +1355,7 @@ async function enterTradeLocked(
       s.entry_price ?? '—'
     } · SL ${s.safety_sl ?? 'none'}${
       usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''
-    } · ${result.detail}${dealId ? ` · dealId=${dealId}` : ''}`,
+    } · TP ${s.safety_tp ?? 'none'} · ${result.detail}${dealId ? ` · dealId=${dealId}` : ''}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -2453,6 +2569,7 @@ export async function startRobotSession(input: {
     open_side: null,
     last_closed_side: null,
     safety_sl: null,
+    safety_tp: null,
     error: null,
     entry_enabled: input.entry_enabled !== false,
     timer: null,

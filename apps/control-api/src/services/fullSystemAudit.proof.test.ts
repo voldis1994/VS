@@ -345,6 +345,10 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('softExitMarketGate');
     expect(src).toMatch(/softGate\.allow/);
     expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
+    // Broker SAFETY TP attached at open (opposite of SAFETY SL)
+    expect(src).toContain('safetyTakeProfitLevel');
+    expect(src).toContain('profitDistance');
+    expect(src).toContain('safety_tp');
   });
 
   it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {

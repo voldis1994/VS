@@ -1110,7 +1110,10 @@ export async function createCapitalPosition(
     stopLevel?: number;
     /** Distance in Capital POINTS — preferred for tightest legal SL */
     stopDistance?: number;
+    /** Absolute price take-profit (Capital profitLevel) — SAFETY TP */
     profitLevel?: number;
+    /** Take-profit distance in Capital POINTS */
+    profitDistance?: number;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   let epic = input.epic.trim();
@@ -1136,7 +1139,14 @@ export async function createCapitalPosition(
   } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
     body.stopLevel = input.stopLevel;
   }
-  if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
+  // Same for TP — prefer distance when SL used distance; else absolute level
+  if (
+    input.profitDistance != null &&
+    Number.isFinite(input.profitDistance) &&
+    input.profitDistance > 0
+  ) {
+    body.profitDistance = input.profitDistance;
+  } else if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
     body.profitLevel = input.profitLevel;
   }
 
@@ -1158,14 +1168,20 @@ export async function createCapitalPosition(
       : input.stopLevel != null && Number.isFinite(input.stopLevel)
         ? ` stop=${input.stopLevel}`
         : '';
+  const tpNote =
+    input.profitDistance != null && Number.isFinite(input.profitDistance)
+      ? ` tpDist=${input.profitDistance}`
+      : input.profitLevel != null && Number.isFinite(input.profitLevel)
+        ? ` tp=${input.profitLevel}`
+        : '';
   return {
     ok: true,
     status: res.status,
     json: res.json,
     deal_reference: dealRef || undefined,
     detail: dealRef
-      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
-      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
+      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote}${tpNote} dealRef=${dealRef}`
+      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}${tpNote}`,
   };
 }
 

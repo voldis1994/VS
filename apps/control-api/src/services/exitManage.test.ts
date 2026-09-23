@@ -6,8 +6,10 @@ import {
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  safetyTakeProfitLevel,
   scaleDeskAbs,
   softLossLine,
+  targetTakeProfitDistance,
   BE_LOCK_FRAC,
   DESK_REF_MID,
   HARDINV_ABS_CAP,
@@ -524,5 +526,36 @@ describe('decideBestOutcomeExit', () => {
     // Soft distance follows entry_regime TREND, not live COMPRESSION
     expect(hardInvStopDistance(2000, 'TREND_UP')).toBe(trendSl);
     expect(hardInvStopDistance(2000, 'RANGE')).toBeGreaterThan(trendSl);
+  });
+});
+
+describe('broker SAFETY TP (opposite of Soft HardInv)', () => {
+  it('BUY TP is above entry; SELL TP is below — Target ≥ HardInv', () => {
+    const entry = 2650;
+    const buyTp = safetyTakeProfitLevel('BUY', entry, 'TREND_UP');
+    const sellTp = safetyTakeProfitLevel('SELL', entry, 'TREND_DOWN');
+    const sl = hardInvStopDistance(entry, 'TREND_UP');
+    const tpDist = targetTakeProfitDistance(entry, 'TREND_UP');
+    expect(buyTp).toBeGreaterThan(entry);
+    expect(sellTp).toBeLessThan(entry);
+    expect(tpDist).toBeGreaterThan(sl);
+    // Gold rounds profitLevel to 0.1 — distance within one tick of Target
+    expect(Math.abs(buyTp - entry - tpDist)).toBeLessThan(0.1);
+    expect(Math.abs(entry - sellTp - targetTakeProfitDistance(entry, 'TREND_DOWN'))).toBeLessThan(
+      0.1
+    );
+  });
+
+  it('RANGE fade TP is tighter than TREND (profile target_mult)', () => {
+    const entry = 2650;
+    const trend = targetTakeProfitDistance(entry, 'TREND_UP');
+    const range = targetTakeProfitDistance(entry, 'RANGE');
+    expect(range).toBeLessThan(trend);
+  });
+
+  it('respects broker min stop/profit distance floor', () => {
+    const entry = 2650;
+    const wide = safetyTakeProfitLevel('BUY', entry, 'RANGE', 20);
+    expect(wide - entry).toBeGreaterThanOrEqual(20 * 1.05 - 1e-9);
   });
 });
