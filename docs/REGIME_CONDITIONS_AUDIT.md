@@ -1,7 +1,7 @@
 # Trade regimes — nosacījumi + izpildāmības audits
 
 **Datums:** 2026-09-17  
-**Live ceļš (Capital robot):** `10s OHLC` → `classifyRegime` (`regimes.ts`) → `regimeAllowedForEntry` (`deskCalibration.ts`) → `decideEntryFrom10sRegime` (`entryFromRegime.ts`) → `robotDesk` order.
+**Live ceļš (Capital robot):** `10s OHLC` → `classifyRegime` (`regimes.ts`) → `regimeAllowedForEntry` (`deskCalibration.ts`) → `decideEntryWithStructure` (`structureEntry.ts` = 10s recipe + 30m zona + 1m no tiem pašiem 10s) → `robotDesk` order.
 
 **Svarīgi:** Regime = **tirgus stāvokļa klasifikators**, nevis pats entry. Entry notiek tikai, ja (1) režīms ir ieslēgts kalibrācijā, (2) `decideEntry…` atgriež signālu, (3) 10s svece ir “moving”.
 

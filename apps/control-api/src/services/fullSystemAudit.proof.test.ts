@@ -324,6 +324,13 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(block).toMatch(/keep trail|KEEP trail|PeakProtect \$\{/i);
   });
 
+  it('entry uses decideEntryWithStructure (10s + zone + 1m), not raw 10s only', () => {
+    const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
+    expect(src).toContain('decideEntryWithStructure');
+    expect(src).toMatch(/closedBars:\s*s\.closedBars/);
+    expect(src).not.toMatch(/decideEntryFrom10sRegime\(entryBar/);
+  });
+
   it('open-trade manage uses short Capital leases — decide outside mutex', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
     expect(src).toContain('robotManageShortLeaseCycle');
