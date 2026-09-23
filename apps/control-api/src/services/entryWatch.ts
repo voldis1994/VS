@@ -16,6 +16,7 @@ import {
   sameDirectionBlocked,
 } from './flipFilter.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
+import { readMarketStory, type MarketStory } from './marketStory.js';
 
 const DIP = ENTRY_DIP;
 const RALLY = ENTRY_RALLY;
@@ -44,6 +45,11 @@ export type EntryWatch = {
   looking_for: string;
   /** Human: how the current bar relates to the trigger */
   bar_vs_trigger: string;
+  /** 30m human market story (chart narrative) */
+  market_story: string;
+  story_chapter: string;
+  story_allow: string;
+  story_detail: string;
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
@@ -366,13 +372,23 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     ? ` · FLIP LOCK 3m: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
+  const story: MarketStory = readMarketStory(
+    input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
+    bar
+  );
+  const lookBase = `${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
+
   return {
     regime,
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: lookingForWithZone(`${recipe.looking_for}${flipNote}`, zone, regime),
+    looking_for: lookingForWithZone(lookBase, zone, regime),
     bar_vs_trigger: vs,
+    market_story: story.summary_lv,
+    story_chapter: story.chapter,
+    story_allow: story.allow,
+    story_detail: story.detail,
     direction: sig?.direction ?? (flipBlocked ? needSide : recipe.direction),
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',

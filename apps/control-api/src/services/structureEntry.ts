@@ -17,6 +17,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
+import { readMarketStory, storyAllowsDirection } from './marketStory.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -430,6 +431,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
+  const story = readMarketStory(input.closedBars, input.bar);
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const candidate = raw ?? started;
@@ -438,9 +440,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
+  const storyGate = storyAllowsDirection(story, candidate.direction, regime);
+  if (!storyGate.ok) return null;
+
   return {
     ...candidate,
-    reason: `${candidate.reason} · ${gate.tag}`,
+    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv}`,
   };
 }
 
