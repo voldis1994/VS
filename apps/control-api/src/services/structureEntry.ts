@@ -58,9 +58,6 @@ const EXTREME_LO = 0.15;
  */
 const START_LO = 0.65;
 const START_HI = 0.35;
-/** Against-bias turn is OK near the edge (start of move), not mid-chop bounce */
-const TURN_LO = 0.45;
-const TURN_HI = 0.55;
 
 function bandOf(pos: number): ZoneBand {
   if (pos <= 0.2) return 'LO';
@@ -204,17 +201,14 @@ function against1mBias(
   direction: 'BUY' | 'SELL',
   bias: 'UP' | 'DOWN' | 'FLAT',
   regime: RegimeName,
-  zone: ZoneGeometry | null
+  _zone: ZoneGeometry | null
 ): string | null {
   if (bias === 'FLAT' || allowsAgainstBias(regime, direction)) return null;
-  // Turn start: BUY from LO half while prior 1ms are still red = start of rally
+  // Never open against the 1m tape — LO/HI "turn" exceptions caused knife SL hits
   if (direction === 'BUY' && bias === 'DOWN') {
-    if (zone && zone.pos <= TURN_LO) return null;
     return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
   }
-  // Turn start: SELL from HI half while prior 1ms are still green = start of drop
   if (direction === 'SELL' && bias === 'UP') {
-    if (zone && zone.pos >= TURN_HI) return null;
     return `SELL vs 1m bias UP (${regime}) · fade into rally`;
   }
   return null;
@@ -259,13 +253,9 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      // Never start long mid-bounce into a selloff (knife) — LO-edge turn is OK
-      // COMPRESSION / TRANSITION / UNKNOWN — no structure-start (wait-only)
-      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY') && zone.pos > TURN_LO) {
-        break;
-      }
-      // 10s rally starts the leg — do NOT wait for last closed 1m to flip green
-      // (that delay is why entries open mid-move)
+      // Never start long into a multi-1m selloff (bounce knife)
+      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
+      // 10s rally can start the leg before last closed 1m flips — bias must already agree
       if (zone.pos <= START_LO && rally(bar)) {
         return {
           direction: 'BUY',
@@ -286,9 +276,7 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL') && zone.pos < TURN_HI) {
-        break;
-      }
+      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
       if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',

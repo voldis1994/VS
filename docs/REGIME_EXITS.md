@@ -39,12 +39,12 @@ Faster than Soft (8s grace / 3s confirm):
 
 ## SAFETY TP (broker)
 
-Same idea as SAFETY SL / Soft HardInv, but on the **profit** side:
+Opposite of SAFETY SL / Soft HardInv on the **profit** side:
 
 - Attached at open as Capital `profitLevel` / `profitDistance`
-- Distance = desk Target (`target_abs` / `target_pct` × regime `target_mult`)
+- Distance = **max**(desk Target, SAFETY_SL × **1.5**, Soft HardInv × 1.5)
+- **Never TP < SL** (RANGE/chop soft Target alone used to invert R:R)
 - Soft Peak / Target / TimeDecay still manage earlier exits
-- Broker TP is the hard lock if manage is slow or feed drops
-- If Capital rejects TP, order falls back to SL-only (never naked)
+- If Capital rejects TP → SL-only fallback (never naked)
 
-Code: `safetyTakeProfitLevel` / `safetyTakeProfitDistancePts` in `exitManage.ts` · wired in `robotDesk` + `intentFanout`.
+Code: `safetyTakeProfitDistance` in `exitManage.ts` · wired in `robotDesk` + `intentFanout`.
