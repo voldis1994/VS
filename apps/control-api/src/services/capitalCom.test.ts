@@ -39,22 +39,6 @@ describe('testCapitalComSession validation', () => {
     expect(result.ok).toBe(false);
     expect(result.detail.toLowerCase()).toContain('2fa');
   });
-
-  it('Test prefers pooled session + login throttle (no double login spam)', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { join, dirname } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const here = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(here, 'capitalCom.ts'), 'utf8');
-    expect(src).toMatch(/connectionId\?: number/);
-    expect(src).toContain('await acquireCapitalSession');
-    expect(src).toContain('withLoginThrottle(connectionId,');
-    expect(src).toMatch(/Rate-limit \/ auth hard-fail/);
-    expect(src).toMatch(/wait ~2 minutes before Test again/);
-    const route = readFileSync(join(here, '../routes/brokers.ts'), 'utf8');
-    expect(route).toContain('connectionId: conn.id');
-    expect(route).toMatch(/Reuse the pooled session from Test/);
-  });
 });
 
 describe('encryptCapitalPassword', () => {

@@ -1,15 +1,9 @@
 # Trade regimes — nosacījumi + izpildāmības audits
 
 **Datums:** 2026-09-17  
-**Live ceļš (Capital robot):** `10s OHLC` → `classifyRegime` (`regimes.ts`) → `regimeAllowedForEntry` (`deskCalibration.ts`) → `decideEntryWithStructure` (`structureEntry.ts` = 10s recipe + 30m zona + 1m no tiem pašiem 10s + `readMarketStory`) → `robotDesk` order.
+**Live ceļš (Capital robot):** `10s OHLC` → `classifyRegime` (`regimes.ts`) → `regimeAllowedForEntry` (`deskCalibration.ts`) → `decideEntryFrom10sRegime` (`entryFromRegime.ts`) → `robotDesk` order.
 
 **Svarīgi:** Regime = **tirgus stāvokļa klasifikators**, nevis pats entry. Entry notiek tikai, ja (1) režīms ir ieslēgts kalibrācijā, (2) `decideEntry…` atgriež signālu, (3) 10s svece ir “moving”.
-
-**2026-09-23 audita labojumi (net≠trek klases kļūdas):**
-- `readMarketStory` + `minuteTrendBias` lieto **trek** (hi−lo), ne open→close net (V-bounce selloff ≠ “troksnis” / FLAT).
-- `BREAKOUT_*` prasa pierce zone hi/lo (mid 0.55 fake → reject).
-- `EXPANSION` — impuls + pareizā puse.
-- `COMPRESSION` / `TRANSITION` — wait-only (entry null).
 
 ---
 
@@ -54,14 +48,14 @@ Logs: `prior` = pēdējie 7 bāri pirms pēdējā; `hi`/`lo` no prior high/low.
 | TREND_DOWN | jā | jā | tikai rally→SELL | **LIVE** |
 | PULLBACK_UPTREND | jā | jā | rally→BUY (CONTINUATION) | **LIVE** |
 | PULLBACK_DOWNTREND | jā | jā | dip→SELL | **LIVE** |
-| COMPRESSION | jā | **jā (maldinoši)** | **vienmēr null (wait-only)** | **DEAD / wait-only** |
-| EXPANSION | jā | jā | follow body + half / impulse (structure) | **LIVE** |
-| BREAKOUT_UP | jā | jā | follow up **only at/through hi** | **LIVE** |
-| BREAKOUT_DOWN | jā | jā | follow down **only at/through lo** | **LIVE** |
+| COMPRESSION | jā | **jā (maldinoši)** | **vienmēr null** | **DEAD / wait-only** |
+| EXPANSION | jā | jā | follow body (BREAKOUT setup) | **LIVE** |
+| BREAKOUT_UP | jā | jā | follow up; dip bārs → wait | **LIVE** |
+| BREAKOUT_DOWN | jā | jā | follow down; rally → wait | **LIVE** |
 | FAILED_BREAKOUT_UP | jā (TS) | jā | fade SELL uz dip | **LIVE** (TS) |
 | FAILED_BREAKOUT_DOWN | jā (TS) | jā | fade BUY uz rally | **LIVE** (TS) |
 | REVERSAL_CANDIDATE | jā (rets) | jā | dip→SELL / rally→BUY | **PARTIAL** (rets) |
-| TRANSITION | jā | nē* | **vienmēr null (wait-only)** | **DEAD / UI trap** |
+| TRANSITION | jā | nē* | **vienmēr null** | **DEAD / UI trap** |
 
 \*UI “All on” var ieslēgt TRANSITION; entry joprojām nekad.
 
@@ -94,16 +88,16 @@ Logs: `prior` = pēdējie 7 bāri pirms pēdējā; `hi`/`lo` no prior high/low.
 
 ### COMPRESSION — DEAD (wait-only)
 - **Detect:** `compressed && inRange` (ļoti šaurs 10s range).
-- **Entry:** **apzināti null** — “wait for expansion/breakout” (`decideEntryFrom10sRegime` + `structureGate`).
-- **Problēma:** joprojām `TRADABLE_DEFAULT` / UI toggle — ieslēgšana **neko neietekmē**.
+- **Entry:** **apzināti null** — “wait for expansion/breakout”.
+- **Problēma:** ir `TRADABLE_DEFAULT` un UI toggle — ieslēgšana **neko neietekmē**.
 
 ### EXPANSION — LIVE
 - **Detect:** expanding, bet nav tīra breakout virziena.
-- **Entry:** moving + rally→BUY / dip→SELL; structure prasa impuls + pareizo pusi.
+- **Entry:** moving + rally→BUY / dip→SELL (setup BREAKOUT).
 
 ### BREAKOUT_UP / BREAKOUT_DOWN — LIVE
 - **Detect:** expanding + close ārpus prior hi/lo + virziens (trend vai lastVel).
-- **Entry:** follow; structure prasa **pierce** zone hi/lo (mid-zone fake breakout → reject).
+- **Entry:** follow; pretējā body (dip UP / rally DOWN) → wait.
 
 ### FAILED_BREAKOUT_UP / DOWN — LIVE (Capital TS)
 - **Detect:** iepriekšējais BREAKOUT_* + atpakaļ `inRange` + pretējs lastVel.
@@ -117,7 +111,7 @@ Logs: `prior` = pēdējie 7 bāri pirms pēdējā; `hi`/`lo` no prior high/low.
 
 ### TRANSITION — DEAD / UI trap
 - **Detect:** bija nosaukts režīms (ne UNKNOWN/RANGE), bet nav skaidra nākamā.
-- **Entry:** null (wait-only). Nav default ON, bet UI “All on” to ieslēdz bez jēgas.
+- **Entry:** null. Nav default ON, bet UI “All on” to ieslēdz bez jēgas.
 
 ---
 

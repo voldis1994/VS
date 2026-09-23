@@ -36,11 +36,21 @@ function describe(bar: TenSecBar): string {
   return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
+/** Impulse follow — used on SPIKE inside RANGE/COMPRESSION (no fade into HardInv). */
+function followSpike(bar: TenSecBar, regime: string): RegimeEntry | null {
+  if (!isSpike10s(bar) || !movingOrNull(bar)) return null;
+  const candle = describe(bar);
+  if (rally(bar))
+    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${regime} SPIKE follow up · ${candle}` };
+  if (dip(bar))
+    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${regime} SPIKE follow down · ${candle}` };
+  return null;
+}
+
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
- * Anti-chase: RANGE never follows SPIKE; TREND waits for pullback (no with-trend chase).
- * COMPRESSION / TRANSITION are wait-only (no fade / no follow).
+ * SPIKE bars in RANGE/COMPRESSION follow immediately (not fade pushbacks).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -51,20 +61,40 @@ export function decideEntryFrom10sRegime(
 
   if (r === 'UNKNOWN') return null;
 
-  // COMPRESSION / TRANSITION — wait-only (docs + structure audit).
-  // Thin squeeze / unclear next: no fade, no follow — wait for RANGE/EXPANSION/BREAKOUT.
-  if (r === 'COMPRESSION' || r === 'TRANSITION') return null;
+  // TRANSITION (rare after sticky classify) — follow body like EXPANSION, not starve
+  if (r === 'TRANSITION') {
+    if (!movingOrNull(bar)) return null;
+    if (rally(bar))
+      return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
+    if (dip(bar))
+      return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
+    return null;
+  }
 
-  // TREND: pullback only — do NOT buy green / sell red continuation (chase).
+  // COMPRESSION: SPIKE → follow now; micro move → fade
+  if (r === 'COMPRESSION') {
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    return null;
+  }
+
   if (r === 'TREND_UP') {
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    // With-trend: do not starve a clean up-bar waiting forever for a pullback
+    if (rally(bar))
+      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} with-trend · ${candle}` };
     return null;
   }
   if (r === 'TREND_DOWN') {
     if (!movingOrNull(bar)) return null;
     if (rally(bar))
       return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    if (dip(bar))
+      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} with-trend · ${candle}` };
     return null;
   }
 
@@ -109,9 +139,10 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // RANGE — same anti-chase: SPIKE WAIT; micro fade only
+  // RANGE — SPIKE follow immediately; only micro bars still fade pushbacks
   if (r === 'RANGE') {
-    if (isSpike10s(bar)) return null;
+    const spike = followSpike(bar, r);
+    if (spike) return spike;
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };

@@ -5,8 +5,7 @@ import {
   ZONE_BARS,
   normalizeRegime,
 } from './regimes.js';
-import type { RegimeEntry } from './entryFromRegime.js';
-import { decideEntryWithStructure } from './structureEntry.js';
+import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import {
@@ -16,7 +15,6 @@ import {
   sameDirectionBlocked,
 } from './flipFilter.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
-import { readMarketStory, type MarketStory } from './marketStory.js';
 
 const DIP = ENTRY_DIP;
 const RALLY = ENTRY_RALLY;
@@ -45,11 +43,6 @@ export type EntryWatch = {
   looking_for: string;
   /** Human: how the current bar relates to the trigger */
   bar_vs_trigger: string;
-  /** 30m human market story (chart narrative) */
-  market_story: string;
-  story_chapter: string;
-  story_allow: string;
-  story_detail: string;
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
@@ -142,16 +135,14 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
-        looking_for:
-          'TREND_UP · DIP pullback (mid-zona OK) · chase tikai extreme HI',
+        looking_for: 'TREND_UP · DIP → BUY pullback · RALLY → BUY with-trend (MOVING 10s)',
         threshold_body_pct: DIP,
       };
     case 'TREND_DOWN':
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
-        looking_for:
-          'TREND_DOWN · RALLY pullback (mid-zona OK) · chase tikai extreme LO',
+        looking_for: 'TREND_DOWN · RALLY → SELL pullback · DIP → SELL with-trend (MOVING 10s)',
         threshold_body_pct: RALLY,
       };
     case 'PULLBACK_UPTREND':
@@ -214,21 +205,23 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'RANGE · fade / start apakšējā vai augšējā pusē (ne wrong-half)',
+        looking_for:
+          'RANGE · SPIKE → follow BUY/SELL · micro fade DIP→BUY RALLY→SELL',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'COMPRESSION · wait-only · gaida EXPANSION / BREAKOUT (nav fade)',
+        setup: 'FADE',
+        looking_for:
+          'COMPRESSION · SPIKE → follow uzreiz · micro fade uz MOVING 10s',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'TRANSITION · wait-only · neskaidrs nākamais režīms (nav entry)',
+        setup: 'BREAKOUT',
+        looking_for: 'TRANSITION · follow body · RALLY → BUY · DIP → SELL (MOVING 10s)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':
@@ -294,8 +287,6 @@ export type BuildWatchInput = {
   just_closed: boolean;
   /** Closed 10s bars already in the robot structure book */
   closed_bar_count?: number;
-  /** Full 10s book — enables zone+1m structure gate in watch ARM preview */
-  closed_bars?: TenSecBar[];
   last_closed_side?: 'BUY' | 'SELL' | null;
   closed_at_ms?: number | null;
   cooldown_left_s?: number;
@@ -319,15 +310,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const needSide = requiredFlipSide(lastClosedSide, closedAtMs);
   const rawSig =
     bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
-      ? decideEntryWithStructure({
-          bar,
-          regime,
-          closedBars: input.closed_bars?.length
-            ? input.closed_bars
-            : bar
-              ? [bar]
-              : [],
-        })
+      ? decideEntryFrom10sRegime(bar, regime)
       : null;
   const flipBlocked = Boolean(
     rawSig && sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs)
@@ -372,23 +355,13 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     ? ` · FLIP LOCK 3m: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
-  const story: MarketStory = readMarketStory(
-    input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
-    bar
-  );
-  const lookBase = `${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
-
   return {
     regime,
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: lookingForWithZone(lookBase, zone, regime),
+    looking_for: lookingForWithZone(`${recipe.looking_for}${flipNote}`, zone, regime),
     bar_vs_trigger: vs,
-    market_story: story.summary_lv,
-    story_chapter: story.chapter,
-    story_allow: story.allow,
-    story_detail: story.detail,
     direction: sig?.direction ?? (flipBlocked ? needSide : recipe.direction),
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',
