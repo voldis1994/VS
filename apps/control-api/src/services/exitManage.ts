@@ -320,14 +320,16 @@ export const STRUCTURE_GRACE_MS = 8_000;
 export const STRUCTURE_CONFIRM_MS = 3_000;
 
 /**
- * After a real favorable excursion (≥ Soft HardInv), Soft line moves to a
- * BE lock so greens cannot fully reverse into a max Soft loss.
+ * After a real favorable excursion (≥ Soft HardInv), Soft line moves near
+ * flat so greens cannot reverse into a full Soft loss.
  *
- * Lock is a fraction of Soft SL (scale-free) — clears typical half-spread at
- * REF; same % on every market. Old fixed +0.25 → Funds magic-minus.
+ * Lock is ONLY a thin spread cushion (scale-free) — NOT a profit harvest.
+ * Old BE_LOCK_FRAC=0.45 banked ~+45% of Soft (+£0.03…+£0.08 on Funds) while
+ * losers still took full Soft (−£0.10…−£0.11) → inverted R:R. Real winners
+ * come from Peak/Target, not Soft BE.
  */
-export const BE_LOCK_FRAC = 0.45;
-/** Executable edge as fraction of Soft SL before BE-lock / Peak / Target fire. */
+export const BE_LOCK_FRAC = 0.05;
+/** Executable edge as fraction of Soft SL — only while mid still green. */
 export const BE_LOCK_EXEC_FRAC = 0.25;
 
 export function softLossLine(sl: number, mfe: number): number {
@@ -459,7 +461,10 @@ export function decideBestOutcomeExit(
     const lossLine = softLossLine(sl, mfe);
     const beMode = mfe >= sl;
     if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
-      if (beMode && execFav < minExec && fav > -sl) {
+      // Magic-minus guard ONLY while mid still green: bid/ask cash-red through
+      // spread must not Soft-cut. Once mid ≤ lock (~flat), cut — do not gift
+      // a free ride back to full Soft loss (Funds −£0.10 after tiny BE wins).
+      if (beMode && fav > 0 && execFav < minExec) {
         if (gate === 'live_loss') {
           return {
             exit: false,
