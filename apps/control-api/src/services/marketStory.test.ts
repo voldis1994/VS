@@ -218,4 +218,72 @@ describe('30m market story — 1m scalp grade', () => {
     expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
     expect(scalpStoryConfirms(story, 'BUY', 'TREND_UP').ok).toBe(false);
   });
+
+  it('10s trigger starts the leg — does not wait for green closed 1m', () => {
+    const story = {
+      chapter: 'RALLY' as const,
+      allow: 'BUY' as const,
+      summary_lv: 'STĀSTS · 30m rally',
+      detail: 'test',
+      confidence: 0.48,
+      zone_pos: 0.32,
+      net_pts: 4,
+      red_1m: 3,
+      green_1m: 6,
+      swing: 'HH_HL' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4330,
+        high: 4330.4,
+        low: 4327,
+        close: 4327.5, // still red — move just turning
+        bars: 6,
+      },
+    };
+    const trigger = {
+      open_time_ms: 10_000,
+      open: 4327.5,
+      high: 4330,
+      low: 4327.2,
+      close: 4329.8, // green 10s start
+      ticks: 10,
+    };
+    const ok = scalpStoryConfirms(story, 'BUY', 'TREND_UP', trigger);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.tag).toMatch(/10s START GREEN/);
+  });
+
+  it('10s red trigger starts SELL leg while last 1m still green', () => {
+    const story = {
+      chapter: 'SELLOFF' as const,
+      allow: 'SELL' as const,
+      summary_lv: 'STĀSTS · 30m selloff',
+      detail: 'test',
+      confidence: 0.5,
+      zone_pos: 0.7,
+      net_pts: -5,
+      red_1m: 7,
+      green_1m: 3,
+      swing: 'LL_LH' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4340,
+        high: 4342,
+        low: 4339,
+        close: 4341.5, // green bounce before drop resumes
+        bars: 6,
+      },
+    };
+    const trigger = {
+      open_time_ms: 10_000,
+      open: 4341.5,
+      high: 4341.8,
+      low: 4338,
+      close: 4338.5,
+      ticks: 10,
+    };
+    const ok = scalpStoryConfirms(story, 'SELL', 'TREND_DOWN', trigger);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.tag).toMatch(/10s START RED/);
+  });
 });
