@@ -76,7 +76,53 @@ describe('30m market story — 1m scalp grade', () => {
     expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
   });
 
-  it('chop / tiny path → no scalp side', () => {
+  it('V-bounce selloff (net≈0, trek large) is SELLOFF not "troksnis"', () => {
+    // Reproduces 09:07 Gold: dump → bounce → dump, net small, trek ~7pt, pos near LO
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 35 * 60_000;
+    const book: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      book.push({
+        open_time_ms: m0 + i * 10_000,
+        open: 4324,
+        high: i === 2 ? 4327.5 : 4324.2,
+        low: i === 8 ? 4320 : 4323.8,
+        close: 4324,
+        ticks: 6,
+      });
+    }
+    // Dump 4327 → 4319
+    for (let m = 0; m < 8; m++) {
+      const start = m0 + MIN_BARS_FOR_ZONE * 10_000 + m * 60_000;
+      const o = 4327 - m * 1.0;
+      const c = o - 0.9;
+      for (let k = 0; k < 6; k++) book.push(bar(o - k * 0.12, o - k * 0.12 - 0.1, start + k * 10_000));
+      book[book.length - 1] = bar(c + 0.2, c, start + 50_000);
+    }
+    // Bounce to ~4325
+    for (let m = 0; m < 5; m++) {
+      const start = m0 + MIN_BARS_FOR_ZONE * 10_000 + (8 + m) * 60_000;
+      const o = 4319.5 + m * 1.0;
+      const c = o + 0.8;
+      for (let k = 0; k < 6; k++) book.push(bar(o + k * 0.1, o + k * 0.1 + 0.08, start + k * 10_000));
+      book[book.length - 1] = bar(c - 0.15, c, start + 50_000);
+    }
+    // Dump again to ~4319
+    for (let m = 0; m < 5; m++) {
+      const start = m0 + MIN_BARS_FOR_ZONE * 10_000 + (13 + m) * 60_000;
+      const o = 4325 - m * 1.1;
+      const c = o - 1.0;
+      for (let k = 0; k < 6; k++) book.push(bar(o - k * 0.12, o - k * 0.12 - 0.1, start + k * 10_000));
+      book[book.length - 1] = bar(c + 0.2, c, start + 50_000);
+    }
+    const last = book[book.length - 1]!;
+    const story = readMarketStory(book, last);
+    expect(story.summary_lv).not.toMatch(/troksnis|ceļš </);
+    expect(['SELLOFF', 'BOUNCE_IN_SELL', 'BREAK_DOWN', 'EXHAUST_LO']).toContain(story.chapter);
+    expect(story.allow).toBe('SELL');
+    expect(storyAllowsDirection(story, 'BUY', 'RANGE').ok).toBe(false);
+  });
+
+  it('tiny trek (<3pt) stays GAIDI', () => {
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 15 * 60_000;
     const book: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE + 60; i++) {
@@ -86,7 +132,6 @@ describe('30m market story — 1m scalp grade', () => {
     const last = book[book.length - 1]!;
     const story = readMarketStory(book, last);
     expect(story.allow).toBe('NONE');
-    expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
-    expect(scalpStoryConfirms(story, 'SELL', 'RANGE').ok).toBe(false);
+    expect(story.summary_lv).toMatch(/trek <|chop|GAIDI/);
   });
 });
