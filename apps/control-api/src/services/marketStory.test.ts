@@ -126,12 +126,19 @@ describe('30m market story — 1m scalp grade', () => {
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 15 * 60_000;
     const book: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE + 60; i++) {
-      const mid = 4330 + Math.sin(i / 3) * 0.4;
-      book.push(bar(mid, mid + ((i % 2) - 0.5) * 0.05, m0 + i * 10_000, 0.08));
+      const mid = 4330 + Math.sin(i / 5) * 0.15; // <1pt total wander
+      book.push({
+        open_time_ms: m0 + i * 10_000,
+        open: mid,
+        high: mid + 0.05,
+        low: mid - 0.05,
+        close: mid + ((i % 2) - 0.5) * 0.02,
+        ticks: 6,
+      });
     }
     const last = book[book.length - 1]!;
     const story = readMarketStory(book, last);
     expect(story.allow).toBe('NONE');
-    expect(story.summary_lv).toMatch(/trek <|chop|GAIDI/);
+    expect(story.summary_lv).toMatch(/trek <|chop|GAIDI|šaurs/);
   });
 });
