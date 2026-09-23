@@ -28,9 +28,7 @@ import {
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
-  epicSupportsGoldDeskCalibration,
   favorableMove,
-  GOLD_DESK_MIN_MID,
 } from './exitManage.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
 import { decideEntryWithStructure } from './structureEntry.js';
@@ -1047,19 +1045,6 @@ async function enterTradeLocked(
       mid: quote.mid,
       detail: 'ENTRY blocked — no mid for safety SL',
     });
-    return;
-  }
-
-  // Gold Soft/Peak abs floors (~1.5–4pt) destroy Heating Oil (~2) — Soft fires instantly
-  if (!epicSupportsGoldDeskCalibration(mid)) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ENTRY blocked — ${s.display_name} mid=${mid.toFixed(4)} < ${GOLD_DESK_MIN_MID} · desk calibrated for Gold only (not Heating Oil / cheap CFDs)`,
-    });
-    s.pending_entry = null;
     return;
   }
 

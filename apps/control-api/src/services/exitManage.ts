@@ -164,9 +164,23 @@ function peakShouldCut(
 }
 
 /**
+ * Soft / Peak / Target abs knobs are tuned once at Gold (~DESK_REF_MID).
+ * Candles/regimes look the same on every market — only **size** changes.
+ * Scale abs pts by entry/REF so Heating Oil gets the same % R:R as Gold.
+ * (Not a per-market calibration — one desk, price-scaled.)
+ */
+export const DESK_REF_MID = 2000;
+
+/** Map a Gold-tuned absolute (pts at REF) onto this instrument's price. */
+export function scaleDeskAbs(goldAbsPts: number, entry: number): number {
+  const mid = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(goldAbsPts * (mid / DESK_REF_MID), mid * 1e-9);
+}
+
+/**
  * Soft HardInv distance in price pts.
- * `hardinv_abs` is a CAP (positive R:R) — Gold % must not push Soft SL to 4–6pt
- * while Peak banks +0.5–2pt.
+ * `hardinv_abs` is a CAP at Gold REF — scaled to entry so cheap CFDs
+ * keep the same % R:R (not a raw 1.5pt floor on Heating Oil).
  */
 export function hardInvStopDistance(
   entry: number,
@@ -175,9 +189,9 @@ export function hardInvStopDistance(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const pct = absEntry * cal.hardinv_pct;
-  const floor = HARDINV_ABS_FLOOR;
-  const cap =
-    cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
+  const floor = scaleDeskAbs(HARDINV_ABS_FLOOR, absEntry);
+  const capGold = cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
+  const cap = scaleDeskAbs(capGold, absEntry);
   let sl = Math.min(Math.max(pct, floor), cap);
   const r = String(regime || '')
     .trim()
@@ -194,19 +208,22 @@ export function hardInvStopDistance(
  * After a real favorable excursion (≥ Soft HardInv), Soft line moves to a
  * BE lock so greens cannot fully reverse into a max Soft loss.
  *
- * MUST clear typical Capital Gold half-spread on market close.
- * Old +0.25 → mid “green” +0.08 then DELETE at bid/ask = Funds magic-minus
- * (−€0.05…−€0.15 every scratch). Same class as TimeDecay-at-flat bug.
+ * Lock is a fraction of Soft SL (scale-free) — clears typical half-spread on
+ * Gold; same % on Heating Oil. Old fixed +0.25 → Funds magic-minus.
  */
-export const BE_LOCK_MIN_ABS = 1.0;
-/** Executable (bid/ask) edge required to fire BE-lock — else HOLD through dead zone. */
-export const BE_LOCK_MIN_EXEC = 0.5;
+export const BE_LOCK_FRAC = 0.45;
+/** Executable edge as fraction of Soft SL before BE-lock / Peak / Target fire. */
+export const BE_LOCK_EXEC_FRAC = 0.25;
 
 export function softLossLine(sl: number, mfe: number): number {
   if (mfe >= sl) {
-    return Math.max(BE_LOCK_MIN_ABS, Math.min(sl * 0.5, 1.5));
+    return Math.max(sl * BE_LOCK_FRAC, sl * 1e-9);
   }
   return -sl;
+}
+
+export function beLockMinExec(sl: number): number {
+  return Math.max(sl * BE_LOCK_EXEC_FRAC, sl * 1e-9);
 }
 
 /**
@@ -226,13 +243,6 @@ export function executableFavorable(
   }
   const px = ask != null && Number.isFinite(ask) ? ask : mid;
   return entry - px;
-}
-
-/** Gold Soft/Peak abs floors are meaningless on Heating Oil (~2) — block live entry. */
-export const GOLD_DESK_MIN_MID = 500;
-
-export function epicSupportsGoldDeskCalibration(mid: number | null | undefined): boolean {
-  return mid != null && Number.isFinite(mid) && mid >= GOLD_DESK_MIN_MID;
 }
 
 export type ExitQuoteLegs = {
@@ -270,19 +280,22 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const peakRet = cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
-  const minGiveback =
-    cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS;
-  // Target: enforce absolute floor so % never undercuts positive R:R vs Soft HardInv
+  const minGiveback = scaleDeskAbs(
+    cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
+    absEntry
+  );
+  // Target: same % R:R as Gold REF — scale abs floors with price
   const tp = Math.max(
     absEntry * cal.target_pct,
-    cal.target_abs || 0,
-    TARGET_ABS_FLOOR
+    scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
+    scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
   );
   const sl = hardInvStopDistance(entry, s.regime);
+  const minExec = beLockMinExec(sl);
   const mfeFloor = Math.max(
     absEntry * cal.peak_mfe_pct,
-    cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR,
-    PEAK_MFE_ABS_FLOOR
+    scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
+    scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
   );
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
@@ -304,7 +317,7 @@ export function decideBestOutcomeExit(
     if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
       // BE-lock dead zone: mid near flat but close would be cash-red → HOLD
       // (Full Soft −sl still cuts when fav ≤ −sl.)
-      if (beMode && execFav < BE_LOCK_MIN_EXEC && fav > -sl) {
+      if (beMode && execFav < minExec && fav > -sl) {
         if (gate === 'live_loss') {
           return { exit: false, reason: '', hardinv_breaching: false };
         }
@@ -333,7 +346,7 @@ export function decideBestOutcomeExit(
   // Armed after reverse 1m — PeakProtect giveback only, green only, real MFE
   if (wantPeakOnly) {
     if (
-      execFav >= BE_LOCK_MIN_EXEC &&
+      execFav >= minExec &&
       peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
     ) {
       const givePct = ((1 - peakRet) * 100).toFixed(0);
@@ -348,7 +361,7 @@ export function decideBestOutcomeExit(
   if (wantFullProfit) {
     if (
       gate === 'all' &&
-      execFav >= BE_LOCK_MIN_EXEC &&
+      execFav >= minExec &&
       peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
     ) {
       return {
@@ -357,7 +370,7 @@ export function decideBestOutcomeExit(
       };
     }
 
-    if (fav >= tp && execFav >= BE_LOCK_MIN_EXEC) {
+    if (fav >= tp && execFav >= minExec) {
       return {
         exit: true,
         reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)}`,
@@ -366,15 +379,15 @@ export function decideBestOutcomeExit(
 
     // Never TimeDecay at fav≈0 — mid flat + spread on close = tiny broker loss
     const minFav = Math.max(
-      TIMEDECAY_MIN_FAV_ABS,
+      scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, absEntry),
       absEntry * 0.00035,
       sl * 0.9,
-      (cal.target_abs || TARGET_ABS_FLOOR) * 0.4
+      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry) * 0.4
     );
     if (
       heldMs > TIMEDECAY_MIN_HOLD_MS &&
       fav >= minFav &&
-      execFav >= BE_LOCK_MIN_EXEC &&
+      execFav >= minExec &&
       mfe >= mfeFloor
     ) {
       return {

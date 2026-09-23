@@ -2,15 +2,16 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
-  epicSupportsGoldDeskCalibration,
+  beLockMinExec,
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  scaleDeskAbs,
   softLossLine,
-  BE_LOCK_MIN_ABS,
-  BE_LOCK_MIN_EXEC,
-  GOLD_DESK_MIN_MID,
+  BE_LOCK_FRAC,
+  DESK_REF_MID,
   HARDINV_ABS_CAP,
+  HARDINV_ABS_FLOOR,
   HARDINV_CONFIRM_MS,
   HARDINV_GRACE_MS,
   PEAK_MFE_ABS_FLOOR,
@@ -82,18 +83,26 @@ describe('positive R:R Soft HardInv', () => {
   it('caps Soft HardInv near ~2.2 on Gold (not 4–6pt % runaway)', () => {
     const trend = hardInvStopDistance(2650, 'TREND_UP');
     const range = hardInvStopDistance(2650, 'RANGE');
-    expect(trend).toBeLessThanOrEqual(HARDINV_ABS_CAP + 0.01);
-    expect(trend).toBeGreaterThanOrEqual(1.5);
-    // RANGE may widen slightly but stays near cap
-    expect(range).toBeLessThanOrEqual(HARDINV_ABS_CAP * 1.25 + 0.01);
+    const capAt = scaleDeskAbs(HARDINV_ABS_CAP, 2650);
+    expect(trend).toBeLessThanOrEqual(capAt + 0.01);
+    expect(trend).toBeGreaterThanOrEqual(scaleDeskAbs(HARDINV_ABS_FLOOR, 2650) - 0.01);
+    expect(range).toBeLessThanOrEqual(capAt * 1.25 + 0.01);
     expect(range).toBeGreaterThan(trend - 0.01);
   });
 
-  it('softLossLine BE-lock clears Gold spread (not +0.25 magic-minus)', () => {
+  it('same Soft % R:R on Heating Oil as Gold (scale abs, not per-market cal)', () => {
+    const gold = hardInvStopDistance(DESK_REF_MID, 'TREND_UP');
+    const oil = hardInvStopDistance(2.15, 'TREND_UP');
+    expect(oil / 2.15).toBeCloseTo(gold / DESK_REF_MID, 5);
+    expect(oil).toBeLessThan(0.05);
+  });
+
+  it('softLossLine BE-lock is a fraction of Soft SL (scale-free)', () => {
     const sl = 2.0;
     expect(softLossLine(sl, 0.5)).toBe(-sl);
-    expect(softLossLine(sl, 2.0)).toBeGreaterThanOrEqual(BE_LOCK_MIN_ABS);
-    expect(softLossLine(sl, 2.0)).toBeLessThanOrEqual(1.5);
+    expect(softLossLine(sl, 2.0)).toBeCloseTo(sl * BE_LOCK_FRAC, 5);
+    const oilSl = hardInvStopDistance(2.15, 'TREND_UP');
+    expect(softLossLine(oilSl, oilSl + 0.001)).toBeCloseTo(oilSl * BE_LOCK_FRAC, 8);
   });
 
   it('Peak MFE floor ≥ Soft HardInv so winners are not micro-scalped', () => {
@@ -146,7 +155,6 @@ describe('decideBestOutcomeExit', () => {
       hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 1_000),
     };
     const slTrend = hardInvStopDistance(2000, 'TREND_UP');
-    // Inside SL — hold
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -160,7 +168,6 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(hold.exit).toBe(false);
 
-    // First tick beyond SL — stamp breach, do not cut yet
     const pending = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -176,7 +183,6 @@ describe('decideBestOutcomeExit', () => {
     expect(pending.exit).toBe(false);
     expect(pending.hardinv_breaching).toBe(true);
 
-    // TREND confirmed cut
     const cutTrend = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', ...aged }),
       2000 - slTrend - 0.2,
@@ -186,7 +192,6 @@ describe('decideBestOutcomeExit', () => {
     expect(cutTrend.exit).toBe(true);
     expect(cutTrend.reason).toMatch(/HardInvalidation/);
 
-    // Shallow wick that was −3.5 under old 4.8 RANGE SL now cuts (capped Soft)
     const shallow = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', ...aged }),
       1996.5,
@@ -218,7 +223,9 @@ describe('decideBestOutcomeExit', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
     const lock = softLossLine(sl, sl + 0.5);
-    // Mid still at lock with bid clearing BE_LOCK_MIN_EXEC
+    const minExec = beLockMinExec(sl);
+    // Slightly under lock so fav ≤ lossLine (avoid float equality miss)
+    const mid = 2000 + lock - 0.02;
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -228,10 +235,10 @@ describe('decideBestOutcomeExit', () => {
         entry_at: new Date(now - 60_000).toISOString(),
         hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 500),
       }),
-      2000 + lock,
+      mid,
       'live_loss',
       now,
-      { bid: 2000 + BE_LOCK_MIN_EXEC + 0.05, ask: 2000 + lock + 0.3 }
+      { bid: 2000 + minExec + 0.05, ask: mid + 0.3 }
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/BE-lock/);
@@ -240,7 +247,6 @@ describe('decideBestOutcomeExit', () => {
   it('BE-lock does NOT scratch mid-flat when bid/ask would be cash-red (Funds magic-minus)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
-    // Mid fav +0.1 — old BE-lock (+0.25) would cut → market close at bid = −cash
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -253,18 +259,12 @@ describe('decideBestOutcomeExit', () => {
       2000.1,
       'live_loss',
       now,
-      { bid: 1999.7, ask: 2000.4 } // exec fav −0.3
+      { bid: 1999.7, ask: 2000.4 }
     );
     expect(d.exit).toBe(false);
     expect(executableFavorable('BUY', 2000, 1999.7, 2000.4, 2000.1)).toBeLessThan(
-      BE_LOCK_MIN_EXEC
+      beLockMinExec(sl)
     );
-  });
-
-  it('Heating Oil / cheap CFDs are outside Gold desk calibration', () => {
-    expect(epicSupportsGoldDeskCalibration(2.15)).toBe(false);
-    expect(epicSupportsGoldDeskCalibration(2650)).toBe(true);
-    expect(GOLD_DESK_MIN_MID).toBe(500);
   });
 
   it('PeakProtect never cuts red after reverse (screenshot micro-loss bug)', () => {
@@ -286,7 +286,7 @@ describe('decideBestOutcomeExit', () => {
       snap({
         open_side: 'BUY',
         entry_price: 2000,
-        mfe: 1.2, // below PEAK_MFE_ABS_FLOOR 3.0
+        mfe: 1.2,
         peak_retention: 0.5,
       }),
       2000.6,
@@ -347,7 +347,6 @@ describe('decideBestOutcomeExit', () => {
   });
 
   it('target banks wins at ≥ TARGET_ABS_FLOOR (positive R:R)', () => {
-    // entry 2000 → TP = max(5.0 pct*?, 5.0 abs, 4.0 floor) ≥ 4
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -379,7 +378,6 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(flat.exit).toBe(false);
 
-    // Small +1.2 fav must NOT TimeDecay — below TIMEDECAY_MIN_FAV_ABS / Soft SL
     const tooSmall = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -396,16 +394,26 @@ describe('decideBestOutcomeExit', () => {
     expect(tooSmall.exit).toBe(false);
     expect(TIMEDECAY_MIN_FAV_ABS).toBeGreaterThanOrEqual(2);
 
+    // Real lock: fav ≥ scaled TimeDecay min + Soft SL fraction; mfe ≥ Peak floor
+    const entry = 4352.73;
+    const sl = hardInvStopDistance(entry, 'RANGE');
+    const minFav = Math.max(
+      scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, entry),
+      sl * 0.9,
+      scaleDeskAbs(TARGET_ABS_FLOOR, entry) * 0.4
+    );
+    const mfeNeed = scaleDeskAbs(PEAK_MFE_ABS_FLOOR, entry);
+    const lockFav = Math.max(minFav + 0.2, mfeNeed);
     const realLock = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
-        entry_price: 4352.73,
+        entry_price: entry,
         regime: 'RANGE',
-        mfe: 6.0,
+        mfe: Math.max(lockFav + 1, mfeNeed + 1),
         peak_retention: 1,
         entry_at: new Date(now - 13 * 60_000).toISOString(),
       }),
-      4352.73 - 3.0,
+      entry - lockFav,
       'target_time',
       now
     );
@@ -417,10 +425,10 @@ describe('decideBestOutcomeExit', () => {
     const entry = 2650;
     const sl = hardInvStopDistance(entry, 'TREND_UP');
     const cal = defaultDeskCalibration();
-    // Earliest Peak lock ≈ mfeFloor * retention after min giveback
-    const earliestPeakLock = cal.peak_mfe_abs - cal.peak_min_giveback_abs;
-    // Soft max loss ≈ sl (before BE). Peak earliest lock should not be << Soft loss.
-    expect(cal.peak_mfe_abs).toBeGreaterThan(sl);
+    const peakFloor = scaleDeskAbs(cal.peak_mfe_abs, entry);
+    const minGb = scaleDeskAbs(cal.peak_min_giveback_abs, entry);
+    const earliestPeakLock = peakFloor - minGb;
+    expect(peakFloor).toBeGreaterThan(sl);
     expect(earliestPeakLock).toBeGreaterThan(sl * 0.7);
   });
 });
