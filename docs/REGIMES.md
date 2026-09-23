@@ -11,10 +11,15 @@ Regime classification is also available via C++ `RegimeEngine` (`libs/regime-eng
 Live Capital orders use `decideEntryWithStructure`:
 
 1. `decideEntryFrom10sRegime` — 10s DIP/RALLY recipe for the current regime  
-2. else `structureStartEntry` — zone LO/HI + closed **1m** (aggregated from the same 10s book)  
-3. `structureGate` — reject mid-zone with-trend **chase**; keep edge fades / breakouts / support pullbacks  
+2. else `structureStartEntry` — zone **half** + closed **1m** color (from same 10s) + MOVING 10s  
+3. `structureGate` — **per-regime** soft rules (all 14); block only extreme chase / wrong half  
 
-30m zone hi/lo comes from the robot’s closed 10s book (`ZONE_BARS`). The 1m candle is **not** a separate feed — it is 6×10s OHLC so the entry matches what you see on the Capital 1m chart.
+Executable defaults (Gold reality):
+- TREND pullbacks allowed mid-zone (not only at LO)
+- BREAKOUT does **not** require prior 1m same color (prior minute often still opposite)
+- RANGE/COMPRESSION fades: correct **half** only
+- FAILED_BREAKOUT: near the failed edge (upper half after failed up, etc.)
+- Chase reject only in extreme ~15% of zone with-trend
 
 ## Regime types
 
