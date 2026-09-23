@@ -205,15 +205,15 @@ export function readMarketStory(
   const recentSell = recentNet < 0 && redR >= 3;
   const recentBuy = recentNet > 0 && greenR >= 3;
 
-  // Human selloff: LH/LL, OR real trek + recent red (even if open→close net is flat after bounce)
+  // Require real trek for color-majority calls — tiny noise must not become SELLOFF
   const sellStruct =
     swing === 'LL_LH' ||
-    (net < 0 && red >= green + 2) ||
+    (trek >= minPath && net < 0 && red >= green + 2) ||
     (trek >= minPath && recentSell && last.close <= midZone) ||
     (trek >= minPath && red >= green + 2 && pos <= 0.45);
   const buyStruct =
     swing === 'HH_HL' ||
-    (net > 0 && green >= red + 2) ||
+    (trek >= minPath && net > 0 && green >= red + 2) ||
     (trek >= minPath && recentBuy && last.close >= midZone) ||
     (trek >= minPath && green >= red + 2 && pos >= 0.55);
 
