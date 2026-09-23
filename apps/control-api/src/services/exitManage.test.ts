@@ -90,11 +90,13 @@ describe('positive R:R Soft HardInv', () => {
     expect(range).toBeGreaterThan(trend - 0.01);
   });
 
-  it('same Soft % R:R on Heating Oil as Gold (scale abs, not per-market cal)', () => {
-    const gold = hardInvStopDistance(DESK_REF_MID, 'TREND_UP');
-    const oil = hardInvStopDistance(2.15, 'TREND_UP');
-    expect(oil / 2.15).toBeCloseTo(gold / DESK_REF_MID, 5);
-    expect(oil).toBeLessThan(0.05);
+  it('same Soft % R:R on any mid (scale abs — one cal for all markets)', () => {
+    const atRef = hardInvStopDistance(DESK_REF_MID, 'TREND_UP');
+    const cheap = hardInvStopDistance(2.15, 'TREND_UP');
+    const rich = hardInvStopDistance(4350, 'TREND_UP');
+    expect(cheap / 2.15).toBeCloseTo(atRef / DESK_REF_MID, 5);
+    expect(rich / 4350).toBeCloseTo(atRef / DESK_REF_MID, 5);
+    expect(cheap).toBeLessThan(0.05);
   });
 
   it('softLossLine BE-lock is a fraction of Soft SL (scale-free)', () => {

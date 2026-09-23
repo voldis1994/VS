@@ -164,23 +164,23 @@ function peakShouldCut(
 }
 
 /**
- * Soft / Peak / Target abs knobs are tuned once at Gold (~DESK_REF_MID).
- * Candles/regimes look the same on every market — only **size** changes.
- * Scale abs pts by entry/REF so Heating Oil gets the same % R:R as Gold.
- * (Not a per-market calibration — one desk, price-scaled.)
+ * Soft / Peak / Target abs knobs are tuned once at REF mid (~DESK_REF_MID).
+ * Candles/regimes look the same on **every** market — only size changes.
+ * Scale abs pts by entry/REF so all epics share the same % R:R.
+ * One desk calibration — not per-market.
  */
 export const DESK_REF_MID = 2000;
 
-/** Map a Gold-tuned absolute (pts at REF) onto this instrument's price. */
-export function scaleDeskAbs(goldAbsPts: number, entry: number): number {
+/** Map a REF-tuned absolute (pts at REF) onto this instrument's price. */
+export function scaleDeskAbs(refAbsPts: number, entry: number): number {
   const mid = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(goldAbsPts * (mid / DESK_REF_MID), mid * 1e-9);
+  return Math.max(refAbsPts * (mid / DESK_REF_MID), mid * 1e-9);
 }
 
 /**
  * Soft HardInv distance in price pts.
- * `hardinv_abs` is a CAP at Gold REF — scaled to entry so cheap CFDs
- * keep the same % R:R (not a raw 1.5pt floor on Heating Oil).
+ * `hardinv_abs` is a CAP at REF — scaled to entry so every market
+ * keeps the same % R:R (not raw REF pts on a cheap CFD).
  */
 export function hardInvStopDistance(
   entry: number,
@@ -208,8 +208,8 @@ export function hardInvStopDistance(
  * After a real favorable excursion (≥ Soft HardInv), Soft line moves to a
  * BE lock so greens cannot fully reverse into a max Soft loss.
  *
- * Lock is a fraction of Soft SL (scale-free) — clears typical half-spread on
- * Gold; same % on Heating Oil. Old fixed +0.25 → Funds magic-minus.
+ * Lock is a fraction of Soft SL (scale-free) — clears typical half-spread at
+ * REF; same % on every market. Old fixed +0.25 → Funds magic-minus.
  */
 export const BE_LOCK_FRAC = 0.45;
 /** Executable edge as fraction of Soft SL before BE-lock / Peak / Target fire. */

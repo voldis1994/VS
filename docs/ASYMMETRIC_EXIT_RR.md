@@ -30,7 +30,7 @@ Peak also **disarmed on every green 1m continue**, so the trail was thrown away 
 7. **TimeDecay min fav ≥2pt** (and ≥0.9× Soft SL) — no +0.75 harvests.
 8. **BE-lock:** after MFE ≥ Soft SL, Soft line moves to **~45% of Soft SL** (scale-free). Cut only if **executable** bid/ask edge ≥ **25% of Soft SL** — otherwise HOLD through the dead zone (mid-flat + spread close = Funds magic-minus). Full Soft −SL still cuts real losers.
 9. **1m continue keeps Peak armed** — trail stays on.
-10. **One desk, price-scaled:** Soft/Peak/Target abs knobs are Gold-at-REF (~2000). Same candle regimes on every market — abs pts scale with `entry/REF` (Heating Oil gets the same % R:R, not a raw 1.5pt floor).
+10. **One desk for all markets:** Soft/Peak/Target abs knobs tuned at REF (~2000). Same candle regimes everywhere — abs pts scale with `entry/REF` (same % R:R on every epic).
 
 One-shot upgrade: disk `desk-calibration.json` with scalp signature (`peak_mfe_abs < 2` + `hardinv_pct ≥ 0.0012`) is replaced by the new defaults (regimes kept).
 
