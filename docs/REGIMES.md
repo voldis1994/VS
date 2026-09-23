@@ -1,10 +1,38 @@
 # Regimes
 
-> **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryFrom10sRegime`
-> (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`).
+> **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryWithStructure`
+> (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`, `structureEntry.ts`).
 > Full conditions + executability audit: **[REGIME_CONDITIONS_AUDIT.md](./REGIME_CONDITIONS_AUDIT.md)**.
 
 Regime classification is also available via C++ `RegimeEngine` (`libs/regime-engine`) from `MarketState`. Config: `config/regimes.yaml` (primary horizon 10s). **FAILED_BREAKOUT_*** are live in TS; reserved / unused in C++ `classify()`.
+
+## Structure entry (10s ↔ 1m)
+
+Live Capital orders use `decideEntryWithStructure`:
+
+1. `decideEntryFrom10sRegime` — 10s DIP/RALLY recipe for the current regime  
+2. else `structureStartEntry` — zone **half** + closed **1m** color (from same 10s) + MOVING 10s  
+3. `structureGate` — **per-regime** soft rules (all 14); block only extreme chase / wrong half  
+
+**Exits** are also per-regime — see **[REGIME_EXITS.md](./REGIME_EXITS.md)** (`entry_regime` frozen at fill + structure invalidation + profile Soft/Peak/Target).
+
+Executable defaults (Gold reality):
+- TREND pullbacks allowed mid-zone (not only at LO)
+- BREAKOUT must **pierce** zone hi/lo (mid-zone 0.55 was a fake breakout — rejected)
+- EXPANSION follow only with impulse + correct half
+- RANGE fades: correct **half** only
+- COMPRESSION / TRANSITION / UNKNOWN: **wait-only** (no entry)
+- FAILED_BREAKOUT: near the failed edge (upper half after failed up, etc.)
+- Chase reject only in extreme ~15% of zone with-trend
+- `minuteTrendBias` uses **trek** (hi−lo), not open→close net (V-bounce ≠ FLAT)
+
+## Market story (cilvēcīgs 30m stāsts)
+
+`readMarketStory` (`marketStory.ts`) reads ~30m of 1m candles from the same 10s book:
+
+- swings (HH/HL vs LH/LL), net path, red/green count  
+- chapters: SELLOFF, RALLY, BOUNCE_IN_SELL, DIP_IN_RALLY, BREAK_*, RANGE_CHOP, …  
+- ENTRY WATCH shows `STĀSTS · …`; entry **blocks** directions that fight the story  
 
 ## Regime types
 

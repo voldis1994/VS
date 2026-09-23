@@ -75,6 +75,10 @@ type EntryWatch = {
   status: string;
   looking_for: string;
   bar_vs_trigger: string;
+  market_story?: string;
+  story_chapter?: string;
+  story_allow?: string;
+  story_detail?: string;
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
@@ -774,6 +778,17 @@ export function RobotDeskPage() {
                     <div className="robot-entry-watch-look">
                       MEKLĒ · {focused.entry_watch.looking_for}
                     </div>
+                    {(focused.entry_watch.market_story || focused.entry_watch.story_chapter) && (
+                      <div className="mono">
+                        {focused.entry_watch.market_story || focused.entry_watch.story_chapter}
+                        {focused.entry_watch.story_allow
+                          ? ` · allow ${focused.entry_watch.story_allow}`
+                          : ''}
+                        {focused.entry_watch.story_detail
+                          ? ` · ${focused.entry_watch.story_detail}`
+                          : ''}
+                      </div>
+                    )}
                     {focused.entry_watch.zone_progress && (
                       <div className="mono">
                         ZONA · {focused.entry_watch.zone_bars ?? '—'}/
