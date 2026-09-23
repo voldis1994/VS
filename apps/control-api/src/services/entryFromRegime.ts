@@ -39,7 +39,8 @@ function describe(bar: TenSecBar): string {
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
- * Anti-chase: RANGE/COMPRESSION never follow SPIKE; TREND waits for pullback (no with-trend chase).
+ * Anti-chase: RANGE never follows SPIKE; TREND waits for pullback (no with-trend chase).
+ * COMPRESSION / TRANSITION are wait-only (no fade / no follow).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -50,25 +51,9 @@ export function decideEntryFrom10sRegime(
 
   if (r === 'UNKNOWN') return null;
 
-  // TRANSITION (rare after sticky classify) — follow body like EXPANSION, not starve
-  if (r === 'TRANSITION') {
-    if (!movingOrNull(bar)) return null;
-    if (rally(bar))
-      return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
-    if (dip(bar))
-      return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
-    return null;
-  }
-
-  // COMPRESSION: never chase SPIKE (skrien pakaļ tirgum → ±0.04 spread scratches).
-  // SPIKE → WAIT; micro MOVE → fade mean-reversion only.
-  if (r === 'COMPRESSION') {
-    if (isSpike10s(bar)) return null;
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
-    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
-    return null;
-  }
+  // COMPRESSION / TRANSITION — wait-only (docs + structure audit).
+  // Thin squeeze / unclear next: no fade, no follow — wait for RANGE/EXPANSION/BREAKOUT.
+  if (r === 'COMPRESSION' || r === 'TRANSITION') return null;
 
   // TREND: pullback only — do NOT buy green / sell red continuation (chase).
   if (r === 'TREND_UP') {

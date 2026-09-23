@@ -195,30 +195,40 @@ export function readMarketStory(
   const brokeUp = last.close > hi;
   const brokeDown = last.close < lo;
 
-  const sellStruct = swing === 'LL_LH' || (net < 0 && red >= green + 2);
-  const buyStruct = swing === 'HH_HL' || (net > 0 && green >= red + 2);
+  const windowHi = Math.max(...mins.map((m) => m.high));
+  const windowLo = Math.min(...mins.map((m) => m.low));
+  const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
+  const midPx = Math.abs(last.close) || 1;
+  const minPath = Math.max(3, midPx * STORY_MIN_PATH_PCT);
+  const midZone = (windowHi + windowLo) / 2;
+
   const recentSell = recentNet < 0 && redR >= 3;
   const recentBuy = recentNet > 0 && greenR >= 3;
+
+  // Require real trek for ALL directional calls — tiny noise must not become SELLOFF
+  const sellStruct =
+    (trek >= minPath && swing === 'LL_LH') ||
+    (trek >= minPath && net < 0 && red >= green + 2) ||
+    (trek >= minPath && recentSell && last.close <= midZone) ||
+    (trek >= minPath && red >= green + 2 && pos <= 0.45);
+  const buyStruct =
+    (trek >= minPath && swing === 'HH_HL') ||
+    (trek >= minPath && net > 0 && green >= red + 2) ||
+    (trek >= minPath && recentBuy && last.close >= midZone) ||
+    (trek >= minPath && green >= red + 2 && pos >= 0.55);
+
   const bounceInSell =
     sellStruct && !brokeUp && greenR >= 1 && greenR <= 2 && redR >= 2 && recentNet >= 0;
   const dipInRally =
     buyStruct && !brokeDown && redR >= 1 && redR <= 2 && greenR >= 2 && recentNet <= 0;
-
-  const midPx = Math.abs(last.close) || 1;
-  const minPath = Math.max(3, midPx * STORY_MIN_PATH_PCT);
-  const pathTooSmall = Math.abs(net) < minPath && swing !== 'LL_LH' && swing !== 'HH_HL';
 
   let chapter: StoryChapter;
   let allow: StorySide;
   let summary_lv: string;
   let confidence = 0.55;
 
-  if (pathTooSmall && !brokeUp && !brokeDown) {
-    chapter = 'RANGE_CHOP';
-    allow = 'NONE';
-    summary_lv = `STĀSTS · 30m ceļš < ${minPath.toFixed(1)}pt · 1m scalp GAIDI (troksnis)`;
-    confidence = 0.35;
-  } else if (brokeUp && (buyStruct || recentBuy || last.close > first.open)) {
+  // Do NOT use net<3pt as a first gate — that mislabeled the 09:07 Gold selloff as "troksnis"
+  if (brokeUp && (buyStruct || recentBuy || last.close > first.open)) {
     chapter = 'BREAK_UP';
     allow = 'BUY';
     summary_lv = 'STĀSTS · 30m BREAK UP virs zonas · sekot gariem (ne fade)';
@@ -238,36 +248,38 @@ export function readMarketStory(
     allow = 'BUY';
     summary_lv = 'STĀSTS · īss dip rallijā · NEPĀRDOT · meklē BUY pullback';
     confidence = 0.85;
-  } else if (sellStruct && (recentSell || net < 0)) {
-    // At floor still a selloff — do NOT open BOTH (that re-arms bounce BUY knives)
+  } else if (sellStruct) {
     chapter = pos <= 0.2 ? 'EXHAUST_LO' : 'SELLOFF';
     allow = 'SELL';
     summary_lv =
       chapter === 'EXHAUST_LO'
         ? 'STĀSTS · selloff pie zonas grīdas · meklē SELL · BUY tikai failed-break / reversal'
-        : 'STĀSTS · 30m selloff (LH+LL / lejup) · tikai SELL · nepirkt';
+        : `STĀSTS · 30m selloff · trek ${trek.toFixed(1)}pt · tikai SELL · nepirkt`;
     confidence = 0.75;
-  } else if (buyStruct && (recentBuy || net > 0)) {
+  } else if (buyStruct) {
     chapter = pos >= 0.8 ? 'EXHAUST_HI' : 'RALLY';
     allow = 'BUY';
     summary_lv =
       chapter === 'EXHAUST_HI'
         ? 'STĀSTS · rally pie zonas griestiem · meklē BUY · SELL tikai failed-break / reversal'
-        : 'STĀSTS · 30m rally (HH+HL / augšup) · tikai BUY · nepārdot';
+        : `STĀSTS · 30m rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
     confidence = 0.75;
-  } else if (net < 0 && red >= green + 1) {
-    // Soft sell path when swings unclear
+  } else if (recentSell && trek >= minPath) {
     chapter = 'SELLOFF';
     allow = 'SELL';
-    summary_lv = 'STĀSTS · 30m ceļš lejup · tikai SELL · nepirkt bounce';
-    confidence = 0.65;
-  } else if (net > 0 && green >= red + 1) {
+    summary_lv = `STĀSTS · pēdējās 1m sarkanas · trek ${trek.toFixed(1)}pt · tikai SELL`;
+    confidence = 0.7;
+  } else if (recentBuy && trek >= minPath) {
     chapter = 'RALLY';
     allow = 'BUY';
-    summary_lv = 'STĀSTS · 30m ceļš augšup · tikai BUY · nepārdot dip';
-    confidence = 0.65;
+    summary_lv = `STĀSTS · pēdējās 1m zaļas · trek ${trek.toFixed(1)}pt · tikai BUY`;
+    confidence = 0.7;
+  } else if (trek < minPath) {
+    chapter = 'RANGE_CHOP';
+    allow = 'NONE';
+    summary_lv = `STĀSTS · 30m trek < ${minPath.toFixed(1)}pt · 1m scalp GAIDI (šaurs)`;
+    confidence = 0.35;
   } else {
-    // Chop — 1m scalper sits out (no BOTH fades mid-zone)
     chapter = 'RANGE_CHOP';
     allow = 'NONE';
     summary_lv = 'STĀSTS · 30m chop · 1m scalp GAIDI (nav skaidras puses)';
@@ -276,6 +288,7 @@ export function readMarketStory(
 
   const detail = [
     `net=${net.toFixed(2)}pt`,
+    `trek=${trek.toFixed(2)}pt`,
     `1m R/G=${red}/${green}`,
     `recent5 R/G=${redR}/${greenR}`,
     `swing=${swing}`,
@@ -363,30 +376,36 @@ export function scalpStoryConfirms(
   const d1 = oneMDir(m1);
   const pos = story.zone_pos;
 
-  // Don't chase the last stretch of the move (classic 1m scalp mistake)
-  if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
-    return {
-      ok: false,
-      reason: `1m scalp · SELL chase pie LO (pos=${pos.toFixed(2)}) · GAIDI bounce/break`,
-    };
-  }
-  if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
-    return {
-      ok: false,
-      reason: `1m scalp · BUY chase pie HI (pos=${pos.toFixed(2)}) · GAIDI dip/break`,
-    };
-  }
-
   if (!m1) {
     return { ok: false, reason: '1m scalp · nav slēgtas 1m sveces · GAIDI' };
   }
 
-  // Continuation: last 1m same color as trade
+  // Continuation at LO/HI is OK if last 1m still prints with the story (breakdown/breakout)
   if (direction === 'SELL' && d1 === 'DOWN') {
     return { ok: true, tag: `1m CONFIRM RED · ${story.chapter}` };
   }
   if (direction === 'BUY' && d1 === 'UP') {
     return { ok: true, tag: `1m CONFIRM GREEN · ${story.chapter}` };
+  }
+
+  // Don't chase a bounce already at the extreme without rejection
+  if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
+    if (rejection1m(m1, 'SELL')) {
+      return { ok: true, tag: `1m REJECT HIGH at LO-zone · ${story.chapter}` };
+    }
+    return {
+      ok: false,
+      reason: `1m scalp · selloff pie LO · gaida bounce-reject vai jaunu sarkanu 1m`,
+    };
+  }
+  if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
+    if (rejection1m(m1, 'BUY')) {
+      return { ok: true, tag: `1m REJECT LOW at HI-zone · ${story.chapter}` };
+    }
+    return {
+      ok: false,
+      reason: `1m scalp · rally pie HI · gaida dip-reject vai jaunu zaļu 1m`,
+    };
   }
 
   // Bounce/dip chapters: need rejection wick on the pullback candle

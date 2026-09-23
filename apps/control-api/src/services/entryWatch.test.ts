@@ -53,11 +53,11 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/RANGE/);
   });
 
-  it('COMPRESSION recipe: fade only — SPIKE waits (no chase)', () => {
+  it('COMPRESSION recipe: wait-only (no fade / no chase)', () => {
     const r = watchRecipe('COMPRESSION');
-    expect(r.looking_for).toMatch(/SPIKE/i);
-    expect(r.looking_for).toMatch(/WAIT|no chase/i);
-    expect(r.looking_for).toMatch(/fade/i);
+    expect(r.looking_for).toMatch(/wait-only/i);
+    expect(r.looking_for).toMatch(/EXPANSION|BREAKOUT/i);
+    expect(r.setup).toBeNull();
     const b = bar(2000, 2000.2, 1998.5, 1999);
     const w = buildEntryWatch({
       running: true,
@@ -70,6 +70,7 @@ describe('entryWatch', () => {
       closed_bar_count: 100,
     });
     expect(w.looking_for).toMatch(/COMPRESSION/);
+    expect(w.looking_for).toMatch(/wait-only/i);
   });
 
   it('FLIP LOCK blocks same direction for 3 min after close', () => {
