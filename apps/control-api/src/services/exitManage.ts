@@ -67,10 +67,12 @@ export const PEAK_MFE_ABS_FLOOR = 3.0;
 /** Need real giveback in price pts before Peak cuts (chop-safe). */
 export const PEAK_MIN_GIVEBACK_ABS = 0.85;
 export const TARGET_ABS_FLOOR = 4.0;
+/** Broker SAFETY TP must be ≥ this × SAFETY SL distance — never TP < SL */
+export const SAFETY_TP_MIN_RR = 1.5;
 
 /**
- * Soft Target / broker SAFETY TP distance in price pts.
- * Same math for manage Target and Capital profitLevel — opposite of Soft HardInv.
+ * Soft Target distance in price pts (manage Target gate).
+ * Broker SAFETY TP uses {@link safetyTakeProfitDistance} which enforces R:R vs SL.
  */
 export function targetTakeProfitDistance(
   entry: number,
@@ -88,19 +90,52 @@ export function targetTakeProfitDistance(
   );
 }
 
+/**
+ * Broker SAFETY TP distance — opposite of SAFETY SL / Soft HardInv.
+ * Always ≥ max(Target, SAFETY_SL×1.5, SoftHardInv×1.5) so R:R is never inverted.
+ */
+export function safetyTakeProfitDistance(
+  entry: number,
+  regime?: string | null,
+  opts?: {
+    minStopDistance?: number | null;
+    /** Actual SAFETY SL cushion in price pts (preferred) */
+    stopDistancePrice?: number | null;
+  }
+): number {
+  let dist = targetTakeProfitDistance(entry, regime);
+  const min =
+    opts?.minStopDistance != null &&
+    Number.isFinite(opts.minStopDistance) &&
+    opts.minStopDistance > 0
+      ? opts.minStopDistance
+      : 0;
+  if (min > 0) dist = Math.max(dist, min * 1.05);
+
+  const softSl = hardInvStopDistance(entry, regime);
+  const cushion = Math.max(Math.abs(entry), 1e-9) * 0.002; // same % as SAFETY SL pillow
+  const slRef =
+    opts?.stopDistancePrice != null &&
+    Number.isFinite(opts.stopDistancePrice) &&
+    opts.stopDistancePrice > 0
+      ? opts.stopDistancePrice
+      : Math.max(softSl, cushion);
+  dist = Math.max(dist, slRef * SAFETY_TP_MIN_RR, softSl * SAFETY_TP_MIN_RR);
+  return dist;
+}
+
 /** Absolute Capital profitLevel — BUY above entry / SELL below entry. */
 export function safetyTakeProfitLevel(
   side: ExitSide,
   entry: number,
   regime?: string | null,
-  minStopDistance?: number | null
+  minStopDistance?: number | null,
+  stopDistancePrice?: number | null
 ): number {
-  let dist = targetTakeProfitDistance(entry, regime);
-  const min =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  if (min > 0) dist = Math.max(dist, min * 1.05);
+  const dist = safetyTakeProfitDistance(entry, regime, {
+    minStopDistance,
+    stopDistancePrice,
+  });
   const abs = Math.max(Math.abs(entry), 1e-9);
   const raw = side === 'BUY' ? entry + dist : entry - dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -110,18 +145,30 @@ export function safetyTakeProfitLevel(
 }
 
 /**
- * Capital profitDistance in POINTS (≥ broker min · same Target % language).
+ * Capital profitDistance in POINTS — always ≥ SAFETY_TP_MIN_RR × stopDistance pts.
  */
 export function safetyTakeProfitDistancePts(
   entry: number,
   regime: string | null | undefined,
   minPts: number | null | undefined,
-  pointSize: number | null | undefined
+  pointSize: number | null | undefined,
+  stopDistancePts?: number | null
 ): number {
-  const distPrice = targetTakeProfitDistance(entry, regime);
   const ps = pointSize != null && pointSize > 0 ? pointSize : null;
+  const stopPrice =
+    stopDistancePts != null && stopDistancePts > 0 && ps != null
+      ? stopDistancePts * ps
+      : null;
+  const distPrice = safetyTakeProfitDistance(entry, regime, {
+    minStopDistance:
+      minPts != null && minPts > 0 && ps != null ? minPts * ps : null,
+    stopDistancePrice: stopPrice,
+  });
   const min = minPts != null && minPts > 0 ? minPts : 0;
   let pts = ps != null ? distPrice / ps : distPrice;
+  if (stopDistancePts != null && stopDistancePts > 0) {
+    pts = Math.max(pts, stopDistancePts * SAFETY_TP_MIN_RR);
+  }
   pts = Math.max(pts, min * 1.05, min + 1e-9);
   return pts >= 10 ? Math.ceil(pts) : Math.round(pts * 100) / 100;
 }

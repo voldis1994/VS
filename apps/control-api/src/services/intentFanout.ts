@@ -508,11 +508,13 @@ async function executeForSubscription(
         spread: q.spread,
         minStopDistance: q.min_stop_distance,
       });
+      const slDist = Math.abs(mid - stopLevel);
       const profitLevel = safetyTakeProfitLevel(
         direction,
         mid,
         regime ?? null,
-        q.min_stop_distance
+        q.min_stop_distance,
+        slDist
       );
 
       let result = await createCapitalPosition(session, {

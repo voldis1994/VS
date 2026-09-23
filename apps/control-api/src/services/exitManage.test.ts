@@ -6,6 +6,8 @@ import {
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  safetyTakeProfitDistance,
+  safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
   scaleDeskAbs,
   softLossLine,
@@ -17,6 +19,7 @@ import {
   HARDINV_CONFIRM_MS,
   HARDINV_GRACE_MS,
   PEAK_MFE_ABS_FLOOR,
+  SAFETY_TP_MIN_RR,
   TARGET_ABS_FLOOR,
   TIMEDECAY_MIN_FAV_ABS,
   thesisFailureReason,
@@ -530,32 +533,39 @@ describe('decideBestOutcomeExit', () => {
 });
 
 describe('broker SAFETY TP (opposite of Soft HardInv)', () => {
-  it('BUY TP is above entry; SELL TP is below — Target ≥ HardInv', () => {
+  it('BUY TP above entry; SELL below — always ≥ 1.5× SAFETY SL', () => {
     const entry = 2650;
-    const buyTp = safetyTakeProfitLevel('BUY', entry, 'TREND_UP');
-    const sellTp = safetyTakeProfitLevel('SELL', entry, 'TREND_DOWN');
-    const sl = hardInvStopDistance(entry, 'TREND_UP');
-    const tpDist = targetTakeProfitDistance(entry, 'TREND_UP');
+    const safetySl = entry * 0.002; // same cushion % as broker SAFETY SL
+    const buyTp = safetyTakeProfitLevel('BUY', entry, 'RANGE', null, safetySl);
+    const sellTp = safetyTakeProfitLevel('SELL', entry, 'RANGE', null, safetySl);
     expect(buyTp).toBeGreaterThan(entry);
     expect(sellTp).toBeLessThan(entry);
-    expect(tpDist).toBeGreaterThan(sl);
-    // Gold rounds profitLevel to 0.1 — distance within one tick of Target
-    expect(Math.abs(buyTp - entry - tpDist)).toBeLessThan(0.1);
-    expect(Math.abs(entry - sellTp - targetTakeProfitDistance(entry, 'TREND_DOWN'))).toBeLessThan(
-      0.1
-    );
+    expect(buyTp - entry).toBeGreaterThanOrEqual(safetySl * 1.5 - 0.15);
+    expect(entry - sellTp).toBeGreaterThanOrEqual(safetySl * 1.5 - 0.15);
   });
 
-  it('RANGE fade TP is tighter than TREND (profile target_mult)', () => {
+  it('RANGE soft Target alone can be < SAFETY SL — broker TP still enforces RR', () => {
     const entry = 2650;
-    const trend = targetTakeProfitDistance(entry, 'TREND_UP');
-    const range = targetTakeProfitDistance(entry, 'RANGE');
-    expect(range).toBeLessThan(trend);
+    const safetySl = entry * 0.002;
+    const softTarget = targetTakeProfitDistance(entry, 'RANGE');
+    expect(softTarget).toBeLessThan(safetySl); // the bug we fixed
+    const brokerTpDist = safetyTakeProfitDistance(entry, 'RANGE', {
+      stopDistancePrice: safetySl,
+    });
+    expect(brokerTpDist).toBeGreaterThanOrEqual(safetySl * 1.5 - 1e-9);
+  });
+
+  it('profitDistance pts ≥ 1.5× stopDistance pts', () => {
+    const entry = 2650;
+    const stopPts = 50;
+    const pointSize = 0.1;
+    const tpPts = safetyTakeProfitDistancePts(entry, 'RANGE', 10, pointSize, stopPts);
+    expect(tpPts).toBeGreaterThanOrEqual(stopPts * 1.5);
   });
 
   it('respects broker min stop/profit distance floor', () => {
     const entry = 2650;
-    const wide = safetyTakeProfitLevel('BUY', entry, 'RANGE', 20);
+    const wide = safetyTakeProfitLevel('BUY', entry, 'RANGE', 20, 5);
     expect(wide - entry).toBeGreaterThanOrEqual(20 * 1.05 - 1e-9);
   });
 });

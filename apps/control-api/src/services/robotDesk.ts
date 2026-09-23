@@ -1077,20 +1077,7 @@ async function enterTradeLocked(
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
-  let profitLevel: number | null = safetyTakeProfitLevel(
-    direction,
-    mid,
-    s.regime,
-    minPrice
-  );
-  let profitDistance: number | null = useDistance
-    ? safetyTakeProfitDistancePts(
-        mid,
-        s.regime,
-        minPts,
-        quote.point_size ?? null
-      )
-    : null;
+  let profitLevel: number | null = null;
   let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
 
   if (useDistance) {
@@ -1111,42 +1098,41 @@ async function enterTradeLocked(
         stopDistance,
         quote.point_size ?? null
       );
-      // TP loosen widens profit distance (harder to hit early — still locks a real Target)
-      const tpDist =
-        profitDistance != null
-          ? Math.max(
-              profitDistance * loosen,
-              (minPts ?? 0) * 1.05,
-              profitDistance
-            )
-          : null;
-      const tpPts =
-        tpDist != null
-          ? tpDist >= 10
-            ? Math.ceil(tpDist)
-            : Math.round(tpDist * 100) / 100
-          : null;
+      // TP always ≥ 1.5× THIS stopDistance — never TP < SL
+      const tpPts = safetyTakeProfitDistancePts(
+        mid,
+        s.regime,
+        minPts,
+        quote.point_size ?? null,
+        stopDistance
+      );
       const expectTp =
-        tpPts != null && quote.point_size != null && quote.point_size > 0
+        quote.point_size != null && quote.point_size > 0
           ? direction === 'BUY'
             ? mid + tpPts * quote.point_size
             : mid - tpPts * quote.point_size
-          : profitLevel;
+          : safetyTakeProfitLevel(
+              direction,
+              mid,
+              s.regime,
+              minPrice,
+              expect != null ? Math.abs(mid - expect) : null
+            );
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP cushion stopDistance=${stopDistance} pts · profitDistance=${
-          tpPts ?? 'n/a'
-        } (~TP ${expectTp ?? 'n/a'} · min=${minPts} · x${loosen})`,
+        detail: `Capital SAFETY SL+TP stopDistance=${stopDistance} pts · profitDistance=${tpPts} (~TP ${
+          expectTp ?? 'n/a'
+        } · RR≥1.5 · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopDistance,
-        ...(tpPts != null ? { profitDistance: tpPts } : {}),
+        profitDistance: tpPts,
       });
       if (result.ok) {
         usedStopDistance = stopDistance;
@@ -1154,7 +1140,6 @@ async function enterTradeLocked(
         if (expectTp != null && Number.isFinite(expectTp)) profitLevel = expectTp;
         break;
       }
-      // Profit rejected → retry wider TP; stop rejected → loosen as before
       if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
         break;
       }
@@ -1183,11 +1168,13 @@ async function enterTradeLocked(
         minPrice,
         loosen
       );
+      const slDist = Math.abs(mid - level);
       const tp = safetyTakeProfitLevel(
         direction,
         mid,
         s.regime,
-        minPrice != null ? minPrice * loosen : minPrice
+        minPrice != null ? minPrice * loosen : minPrice,
+        slDist
       );
       const dist = direction === 'BUY' ? mid - level : level - mid;
       const tpDist = direction === 'BUY' ? tp - mid : mid - tp;
@@ -1196,9 +1183,9 @@ async function enterTradeLocked(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP try stopLevel=${level} · profitLevel=${tp} (SL≈${dist.toFixed(
+        detail: `Capital SAFETY SL+TP stopLevel=${level} · profitLevel=${tp} (SL≈${dist.toFixed(
           5
-        )} · TP≈${tpDist.toFixed(5)} · x${loosen})`,
+        )} · TP≈${tpDist.toFixed(5)} · RR=${(tpDist / Math.max(dist, 1e-9)).toFixed(2)} · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
