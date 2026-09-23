@@ -141,4 +141,81 @@ describe('30m market story — 1m scalp grade', () => {
     expect(story.allow).toBe('NONE');
     expect(story.summary_lv).toMatch(/trek <|chop|GAIDI|šaurs/);
   });
+
+  it('BREAKOUT_UP scalp OK even if last 1m still red (structure pierce is confirm)', () => {
+    const story = {
+      chapter: 'BREAK_UP' as const,
+      allow: 'BUY' as const,
+      summary_lv: 'STĀSTS · 30m BREAK UP',
+      detail: 'test',
+      confidence: 0.8,
+      zone_pos: 0.95,
+      net_pts: 2,
+      red_1m: 4,
+      green_1m: 3,
+      swing: 'MIXED' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4340,
+        high: 4341,
+        low: 4335,
+        close: 4336, // red
+        bars: 6,
+      },
+    };
+    const ok = scalpStoryConfirms(story, 'BUY', 'BREAKOUT_UP');
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.tag).toMatch(/BREAKOUT OK/);
+  });
+
+  it('TREND_UP dip-buy OK when story is RALLY and last 1m is the red dip', () => {
+    const story = {
+      chapter: 'RALLY' as const,
+      allow: 'BUY' as const,
+      summary_lv: 'STĀSTS · 30m rally',
+      detail: 'test',
+      confidence: 0.75,
+      zone_pos: 0.4,
+      net_pts: 5,
+      red_1m: 2,
+      green_1m: 8,
+      swing: 'HH_HL' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4332,
+        high: 4332.5,
+        low: 4329,
+        close: 4329.5, // red dip
+        bars: 6,
+      },
+    };
+    const ok = scalpStoryConfirms(story, 'BUY', 'TREND_UP');
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.tag).toMatch(/DIP OK|REJECT/);
+  });
+
+  it('still blocks knife BUY into BOUNCE_IN_SELL', () => {
+    const story = {
+      chapter: 'BOUNCE_IN_SELL' as const,
+      allow: 'SELL' as const,
+      summary_lv: 'STĀSTS · bounce selloffā',
+      detail: 'test',
+      confidence: 0.85,
+      zone_pos: 0.35,
+      net_pts: -4,
+      red_1m: 8,
+      green_1m: 2,
+      swing: 'LL_LH' as const,
+      last_1m: {
+        open_time_ms: 0,
+        open: 4328,
+        high: 4331,
+        low: 4327.5,
+        close: 4330.5, // green bounce
+        bars: 6,
+      },
+    };
+    expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
+    expect(scalpStoryConfirms(story, 'BUY', 'TREND_UP').ok).toBe(false);
+  });
 });
