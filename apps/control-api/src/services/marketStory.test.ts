@@ -286,4 +286,79 @@ describe('30m market story — 1m scalp grade', () => {
     expect(ok.ok).toBe(true);
     if (ok.ok) expect(ok.tag).toMatch(/10s START RED/);
   });
+
+  it('blocks knife BUY: no DIP OK on EXHAUST_HI / BOUNCE_IN_SELL / RANGE_CHOP', () => {
+    const red1m = {
+      open_time_ms: 0,
+      open: 4332,
+      high: 4332.2,
+      low: 4328,
+      close: 4328.5,
+      bars: 6,
+    };
+    const greenTrig = {
+      open_time_ms: 10_000,
+      open: 4328.5,
+      high: 4331,
+      low: 4328.2,
+      close: 4330.5,
+      ticks: 10,
+    };
+    for (const chapter of ['EXHAUST_HI', 'BOUNCE_IN_SELL', 'RANGE_CHOP'] as const) {
+      const story = {
+        chapter,
+        allow: (chapter === 'BOUNCE_IN_SELL' ? 'SELL' : chapter === 'RANGE_CHOP' ? 'NONE' : 'BUY') as
+          | 'BUY'
+          | 'SELL'
+          | 'NONE',
+        summary_lv: `STĀSTS · ${chapter}`,
+        detail: 'test',
+        confidence: 0.75,
+        zone_pos: chapter === 'EXHAUST_HI' ? 0.92 : 0.4,
+        net_pts: chapter === 'BOUNCE_IN_SELL' ? -5 : 4,
+        red_1m: 4,
+        green_1m: 5,
+        swing: 'HH_HL' as const,
+        last_1m: red1m,
+      };
+      const dip = scalpStoryConfirms(story, 'BUY', 'TREND_UP', greenTrig);
+      expect(dip.ok).toBe(false);
+    }
+  });
+
+  it('10s START never arms BUY on EXHAUST_HI or HI-zone chase', () => {
+    const red1m = {
+      open_time_ms: 0,
+      open: 4332,
+      high: 4332.2,
+      low: 4328,
+      close: 4328.5,
+      bars: 6,
+    };
+    const greenTrig = {
+      open_time_ms: 10_000,
+      open: 4328.5,
+      high: 4331,
+      low: 4328.2,
+      close: 4330.5,
+      ticks: 10,
+    };
+    const hi = {
+      chapter: 'EXHAUST_HI' as const,
+      allow: 'BUY' as const,
+      summary_lv: 'STĀSTS · rally pie zonas griestiem',
+      detail: 'test',
+      confidence: 0.75,
+      zone_pos: 0.94,
+      net_pts: 6,
+      red_1m: 3,
+      green_1m: 7,
+      swing: 'HH_HL' as const,
+      last_1m: red1m,
+    };
+    expect(scalpStoryConfirms(hi, 'BUY', 'TREND_UP', greenTrig).ok).toBe(false);
+
+    const rallyAtHi = { ...hi, chapter: 'RALLY' as const, summary_lv: 'STĀSTS · 30m rally' };
+    expect(scalpStoryConfirms(rallyAtHi, 'BUY', 'TREND_UP', greenTrig).ok).toBe(false);
+  });
 });

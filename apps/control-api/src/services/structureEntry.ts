@@ -468,19 +468,15 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
-  // Full 30m story ready → soft 1m/10s scalp (trigger bar starts the leg)
-  if (story.chapter !== 'SEEDING') {
-    const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
-    if (!scalp.ok) return null;
-    return {
-      ...candidate,
-      reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
-    };
-  }
+  // Never arm while story is SEEDING — that path skipped scalp and let
+  // FAILED_BREAKOUT / REVERSAL BUY with only structureGate (knife scratches).
+  if (story.chapter === 'SEEDING') return null;
 
+  const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
+  if (!scalp.ok) return null;
   return {
     ...candidate,
-    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv}`,
+    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
   };
 }
 
