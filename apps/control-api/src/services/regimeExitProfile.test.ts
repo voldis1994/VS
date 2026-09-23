@@ -18,7 +18,7 @@ describe('regimeExitProfile — all 14 regimes', () => {
     }
   });
 
-  it('TREND lets winners run; RANGE/FAILED fade take profit sooner', () => {
+  it('TREND lets winners run; RANGE/FAILED still shorter hold — but Target never < Soft', () => {
     const trend = regimeExitProfile('TREND_UP');
     const range = regimeExitProfile('RANGE');
     const failed = regimeExitProfile('FAILED_BREAKOUT_UP');
@@ -26,10 +26,19 @@ describe('regimeExitProfile — all 14 regimes', () => {
     expect(range.family).toBe('fade');
     expect(failed.family).toBe('break_fail');
     expect(range.target_mult).toBeLessThan(trend.target_mult);
-    expect(failed.target_mult).toBeLessThan(trend.target_mult);
+    expect(failed.target_mult).toBeLessThanOrEqual(trend.target_mult);
     expect(range.timedecay_hold_ms).toBeLessThan(trend.timedecay_hold_ms);
     expect(range.structure).toBe('through_mid');
     expect(regimeExitProfile('BREAKOUT_UP').structure).toBe('back_in_range');
+  });
+
+  it('no regime shrinks Peak/Target under Soft (Funds tiny-win vs Soft-loss)', () => {
+    for (const r of REGIME_NAMES) {
+      const p = regimeExitProfile(r);
+      expect(p.peak_mfe_mult).toBeGreaterThanOrEqual(1);
+      expect(p.target_mult).toBeGreaterThanOrEqual(p.hardinv_mult);
+      expect(p.target_mult).toBeGreaterThanOrEqual(1);
+    }
   });
 
   it('BREAKOUT Soft tighter than TREND; REVERSAL Soft tightest', () => {

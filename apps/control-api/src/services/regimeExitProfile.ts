@@ -75,8 +75,8 @@ const PULLBACK: RegimeExitProfile = {
   family: 'pullback',
   hardinv_mult: 0.9,
   peak_arm: 'reverse_1m',
-  peak_mfe_mult: 0.9,
-  peak_giveback_mult: 0.9,
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: null,
   target_mult: 1.05,
   timedecay_hold_ms: 11 * 60_000,
@@ -99,27 +99,29 @@ const BREAKOUT: RegimeExitProfile = {
 
 const FAILED_BREAK: RegimeExitProfile = {
   family: 'break_fail',
-  hardinv_mult: 1.0,
+  hardinv_mult: 0.95,
   peak_arm: 'reverse_or_mid',
-  peak_mfe_mult: 0.7,
-  peak_giveback_mult: 0.75,
+  // Never shrink Peak/Target below Soft — old 0.55/0.7 = tiny wins vs Soft loss
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: 0.7,
-  target_mult: 0.55,
+  target_mult: 1.0,
   timedecay_hold_ms: 7 * 60_000,
-  timedecay_min_fav_mult: 0.65,
+  timedecay_min_fav_mult: 0.85,
   structure: 'failed_edge_reclaim',
 };
 
 const RANGE_FADE: RegimeExitProfile = {
   family: 'fade',
-  hardinv_mult: 1.15,
+  // Soft must not widen while Target shrinks (was 1.15 Soft / 0.55 Target)
+  hardinv_mult: 1.0,
   peak_arm: 'reverse_or_mid',
-  peak_mfe_mult: 0.7,
-  peak_giveback_mult: 0.75,
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: 0.7,
-  target_mult: 0.55,
+  target_mult: 1.05,
   timedecay_hold_ms: 7 * 60_000,
-  timedecay_min_fav_mult: 0.65,
+  timedecay_min_fav_mult: 0.85,
   structure: 'through_mid',
 };
 
@@ -127,25 +129,25 @@ const EXPANSION: RegimeExitProfile = {
   family: 'expansion',
   hardinv_mult: 1.0,
   peak_arm: 'reverse_1m',
-  peak_mfe_mult: 0.85,
-  peak_giveback_mult: 0.9,
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: null,
-  target_mult: 0.95,
+  target_mult: 1.1,
   timedecay_hold_ms: 9 * 60_000,
-  timedecay_min_fav_mult: 0.85,
+  timedecay_min_fav_mult: 0.9,
   structure: 'none',
 };
 
 const REVERSAL: RegimeExitProfile = {
   family: 'reversal',
-  hardinv_mult: 0.75,
+  hardinv_mult: 0.8,
   peak_arm: 'fast',
-  peak_mfe_mult: 0.7,
-  peak_giveback_mult: 0.7,
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: 0.7,
-  target_mult: 0.8,
+  target_mult: 1.05,
   timedecay_hold_ms: 5 * 60_000,
-  timedecay_min_fav_mult: 0.7,
+  timedecay_min_fav_mult: 0.85,
   structure: 'none',
 };
 
@@ -153,12 +155,12 @@ const CHOP: RegimeExitProfile = {
   family: 'chop',
   hardinv_mult: 0.95,
   peak_arm: 'fast',
-  peak_mfe_mult: 0.65,
-  peak_giveback_mult: 0.7,
+  peak_mfe_mult: 1.0,
+  peak_giveback_mult: 1.0,
   peak_retention: 0.7,
-  target_mult: 0.55,
+  target_mult: 1.0,
   timedecay_hold_ms: 5 * 60_000,
-  timedecay_min_fav_mult: 0.6,
+  timedecay_min_fav_mult: 0.85,
   structure: 'none',
 };
 
