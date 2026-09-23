@@ -326,6 +326,15 @@ export function storyAllowsDirection(
   if (direction === 'SELL' && (r === 'FAILED_BREAKOUT_UP' || r === 'REVERSAL_CANDIDATE')) {
     return { ok: true };
   }
+  // Breakout follow: structure pierce is the confirm — don't starve on RANGE_CHOP allow=NONE
+  if (
+    (r === 'BREAKOUT_UP' && direction === 'BUY') ||
+    (r === 'BREAKOUT_DOWN' && direction === 'SELL')
+  ) {
+    if (story.allow === 'NONE' || story.allow === direction || story.allow === 'BOTH') {
+      return { ok: true };
+    }
+  }
 
   if (story.allow === 'BOTH' || story.allow === direction) return { ok: true };
   if (story.allow === 'NONE') {
@@ -353,9 +362,30 @@ function rejection1m(m: MinuteBar, side: 'BUY' | 'SELL'): boolean {
   return lower >= 0.45 && m.close >= m.open - span * 0.15;
 }
 
+function isBreakoutRegime(regime?: string | null): boolean {
+  const r = String(regime || '').toUpperCase();
+  return r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN';
+}
+
+function isTrendPullbackRegime(regime?: string | null): boolean {
+  const r = String(regime || '').toUpperCase();
+  return (
+    r === 'TREND_UP' ||
+    r === 'TREND_DOWN' ||
+    r === 'PULLBACK_UPTREND' ||
+    r === 'PULLBACK_DOWNTREND' ||
+    r === 'EXPANSION'
+  );
+}
+
 /**
- * 1m scalp confirm — what I'd actually require before clicking:
- * story side + last closed 1m agrees (or rejection) + no chase into zone extreme.
+ * 1m scalp confirm — story side + last 1m (soft for breakout / trend pullback).
+ *
+ * Must NOT miss clear legs:
+ * - BREAKOUT pierce already passed structureGate — prior 1m often still opposite color
+ * - TREND/PULLBACK dip-buy: FLAT last 1m OK when story.allow matches
+ *
+ * Must NOT knife-buy: BOUNCE_IN_SELL / wrong story.allow still blocked.
  */
 export function scalpStoryConfirms(
   story: MarketStory,
@@ -365,10 +395,14 @@ export function scalpStoryConfirms(
   const sideOk = storyAllowsDirection(story, direction, regime);
   if (!sideOk.ok) return sideOk;
 
-  if (story.chapter === 'SEEDING' || story.chapter === 'RANGE_CHOP') {
+  if (story.chapter === 'SEEDING') {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  if (story.confidence < 0.55) {
+  // RANGE_CHOP: starve fades — but BREAKOUT may still fire (pierce is the setup)
+  if (story.chapter === 'RANGE_CHOP' && !isBreakoutRegime(regime)) {
+    return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
+  }
+  if (story.confidence < 0.55 && !isBreakoutRegime(regime)) {
     return { ok: false, reason: `STĀSTS vājš conf=${story.confidence.toFixed(2)} · GAIDI` };
   }
 
@@ -380,12 +414,46 @@ export function scalpStoryConfirms(
     return { ok: false, reason: '1m scalp · nav slēgtas 1m sveces · GAIDI' };
   }
 
-  // Continuation at LO/HI is OK if last 1m still prints with the story (breakdown/breakout)
+  // Same-color 1m — always good
   if (direction === 'SELL' && d1 === 'DOWN') {
     return { ok: true, tag: `1m CONFIRM RED · ${story.chapter}` };
   }
   if (direction === 'BUY' && d1 === 'UP') {
     return { ok: true, tag: `1m CONFIRM GREEN · ${story.chapter}` };
+  }
+
+  // BREAKOUT / BREAK chapter: structure pierce is enough (prior 1m often still opposite)
+  if (
+    (isBreakoutRegime(regime) ||
+      story.chapter === 'BREAK_UP' ||
+      story.chapter === 'BREAK_DOWN') &&
+    ((direction === 'BUY' &&
+      (String(regime).toUpperCase() === 'BREAKOUT_UP' || story.chapter === 'BREAK_UP')) ||
+      (direction === 'SELL' &&
+        (String(regime).toUpperCase() === 'BREAKOUT_DOWN' || story.chapter === 'BREAK_DOWN')))
+  ) {
+    return { ok: true, tag: `1m BREAKOUT OK · last1m=${d1} · ${story.chapter}` };
+  }
+
+  // TREND / PULLBACK / EXPANSION: story already on our side + FLAT 1m = pullback pause, not knife
+  if (isTrendPullbackRegime(regime) && (story.allow === direction || story.allow === 'BOTH')) {
+    if (d1 === 'FLAT') {
+      return { ok: true, tag: `1m FLAT OK · ${story.chapter} · ${regime}` };
+    }
+    // Dip-buy into RALLY: last 1m may still be red (the dip) — allow reject OR small adverse
+    if (direction === 'BUY' && d1 === 'DOWN' && rejection1m(m1, 'BUY')) {
+      return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
+    }
+    if (direction === 'SELL' && d1 === 'UP' && rejection1m(m1, 'SELL')) {
+      return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
+    }
+    // Dip-buy / rally-sell: the adverse 1m IS the setup candle — allow when story agrees
+    if (direction === 'BUY' && d1 === 'DOWN' && story.chapter !== 'BOUNCE_IN_SELL') {
+      return { ok: true, tag: `1m DIP OK · ${story.chapter} · pullback` };
+    }
+    if (direction === 'SELL' && d1 === 'UP' && story.chapter !== 'DIP_IN_RALLY') {
+      return { ok: true, tag: `1m RALLY OK · ${story.chapter} · pullback` };
+    }
   }
 
   // Don't chase a bounce already at the extreme without rejection
@@ -408,8 +476,8 @@ export function scalpStoryConfirms(
     };
   }
 
-  // Bounce/dip chapters: need rejection wick on the pullback candle
-  if (direction === 'SELL' && (story.chapter === 'BOUNCE_IN_SELL' || story.chapter === 'SELLOFF')) {
+  // Bounce-in-sell / dip-in-rally: still need rejection (knife filter)
+  if (direction === 'SELL' && story.chapter === 'BOUNCE_IN_SELL') {
     if (rejection1m(m1, 'SELL')) {
       return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
     }
@@ -418,7 +486,7 @@ export function scalpStoryConfirms(
       reason: `1m scalp · gaida sarkanu 1m vai reject-wick (tagad ${d1})`,
     };
   }
-  if (direction === 'BUY' && (story.chapter === 'DIP_IN_RALLY' || story.chapter === 'RALLY')) {
+  if (direction === 'BUY' && story.chapter === 'DIP_IN_RALLY') {
     if (rejection1m(m1, 'BUY')) {
       return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
     }
@@ -426,6 +494,19 @@ export function scalpStoryConfirms(
       ok: false,
       reason: `1m scalp · gaida zaļu 1m vai reject-wick (tagad ${d1})`,
     };
+  }
+
+  // SELLOFF/RALLY with matching direction but opposite last 1m already handled above for trend;
+  // fades still need color or reject
+  if (direction === 'SELL' && (story.chapter === 'SELLOFF' || story.chapter === 'EXHAUST_LO')) {
+    if (rejection1m(m1, 'SELL')) {
+      return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
+    }
+  }
+  if (direction === 'BUY' && (story.chapter === 'RALLY' || story.chapter === 'EXHAUST_HI')) {
+    if (rejection1m(m1, 'BUY')) {
+      return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
+    }
   }
 
   return {
