@@ -14,6 +14,8 @@ Live Capital orders use `decideEntryWithStructure`:
 2. else `structureStartEntry` — zone **half** + closed **1m** color (from same 10s) + MOVING 10s  
 3. `structureGate` — **per-regime** soft rules (all 14); block only extreme chase / wrong half  
 
+**Exits** are also per-regime — see **[REGIME_EXITS.md](./REGIME_EXITS.md)** (`entry_regime` frozen at fill + structure invalidation + profile Soft/Peak/Target).
+
 Executable defaults (Gold reality):
 - TREND pullbacks allowed mid-zone (not only at LO)
 - BREAKOUT must **pierce** zone hi/lo (mid-zone 0.55 was a fake breakout — rejected)

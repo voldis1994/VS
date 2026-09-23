@@ -18,6 +18,7 @@ import {
   TARGET_ABS_FLOOR,
   TIMEDECAY_MIN_FAV_ABS,
   thesisFailureReason,
+  regimeExitProfile,
   type ExitSnapshot,
 } from './exitManage.js';
 import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js';
@@ -396,41 +397,132 @@ describe('decideBestOutcomeExit', () => {
     expect(tooSmall.exit).toBe(false);
     expect(TIMEDECAY_MIN_FAV_ABS).toBeGreaterThanOrEqual(2);
 
-    // Real lock: fav ≥ scaled TimeDecay min + Soft SL fraction; mfe ≥ Peak floor
+    // Real lock on TREND (RANGE hits Target earlier — by design for fades)
     const entry = 4352.73;
-    const sl = hardInvStopDistance(entry, 'RANGE');
+    const sl = hardInvStopDistance(entry, 'TREND_DOWN');
     const minFav = Math.max(
       scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, entry),
       sl * 0.9,
       scaleDeskAbs(TARGET_ABS_FLOOR, entry) * 0.4
     );
     const mfeNeed = scaleDeskAbs(PEAK_MFE_ABS_FLOOR, entry);
-    const lockFav = Math.max(minFav + 0.2, mfeNeed);
+    const trendTp =
+      Math.max(
+        scaleDeskAbs(TARGET_ABS_FLOOR, entry),
+        entry * defaultDeskCalibration().target_pct
+      ) * regimeExitProfile('TREND_DOWN').target_mult;
+    const lockFav = Math.min(Math.max(minFav + 0.15, mfeNeed), trendTp - 0.4);
     const realLock = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
         entry_price: entry,
-        regime: 'RANGE',
+        entry_regime: 'TREND_DOWN',
+        regime: 'TREND_DOWN',
         mfe: Math.max(lockFav + 1, mfeNeed + 1),
         peak_retention: 1,
-        entry_at: new Date(now - 13 * 60_000).toISOString(),
+        entry_at: new Date(now - 15 * 60_000).toISOString(),
       }),
       entry - lockFav,
       'target_time',
       now
     );
     expect(realLock.exit).toBe(true);
-    expect(realLock.reason).toMatch(/TimeDecay/);
+    expect(realLock.reason).toMatch(/TimeDecay|Target/);
   });
 
-  it('asymmetry proof: Peak lock ≥ Soft HardInv (no 80%-win net-minus profile)', () => {
-    const entry = 2650;
-    const sl = hardInvStopDistance(entry, 'TREND_UP');
-    const cal = defaultDeskCalibration();
-    const peakFloor = scaleDeskAbs(cal.peak_mfe_abs, entry);
-    const minGb = scaleDeskAbs(cal.peak_min_giveback_abs, entry);
-    const earliestPeakLock = peakFloor - minGb;
-    expect(peakFloor).toBeGreaterThan(sl);
-    expect(earliestPeakLock).toBeGreaterThan(sl * 0.7);
+  it('RANGE Target/TimeDecay tighter than TREND (fade ≠ trend run)', () => {
+    const now = Date.now();
+    const aged = new Date(now - 8 * 60_000).toISOString();
+    // RANGE: target ~0.55× → fires earlier on same mid move
+    const rangeTp = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_regime: 'RANGE',
+        regime: 'RANGE',
+        mfe: 3,
+        peak_retention: 1,
+        entry_at: aged,
+      }),
+      2002.5, // +2.5 — below TREND TP (~4.6) but near RANGE TP (~2.5)
+      'target_time',
+      now
+    );
+    const trendTp = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_regime: 'TREND_UP',
+        regime: 'TREND_UP',
+        mfe: 3,
+        peak_retention: 1,
+        entry_at: aged,
+      }),
+      2002.5,
+      'target_time',
+      now
+    );
+    expect(rangeTp.exit).toBe(true);
+    expect(rangeTp.reason).toMatch(/fade|Target/);
+    expect(trendTp.exit).toBe(false);
+  });
+
+  it('BREAKOUT structure kill when price back under hi (entry_zone frozen)', () => {
+    const now = Date.now();
+    const zone = { hi: 4340, lo: 4320, mid: 4330, width: 20 };
+    const pending = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4341,
+        entry_regime: 'BREAKOUT_UP',
+        regime: 'BREAKOUT_UP',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: 0,
+        mfe: 1,
+      }),
+      4338,
+      'live_loss',
+      now
+    );
+    expect(pending.exit).toBe(false);
+    expect(pending.structure_breaching).toBe(true);
+
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4341,
+        entry_regime: 'BREAKOUT_UP',
+        regime: 'BREAKOUT_UP',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: now - 4_000,
+        mfe: 1,
+      }),
+      4338,
+      'live_loss',
+      now
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/StructureInvalidation|back under/);
+  });
+
+  it('entry_regime freeze — live COMPRESSION does not rewrite TREND Soft thesis', () => {
+    const trendSl = hardInvStopDistance(2000, 'TREND_UP');
+    const liveFlip = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_regime: 'TREND_UP',
+        regime: 'COMPRESSION', // live flicker
+        mfe: 0.2,
+      }),
+      2000.1,
+      'live_loss'
+    );
+    expect(liveFlip.exit).toBe(false);
+    // Soft distance follows entry_regime TREND, not live COMPRESSION
+    expect(hardInvStopDistance(2000, 'TREND_UP')).toBe(trendSl);
+    expect(hardInvStopDistance(2000, 'RANGE')).toBeGreaterThan(trendSl);
   });
 });

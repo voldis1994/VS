@@ -29,9 +29,11 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
+  shouldArmPeakProtect,
+  type ExitZoneSnap,
 } from './exitManage.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
-import { decideEntryWithStructure } from './structureEntry.js';
+import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   flipFilterReason,
   requiredFlipSide,
@@ -180,6 +182,14 @@ type Internal = RobotSession & {
    * Soft HardInv first saw breach (ms) — confirm debounce vs wick “magic minus”.
    */
   hardinv_breach_since_ms: number;
+  /** Structure invalidation first saw breach (ms) */
+  structure_breach_since_ms: number;
+  /** Regime frozen at fill — exit thesis (not live classify flicker) */
+  entry_regime: RegimeName | null;
+  /** Setup frozen at fill */
+  entry_setup: string | null;
+  /** Zone frozen at fill — structure invalidation */
+  entry_zone: ExitZoneSnap | null;
   /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
@@ -546,6 +556,10 @@ function clearTradeState(s: Internal) {
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
   s.hardinv_breach_since_ms = 0;
+  s.structure_breach_since_ms = 0;
+  s.entry_regime = null;
+  s.entry_setup = null;
+  s.entry_zone = null;
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -1182,6 +1196,16 @@ async function enterTradeLocked(
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
+  // Freeze exit thesis at fill — live classify must not rewrite Soft/Peak mid-trade
+  s.entry_regime = s.regime;
+  s.entry_setup = setupType ?? null;
+  const z = zoneGeometry(s.closedBars);
+  s.entry_zone = z
+    ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
+    : null;
+  s.structure_breach_since_ms = 0;
+  s.hardinv_breach_since_ms = 0;
+  s.peak_protect_armed = false;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
@@ -1294,7 +1318,7 @@ function reportCapitalLeaseFail(s: Internal, result: CapitalComSessionResult) {
 }
 
 /**
- * Soft HardInv → reverse-1m Peak arm → Peak trail → Target/TimeDecay (#565 policy).
+ * Soft HardInv → structure kill → per-regime Peak arm → Peak trail → Target/TimeDecay.
  * Pure CPU — runs OUTSIDE the Capital connection mutex so each client decides its
  * own exit independently (not queued behind another account's HTTP on the same key).
  */
@@ -1305,9 +1329,25 @@ function decideOpenManageExit(
 ): string | null {
   if (quote.mid == null || !s.open_side) return null;
   if (s.entry_price == null) s.entry_price = quote.mid;
+  // If we attached without freeze (legacy), freeze now from live state
+  if (!s.entry_regime && s.regime) s.entry_regime = s.regime;
   updateExcursion(s, quote.mid);
 
   const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss', Date.now(), quote);
+  if (lossDec.structure_breaching) {
+    if (!s.structure_breach_since_ms) {
+      s.structure_breach_since_ms = Date.now();
+      pushTick(s, {
+        phase: 'MANAGE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `Structure BREACH · waiting confirm · ${s.entry_regime || s.regime}`,
+      });
+    }
+  } else {
+    s.structure_breach_since_ms = 0;
+  }
   if (lossDec.hardinv_breaching) {
     if (!s.hardinv_breach_since_ms) {
       s.hardinv_breach_since_ms = Date.now();
@@ -1324,7 +1364,7 @@ function decideOpenManageExit(
   }
   if (lossDec.exit) return lossDec.reason;
 
-  // PROFIT: hold on Capital 1m continue; reverse → PeakProtect arms + trails live
+  // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
   const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
   if (closed1m && s.open_side && s.entry_price != null) {
     const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
@@ -1337,9 +1377,16 @@ function decideOpenManageExit(
       );
       s.last_1m_profit_exit_key = key;
 
+      const arm = shouldArmPeakProtect({
+        regime: s.entry_regime || s.regime,
+        policy,
+        side: s.open_side,
+        mid: quote.mid,
+        zone: s.entry_zone,
+        mfe: s.mfe,
+      });
+
       if (policy === 'continue') {
-        // Keep Peak armed if already trailing — do NOT disarm on green 1m
-        // (old: Peak OFF threw away the trail and re-scalped tiny givebacks).
         pushTick(s, {
           phase: 'MANAGE',
           bid: quote.bid,
@@ -1347,26 +1394,37 @@ function decideOpenManageExit(
           mid: quote.mid,
           detail: `1m continue · HOLD profit · PeakProtect ${
             s.peak_protect_armed ? 'ON (keep trail)' : 'OFF'
-          }`,
+          } · thesis=${s.entry_regime || s.regime}`,
         });
       } else if (policy === 'wait') {
-        pushTick(s, {
-          phase: 'MANAGE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `1m wait · HOLD profit · PeakProtect ${
-            s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
-          }`,
-        });
-      } else if (policy === 'reverse') {
+        if (arm && !s.peak_protect_armed) {
+          s.peak_protect_armed = true;
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `1m wait · PeakProtect ARMED (${s.entry_regime || s.regime} profile) · trail`,
+          });
+        } else {
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `1m wait · HOLD profit · PeakProtect ${
+              s.peak_protect_armed ? 'ON (live trail)' : 'OFF'
+            }`,
+          });
+        }
+      } else if (policy === 'reverse' || arm) {
         s.peak_protect_armed = true;
         pushTick(s, {
           phase: 'MANAGE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
+          detail: `1m ${policy} · PeakProtect ARMED · ${s.entry_regime || s.regime} · trail after real MFE`,
         });
         const peakAtClose = decideBestOutcomeExit(
           s,
@@ -1380,7 +1438,30 @@ function decideOpenManageExit(
     }
   }
 
-  // Once armed by reverse — PeakProtect-only on LIVE mark
+  // Live mid through-mid on fade can arm Peak even between 1m closes
+  if (
+    !s.peak_protect_armed &&
+    s.open_side &&
+    quote.mid != null &&
+    shouldArmPeakProtect({
+      regime: s.entry_regime || s.regime,
+      policy: 'wait',
+      side: s.open_side,
+      mid: quote.mid,
+      zone: s.entry_zone,
+      mfe: s.mfe,
+    })
+  ) {
+    s.peak_protect_armed = true;
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `PeakProtect ARMED · structure/fade profile · ${s.entry_regime || s.regime}`,
+    });
+  }
+
   if (s.peak_protect_armed && s.open_side) {
     const peakDec = decideBestOutcomeExit(
       s,
@@ -1394,7 +1475,6 @@ function decideOpenManageExit(
 
   if (opts?.includeTargetTime === false) return null;
 
-  // Green Target / TimeDecay — winners must not wait only for Peak/HardInv
   if (s.open_side && s.entry_price != null && quote.mid != null) {
     const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
     if (favNow > 0) {
@@ -2362,6 +2442,10 @@ export async function startRobotSession(input: {
     pending_entry: null,
     entry_close_latch: null,
     hardinv_breach_since_ms: 0,
+    structure_breach_since_ms: 0,
+    entry_regime: null,
+    entry_setup: null,
+    entry_zone: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -2446,6 +2530,14 @@ export async function attachManageOnlyRobot(input: {
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.deal_id) existing.deal_id = input.deal_id;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
+    if (!existing.entry_regime) {
+      existing.entry_regime = normalizeRegime(input.regime || existing.regime);
+      existing.entry_setup = input.setup_type ?? existing.entry_setup;
+      const z = zoneGeometry(existing.closedBars);
+      existing.entry_zone = z
+        ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
+        : existing.entry_zone;
+    }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -2477,6 +2569,12 @@ export async function attachManageOnlyRobot(input: {
     if (input.deal_id) internal.deal_id = input.deal_id;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
+    internal.entry_regime = normalizeRegime(input.regime || internal.regime);
+    internal.entry_setup = input.setup_type ?? null;
+    {
+      const z = zoneGeometry(internal.closedBars);
+      internal.entry_zone = z ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width } : null;
+    }
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
