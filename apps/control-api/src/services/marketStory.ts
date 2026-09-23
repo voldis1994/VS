@@ -6,7 +6,8 @@
  * and whether the last minutes are a bounce inside a selloff (knife) or a real turn.
  */
 import { ZONE_BARS, MIN_BARS_FOR_ZONE } from './regimes.js';
-import type { TenSecBar } from './tenSecondOhlc.js';
+import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
+import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
 
 export type StoryChapter =
   | 'SEEDING'
@@ -48,8 +49,10 @@ export type MarketStory = {
 
 /** Min |net| over ~30m to treat path as tradeable (Gold ~0.07% ≈ 3pt @ 4300). */
 export const STORY_MIN_PATH_PCT = 0.0007;
-/** Prefer not to chase the last 25% of the zone on continuation scalps */
-const CHASE_EDGE = 0.25;
+/** Prefer not to chase only the last ~12% of the zone (was 25% — starved move starts) */
+const CHASE_EDGE = 0.12;
+/** Soft confidence floor — early legs often sit ~0.45–0.55 */
+const STORY_CONF_MIN = 0.4;
 
 function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   if (!bars.length) return [];
@@ -379,18 +382,20 @@ function isTrendPullbackRegime(regime?: string | null): boolean {
 }
 
 /**
- * 1m scalp confirm — story side + last 1m (soft for breakout / trend pullback).
+ * 1m / 10s scalp confirm — soft enough to catch the START of a leg.
  *
  * Must NOT miss clear legs:
  * - BREAKOUT pierce already passed structureGate — prior 1m often still opposite color
- * - TREND/PULLBACK dip-buy: FLAT last 1m OK when story.allow matches
+ * - TREND/PULLBACK dip-buy: FLAT / adverse 1m OK when story.allow matches
+ * - Fresh 10s trigger with our side starts the move — do not wait for a full green/red 1m
  *
  * Must NOT knife-buy: BOUNCE_IN_SELL / wrong story.allow still blocked.
  */
 export function scalpStoryConfirms(
   story: MarketStory,
   direction: 'BUY' | 'SELL',
-  regime?: string | null
+  regime?: string | null,
+  trigger?: TenSecBar | null
 ): { ok: true; tag: string } | { ok: false; reason: string } {
   const sideOk = storyAllowsDirection(story, direction, regime);
   if (!sideOk.ok) return sideOk;
@@ -398,19 +403,44 @@ export function scalpStoryConfirms(
   if (story.chapter === 'SEEDING') {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  // RANGE_CHOP: starve fades — but BREAKOUT may still fire (pierce is the setup)
-  if (story.chapter === 'RANGE_CHOP' && !isBreakoutRegime(regime)) {
+  // RANGE_CHOP: starve fades — BREAKOUT / EXPANSION / TREND may still fire on trigger
+  const impulseOk =
+    isBreakoutRegime(regime) ||
+    isTrendPullbackRegime(regime) ||
+    String(regime || '').toUpperCase() === 'RANGE';
+  if (story.chapter === 'RANGE_CHOP' && !isBreakoutRegime(regime) && !isTrendPullbackRegime(regime)) {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  if (story.confidence < 0.55 && !isBreakoutRegime(regime)) {
+  if (story.confidence < STORY_CONF_MIN && !isBreakoutRegime(regime)) {
     return { ok: false, reason: `STĀSTS vājš conf=${story.confidence.toFixed(2)} · GAIDI` };
   }
 
   const m1 = story.last_1m;
   const d1 = oneMDir(m1);
   const pos = story.zone_pos;
+  const trigBuy = trigger != null && bodyPct(trigger) >= ENTRY_RALLY;
+  const trigSell = trigger != null && bodyPct(trigger) <= ENTRY_DIP;
+
+  // 10s trigger already prints the start of the leg — do not wait for closed 1m color
+  if (
+    impulseOk &&
+    (story.allow === direction || story.allow === 'BOTH' || isBreakoutRegime(regime)) &&
+    story.chapter !== 'BOUNCE_IN_SELL' &&
+    story.chapter !== 'DIP_IN_RALLY'
+  ) {
+    if (direction === 'BUY' && trigBuy) {
+      return { ok: true, tag: `10s START GREEN · ${story.chapter}` };
+    }
+    if (direction === 'SELL' && trigSell) {
+      return { ok: true, tag: `10s START RED · ${story.chapter}` };
+    }
+  }
 
   if (!m1) {
+    // Trigger-only path already handled; without 1m still allow breakout
+    if (isBreakoutRegime(regime)) {
+      return { ok: true, tag: `1m BREAKOUT OK · no-1m · ${story.chapter}` };
+    }
     return { ok: false, reason: '1m scalp · nav slēgtas 1m sveces · GAIDI' };
   }
 
@@ -440,7 +470,6 @@ export function scalpStoryConfirms(
     if (d1 === 'FLAT') {
       return { ok: true, tag: `1m FLAT OK · ${story.chapter} · ${regime}` };
     }
-    // Dip-buy into RALLY: last 1m may still be red (the dip) — allow reject OR small adverse
     if (direction === 'BUY' && d1 === 'DOWN' && rejection1m(m1, 'BUY')) {
       return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
     }
@@ -456,10 +485,10 @@ export function scalpStoryConfirms(
     }
   }
 
-  // Don't chase a bounce already at the extreme without rejection
+  // Don't chase only the extreme edge without rejection (narrower than before)
   if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
-    if (rejection1m(m1, 'SELL')) {
-      return { ok: true, tag: `1m REJECT HIGH at LO-zone · ${story.chapter}` };
+    if (rejection1m(m1, 'SELL') || trigSell) {
+      return { ok: true, tag: `1m/10s REJECT at LO-zone · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -467,8 +496,8 @@ export function scalpStoryConfirms(
     };
   }
   if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
-    if (rejection1m(m1, 'BUY')) {
-      return { ok: true, tag: `1m REJECT LOW at HI-zone · ${story.chapter}` };
+    if (rejection1m(m1, 'BUY') || trigBuy) {
+      return { ok: true, tag: `1m/10s REJECT at HI-zone · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -478,8 +507,8 @@ export function scalpStoryConfirms(
 
   // Bounce-in-sell / dip-in-rally: still need rejection (knife filter)
   if (direction === 'SELL' && story.chapter === 'BOUNCE_IN_SELL') {
-    if (rejection1m(m1, 'SELL')) {
-      return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
+    if (rejection1m(m1, 'SELL') || trigSell) {
+      return { ok: true, tag: `1m/10s REJECT HIGH · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -487,8 +516,8 @@ export function scalpStoryConfirms(
     };
   }
   if (direction === 'BUY' && story.chapter === 'DIP_IN_RALLY') {
-    if (rejection1m(m1, 'BUY')) {
-      return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
+    if (rejection1m(m1, 'BUY') || trigBuy) {
+      return { ok: true, tag: `1m/10s REJECT LOW · ${story.chapter}` };
     }
     return {
       ok: false,
@@ -496,16 +525,15 @@ export function scalpStoryConfirms(
     };
   }
 
-  // SELLOFF/RALLY with matching direction but opposite last 1m already handled above for trend;
-  // fades still need color or reject
+  // SELLOFF/RALLY continuation — reject OR same-side 10s starts the next push
   if (direction === 'SELL' && (story.chapter === 'SELLOFF' || story.chapter === 'EXHAUST_LO')) {
-    if (rejection1m(m1, 'SELL')) {
-      return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
+    if (rejection1m(m1, 'SELL') || trigSell) {
+      return { ok: true, tag: `1m/10s SELLOFF OK · ${story.chapter}` };
     }
   }
   if (direction === 'BUY' && (story.chapter === 'RALLY' || story.chapter === 'EXHAUST_HI')) {
-    if (rejection1m(m1, 'BUY')) {
-      return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
+    if (rejection1m(m1, 'BUY') || trigBuy) {
+      return { ok: true, tag: `1m/10s RALLY OK · ${story.chapter}` };
     }
   }
 

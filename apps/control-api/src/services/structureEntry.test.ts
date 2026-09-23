@@ -314,16 +314,27 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     ).toBe(true);
   });
 
-  it('EXPANSION BUY not in lower half; SELL not in upper half', () => {
-    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4322.5 });
+  it('EXPANSION allows LO BUY / HI SELL start — blocks weak opposite half', () => {
+    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4325, lastOpen: 4322 });
     const lo = loBook[loBook.length - 1]!;
     const buy = { direction: 'BUY' as const, setup: 'BREAKOUT' as const, reason: 'exp' };
-    expect(structureGate(buy, 'EXPANSION', lo, zoneGeometry(loBook, lo), null).ok).toBe(false);
+    // Rally from LO = start of expansion leg
+    expect(structureGate(buy, 'EXPANSION', lo, zoneGeometry(loBook, lo), null).ok).toBe(true);
 
-    const hiBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4337, lastOpen: 4338.5 });
+    const hiBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4339 });
     const hi = hiBook[hiBook.length - 1]!;
     const sell = { direction: 'SELL' as const, setup: 'BREAKOUT' as const, reason: 'exp' };
-    expect(structureGate(sell, 'EXPANSION', hi, zoneGeometry(hiBook, hi), null).ok).toBe(false);
+    expect(structureGate(sell, 'EXPANSION', hi, zoneGeometry(hiBook, hi), null).ok).toBe(true);
+
+    // Flat micro bar mid-zone — not an expansion impulse
+    const midBook = zoneBook({
+      lo: 4320,
+      hi: 4340,
+      lastClose: 4330.01,
+      lastOpen: 4330,
+    });
+    const mid = midBook[midBook.length - 1]!;
+    expect(structureGate(buy, 'EXPANSION', mid, zoneGeometry(midBook, mid), null).ok).toBe(false);
   });
 
   it('COMPRESSION + TRANSITION + UNKNOWN are wait-only at the gate', () => {
@@ -387,6 +398,37 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(
       structureGate(buy, 'TREND_DOWN', lo, zoneGeometry(loBook, lo), null, 'FLAT').ok
     ).toBe(false);
+  });
+
+  it('BUY vs DOWN bias allowed at LO turn-start — blocked mid-bounce', () => {
+    const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4322 });
+    const lo = loBook[loBook.length - 1]!;
+    const buy = { direction: 'BUY' as const, setup: 'PULLBACK' as const, reason: 'turn' };
+    expect(
+      structureGate(buy, 'TREND_UP', lo, zoneGeometry(loBook, lo), null, 'DOWN').ok
+    ).toBe(true);
+
+    const midBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
+    const mid = midBook[midBook.length - 1]!;
+    expect(
+      structureGate(buy, 'TREND_UP', mid, zoneGeometry(midBook, mid), null, 'DOWN').ok
+    ).toBe(false);
+  });
+
+  it('structure start fires on 10s rally even when last 1m is still red', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4325, lastOpen: 4322 });
+    const trigger = book[book.length - 1]!;
+    const z = zoneGeometry(book, trigger);
+    const m1Red = {
+      open_time_ms: 0,
+      open: 4330,
+      high: 4331,
+      low: 4324,
+      close: 4325,
+      bars: 6,
+    };
+    const started = structureStartEntry(trigger, 'TREND_UP', z, m1Red, 'DOWN');
+    expect(started?.direction).toBe('BUY');
   });
 
   it('FAILED_BREAKOUT sides stay near the failed edge', () => {

@@ -52,9 +52,15 @@ const HALF_HI = 0.5;
 /** Only reject with-trend chase in the extreme 15% of the zone */
 const EXTREME_HI = 0.85;
 const EXTREME_LO = 0.15;
-/** Structure-start: start of a 1m leg from the nearer half */
-const START_LO = 0.55;
-const START_HI = 0.45;
+/**
+ * Structure-start: prefer nearer half, but allow mid so a fresh 10s leg
+ * is not starved until price is already mid-zone.
+ */
+const START_LO = 0.65;
+const START_HI = 0.35;
+/** Against-bias turn is OK near the edge (start of move), not mid-chop bounce */
+const TURN_LO = 0.45;
+const TURN_HI = 0.55;
 
 function bandOf(pos: number): ZoneBand {
   if (pos <= 0.2) return 'LO';
@@ -197,13 +203,18 @@ function allowsAgainstBias(regime: RegimeName, direction: 'BUY' | 'SELL'): boole
 function against1mBias(
   direction: 'BUY' | 'SELL',
   bias: 'UP' | 'DOWN' | 'FLAT',
-  regime: RegimeName
+  regime: RegimeName,
+  zone: ZoneGeometry | null
 ): string | null {
   if (bias === 'FLAT' || allowsAgainstBias(regime, direction)) return null;
+  // Turn start: BUY from LO half while prior 1ms are still red = start of rally
   if (direction === 'BUY' && bias === 'DOWN') {
+    if (zone && zone.pos <= TURN_LO) return null;
     return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
   }
+  // Turn start: SELL from HI half while prior 1ms are still green = start of drop
   if (direction === 'SELL' && bias === 'UP') {
+    if (zone && zone.pos >= TURN_HI) return null;
     return `SELL vs 1m bias UP (${regime}) · fade into rally`;
   }
   return null;
@@ -248,10 +259,14 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      // Never start long into a multi-1m selloff (bounce knife)
+      // Never start long mid-bounce into a selloff (knife) — LO-edge turn is OK
       // COMPRESSION / TRANSITION / UNKNOWN — no structure-start (wait-only)
-      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
-      if (zone.pos <= START_LO && md !== 'DOWN' && rally(bar)) {
+      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY') && zone.pos > TURN_LO) {
+        break;
+      }
+      // 10s rally starts the leg — do NOT wait for last closed 1m to flip green
+      // (that delay is why entries open mid-move)
+      if (zone.pos <= START_LO && rally(bar)) {
         return {
           direction: 'BUY',
           setup: 'CONTINUATION',
@@ -271,8 +286,10 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
-      if (zone.pos >= START_HI && md !== 'UP' && dip(bar)) {
+      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL') && zone.pos < TURN_HI) {
+        break;
+      }
+      if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',
           setup: 'CONTINUATION',
@@ -309,7 +326,7 @@ export function structureGate(
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
 
-  const against = against1mBias(sig.direction, bias, regime);
+  const against = against1mBias(sig.direction, bias, regime, zone);
   if (against) {
     return { ok: false, reason: against };
   }
@@ -394,16 +411,20 @@ export function structureGate(
       return { ok: false, reason: `BREAKOUT_DOWN not at/through lo (${posTag})` };
 
     case 'EXPANSION':
-      // Follow impulse — not mid-zone fade disguised as expansion
+      // Follow impulse from the start of the leg — not only after mid-zone
       if (sig.direction === 'BUY') {
-        if ((rally(bar) || bar.close >= zone.hi) && zone.pos >= 0.45) {
-          return { ok: true, tag: `EXPANSION BUY · ${posTag}` };
+        if (rally(bar) || bar.close >= zone.hi) {
+          if (zone.pos >= 0.2 || bar.close >= zone.hi) {
+            return { ok: true, tag: `EXPANSION BUY · ${posTag}` };
+          }
         }
         return { ok: false, reason: `EXPANSION BUY weak / wrong half (${posTag})` };
       }
       if (sig.direction === 'SELL') {
-        if ((dip(bar) || bar.close <= zone.lo) && zone.pos <= 0.55) {
-          return { ok: true, tag: `EXPANSION SELL · ${posTag}` };
+        if (dip(bar) || bar.close <= zone.lo) {
+          if (zone.pos <= 0.8 || bar.close <= zone.lo) {
+            return { ok: true, tag: `EXPANSION SELL · ${posTag}` };
+          }
         }
         return { ok: false, reason: `EXPANSION SELL weak / wrong half (${posTag})` };
       }
@@ -459,9 +480,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
-  // Full 30m story ready → require 1m scalp confirm (what a human would wait for)
+  // Full 30m story ready → soft 1m/10s scalp (trigger bar starts the leg)
   if (story.chapter !== 'SEEDING') {
-    const scalp = scalpStoryConfirms(story, candidate.direction, regime);
+    const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
     if (!scalp.ok) return null;
     return {
       ...candidate,
