@@ -28,8 +28,9 @@ Peak also **disarmed on every green 1m continue**, so the trail was thrown away 
 5. **Peak min giveback 0.85**, retention ~65% — lock more of a real leg.
 6. **Target ≥ max(pct, abs, 4pt floor)** — Target stays above Soft HardInv.
 7. **TimeDecay min fav ≥2pt** (and ≥0.9× Soft SL) — no +0.75 harvests.
-8. **BE-lock:** after MFE ≥ Soft SL, Soft line moves near flat — greens cannot reverse into full Soft loss.
+8. **BE-lock:** after MFE ≥ Soft SL, Soft line moves near **+1.0pt** (not +0.25). Cut only if **executable** bid/ask edge ≥ **0.5pt** — otherwise HOLD through the dead zone (mid-flat + spread close = Funds magic-minus). Full Soft −SL still cuts real losers.
 9. **1m continue keeps Peak armed** — trail stays on.
+10. **Gold-only abs floors:** mid &lt; 500 (Heating Oil etc.) → no live entry (desk Soft/Peak pts are Gold-scale).
 
 One-shot upgrade: disk `desk-calibration.json` with scalp signature (`peak_mfe_abs < 2` + `hardinv_pct ≥ 0.0012`) is replaced by the new defaults (regimes kept).
 

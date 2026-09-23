@@ -2,9 +2,14 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
+  epicSupportsGoldDeskCalibration,
+  executableFavorable,
   favorableMove,
   hardInvStopDistance,
   softLossLine,
+  BE_LOCK_MIN_ABS,
+  BE_LOCK_MIN_EXEC,
+  GOLD_DESK_MIN_MID,
   HARDINV_ABS_CAP,
   HARDINV_CONFIRM_MS,
   HARDINV_GRACE_MS,
@@ -84,11 +89,11 @@ describe('positive R:R Soft HardInv', () => {
     expect(range).toBeGreaterThan(trend - 0.01);
   });
 
-  it('softLossLine moves to BE-lock after real MFE ≥ Soft SL', () => {
+  it('softLossLine BE-lock clears Gold spread (not +0.25 magic-minus)', () => {
     const sl = 2.0;
     expect(softLossLine(sl, 0.5)).toBe(-sl);
-    expect(softLossLine(sl, 2.0)).toBeGreaterThan(0);
-    expect(softLossLine(sl, 2.0)).toBeLessThanOrEqual(0.25);
+    expect(softLossLine(sl, 2.0)).toBeGreaterThanOrEqual(BE_LOCK_MIN_ABS);
+    expect(softLossLine(sl, 2.0)).toBeLessThanOrEqual(1.5);
   });
 
   it('Peak MFE floor ≥ Soft HardInv so winners are not micro-scalped', () => {
@@ -209,9 +214,11 @@ describe('decideBestOutcomeExit', () => {
     expect(d.hardinv_breaching).toBe(false);
   });
 
-  it('BE-lock cuts when MFE reached Soft SL then price returns near flat', () => {
+  it('BE-lock cuts when MFE reached Soft SL then price returns near lock with exec edge', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
+    const lock = softLossLine(sl, sl + 0.5);
+    // Mid still at lock with bid clearing BE_LOCK_MIN_EXEC
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -221,12 +228,43 @@ describe('decideBestOutcomeExit', () => {
         entry_at: new Date(now - 60_000).toISOString(),
         hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 500),
       }),
-      2000.1, // fav ~0.1 ≤ BE lock (~0.25)
+      2000 + lock,
       'live_loss',
-      now
+      now,
+      { bid: 2000 + BE_LOCK_MIN_EXEC + 0.05, ask: 2000 + lock + 0.3 }
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/BE-lock/);
+  });
+
+  it('BE-lock does NOT scratch mid-flat when bid/ask would be cash-red (Funds magic-minus)', () => {
+    const now = Date.now();
+    const sl = hardInvStopDistance(2000, 'TREND_UP');
+    // Mid fav +0.1 — old BE-lock (+0.25) would cut → market close at bid = −cash
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: sl + 0.5,
+        entry_at: new Date(now - 60_000).toISOString(),
+        hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 500),
+      }),
+      2000.1,
+      'live_loss',
+      now,
+      { bid: 1999.7, ask: 2000.4 } // exec fav −0.3
+    );
+    expect(d.exit).toBe(false);
+    expect(executableFavorable('BUY', 2000, 1999.7, 2000.4, 2000.1)).toBeLessThan(
+      BE_LOCK_MIN_EXEC
+    );
+  });
+
+  it('Heating Oil / cheap CFDs are outside Gold desk calibration', () => {
+    expect(epicSupportsGoldDeskCalibration(2.15)).toBe(false);
+    expect(epicSupportsGoldDeskCalibration(2650)).toBe(true);
+    expect(GOLD_DESK_MIN_MID).toBe(500);
   });
 
   it('PeakProtect never cuts red after reverse (screenshot micro-loss bug)', () => {

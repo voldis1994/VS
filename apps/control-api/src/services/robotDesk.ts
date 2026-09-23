@@ -28,7 +28,9 @@ import {
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
+  epicSupportsGoldDeskCalibration,
   favorableMove,
+  GOLD_DESK_MIN_MID,
 } from './exitManage.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
 import { decideEntryWithStructure } from './structureEntry.js';
@@ -1048,6 +1050,19 @@ async function enterTradeLocked(
     return;
   }
 
+  // Gold Soft/Peak abs floors (~1.5–4pt) destroy Heating Oil (~2) — Soft fires instantly
+  if (!epicSupportsGoldDeskCalibration(mid)) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY blocked — ${s.display_name} mid=${mid.toFixed(4)} < ${GOLD_DESK_MIN_MID} · desk calibrated for Gold only (not Heating Oil / cheap CFDs)`,
+    });
+    s.pending_entry = null;
+    return;
+  }
+
   // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
@@ -1307,7 +1322,7 @@ function decideOpenManageExit(
   if (s.entry_price == null) s.entry_price = quote.mid;
   updateExcursion(s, quote.mid);
 
-  const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss');
+  const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss', Date.now(), quote);
   if (lossDec.hardinv_breaching) {
     if (!s.hardinv_breach_since_ms) {
       s.hardinv_breach_since_ms = Date.now();
@@ -1368,7 +1383,13 @@ function decideOpenManageExit(
           mid: quote.mid,
           detail: '1m reverse · PeakProtect ARMED · trail after real MFE (≥3pt)',
         });
-        const peakAtClose = decideBestOutcomeExit(s, closed1m.close, 'peak_protect_only');
+        const peakAtClose = decideBestOutcomeExit(
+          s,
+          closed1m.close,
+          'peak_protect_only',
+          Date.now(),
+          quote
+        );
         if (peakAtClose.exit) return peakAtClose.reason;
       }
     }
@@ -1376,7 +1397,13 @@ function decideOpenManageExit(
 
   // Once armed by reverse — PeakProtect-only on LIVE mark
   if (s.peak_protect_armed && s.open_side) {
-    const peakDec = decideBestOutcomeExit(s, quote.mid, 'peak_protect_only');
+    const peakDec = decideBestOutcomeExit(
+      s,
+      quote.mid,
+      'peak_protect_only',
+      Date.now(),
+      quote
+    );
     if (peakDec.exit) return peakDec.reason;
   }
 
@@ -1386,7 +1413,7 @@ function decideOpenManageExit(
   if (s.open_side && s.entry_price != null && quote.mid != null) {
     const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
     if (favNow > 0) {
-      const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time');
+      const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
       if (tpDec.exit) return tpDec.reason;
     }
   }
