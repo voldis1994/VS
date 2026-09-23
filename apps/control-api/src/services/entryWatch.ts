@@ -5,7 +5,8 @@ import {
   ZONE_BARS,
   normalizeRegime,
 } from './regimes.js';
-import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
+import type { RegimeEntry } from './entryFromRegime.js';
+import { decideEntryWithStructure } from './structureEntry.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import {
@@ -135,14 +136,16 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
-        looking_for: 'TREND_UP · gaida DIP → BUY pullback (ne chase zaļo sveci)',
+        looking_for:
+          'TREND_UP · DIP pie zonas LO / structure+1m · ne chase HI',
         threshold_body_pct: DIP,
       };
     case 'TREND_DOWN':
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
-        looking_for: 'TREND_DOWN · gaida RALLY → SELL pullback (ne chase sarkano)',
+        looking_for:
+          'TREND_DOWN · RALLY pie zonas HI / structure+1m · ne chase LO',
         threshold_body_pct: RALLY,
       };
     case 'PULLBACK_UPTREND':
@@ -205,7 +208,7 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'RANGE · micro fade DIP→BUY RALLY→SELL · SPIKE → WAIT (no chase)',
+        looking_for: 'RANGE · fade tikai pie LO/HI · mid-zona = chase WAIT',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
@@ -285,6 +288,8 @@ export type BuildWatchInput = {
   just_closed: boolean;
   /** Closed 10s bars already in the robot structure book */
   closed_bar_count?: number;
+  /** Full 10s book — enables zone+1m structure gate in watch ARM preview */
+  closed_bars?: TenSecBar[];
   last_closed_side?: 'BUY' | 'SELL' | null;
   closed_at_ms?: number | null;
   cooldown_left_s?: number;
@@ -308,7 +313,15 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const needSide = requiredFlipSide(lastClosedSide, closedAtMs);
   const rawSig =
     bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
-      ? decideEntryFrom10sRegime(bar, regime)
+      ? decideEntryWithStructure({
+          bar,
+          regime,
+          closedBars: input.closed_bars?.length
+            ? input.closed_bars
+            : bar
+              ? [bar]
+              : [],
+        })
       : null;
   const flipBlocked = Boolean(
     rawSig && sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs)

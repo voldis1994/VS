@@ -30,8 +30,8 @@ import {
   decideBestOutcomeExit,
   favorableMove,
 } from './exitManage.js';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
+import { decideEntryWithStructure } from './structureEntry.js';
 import {
   flipFilterReason,
   requiredFlipSide,
@@ -297,6 +297,7 @@ function refreshEntryWatch(
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),
     closed_bar_count: s.closedBars.length,
+    closed_bars: s.closedBars,
     last_closed_side: s.last_closed_side,
     closed_at_ms: s.closed_at_ms,
     cooldown_left_s: opts?.cooldown_left_s,
@@ -2072,7 +2073,12 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        const sig = decideEntryFrom10sRegime(entryBar, s.regime);
+        // 10s recipe + 30m zone + 1m (from same 10s book) — chase vs structure
+        const sig = decideEntryWithStructure({
+          bar: entryBar,
+          regime: s.regime,
+          closedBars: s.closedBars,
+        });
         if (sig) {
           if (sameDirectionBlocked(sig.direction, s.last_closed_side, s.closed_at_ms)) {
             const need = requiredFlipSide(s.last_closed_side, s.closed_at_ms);

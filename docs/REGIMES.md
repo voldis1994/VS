@@ -1,10 +1,20 @@
 # Regimes
 
-> **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryFrom10sRegime`
-> (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`).
+> **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryWithStructure`
+> (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`, `structureEntry.ts`).
 > Full conditions + executability audit: **[REGIME_CONDITIONS_AUDIT.md](./REGIME_CONDITIONS_AUDIT.md)**.
 
 Regime classification is also available via C++ `RegimeEngine` (`libs/regime-engine`) from `MarketState`. Config: `config/regimes.yaml` (primary horizon 10s). **FAILED_BREAKOUT_*** are live in TS; reserved / unused in C++ `classify()`.
+
+## Structure entry (10s ↔ 1m)
+
+Live Capital orders use `decideEntryWithStructure`:
+
+1. `decideEntryFrom10sRegime` — 10s DIP/RALLY recipe for the current regime  
+2. else `structureStartEntry` — zone LO/HI + closed **1m** (aggregated from the same 10s book)  
+3. `structureGate` — reject mid-zone with-trend **chase**; keep edge fades / breakouts / support pullbacks  
+
+30m zone hi/lo comes from the robot’s closed 10s book (`ZONE_BARS`). The 1m candle is **not** a separate feed — it is 6×10s OHLC so the entry matches what you see on the Capital 1m chart.
 
 ## Regime types
 
