@@ -1,5 +1,10 @@
 /** Live Capital exit — cut losers fast; let winners run / lock real +R. */
 import { getDeskCalibration } from './deskCalibration.js';
+import {
+  regimeExitProfile,
+  structureInvalidationReason,
+  type ExitZoneSnap,
+} from './regimeExitProfile.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -10,9 +15,18 @@ export type ExitSnapshot = {
   mfe: number;
   mae: number;
   peak_retention: number | null;
+  /** Live regime (UI / secondary) — Soft/Peak prefer entry_regime when set */
   regime?: string | null;
+  /** Regime frozen at fill — exit thesis */
+  entry_regime?: string | null;
+  /** Setup frozen at fill (PULLBACK / BREAKOUT / FADE / …) */
+  entry_setup?: string | null;
+  /** Zone geometry frozen at fill — structure invalidation */
+  entry_zone?: ExitZoneSnap | null;
   /** Wall ms when Soft HardInv first saw breach — null/0 = not breaching */
   hardinv_breach_since_ms?: number | null;
+  /** Wall ms when structure invalidation first seen */
+  structure_breach_since_ms?: number | null;
 };
 
 export type CandleOHLC = { open: number; close: number };
@@ -33,6 +47,8 @@ export type ExitDecision = {
   reason: string;
   /** Soft HardInv currently beyond SL — desk should stamp/clear breach timer */
   hardinv_breaching?: boolean;
+  /** Structure invalidation currently true — desk stamps structure_breach_since_ms */
+  structure_breaching?: boolean;
 };
 
 /** Keep ~65% of MFE → give back at most ~35% once a real leg exists. */
@@ -63,12 +79,7 @@ export const HARDINV_GRACE_MS = 12_000;
  * Short confirm — still debounce, but do not gift 37s of free adverse travel.
  */
 export const HARDINV_CONFIRM_MS = 5_000;
-/**
- * RANGE/COMPRESSION noise — slight widen only.
- * Was 1.6 and pushed Soft HardInv past SAFETY (~6pt Gold) while Peak banked +0.5.
- */
-export const HARDINV_RANGE_MULT = 1.15;
-/** TimeDecay min hold */
+/** TimeDecay default hold (overridden per regime profile) */
 export const TIMEDECAY_MIN_HOLD_MS = 12 * 60_000;
 /**
  * TimeDecay must lock REAL mid edge — at least ~half Soft HardInv,
@@ -179,8 +190,7 @@ export function scaleDeskAbs(refAbsPts: number, entry: number): number {
 
 /**
  * Soft HardInv distance in price pts.
- * `hardinv_abs` is a CAP at REF — scaled to entry so every market
- * keeps the same % R:R (not raw REF pts on a cheap CFD).
+ * Base CAP/floor at REF, then × regime exit profile (entry thesis).
  */
 export function hardInvStopDistance(
   entry: number,
@@ -193,16 +203,16 @@ export function hardInvStopDistance(
   const capGold = cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
   const cap = scaleDeskAbs(capGold, absEntry);
   let sl = Math.min(Math.max(pct, floor), cap);
-  const r = String(regime || '')
-    .trim()
-    .toUpperCase();
-  if (r === 'RANGE' || r === 'COMPRESSION') {
-    sl *= HARDINV_RANGE_MULT;
-    // Still never explode past ~1.25× cap after RANGE widen
-    sl = Math.min(sl, cap * 1.25);
-  }
+  const profile = regimeExitProfile(regime);
+  sl *= profile.hardinv_mult;
+  // Never explode past ~1.3× scaled cap after regime widen (RANGE 1.15 etc.)
+  sl = Math.min(sl, cap * 1.3);
   return sl;
 }
+
+/** Structure invalidation grace / confirm (faster than Soft Soft — thesis broken). */
+export const STRUCTURE_GRACE_MS = 8_000;
+export const STRUCTURE_CONFIRM_MS = 3_000;
 
 /**
  * After a real favorable excursion (≥ Soft HardInv), Soft line moves to a
@@ -251,13 +261,14 @@ export type ExitQuoteLegs = {
 };
 
 /**
- * Manage exit — winners hold on 1m continue; Peak giveback after reverse.
- * Soft HardInv caps losers with short grace + confirm.
- * Peak never cuts red — only green after real MFE (≥3pt floor).
+ * Manage exit — Soft HardInv + per-regime Peak/Target/TimeDecay + structure kill.
+ * Peak never cuts red — only green after real MFE (profile-scaled floor).
  * Broker SAFETY SL remains the hard cushion outside this function.
  *
  * Pass bid/ask when available — BE-lock / Peak / Target must not fire on mid
  * “green” that is cash-red after market close through the spread.
+ *
+ * Uses entry_regime (frozen at fill) when set; falls back to live regime.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -269,6 +280,8 @@ export function decideBestOutcomeExit(
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
   const entry = s.entry_price;
+  const thesisRegime = s.entry_regime || s.regime;
+  const profile = regimeExitProfile(thesisRegime);
   const fav = favorableMove(s.open_side, entry, mid);
   const execFav = executableFavorable(
     s.open_side,
@@ -279,24 +292,31 @@ export function decideBestOutcomeExit(
   );
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
-  const peakRet = cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
-  const minGiveback = scaleDeskAbs(
-    cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
-    absEntry
-  );
-  // Target: same % R:R as Gold REF — scale abs floors with price
-  const tp = Math.max(
-    absEntry * cal.target_pct,
-    scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
-    scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
-  );
-  const sl = hardInvStopDistance(entry, s.regime);
+  const peakRet =
+    profile.peak_retention != null && profile.peak_retention > 0
+      ? profile.peak_retention
+      : cal.peak_retention > 0
+        ? cal.peak_retention
+        : PEAK_MFE_RETENTION;
+  const minGiveback =
+    scaleDeskAbs(
+      cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
+      absEntry
+    ) * profile.peak_giveback_mult;
+  const tp =
+    Math.max(
+      absEntry * cal.target_pct,
+      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
+      scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
+    ) * profile.target_mult;
+  const sl = hardInvStopDistance(entry, thesisRegime);
   const minExec = beLockMinExec(sl);
-  const mfeFloor = Math.max(
-    absEntry * cal.peak_mfe_pct,
-    scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
-    scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
-  );
+  const mfeFloor =
+    Math.max(
+      absEntry * cal.peak_mfe_pct,
+      scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
+      scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
+    ) * profile.peak_mfe_mult;
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
@@ -312,14 +332,41 @@ export function decideBestOutcomeExit(
 
   if (wantLoss) {
     let breaching = false;
+    let structureBreaching = false;
+
+    // 1) Structure invalidation — regime thesis dead at the zone (faster confirm)
+    const structReason = structureInvalidationReason(
+      s.open_side,
+      mid,
+      thesisRegime,
+      s.entry_zone
+    );
+    if (structReason && heldMs >= STRUCTURE_GRACE_MS) {
+      structureBreaching = true;
+      const since = s.structure_breach_since_ms;
+      if (since != null && Number.isFinite(since) && since > 0) {
+        if (nowMs - since >= STRUCTURE_CONFIRM_MS) {
+          return {
+            exit: true,
+            reason: `${structReason} · held ${Math.round(heldMs / 1000)}s · family=${profile.family}`,
+            hardinv_breaching: false,
+          };
+        }
+      }
+    }
+
+    // 2) Soft HardInv / BE-lock
     const lossLine = softLossLine(sl, mfe);
     const beMode = mfe >= sl;
     if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
-      // BE-lock dead zone: mid near flat but close would be cash-red → HOLD
-      // (Full Soft −sl still cuts when fav ≤ −sl.)
       if (beMode && execFav < minExec && fav > -sl) {
         if (gate === 'live_loss') {
-          return { exit: false, reason: '', hardinv_breaching: false };
+          return {
+            exit: false,
+            reason: '',
+            hardinv_breaching: false,
+            // structure stamp still needed by desk
+          };
         }
       } else {
         breaching = true;
@@ -330,17 +377,24 @@ export function decideBestOutcomeExit(
             const beTag = beMode ? ' · BE-lock' : '';
             return {
               exit: true,
-              reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)})${beTag} · exec ${execFav.toFixed(5)} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+              reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)})${beTag} · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
               hardinv_breaching: true,
             };
           }
         }
       }
     }
-    // Thesis is diagnostic only — micro-red regime flicker must NOT scratch
+
     if (gate === 'live_loss') {
-      return { exit: false, reason: '', hardinv_breaching: breaching };
+      return {
+        exit: false,
+        reason: '',
+        hardinv_breaching: breaching,
+        structure_breaching: structureBreaching,
+      };
     }
+
+    void structureBreaching;
   }
 
   // Armed after reverse 1m — PeakProtect giveback only, green only, real MFE
@@ -352,7 +406,7 @@ export function decideBestOutcomeExit(
       const givePct = ((1 - peakRet) * 100).toFixed(0);
       return {
         exit: true,
-        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}% · exec ${execFav.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}% · exec ${execFav.toFixed(5)}`,
       };
     }
     return { exit: false, reason: '' };
@@ -366,36 +420,67 @@ export function decideBestOutcomeExit(
     ) {
       return {
         exit: true,
-        reason: `PeakProtection · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · exec ${execFav.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · exec ${execFav.toFixed(5)}`,
       };
     }
 
     if (fav >= tp && execFav >= minExec) {
       return {
         exit: true,
-        reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)}`,
+        reason: `Target / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)}`,
       };
     }
 
-    // Never TimeDecay at fav≈0 — mid flat + spread on close = tiny broker loss
-    const minFav = Math.max(
-      scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, absEntry),
-      absEntry * 0.00035,
-      sl * 0.9,
-      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry) * 0.4
-    );
+    const minFav =
+      Math.max(
+        scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, absEntry),
+        absEntry * 0.00035,
+        sl * 0.9,
+        scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry) * 0.4
+      ) * profile.timedecay_min_fav_mult;
+    const holdNeed = profile.timedecay_hold_ms;
     if (
-      heldMs > TIMEDECAY_MIN_HOLD_MS &&
+      heldMs > holdNeed &&
       fav >= minFav &&
       execFav >= minExec &&
       mfe >= mfeFloor
     ) {
       return {
         exit: true,
-        reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · lock UPL ${fav.toFixed(5)} ≥ min ${minFav.toFixed(5)} · exec ${execFav.toFixed(5)}`,
+        reason: `TimeDecay · ${profile.family} · held ${Math.round(heldMs / 1000)}s · lock UPL ${fav.toFixed(5)} ≥ min ${minFav.toFixed(5)} · exec ${execFav.toFixed(5)}`,
       };
     }
   }
 
   return { exit: false, reason: '' };
 }
+
+/** True when structure invalidation is currently breaching (desk stamps timer). */
+export function isStructureBreaching(
+  s: ExitSnapshot,
+  mid: number,
+  nowMs = Date.now()
+): boolean {
+  if (!s.open_side || s.entry_price == null) return false;
+  const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
+  if (heldMs < STRUCTURE_GRACE_MS) return false;
+  return Boolean(
+    structureInvalidationReason(
+      s.open_side,
+      mid,
+      s.entry_regime || s.regime,
+      s.entry_zone
+    )
+  );
+}
+
+// Re-export profile helpers for desk / tests
+export {
+  regimeExitFamily,
+  regimeExitProfile,
+  shouldArmPeakProtect,
+  structureInvalidationReason,
+  type ExitZoneSnap,
+  type RegimeExitFamily,
+  type RegimeExitProfile,
+} from './regimeExitProfile.js';
