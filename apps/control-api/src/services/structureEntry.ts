@@ -1,20 +1,23 @@
 /**
- * Structure entry — make 10s OHLC decisions correspond to the 1m chart.
+ * Structure entry — 10s trigger aligned to 1m chart + 30m zone.
  *
- * Zone (≈30m of 10s bars) + last closed 1m (aggregated from the same 10s book)
- * distinguish chase (mid/far zone, with-trend candle) from real setup
- * (bounce/reject at zone edge, or breakout pierce, confirmed by 1m).
+ * Design goals (executable on live Gold):
+ * - Zone hi/lo from the 10s book; **pos from the entry 10s close** (not a stale book tip).
+ * - 1m = aggregate of the same 10s bars (what you see on Capital 1m).
+ * - Soft gates: block only clear chase / wrong-edge fades — never AND-stack
+ *   conditions that almost never fire together on quiet 10s Gold.
+ * - Explicit rule per regime (all 14).
  */
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE } from './regimeBands.js';
-import { MIN_BARS_FOR_ZONE, ZONE_BARS, normalizeRegime, type RegimeName } from './regimes.js';
 import {
-  bodyPct,
-  isMoving10s,
-  type TenSecBar,
-} from './tenSecondOhlc.js';
+  MIN_BARS_FOR_ZONE,
+  ZONE_BARS,
+  normalizeRegime,
+  type RegimeName,
+} from './regimes.js';
+import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 
-/** 0 at zone lo → 1 at zone hi */
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
 export type ZoneGeometry = {
@@ -22,7 +25,7 @@ export type ZoneGeometry = {
   lo: number;
   mid: number;
   width: number;
-  /** close position in [lo,hi], clamped 0..1 */
+  /** entry close in [lo,hi], clamped 0..1 (can be outside → 0 or 1) */
   pos: number;
   band: ZoneBand;
 };
@@ -33,22 +36,24 @@ export type MinuteBar = {
   high: number;
   low: number;
   close: number;
-  /** How many 10s bars contributed (6 = full minute) */
   bars: number;
 };
 
 export type StructureDecideInput = {
   bar: TenSecBar;
   regime: string | null | undefined;
-  /** Robot closed 10s book (same series as classifyRegime) */
   closedBars: TenSecBar[];
 };
 
-const LO_MAX = 0.42;
-const HI_MIN = 0.58;
-/** Chase into extreme — reject with-trend non-breakout */
-const CHASE_HI = 0.72;
-const CHASE_LO = 0.28;
+/** Lower / upper half — realistic for Gold 30m zones */
+const HALF_LO = 0.5;
+const HALF_HI = 0.5;
+/** Only reject with-trend chase in the extreme 15% of the zone */
+const EXTREME_HI = 0.85;
+const EXTREME_LO = 0.15;
+/** Structure-start: start of a 1m leg from the nearer half */
+const START_LO = 0.55;
+const START_HI = 0.45;
 
 function bandOf(pos: number): ZoneBand {
   if (pos <= 0.2) return 'LO';
@@ -58,24 +63,30 @@ function bandOf(pos: number): ZoneBand {
   return 'HI';
 }
 
-/** 30m structure from closed 10s bars (same window as classifyRegime). */
-export function zoneGeometry(bars: TenSecBar[]): ZoneGeometry | null {
+/**
+ * Zone hi/lo from book priors; position from **entry** close.
+ * If entry is in the book, exclude that bar from hi/lo (same idea as classifyRegime).
+ */
+export function zoneGeometry(
+  bars: TenSecBar[],
+  entry?: TenSecBar | null
+): ZoneGeometry | null {
   if (!bars.length || bars.length < MIN_BARS_FOR_ZONE) return null;
   const zone = bars.slice(-ZONE_BARS);
   if (zone.length < 2) return null;
-  const prior = zone.slice(0, -1);
-  const last = zone[zone.length - 1]!;
-  const hi = Math.max(...prior.map((b) => b.high));
-  const lo = Math.min(...prior.map((b) => b.low));
+
+  const entryBar = entry ?? zone[zone.length - 1]!;
+  let structureBars = zone.filter((b) => b.open_time_ms !== entryBar.open_time_ms);
+  if (structureBars.length < 2) structureBars = zone.slice(0, -1);
+  if (!structureBars.length) return null;
+
+  const hi = Math.max(...structureBars.map((b) => b.high));
+  const lo = Math.min(...structureBars.map((b) => b.low));
   const width = Math.max(hi - lo, 1e-9);
-  const pos = Math.min(1, Math.max(0, (last.close - lo) / width));
+  const pos = Math.min(1, Math.max(0, (entryBar.close - lo) / width));
   return { hi, lo, mid: (hi + lo) / 2, width, pos, band: bandOf(pos) };
 }
 
-/**
- * Aggregate 10s → 1m OHLC (aligned to minute buckets).
- * Incomplete trailing minute (still forming / partial seed) is omitted from "closed".
- */
 export function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   if (!bars.length) return [];
   const map = new Map<number, TenSecBar[]>();
@@ -108,24 +119,22 @@ export function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   return out;
 }
 
-/** Last fully closed 1m built from 10s (prefer complete 6×10s; else ≥4). */
+/**
+ * Last closed 1m from 10s.
+ * Prefer complete minutes; accept ≥3×10s (30s) so live books are not starved.
+ * Drop only the wall-clock forming minute.
+ */
 export function lastClosed1mFromTenSec(bars: TenSecBar[]): MinuteBar | null {
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return null;
   const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
-  // Drop forming minute (same wall bucket) and incomplete trailing seed
-  const closed = mins.filter((m) => {
-    if (m.open_time_ms >= lastBucket) return false;
-    return m.bars >= 4;
-  });
+  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= 3);
   return closed.length ? closed[closed.length - 1]! : null;
 }
 
+/** Soft 1m direction — close vs open (matches what you see on 1m candle color). */
 export function minuteDir(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLAT' {
   if (!m) return 'FLAT';
-  const bp = bodyPct(m);
-  if (bp >= MOVE) return 'UP';
-  if (bp <= -MOVE) return 'DOWN';
   if (m.close > m.open) return 'UP';
   if (m.close < m.open) return 'DOWN';
   return 'FLAT';
@@ -139,9 +148,13 @@ function dip(bar: TenSecBar): boolean {
   return bodyPct(bar) <= ENTRY_DIP;
 }
 
+function tag(zone: ZoneGeometry, md: string): string {
+  return `zona ${zone.band} pos=${zone.pos.toFixed(2)} · 1m=${md}`;
+}
+
 /**
- * Real 1m-aligned start from zone edge (not mid-zone chase).
- * Catches slow 1m legs that never print a TREND_ENTER 10s body.
+ * Structure-start for regimes that can begin a 1m leg from the zone half.
+ * Does NOT require TREND_ENTER on 10s — only MOVING + 1m color agreement.
  */
 export function structureStartEntry(
   bar: TenSecBar,
@@ -151,37 +164,56 @@ export function structureStartEntry(
 ): RegimeEntry | null {
   if (!zone || !isMoving10s(bar)) return null;
   const md = minuteDir(m1);
-  const candle = `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · 1m=${md} · zona ${zone.band} pos=${zone.pos.toFixed(2)}`;
+  const candle = `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${tag(zone, md)}`;
 
-  const upFamily =
-    regime === 'TREND_UP' ||
-    regime === 'PULLBACK_UPTREND' ||
-    regime === 'EXPANSION' ||
-    regime === 'BREAKOUT_UP' ||
-    regime === 'RANGE';
-  const downFamily =
-    regime === 'TREND_DOWN' ||
-    regime === 'PULLBACK_DOWNTREND' ||
-    regime === 'EXPANSION' ||
-    regime === 'BREAKOUT_DOWN' ||
-    regime === 'RANGE';
+  switch (regime) {
+    case 'UNKNOWN':
+      return null;
 
-  // From zone LO / lower band: 1m UP + 10s rally = structure long (1m chart leg)
-  if (upFamily && zone.pos <= LO_MAX && md === 'UP' && rally(bar)) {
-    return {
-      direction: 'BUY',
-      setup: 'CONTINUATION',
-      reason: `${regime} structure LO→1m UP · ${candle}`,
-    };
+    case 'TREND_UP':
+    case 'PULLBACK_UPTREND':
+    case 'EXPANSION':
+    case 'BREAKOUT_UP':
+    case 'FAILED_BREAKOUT_DOWN':
+    case 'RANGE':
+    case 'COMPRESSION':
+    case 'TRANSITION':
+    case 'REVERSAL_CANDIDATE':
+      // Lower half + 1m not red + 10s rally → long leg start (1m chart)
+      if (zone.pos <= START_LO && md !== 'DOWN' && rally(bar)) {
+        return {
+          direction: 'BUY',
+          setup: 'CONTINUATION',
+          reason: `${regime} structure start LO-half · ${candle}`,
+        };
+      }
+      break;
+    default:
+      break;
   }
-  // From zone HI / upper band: 1m DOWN + 10s dip = structure short
-  if (downFamily && zone.pos >= HI_MIN && md === 'DOWN' && dip(bar)) {
-    return {
-      direction: 'SELL',
-      setup: 'CONTINUATION',
-      reason: `${regime} structure HI→1m DOWN · ${candle}`,
-    };
+
+  switch (regime) {
+    case 'TREND_DOWN':
+    case 'PULLBACK_DOWNTREND':
+    case 'EXPANSION':
+    case 'BREAKOUT_DOWN':
+    case 'FAILED_BREAKOUT_UP':
+    case 'RANGE':
+    case 'COMPRESSION':
+    case 'TRANSITION':
+    case 'REVERSAL_CANDIDATE':
+      if (zone.pos >= START_HI && md !== 'UP' && dip(bar)) {
+        return {
+          direction: 'SELL',
+          setup: 'CONTINUATION',
+          reason: `${regime} structure start HI-half · ${candle}`,
+        };
+      }
+      break;
+    default:
+      break;
   }
+
   return null;
 }
 
@@ -190,8 +222,8 @@ export type StructureGateResult =
   | { ok: false; reason: string };
 
 /**
- * Reject chase: with-trend 10s signal far from structure edge / against 1m.
- * Keep breakouts that already pierced the zone.
+ * Per-regime structure gate — soft, executable.
+ * Unknown / thin zone → pass raw 10s (do not starve).
  */
 export function structureGate(
   sig: RegimeEntry,
@@ -204,71 +236,136 @@ export function structureGate(
     return { ok: true, tag: 'zona thin · raw 10s' };
   }
   const md = minuteDir(m1);
-  const posTag = `zona ${zone.band} pos=${zone.pos.toFixed(2)} · 1m=${md}`;
+  const posTag = tag(zone, md);
 
-  // Fade only at the correct edge
-  if (sig.setup === 'FADE') {
-    if (sig.direction === 'BUY' && zone.pos > LO_MAX) {
-      return { ok: false, reason: `FADE BUY chase · not at LO (${posTag})` };
-    }
-    if (sig.direction === 'SELL' && zone.pos < HI_MIN) {
-      return { ok: false, reason: `FADE SELL chase · not at HI (${posTag})` };
-    }
-    return { ok: true, tag: `structure fade · ${posTag}` };
+  switch (regime) {
+    case 'UNKNOWN':
+      return { ok: false, reason: 'UNKNOWN · no entry' };
+
+    case 'RANGE':
+    case 'COMPRESSION':
+      // Fade / structure only in the correct half (not mid-wrong-way)
+      if (sig.direction === 'BUY' && zone.pos > HALF_LO) {
+        return { ok: false, reason: `${regime} BUY not in lower half (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos < HALF_HI) {
+        return { ok: false, reason: `${regime} SELL not in upper half (${posTag})` };
+      }
+      return { ok: true, tag: `${regime} half-OK · ${posTag}` };
+
+    case 'TREND_UP':
+      // Dip-buy: allow anywhere except extreme HI chase without a real dip context
+      if (sig.direction !== 'BUY') {
+        return { ok: false, reason: `TREND_UP only BUY (${posTag})` };
+      }
+      if (zone.pos >= EXTREME_HI && md === 'UP' && sig.setup !== 'PULLBACK') {
+        return { ok: false, reason: `TREND_UP chase HI (${posTag})` };
+      }
+      return { ok: true, tag: `TREND_UP OK · ${posTag}` };
+
+    case 'TREND_DOWN':
+      if (sig.direction !== 'SELL') {
+        return { ok: false, reason: `TREND_DOWN only SELL (${posTag})` };
+      }
+      if (zone.pos <= EXTREME_LO && md === 'DOWN' && sig.setup !== 'PULLBACK') {
+        return { ok: false, reason: `TREND_DOWN chase LO (${posTag})` };
+      }
+      return { ok: true, tag: `TREND_DOWN OK · ${posTag}` };
+
+    case 'PULLBACK_UPTREND':
+      // Resume long — mid-zone is normal; only block extreme HI melt-up
+      if (sig.direction !== 'BUY') {
+        return { ok: false, reason: `PULLBACK_UPTREND only BUY (${posTag})` };
+      }
+      if (zone.pos >= EXTREME_HI && !rally(bar)) {
+        return { ok: false, reason: `PULLBACK_UPTREND late HI (${posTag})` };
+      }
+      return { ok: true, tag: `PULLBACK_UPTREND OK · ${posTag}` };
+
+    case 'PULLBACK_DOWNTREND':
+      if (sig.direction !== 'SELL') {
+        return { ok: false, reason: `PULLBACK_DOWNTREND only SELL (${posTag})` };
+      }
+      if (zone.pos <= EXTREME_LO && !dip(bar)) {
+        return { ok: false, reason: `PULLBACK_DOWNTREND late LO (${posTag})` };
+      }
+      return { ok: true, tag: `PULLBACK_DOWNTREND OK · ${posTag}` };
+
+    case 'BREAKOUT_UP':
+    case 'EXPANSION':
+      if (sig.direction === 'BUY') {
+        // Pierce or upper half — do NOT require 1m UP (prior 1m often still red)
+        if (bar.close >= zone.hi || zone.pos >= 0.55 || rally(bar)) {
+          return { ok: true, tag: `${regime} BUY OK · ${posTag}` };
+        }
+        return { ok: false, reason: `${regime} BUY weak vs zone (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && regime === 'EXPANSION') {
+        if (bar.close <= zone.lo || zone.pos <= 0.45 || dip(bar)) {
+          return { ok: true, tag: `EXPANSION SELL OK · ${posTag}` };
+        }
+        return { ok: false, reason: `EXPANSION SELL weak vs zone (${posTag})` };
+      }
+      return { ok: false, reason: `${regime} direction mismatch (${posTag})` };
+
+    case 'BREAKOUT_DOWN':
+      if (sig.direction !== 'SELL') {
+        return { ok: false, reason: `BREAKOUT_DOWN only SELL (${posTag})` };
+      }
+      if (bar.close <= zone.lo || zone.pos <= 0.45 || dip(bar)) {
+        return { ok: true, tag: `BREAKOUT_DOWN OK · ${posTag}` };
+      }
+      return { ok: false, reason: `BREAKOUT_DOWN weak vs zone (${posTag})` };
+
+    case 'FAILED_BREAKOUT_UP':
+      // Fade short after failed up — upper half is correct (not LO)
+      if (sig.direction !== 'SELL') {
+        return { ok: false, reason: `FAILED_BREAKOUT_UP only SELL (${posTag})` };
+      }
+      if (zone.pos < 0.35) {
+        return { ok: false, reason: `FAILED_BREAKOUT_UP too far from hi (${posTag})` };
+      }
+      return { ok: true, tag: `FAILED_BREAKOUT_UP OK · ${posTag}` };
+
+    case 'FAILED_BREAKOUT_DOWN':
+      if (sig.direction !== 'BUY') {
+        return { ok: false, reason: `FAILED_BREAKOUT_DOWN only BUY (${posTag})` };
+      }
+      if (zone.pos > 0.65) {
+        return { ok: false, reason: `FAILED_BREAKOUT_DOWN too far from lo (${posTag})` };
+      }
+      return { ok: true, tag: `FAILED_BREAKOUT_DOWN OK · ${posTag}` };
+
+    case 'REVERSAL_CANDIDATE':
+      // Violent bar — allow; only block buying extreme HI / selling extreme LO with-trend
+      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && md === 'UP') {
+        return { ok: false, reason: `REVERSAL BUY chase HI (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && md === 'DOWN') {
+        return { ok: false, reason: `REVERSAL SELL chase LO (${posTag})` };
+      }
+      return { ok: true, tag: `REVERSAL OK · ${posTag}` };
+
+    case 'TRANSITION':
+      // Follow body only if not extreme chase
+      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && md === 'UP') {
+        return { ok: false, reason: `TRANSITION BUY chase HI (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && md === 'DOWN') {
+        return { ok: false, reason: `TRANSITION SELL chase LO (${posTag})` };
+      }
+      return { ok: true, tag: `TRANSITION OK · ${posTag}` };
+
+    default:
+      return { ok: true, tag: posTag };
   }
-
-  // Breakout must still be at/through the edge on this 10s close
-  if (sig.setup === 'BREAKOUT') {
-    if (sig.direction === 'BUY' && bar.close < zone.hi && zone.pos < 0.9) {
-      return { ok: false, reason: `BREAKOUT BUY not at hi (${posTag})` };
-    }
-    if (sig.direction === 'SELL' && bar.close > zone.lo && zone.pos > 0.1) {
-      return { ok: false, reason: `BREAKOUT SELL not at lo (${posTag})` };
-    }
-    // 1m should not violently fight the pierce
-    if (sig.direction === 'BUY' && md === 'DOWN') {
-      return { ok: false, reason: `BREAKOUT BUY vs 1m DOWN (${posTag})` };
-    }
-    if (sig.direction === 'SELL' && md === 'UP') {
-      return { ok: false, reason: `BREAKOUT SELL vs 1m UP (${posTag})` };
-    }
-    return { ok: true, tag: `structure breakout · ${posTag}` };
-  }
-
-  // Pullback / continuation / reversal — block mid-zone with-trend chase
-  if (sig.direction === 'BUY') {
-    if (zone.pos >= CHASE_HI && md === 'UP' && sig.setup !== 'REVERSAL') {
-      return { ok: false, reason: `BUY chase into HI (${posTag})` };
-    }
-    // Pullback BUY wants dip near support, not dip already at highs
-    if (sig.setup === 'PULLBACK' && zone.pos >= HI_MIN && md !== 'DOWN') {
-      return { ok: false, reason: `PULLBACK BUY not at support (${posTag})` };
-    }
-    return { ok: true, tag: `structure long · ${posTag}` };
-  }
-
-  if (sig.direction === 'SELL') {
-    if (zone.pos <= CHASE_LO && md === 'DOWN' && sig.setup !== 'REVERSAL') {
-      return { ok: false, reason: `SELL chase into LO (${posTag})` };
-    }
-    if (sig.setup === 'PULLBACK' && zone.pos <= LO_MAX && md !== 'UP') {
-      return { ok: false, reason: `PULLBACK SELL not at resistance (${posTag})` };
-    }
-    return { ok: true, tag: `structure short · ${posTag}` };
-  }
-
-  return { ok: true, tag: posTag };
 }
 
-/**
- * Live entry: 10s regime recipe + 1m/zone structure.
- * Prefer raw 10s signal when present; else structure-start from zone edge.
- */
 export function decideEntryWithStructure(input: StructureDecideInput): RegimeEntry | null {
   const regime = normalizeRegime(input.regime);
   if (regime === 'UNKNOWN') return null;
 
-  const zone = zoneGeometry(input.closedBars);
+  const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1);
@@ -282,4 +379,13 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
     ...candidate,
     reason: `${candidate.reason} · ${gate.tag}`,
   };
+}
+
+/** Test helper — MOVE kept for callers that want strong 1m body */
+export function minuteDirStrong(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLAT' {
+  if (!m) return 'FLAT';
+  const bp = bodyPct(m);
+  if (bp >= MOVE) return 'UP';
+  if (bp <= -MOVE) return 'DOWN';
+  return minuteDir(m);
 }

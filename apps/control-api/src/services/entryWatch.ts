@@ -137,7 +137,7 @@ export function watchRecipe(regime?: string | null): {
         direction: 'BUY',
         setup: 'PULLBACK',
         looking_for:
-          'TREND_UP · DIP pie zonas LO / structure+1m · ne chase HI',
+          'TREND_UP · DIP pullback (mid-zona OK) · chase tikai extreme HI',
         threshold_body_pct: DIP,
       };
     case 'TREND_DOWN':
@@ -145,7 +145,7 @@ export function watchRecipe(regime?: string | null): {
         direction: 'SELL',
         setup: 'PULLBACK',
         looking_for:
-          'TREND_DOWN · RALLY pie zonas HI / structure+1m · ne chase LO',
+          'TREND_DOWN · RALLY pullback (mid-zona OK) · chase tikai extreme LO',
         threshold_body_pct: RALLY,
       };
     case 'PULLBACK_UPTREND':
@@ -208,7 +208,7 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'RANGE · fade tikai pie LO/HI · mid-zona = chase WAIT',
+        looking_for: 'RANGE · fade / start apakšējā vai augšējā pusē (ne wrong-half)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
