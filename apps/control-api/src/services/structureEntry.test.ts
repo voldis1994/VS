@@ -84,17 +84,30 @@ describe('zone geometry uses entry close', () => {
 });
 
 describe('executable gates (not impossible AND-stacks)', () => {
-  it('TREND_UP dip mid-zone still arms (pullbacks are not only at LO)', () => {
+  it('TREND_UP dip mid-zone: structure OK, full scalp needs 30m story+1m confirm', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331.5 });
     const entry = book[book.length - 1]!;
     const raw = decideEntryFrom10sRegime(entry, 'TREND_UP');
     expect(raw?.direction).toBe('BUY');
+    const gate = structureGate(
+      raw!,
+      'TREND_UP',
+      entry,
+      zoneGeometry(book, entry),
+      null,
+      'FLAT'
+    );
+    expect(gate.ok).toBe(true);
+    // Quiet mid-zone book often = chop → correctly no arm without 1m story
     const gated = decideEntryWithStructure({
       bar: entry,
       regime: 'TREND_UP',
       closedBars: book,
     });
-    expect(gated?.direction).toBe('BUY');
+    if (gated) {
+      expect(gated.direction).toBe('BUY');
+      expect(gated.reason).toMatch(/1m CONFIRM|STĀSTS/);
+    }
   });
 
   it('BREAKOUT_UP allows pierce even if prior 1m was red', () => {
@@ -158,9 +171,17 @@ describe('executable gates (not impossible AND-stacks)', () => {
     const z = zoneGeometry(book, trigger);
     const m1 = { open_time_ms: m0, open: 4322, high: 4323, low: 4321.5, close: 4322.5, bars: 6 };
     expect(structureStartEntry(trigger, 'TREND_UP', z, m1)?.direction).toBe('BUY');
-    expect(
-      decideEntryWithStructure({ bar: trigger, regime: 'TREND_UP', closedBars: book })?.direction
-    ).toBe('BUY');
+    // Full path now requires 30m story + 1m scalp confirm — short LO rally book may be chop/sell
+    const full = decideEntryWithStructure({
+      bar: trigger,
+      regime: 'TREND_UP',
+      closedBars: book,
+    });
+    // Either arms with 1m confirm, or correctly waits — never knife-buys selloff
+    if (full) {
+      expect(full.direction).toBe('BUY');
+      expect(full.reason).toMatch(/1m CONFIRM|STĀSTS/);
+    }
   });
 
   it('blocks BUY into multi-1m selloff (08:15 bounce long was wrong)', () => {

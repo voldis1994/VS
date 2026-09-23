@@ -17,7 +17,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
-import { readMarketStory, storyAllowsDirection } from './marketStory.js';
+import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -440,8 +440,15 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
-  const storyGate = storyAllowsDirection(story, candidate.direction, regime);
-  if (!storyGate.ok) return null;
+  // Full 30m story ready → require 1m scalp confirm (what a human would wait for)
+  if (story.chapter !== 'SEEDING') {
+    const scalp = scalpStoryConfirms(story, candidate.direction, regime);
+    if (!scalp.ok) return null;
+    return {
+      ...candidate,
+      reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
+    };
+  }
 
   return {
     ...candidate,

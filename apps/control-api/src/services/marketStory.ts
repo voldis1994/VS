@@ -42,7 +42,14 @@ export type MarketStory = {
   red_1m: number;
   green_1m: number;
   swing: 'LL_LH' | 'HH_HL' | 'MIXED' | 'UNKNOWN';
+  /** Last closed 1m (for scalp confirm) */
+  last_1m: MinuteBar | null;
 };
+
+/** Min |net| over ~30m to treat path as tradeable (Gold ~0.07% ≈ 3pt @ 4300). */
+export const STORY_MIN_PATH_PCT = 0.0007;
+/** Prefer not to chase the last 25% of the zone on continuation scalps */
+const CHASE_EDGE = 0.25;
 
 function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   if (!bars.length) return [];
@@ -150,7 +157,7 @@ export function readMarketStory(
 ): MarketStory {
   const empty = (chapter: StoryChapter, summary_lv: string): MarketStory => ({
     chapter,
-    allow: 'BOTH',
+    allow: 'NONE',
     summary_lv,
     detail: 'insufficient 30m book',
     confidence: 0.1,
@@ -159,6 +166,7 @@ export function readMarketStory(
     red_1m: 0,
     green_1m: 0,
     swing: 'UNKNOWN',
+    last_1m: null,
   });
 
   if (!closedBars.length || closedBars.length < MIN_BARS_FOR_ZONE) {
@@ -173,6 +181,7 @@ export function readMarketStory(
 
   const first = mins[0]!;
   const last = mins[mins.length - 1]!;
+  const last1m = last;
   const net = last.close - first.open;
   const { red, green } = countColors(mins);
   const recent = mins.slice(-5);
@@ -195,12 +204,21 @@ export function readMarketStory(
   const dipInRally =
     buyStruct && !brokeDown && redR >= 1 && redR <= 2 && greenR >= 2 && recentNet <= 0;
 
+  const midPx = Math.abs(last.close) || 1;
+  const minPath = Math.max(3, midPx * STORY_MIN_PATH_PCT);
+  const pathTooSmall = Math.abs(net) < minPath && swing !== 'LL_LH' && swing !== 'HH_HL';
+
   let chapter: StoryChapter;
   let allow: StorySide;
   let summary_lv: string;
   let confidence = 0.55;
 
-  if (brokeUp && (buyStruct || recentBuy || last.close > first.open)) {
+  if (pathTooSmall && !brokeUp && !brokeDown) {
+    chapter = 'RANGE_CHOP';
+    allow = 'NONE';
+    summary_lv = `STĀSTS · 30m ceļš < ${minPath.toFixed(1)}pt · 1m scalp GAIDI (troksnis)`;
+    confidence = 0.35;
+  } else if (brokeUp && (buyStruct || recentBuy || last.close > first.open)) {
     chapter = 'BREAK_UP';
     allow = 'BUY';
     summary_lv = 'STĀSTS · 30m BREAK UP virs zonas · sekot gariem (ne fade)';
@@ -249,10 +267,11 @@ export function readMarketStory(
     summary_lv = 'STĀSTS · 30m ceļš augšup · tikai BUY · nepārdot dip';
     confidence = 0.65;
   } else {
+    // Chop — 1m scalper sits out (no BOTH fades mid-zone)
     chapter = 'RANGE_CHOP';
-    allow = 'BOTH';
-    summary_lv = 'STĀSTS · 30m chop zonā · fade tikai pie malām · mid = gaidi';
-    confidence = 0.5;
+    allow = 'NONE';
+    summary_lv = 'STĀSTS · 30m chop · 1m scalp GAIDI (nav skaidras puses)';
+    confidence = 0.4;
   }
 
   const detail = [
@@ -262,6 +281,9 @@ export function readMarketStory(
     `swing=${swing}`,
     zone ? `pos=${pos.toFixed(2)} ${zone.band}` : 'pos=—',
     `hi=${hi.toFixed(2)} lo=${lo.toFixed(2)}`,
+    last1m
+      ? `last1m ${last1m.close >= last1m.open ? 'GREEN' : 'RED'} ${last1m.open.toFixed(2)}→${last1m.close.toFixed(2)}`
+      : 'last1m=—',
   ].join(' · ');
 
   return {
@@ -275,6 +297,7 @@ export function readMarketStory(
     red_1m: red,
     green_1m: green,
     swing,
+    last_1m: last1m,
   };
 }
 
@@ -298,6 +321,97 @@ export function storyAllowsDirection(
   return {
     ok: false,
     reason: `${story.summary_lv} · bloķē ${direction} (stāsts=${story.chapter})`,
+  };
+}
+
+function oneMDir(m: MinuteBar | null): 'UP' | 'DOWN' | 'FLAT' {
+  if (!m) return 'FLAT';
+  if (m.close > m.open) return 'UP';
+  if (m.close < m.open) return 'DOWN';
+  return 'FLAT';
+}
+
+/** Upper/lower wick rejection on last 1m (scalp location quality). */
+function rejection1m(m: MinuteBar, side: 'BUY' | 'SELL'): boolean {
+  const span = Math.max(m.high - m.low, 1e-9);
+  const upper = (m.high - Math.max(m.open, m.close)) / span;
+  const lower = (Math.min(m.open, m.close) - m.low) / span;
+  if (side === 'SELL') return upper >= 0.45 && m.close <= m.open + span * 0.15;
+  return lower >= 0.45 && m.close >= m.open - span * 0.15;
+}
+
+/**
+ * 1m scalp confirm — what I'd actually require before clicking:
+ * story side + last closed 1m agrees (or rejection) + no chase into zone extreme.
+ */
+export function scalpStoryConfirms(
+  story: MarketStory,
+  direction: 'BUY' | 'SELL',
+  regime?: string | null
+): { ok: true; tag: string } | { ok: false; reason: string } {
+  const sideOk = storyAllowsDirection(story, direction, regime);
+  if (!sideOk.ok) return sideOk;
+
+  if (story.chapter === 'SEEDING' || story.chapter === 'RANGE_CHOP') {
+    return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
+  }
+  if (story.confidence < 0.55) {
+    return { ok: false, reason: `STĀSTS vājš conf=${story.confidence.toFixed(2)} · GAIDI` };
+  }
+
+  const m1 = story.last_1m;
+  const d1 = oneMDir(m1);
+  const pos = story.zone_pos;
+
+  // Don't chase the last stretch of the move (classic 1m scalp mistake)
+  if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
+    return {
+      ok: false,
+      reason: `1m scalp · SELL chase pie LO (pos=${pos.toFixed(2)}) · GAIDI bounce/break`,
+    };
+  }
+  if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
+    return {
+      ok: false,
+      reason: `1m scalp · BUY chase pie HI (pos=${pos.toFixed(2)}) · GAIDI dip/break`,
+    };
+  }
+
+  if (!m1) {
+    return { ok: false, reason: '1m scalp · nav slēgtas 1m sveces · GAIDI' };
+  }
+
+  // Continuation: last 1m same color as trade
+  if (direction === 'SELL' && d1 === 'DOWN') {
+    return { ok: true, tag: `1m CONFIRM RED · ${story.chapter}` };
+  }
+  if (direction === 'BUY' && d1 === 'UP') {
+    return { ok: true, tag: `1m CONFIRM GREEN · ${story.chapter}` };
+  }
+
+  // Bounce/dip chapters: need rejection wick on the pullback candle
+  if (direction === 'SELL' && (story.chapter === 'BOUNCE_IN_SELL' || story.chapter === 'SELLOFF')) {
+    if (rejection1m(m1, 'SELL')) {
+      return { ok: true, tag: `1m REJECT HIGH · ${story.chapter}` };
+    }
+    return {
+      ok: false,
+      reason: `1m scalp · gaida sarkanu 1m vai reject-wick (tagad ${d1})`,
+    };
+  }
+  if (direction === 'BUY' && (story.chapter === 'DIP_IN_RALLY' || story.chapter === 'RALLY')) {
+    if (rejection1m(m1, 'BUY')) {
+      return { ok: true, tag: `1m REJECT LOW · ${story.chapter}` };
+    }
+    return {
+      ok: false,
+      reason: `1m scalp · gaida zaļu 1m vai reject-wick (tagad ${d1})`,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: `1m scalp · last1m=${d1} neapstiprina ${direction} · GAIDI`,
   };
 }
 
