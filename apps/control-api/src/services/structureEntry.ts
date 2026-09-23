@@ -140,6 +140,58 @@ export function minuteDir(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLA
   return 'FLAT';
 }
 
+/**
+ * Multi-1m bias from the same 10s book — blocks bounce-BUY into a selloff
+ * (e.g. Gold 08:15 long while 1m has been red since ~08:00).
+ */
+export function minuteTrendBias(
+  bars: TenSecBar[],
+  lookback = 5
+): 'UP' | 'DOWN' | 'FLAT' {
+  const mins = aggregateTenSecToMinutes(bars);
+  if (!mins.length) return 'FLAT';
+  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
+  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= 3);
+  const window = closed.slice(-Math.max(3, lookback));
+  if (window.length < 3) return 'FLAT';
+
+  let up = 0;
+  let down = 0;
+  for (const m of window) {
+    if (m.close > m.open) up += 1;
+    else if (m.close < m.open) down += 1;
+  }
+  const net = window[window.length - 1]!.close - window[0]!.open;
+  if (down >= 3 && net < 0) return 'DOWN';
+  if (up >= 3 && net > 0) return 'UP';
+  if (down > up && net < 0) return 'DOWN';
+  if (up > down && net > 0) return 'UP';
+  return 'FLAT';
+}
+
+/** Counter-trend entries that may ignore 1m bias (structured fade / reversal). */
+function allowsAgainstBias(regime: RegimeName, direction: 'BUY' | 'SELL'): boolean {
+  if (direction === 'BUY' && regime === 'FAILED_BREAKOUT_DOWN') return true;
+  if (direction === 'SELL' && regime === 'FAILED_BREAKOUT_UP') return true;
+  if (regime === 'REVERSAL_CANDIDATE') return true;
+  return false;
+}
+
+function against1mBias(
+  direction: 'BUY' | 'SELL',
+  bias: 'UP' | 'DOWN' | 'FLAT',
+  regime: RegimeName
+): string | null {
+  if (bias === 'FLAT' || allowsAgainstBias(regime, direction)) return null;
+  if (direction === 'BUY' && bias === 'DOWN') {
+    return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
+  }
+  if (direction === 'SELL' && bias === 'UP') {
+    return `SELL vs 1m bias UP (${regime}) · fade into rally`;
+  }
+  return null;
+}
+
 function rally(bar: TenSecBar): boolean {
   return bodyPct(bar) >= ENTRY_RALLY;
 }
@@ -148,8 +200,9 @@ function dip(bar: TenSecBar): boolean {
   return bodyPct(bar) <= ENTRY_DIP;
 }
 
-function tag(zone: ZoneGeometry, md: string): string {
-  return `zona ${zone.band} pos=${zone.pos.toFixed(2)} · 1m=${md}`;
+function tag(zone: ZoneGeometry, md: string, bias?: string): string {
+  const b = bias && bias !== 'FLAT' ? ` · bias=${bias}` : '';
+  return `zona ${zone.band} pos=${zone.pos.toFixed(2)} · 1m=${md}${b}`;
 }
 
 /**
@@ -160,11 +213,12 @@ export function structureStartEntry(
   bar: TenSecBar,
   regime: RegimeName,
   zone: ZoneGeometry | null,
-  m1: MinuteBar | null
+  m1: MinuteBar | null,
+  bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
 ): RegimeEntry | null {
   if (!zone || !isMoving10s(bar)) return null;
   const md = minuteDir(m1);
-  const candle = `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${tag(zone, md)}`;
+  const candle = `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${tag(zone, md, bias)}`;
 
   switch (regime) {
     case 'UNKNOWN':
@@ -179,7 +233,8 @@ export function structureStartEntry(
     case 'COMPRESSION':
     case 'TRANSITION':
     case 'REVERSAL_CANDIDATE':
-      // Lower half + 1m not red + 10s rally → long leg start (1m chart)
+      // Never start long into a multi-1m selloff (bounce knife)
+      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
       if (zone.pos <= START_LO && md !== 'DOWN' && rally(bar)) {
         return {
           direction: 'BUY',
@@ -202,6 +257,7 @@ export function structureStartEntry(
     case 'COMPRESSION':
     case 'TRANSITION':
     case 'REVERSAL_CANDIDATE':
+      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
       if (zone.pos >= START_HI && md !== 'UP' && dip(bar)) {
         return {
           direction: 'SELL',
@@ -230,13 +286,19 @@ export function structureGate(
   regime: RegimeName,
   bar: TenSecBar,
   zone: ZoneGeometry | null,
-  m1: MinuteBar | null
+  m1: MinuteBar | null,
+  bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
 ): StructureGateResult {
   if (!zone) {
     return { ok: true, tag: 'zona thin · raw 10s' };
   }
   const md = minuteDir(m1);
-  const posTag = tag(zone, md);
+  const posTag = tag(zone, md, bias);
+
+  const against = against1mBias(sig.direction, bias, regime);
+  if (against) {
+    return { ok: false, reason: against };
+  }
 
   switch (regime) {
     case 'UNKNOWN':
@@ -367,12 +429,13 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
 
   const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
+  const bias = minuteTrendBias(input.closedBars);
   const raw = decideEntryFrom10sRegime(input.bar, regime);
-  const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1);
+  const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const candidate = raw ?? started;
   if (!candidate) return null;
 
-  const gate = structureGate(candidate, regime, input.bar, zone, m1);
+  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
   return {
