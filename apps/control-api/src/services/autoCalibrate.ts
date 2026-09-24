@@ -4,7 +4,8 @@
  * every N closes.
  *
  * Soft by design: never daily/% entry blocks, never empty allowlist,
- * never starve below MIN_ENABLED_REGIMES. Lot size untouched.
+ * never starve below MIN_ENABLED_REGIMES; core regimes never auto-OFF.
+ * Lot size untouched.
  * Entry filters start OPEN (0); auto-cal raises after bad closes.
  */
 import fs from 'node:fs';
@@ -23,6 +24,26 @@ export const AUTO_CALIBRATE_EVERY_N = 5;
 export const AUTO_CALIBRATE_COOLDOWN_MS = 3 * 60_000;
 /** Never drop below this many regimes — entries stay possible. */
 export const MIN_ENABLED_REGIMES = 5;
+
+/**
+ * Core liquid regimes — auto-cal NEVER turns these OFF.
+ * Demoting RANGE/TREND left only rare BREAKOUT_* → robot starves.
+ * Satellite regimes (BREAKOUT / FAILED / REVERSAL) may still soft-demote.
+ */
+export const CORE_ALWAYS_ON_REGIMES: readonly string[] = [
+  'RANGE',
+  'TREND_UP',
+  'TREND_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
+  'EXPANSION',
+  'COMPRESSION',
+  'TRANSITION',
+] as const;
+
+export function isCoreAlwaysOnRegime(regime: string): boolean {
+  return CORE_ALWAYS_ON_REGIMES.includes(String(regime || '').toUpperCase());
+}
 
 export type SessionTrade = {
   pnl_pts: number;
@@ -176,6 +197,26 @@ function hydrateSession(): void {
   }
 }
 
+
+function ensureCoreRegimesOn(): void {
+  try {
+    const cur = getDeskCalibration();
+    const have = new Set(cur.enabled_regimes.map((r) => String(r).toUpperCase()));
+    let changed = false;
+    for (const r of CORE_ALWAYS_ON_REGIMES) {
+      if (!have.has(r)) {
+        have.add(r);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setDeskCalibration({ enabled_regimes: [...have] as never });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setAutoCalibrateEnabled(on: boolean): void {
   hydrateSession();
   enabled = Boolean(on);
@@ -208,6 +249,7 @@ export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrate
   } catch {
     /* ignore */
   }
+  ensureCoreRegimesOn();
   persistSession();
   return getAutoCalibrateStatus();
 }
@@ -218,6 +260,7 @@ export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrate
  */
 export function ensureAutoCalibrateSession(reason = 'robot_start'): AutoCalibrateStatus {
   hydrateSession();
+  ensureCoreRegimesOn();
   if (state.started_at) {
     state.last_summary = `Watch continues · ${reason} · closes=${state.trades.length}`;
     persistSession();
@@ -507,10 +550,13 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Demote at most ONE worst offender per cycle (soft)
+  // Demote at most ONE worst *satellite* offender (never CORE)
   let demotedThisCycle: string | null = null;
   const offenders = [...byRegime.entries()]
-    .filter(([, st]) => st.n >= 2 && st.sum < -0.35)
+    .filter(
+      ([r, st]) =>
+        !isCoreAlwaysOnRegime(r) && st.n >= 2 && st.sum < -0.35
+    )
     .sort((a, b) => a[1].sum - b[1].sum);
   if (offenders.length && enabled.size > MIN_ENABLED_REGIMES) {
     const worst = offenders[0]![0];
@@ -522,14 +568,22 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Positive cycle — soft re-promote one previously demoted regime
-  // (never the one we just turned OFF this cycle)
-  if (expectancy > 0.2 && demotedSession.size) {
+  // Positive cycle OR flat — soft re-promote one previously demoted regime
+  if ((expectancy > 0.1 || !demotedThisCycle) && demotedSession.size) {
     const candidate = [...demotedSession].find((r) => r !== demotedThisCycle);
     if (candidate && !enabled.has(candidate)) {
       enabled.add(candidate);
       demotedSession.delete(candidate);
       changes.push(`regime ON ${candidate}`);
+    }
+  }
+
+  // Core always stay ON — cannot starve liquid regimes
+  for (const r of CORE_ALWAYS_ON_REGIMES) {
+    if (!enabled.has(r)) {
+      enabled.add(r);
+      demotedSession.delete(r);
+      changes.push(`regime ON ${r} (core)`);
     }
   }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   AUTO_CALIBRATE_EVERY_N,
   AUTO_CALIBRATE_COOLDOWN_MS,
+  CORE_ALWAYS_ON_REGIMES,
   MIN_ENABLED_REGIMES,
   _resetAutoCalibrateForTests,
   beginAutoCalibrateSession,
@@ -67,11 +68,11 @@ describe('autoCalibrate', () => {
     expect(getAutoCalibrateStatus().cycles_run).toBe(1);
   });
 
-  it('soft-demotes worst regime but keeps ≥ MIN_ENABLED_REGIMES', () => {
+  it('soft-demotes satellite regime but NEVER turns OFF core (RANGE etc)', () => {
     const current = defaultDeskCalibration();
     const window = [
-      trade({ pnl_pts: -1.5, regime: 'RANGE', exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: -1.2, regime: 'RANGE', exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: -1.5, regime: 'BREAKOUT_UP', exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: -1.2, regime: 'BREAKOUT_UP', exit_reason: 'HardInvalidation' }),
       trade({ pnl_pts: 2.0, regime: 'TREND_UP', exit_reason: 'PeakProtection' }),
       trade({ pnl_pts: 2.5, regime: 'TREND_UP', exit_reason: 'Target' }),
       trade({ pnl_pts: 1.0, regime: 'PULLBACK_UPTREND', exit_reason: 'PeakProtection' }),
@@ -79,9 +80,27 @@ describe('autoCalibrate', () => {
     const demoted = new Set<string>();
     const result = proposeAutoCalibration(current, window, demoted);
     expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
-    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(false);
+    expect(result.next.enabled_regimes.includes('BREAKOUT_UP' as never)).toBe(false);
+    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
     expect(result.next.enabled_regimes.includes('TREND_UP' as never)).toBe(true);
-    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(true);
+    expect(result.changes.some((c) => c.includes('regime OFF BREAKOUT_UP'))).toBe(true);
+  });
+
+  it('refuses to auto-OFF core RANGE even when it is the worst loser', () => {
+    const current = defaultDeskCalibration();
+    const window = [
+      trade({ pnl_pts: -2, regime: 'RANGE' }),
+      trade({ pnl_pts: -2, regime: 'RANGE' }),
+      trade({ pnl_pts: 1, regime: 'TREND_UP' }),
+      trade({ pnl_pts: 1, regime: 'TREND_UP' }),
+      trade({ pnl_pts: 0.5, regime: 'TREND_DOWN' }),
+    ];
+    const result = proposeAutoCalibration(current, window, new Set());
+    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
+    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(false);
+    for (const r of CORE_ALWAYS_ON_REGIMES) {
+      expect(result.next.enabled_regimes.includes(r as never)).toBe(true);
+    }
   });
 
   it('never empties allowlist even if all window regimes lose', () => {

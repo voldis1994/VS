@@ -102,3 +102,11 @@ Session state is saved to `data/auto-calibrate-session.json` so closes/cycles
 survive process restart. Robot **START** continues the watch (does not wipe).
 Use **Reset watch** (or POST reset) for a fresh OPEN session.
 Every close logs `AUTO-CAL watch n/5` even before a cycle.
+
+
+## Core regimes never auto-OFF
+
+Auto-cal will **not** turn off: RANGE, TREND_*, PULLBACK_*, EXPANSION,
+COMPRESSION, TRANSITION. Only satellite regimes (BREAKOUT_*, FAILED_*,
+REVERSAL_CANDIDATE) may soft-demote. Floor remains ≥5 enabled. Trading
+cannot be starved by closing all liquid regimes.
