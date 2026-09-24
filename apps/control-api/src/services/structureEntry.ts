@@ -18,6 +18,7 @@ import {
 } from './regimes.js';
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
+import { tradeOpenAtStart } from './tradeOpenPolicy.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -314,6 +315,12 @@ export function structureGate(
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
 
+  // Ultimate open-at-start: no structure soft-blocks — auto-cal corrects later
+  if (tradeOpenAtStart()) {
+    if (regime === 'UNKNOWN') return { ok: false, reason: 'UNKNOWN · no entry' };
+    return { ok: true, tag: `open · ${posTag}` };
+  }
+
   const against = against1mBias(sig.direction, bias, regime, zone);
   if (against) {
     return { ok: false, reason: against };
@@ -324,12 +331,10 @@ export function structureGate(
       return { ok: false, reason: 'UNKNOWN · no entry' };
 
     case 'COMPRESSION':
-      // Wait for expansion/breakout — micro fade in thin range is noise, not a setup
-      return { ok: false, reason: `COMPRESSION wait-only · ${posTag}` };
+      return { ok: true, tag: `COMPRESSION open · ${posTag}` };
 
     case 'TRANSITION':
-      // Unclear next regime — never arm from structure path
-      return { ok: false, reason: `TRANSITION wait-only · ${posTag}` };
+      return { ok: true, tag: `TRANSITION open · ${posTag}` };
 
     case 'RANGE':
       // Fade only in the correct half (not mid-wrong-way)
@@ -476,6 +481,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
     raw ? 'FLAT' : bias
   );
   if (!gate.ok) return null;
+
+  // Open-at-start: skip story knives / scalp GAIDI — trade the setup now
+  if (tradeOpenAtStart()) {
+    return {
+      ...candidate,
+      reason: `${candidate.reason} · ${gate.tag} · OPEN START · ${story.summary_lv}`,
+    };
+  }
 
   // Raw 10s regime setup = TRADE NOW. Do not re-hunt with 1m scalp GAIDI /
   // SEEDING waits (Funds: setup shown, entry searched 10×). Only hard knives.

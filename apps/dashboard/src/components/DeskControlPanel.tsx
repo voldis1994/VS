@@ -331,8 +331,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            Kopš START skaita closes · ik pēc 5 pats maigi retune Soft/Peak/Target + regimes.
-            Lot nemaina. Nekādu daily/% entry bloķētāju.
+            Sākumā tirgo VISU (open book). Kopš START ik pēc 5 closes pats maigi koriģē
+            Soft/Peak/Target + regimes. Lot nemaina. Nav soft entry / daily/% bloķētāju.
           </p>
           {auto ? (
             <>

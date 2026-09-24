@@ -221,15 +221,15 @@ export function watchRecipe(regime?: string | null): {
     case 'COMPRESSION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'COMPRESSION · wait-only · gaida EXPANSION / BREAKOUT (nav fade)',
+        setup: 'FADE',
+        looking_for: 'COMPRESSION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
       return {
         direction: null,
-        setup: null,
-        looking_for: 'TRANSITION · wait-only · neskaidrs nākamais režīms (nav entry)',
+        setup: 'FADE',
+        looking_for: 'TRANSITION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':

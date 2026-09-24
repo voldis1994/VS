@@ -256,7 +256,7 @@ export function proposeAutoCalibration(
   const byRegime = new Map<string, { sum: number; n: number }>();
   for (const t of windowTrades) {
     const r = String(t.regime || 'UNKNOWN').toUpperCase();
-    if (r === 'UNKNOWN' || r === 'COMPRESSION' || r === 'TRANSITION') continue;
+    if (r === 'UNKNOWN') continue;
     const cur = byRegime.get(r) || { sum: 0, n: 0 };
     cur.sum += t.pnl_pts;
     cur.n += 1;

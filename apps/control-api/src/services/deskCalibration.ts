@@ -28,11 +28,11 @@ export type DeskCalibration = {
   updated_at: string;
 };
 
-/** Wait-only regimes never enter — keep them out of the default allowlist (UI trap). */
-const WAIT_ONLY_REGIMES = new Set<RegimeName>(['COMPRESSION', 'TRANSITION', 'UNKNOWN']);
+/** Only UNKNOWN stays out — no structure yet. Everything else starts ON; auto-cal demotes. */
+const NEVER_ENTRY_REGIMES = new Set<RegimeName>(['UNKNOWN']);
 
 const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
-  (r) => !WAIT_ONLY_REGIMES.has(r)
+  (r) => !NEVER_ENTRY_REGIMES.has(r)
 ) as RegimeName[];
 
 export function tradableDefaultRegimes(): RegimeName[] {
@@ -79,7 +79,7 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
         .map((r) => String(r || '').trim().toUpperCase())
         .filter(
         (r): r is RegimeName =>
-          (REGIME_NAMES as readonly string[]).includes(r) && !WAIT_ONLY_REGIMES.has(r as RegimeName)
+          (REGIME_NAMES as readonly string[]).includes(r) && !NEVER_ENTRY_REGIMES.has(r as RegimeName)
       )
     ),
   ] as RegimeName[];
@@ -122,7 +122,17 @@ function loadFromDisk(): DeskCalibration {
         enabled_regimes: raw.enabled_regimes,
       });
     }
-    return sanitize(raw);
+    // Ultimate: open book — expand to full tradable if COMPRESSION/TRANSITION missing
+    const sanitized = sanitize(raw);
+    const hasCompress = sanitized.enabled_regimes.includes('COMPRESSION');
+    const hasTrans = sanitized.enabled_regimes.includes('TRANSITION');
+    if (!hasCompress || !hasTrans) {
+      return sanitize({
+        ...sanitized,
+        enabled_regimes: [...TRADABLE_DEFAULT],
+      });
+    }
+    return sanitized;
   } catch {
     return defaultDeskCalibration();
   }
@@ -160,7 +170,8 @@ export function regimeAllowedForEntry(regime?: string | null): boolean {
 export function deskCalibrationCatalog() {
   return {
     regimes: [...REGIME_NAMES],
-    wait_only: ['COMPRESSION', 'TRANSITION', 'UNKNOWN'],
+    wait_only: ['UNKNOWN'],
+    open_at_start: true,
     tradable_default: [...TRADABLE_DEFAULT],
     knobs: [
       'hardinv_abs',

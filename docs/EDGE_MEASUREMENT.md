@@ -42,6 +42,16 @@ decide which regimes stay in desk calibration — do not add entry rate-limits.
 `decideBestOutcomeExit` and returns the same expectancy shape. Unit tests:
 `strategyReplay.test.ts`, `tradeLedger.test.ts`.
 
+## Open at start (trade everything)
+
+`TRADE_EVERYTHING_AT_START` — no soft entry blocks at boot:
+
+- All regimes ON except UNKNOWN (incl. COMPRESSION / TRANSITION fade)
+- No structure / story / flip / same-dir soft gates
+- Auto-calibrate demotes losers every 5 closes
+
+Still kept: SAFETY SL, one-trade-per-epic, stale-quote fail-closed. Lot unchanged.
+
 ## Auto-calibrate (ultimate)
 
 From **robot START** (`entry_enabled`), desk watches closed trades and every
