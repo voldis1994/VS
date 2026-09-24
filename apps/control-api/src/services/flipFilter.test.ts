@@ -11,7 +11,7 @@ import {
   sameDirectionBlocked,
 } from './flipFilter.js';
 
-describe('flipFilter — same-dir lock + after-loss flip', () => {
+describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
   const t0 = 1_000_000;
 
   it('allows any side when no prior close', () => {
@@ -31,16 +31,19 @@ describe('flipFilter — same-dir lock + after-loss flip', () => {
     expect(sameDirLockLeftSec(t0, t0 + 30_000, sameDirLockMs(false))).toBe(60);
   });
 
-  it('after Soft loss keeps same-dir blocked for 12m (Funds SELL spam)', () => {
+  it('after Soft loss keeps same-dir blocked for 12m — no forced opposite', () => {
     expect(sameDirLockMs(true)).toBe(SAME_DIR_LOCK_AFTER_LOSS_MS);
-    // 5 min after Soft loss — still blocked
+    // 5 min after Soft loss — same still blocked
     expect(
       sameDirectionBlocked('SELL', 'SELL', t0, t0 + 5 * 60_000, { wasLoss: true })
     ).toBe(true);
+    // Opposite allowed by lock (next-move gate is robotDesk)
     expect(
       sameDirectionBlocked('BUY', 'SELL', t0, t0 + 5 * 60_000, { wasLoss: true })
     ).toBe(false);
-    // After 12m — allowed
+    // Do NOT advertise forced flip after Soft
+    expect(requiredFlipSide('SELL', t0, t0 + 5 * 60_000, { wasLoss: true })).toBeNull();
+    // After 12m — same-dir allowed again
     expect(
       sameDirectionBlocked(
         'SELL',
@@ -59,8 +62,9 @@ describe('flipFilter — same-dir lock + after-loss flip', () => {
     ).toBe(false);
   });
 
-  it('explains loss flip vs normal lock', () => {
-    expect(flipFilterReason('SELL', 'SELL', 400, true)).toMatch(/FLIP AFTER LOSS 12m/);
+  it('explains same-dir Soft lock vs normal flip lock', () => {
+    expect(flipFilterReason('SELL', 'SELL', 400, true)).toMatch(/SAME-DIR LOCK after Soft/);
+    expect(flipFilterReason('SELL', 'SELL', 400, true)).toMatch(/ne auto-flip/);
     expect(flipFilterReason('BUY', 'BUY', 40, false)).toMatch(/FLIP LOCK 90s/);
   });
 

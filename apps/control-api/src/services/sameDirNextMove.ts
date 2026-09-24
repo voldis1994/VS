@@ -38,7 +38,7 @@ export function sameDirNextMoveConfirms(input: {
   if (minute === 'reverse') {
     return {
       ok: false,
-      reason: `1m reverse · ne same-dir ${side} · gaida flip vai jaunu confirm`,
+      reason: `1m reverse · ne same-dir ${side} · gaida next-move confirm`,
     };
   }
 
