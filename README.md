@@ -119,6 +119,8 @@ VS.bat          one-click launcher (git pull, stack, client tunnel)
 
 See [docs/SECURITY.md](docs/SECURITY.md) and [docs/FULL_SYSTEM_AUDIT.md](docs/FULL_SYSTEM_AUDIT.md).
 
+Closed-trade expectancy (no daily/% entry blockers): [docs/EDGE_MEASUREMENT.md](docs/EDGE_MEASUREMENT.md).
+
 ## License
 
 Proprietary. All rights reserved.

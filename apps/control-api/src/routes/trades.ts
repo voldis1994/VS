@@ -1,15 +1,42 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
+import { fetchExpectancyReport } from '../services/tradeLedger.js';
+import { replayStrategy, syntheticTrendBars } from '../services/strategyReplay.js';
 
 export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/api/trades/expectancy', async (request) => {
+    const query = request.query as {
+      window?: string;
+      client_id?: string;
+      account_id?: string;
+      epic?: string;
+    };
+    return fetchExpectancyReport(query);
+  });
+
+  /** Offline TS-brain smoke replay (synthetic bars) — measurement only, no orders. */
+  app.post('/api/trades/replay/smoke', async () => {
+    const bars = syntheticTrendBars({ n: 360, step: 0.12 });
+    const result = replayStrategy(bars, { spread_pts: 0.15 });
+    return {
+      ok: true,
+      bars: result.bars,
+      trades: result.trades.length,
+      entries_attempted: result.entries_attempted,
+      expectancy: result.expectancy.total,
+      by_regime: result.expectancy.by_regime.slice(0, 8),
+    };
+  });
+
   app.get('/api/trades', async (request) => {
     const query = request.query as {
       client_id?: string;
       instrument_id?: string;
       direction?: string;
+      epic?: string;
       limit?: string;
     };
-    let sql = `SELECT t.*, c.name as client_name
+    let sql = `SELECT t.*, c.name as client_name, ba.display_name as account_name
                FROM trades t
                JOIN broker_accounts ba ON ba.id = t.broker_account_id
                JOIN broker_connections bc ON bc.id = ba.broker_connection_id
@@ -30,9 +57,13 @@ export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
       sql += ` AND t.direction = $${idx++}`;
       params.push(query.direction);
     }
+    if (query.epic) {
+      sql += ` AND t.epic = $${idx++}`;
+      params.push(query.epic);
+    }
 
     sql += ` ORDER BY t.closed_at DESC NULLS LAST LIMIT $${idx}`;
-    params.push(parseInt(query.limit || '50', 10));
+    params.push(parseInt(query.limit || '100', 10));
 
     const { rows } = await pool.query(sql, params);
     return rows;

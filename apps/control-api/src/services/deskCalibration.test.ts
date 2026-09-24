@@ -20,6 +20,9 @@ describe('deskCalibration', () => {
     expect(c.target_abs).toBe(5.0);
     expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
     expect(c.enabled_regimes.includes('UNKNOWN')).toBe(false);
+    expect(c.enabled_regimes.includes('COMPRESSION')).toBe(false);
+    expect(c.enabled_regimes.includes('TRANSITION')).toBe(false);
+    expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
   });
 
   it('clamps peak_retention and filters UNKNOWN', () => {
@@ -28,6 +31,13 @@ describe('deskCalibration', () => {
       enabled_regimes: ['TREND_UP', 'UNKNOWN', 'bogus'] as never,
     });
     expect(c.peak_retention).toBeLessThanOrEqual(0.95);
+    expect(c.enabled_regimes).toEqual(['TREND_UP']);
+  });
+
+  it('filters wait-only regimes from allowlist', () => {
+    const c = setDeskCalibration({
+      enabled_regimes: ['TREND_UP', 'COMPRESSION', 'TRANSITION'] as never,
+    });
     expect(c.enabled_regimes).toEqual(['TREND_UP']);
   });
 

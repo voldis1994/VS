@@ -1,5 +1,7 @@
 # Regimes
 
+> **Live decision SoT:** Capital desk TypeScript (`structureEntry` / `exitManage`). C++ bridge is Client Panel intents only — see [EDGE_MEASUREMENT.md](./EDGE_MEASUREMENT.md).
+>
 > **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryWithStructure`
 > (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`, `structureEntry.ts`).
 > Full conditions + executability audit: **[REGIME_CONDITIONS_AUDIT.md](./REGIME_CONDITIONS_AUDIT.md)**.
