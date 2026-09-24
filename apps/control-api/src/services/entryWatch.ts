@@ -56,7 +56,7 @@ export type EntryWatch = {
   armed: boolean;
   /** Last closed side — same side blocked for 45s after close */
   last_closed_side: 'BUY' | 'SELL' | null;
-  /** Required flip side while 45s lock active, or null when lock expired */
+  /** Required flip side while win-lock active; null after Soft (no auto-flip) */
   need_side: 'BUY' | 'SELL' | null;
   /** Seconds left on same-direction lock (0 = expired / inactive) */
   lock_left_s: number;
@@ -299,7 +299,7 @@ export type BuildWatchInput = {
   closed_bars?: TenSecBar[];
   last_closed_side?: 'BUY' | 'SELL' | null;
   closed_at_ms?: number | null;
-  /** Last close was Soft/SL loss — longer flip lock */
+  /** Last close was Soft/SL loss — longer same-dir block (no forced flip) */
   last_close_was_loss?: boolean;
   cooldown_left_s?: number;
   status_override?: EntryWatchStatus | null;
@@ -360,14 +360,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   let last_reason = input.last_reason || '';
   if (!last_reason) {
     if (status === 'ARMED' && sig) last_reason = sig.reason;
-    else if (status === 'FLIP_FILTER' && lastClosedSide && needSide)
-      last_reason = flipFilterReason(
-        needSide === 'BUY' ? 'SELL' : 'BUY',
-        lastClosedSide,
-        lockLeft,
-        wasLoss
-      );
-    else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
+    else if (status === 'FLIP_FILTER' && lastClosedSide) {
+      const blockedSig = flipBlocked && rawSig ? rawSig.direction : lastClosedSide;
+      last_reason = flipFilterReason(blockedSig, lastClosedSide, lockLeft, wasLoss);
+    } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
       last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
     else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
@@ -383,10 +379,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   }
 
   const flipNote = needSide
-    ? wasLoss
-      ? ` · FLIP AFTER LOSS ${Math.ceil(lockMs / 60_000)}m: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
-      : ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
-    : '';
+    ? ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
+    : wasLoss && lockLeft > 0 && lastClosedSide
+      ? ` · SAME-DIR LOCK after Soft ${Math.ceil(lockMs / 60_000)}m: blocked ${lastClosedSide} · ${lockLeft}s · pretējo tikai ar next-move`
+      : '';
 
   const story: MarketStory = readMarketStory(
     input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
@@ -405,7 +401,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     story_chapter: story.chapter,
     story_allow: story.allow,
     story_detail: story.detail,
-    direction: sig?.direction ?? (flipBlocked ? needSide : recipe.direction),
+    direction: sig?.direction ?? (flipBlocked ? null : recipe.direction),
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',
     last_closed_side: lastClosedSide,

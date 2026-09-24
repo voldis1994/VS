@@ -97,7 +97,7 @@ describe('entryWatch', () => {
     expect(w.last_reason).toMatch(/FLIP LOCK/);
   });
 
-  it('FLIP AFTER LOSS blocks same direction for 12m', () => {
+  it('after Soft blocks same direction for 12m — no forced opposite', () => {
     // Green bounce → TREND_DOWN rally-sell same as last SELL loss
     const b = bar(2000, 2000.8, 1999.9, 1999.7);
     const w = buildEntryWatch({
@@ -113,10 +113,14 @@ describe('entryWatch', () => {
       closed_at_ms: Date.now() - 5 * 60_000,
       last_close_was_loss: true,
     });
-    expect(w.status).toBe('FLIP_FILTER');
-    expect(w.need_side).toBe('BUY');
+    expect(w.need_side).toBeNull(); // no auto-flip after Soft
     expect(w.lock_left_s).toBeGreaterThan(60);
-    expect(w.last_reason).toMatch(/FLIP AFTER LOSS/);
+    expect(w.looking_for).toMatch(/SAME-DIR LOCK after Soft/);
+    // If setup fires same-dir → FLIP_FILTER; otherwise note still on looking_for
+    if (w.status === 'FLIP_FILTER') {
+      expect(w.last_reason).toMatch(/SAME-DIR LOCK after Soft/);
+    }
+    expect(w.armed).toBe(false);
   });
 
   it('same direction allowed again after win lock', () => {

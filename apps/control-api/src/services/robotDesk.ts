@@ -40,7 +40,6 @@ import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
-  requiredFlipSide,
   sameDirLockLeftSec,
   sameDirLockMs,
   sameDirectionBlocked,
@@ -890,13 +889,13 @@ async function exitTrade(
     const listed = await listCapitalOpenPositions(session);
     if (listed.ok && !matchOpenOnEpic(listed.positions, s.epic)) {
       if (s.open_side) s.last_closed_side = s.open_side;
-      s.last_close_was_loss = exitReasonWasLoss(reason) || true; // unknown UPL — treat as loss flip
+      s.last_close_was_loss = exitReasonWasLoss(reason) || true; // unknown UPL — same-dir lock
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · FLIP AFTER LOSS · ≠ ${s.last_closed_side || '—'}`,
+        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · SAME-DIR LOCK after Soft · blocked ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
       clearTradeState(s);
@@ -954,14 +953,14 @@ async function exitTrade(
     s.last_close_was_loss = wasLoss;
   }
   const lockLabel = s.last_close_was_loss
-    ? `FLIP AFTER LOSS ${Math.ceil(sameDirLockMs(true) / 60_000)}m`
-    : `FLIP LOCK ${Math.ceil(sameDirLockMs(false) / 1000)}s`;
+    ? `SAME-DIR LOCK after Soft ${Math.ceil(sameDirLockMs(true) / 60_000)}m · blocked ${s.last_closed_side}`
+    : `FLIP LOCK ${Math.ceil(sameDirLockMs(false) / 1000)}s · ≠ ${s.last_closed_side}`;
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · ${lockLabel} ≠ ${s.last_closed_side}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · ${lockLabel}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1042,8 +1041,12 @@ async function enterTradeLocked(
     s.pending_entry = null;
     return;
   }
-  // Same-dir after lock: only if next move still agrees (no blind SELL spam)
-  if (s.last_closed_side && direction === s.last_closed_side) {
+  // After close: next-move must confirm — same-dir always; opposite after Soft too
+  // (force-flip after Soft caused BUY↔SELL Soft ping-pong on Funds)
+  const needsNextMove =
+    Boolean(s.last_closed_side) &&
+    (direction === s.last_closed_side || s.last_close_was_loss);
+  if (needsNextMove) {
     const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
     const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
     const nextOk = sameDirNextMoveConfirms({
@@ -1054,12 +1057,14 @@ async function enterTradeLocked(
       prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
     });
     if (!nextOk.ok) {
+      const tag =
+        direction === s.last_closed_side ? 'SAME-DIR BLOCK' : 'POST-SOFT BLOCK';
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SAME-DIR BLOCK · ${nextOk.reason}`,
+        detail: `${tag} · ${nextOk.reason}`,
       });
       s.pending_entry = null;
       return;
@@ -1779,7 +1784,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         ask: quote.ask,
         mid: quote.mid,
         detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · FLIP AFTER LOSS ≠ ${closedSide}`
+          ? `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`
           : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
       });
       return;
@@ -2116,13 +2121,13 @@ async function robotCycleLocked(s: Internal) {
         // Local thought open but broker flat → treat as closed
         const closedSide = s.open_side;
         s.last_closed_side = closedSide;
-        s.last_close_was_loss = true; // external close — unknown UPL, force flip window
+        s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `Broker flat on this epic — trade closed externally · FLAT · FLIP AFTER LOSS ≠ ${closedSide}`,
+          detail: `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -2381,12 +2386,6 @@ async function robotCycleLocked(s: Internal) {
               flipOpts
             )
           ) {
-            const need = requiredFlipSide(
-              s.last_closed_side,
-              s.closed_at_ms,
-              Date.now(),
-              flipOpts
-            );
             const left = sameDirLockLeftSec(s.closed_at_ms, Date.now(), lockMs);
             s.pending_entry = null;
             s.entry_close_latch = null;
@@ -2399,16 +2398,17 @@ async function robotCycleLocked(s: Internal) {
                 s.last_close_was_loss
               ),
             });
+            const lockTag = s.last_close_was_loss ? 'SAME-DIR LOCK after Soft' : 'FLIP LOCK';
             pushTick(s, {
               phase: 'DECIDE',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `${ohlcLine} · ${s.last_close_was_loss ? 'FLIP AFTER LOSS' : 'FLIP LOCK'} · blocked ${sig.direction} ${sig.setup} · need ${need} · ${left}s left (last ${s.last_closed_side})`,
+              detail: `${ohlcLine} · ${lockTag} · blocked ${sig.direction} ${sig.setup} · ${left}s left (last ${s.last_closed_side})`,
             });
           } else if (
             s.last_closed_side &&
-            sig.direction === s.last_closed_side
+            (sig.direction === s.last_closed_side || s.last_close_was_loss)
           ) {
             const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
             const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
@@ -2424,6 +2424,10 @@ async function robotCycleLocked(s: Internal) {
                 : null,
             });
             if (!nextOk.ok) {
+              const tag =
+                sig.direction === s.last_closed_side
+                  ? 'SAME-DIR BLOCK'
+                  : 'POST-SOFT BLOCK';
               s.pending_entry = null;
               s.entry_close_latch = null;
               refreshEntryWatch(s, {
@@ -2435,7 +2439,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `${ohlcLine} · SAME-DIR BLOCK · ${nextOk.reason}`,
+                detail: `${ohlcLine} · ${tag} · ${nextOk.reason}`,
               });
             } else {
               direction = sig.direction;
@@ -2451,7 +2455,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `ARMED ${sig.direction} ${sig.setup} · same-dir OK · ${nextOk.tag}`,
+                detail: `ARMED ${sig.direction} ${sig.setup} · next-move OK · ${nextOk.tag}`,
               });
             }
           } else {
@@ -2528,7 +2532,8 @@ async function robotCycleLocked(s: Internal) {
         });
       } else if (
         s.last_closed_side &&
-        s.pending_entry.direction === s.last_closed_side
+        (s.pending_entry.direction === s.last_closed_side ||
+          s.last_close_was_loss)
       ) {
         const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
         const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
