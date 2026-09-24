@@ -320,27 +320,35 @@ export const STRUCTURE_GRACE_MS = 8_000;
 export const STRUCTURE_CONFIRM_MS = 3_000;
 
 /**
- * After a real favorable excursion (≥ Soft HardInv), Soft line moves near
- * flat so greens cannot reverse into a full Soft loss.
+ * After a real favorable excursion (≥ Soft HardInv), Soft line moves to
+ * true flat so greens cannot reverse into a full Soft loss.
  *
- * Lock is ONLY a thin spread cushion (scale-free) — NOT a profit harvest.
- * Old BE_LOCK_FRAC=0.45 banked ~+45% of Soft (+£0.03…+£0.08 on Funds) while
- * losers still took full Soft (−£0.10…−£0.11) → inverted R:R. Real winners
- * come from Peak/Target, not Soft BE.
+ * Lock is NOT a profit harvest — old 0.45 / even 0.05 Soft still banked
+ * Funds +£0.01…+£0.03 while Soft losers took −£0.06. Real winners =
+ * Peak/Target with exec ≥ Soft (1:1 min vs Soft loss).
  */
-export const BE_LOCK_FRAC = 0.05;
-/** Executable edge as fraction of Soft SL — only while mid still green. */
+export const BE_LOCK_FRAC = 0;
+/** Executable edge as fraction of Soft SL — only while mid still green (magic-minus). */
 export const BE_LOCK_EXEC_FRAC = 0.25;
 
 export function softLossLine(sl: number, mfe: number): number {
   if (mfe >= sl) {
-    return Math.max(sl * BE_LOCK_FRAC, sl * 1e-9);
+    // True BE — never harvest a slice of Soft as a "win"
+    return 0;
   }
   return -sl;
 }
 
 export function beLockMinExec(sl: number): number {
   return Math.max(sl * BE_LOCK_EXEC_FRAC, sl * 1e-9);
+}
+
+/**
+ * Soft profit exits (Peak / Target / TimeDecay) must bank at least Soft HardInv
+ * — otherwise Funds shows +£0.01…+£0.03 vs −£0.06 Soft (inverted R:R).
+ */
+export function minProfitBank(sl: number): number {
+  return Math.max(sl, sl * 1e-9);
 }
 
 /**
@@ -413,6 +421,8 @@ export function decideBestOutcomeExit(
   const tp = targetTakeProfitDistance(entry, thesisRegime);
   const sl = hardInvStopDistance(entry, thesisRegime);
   const minExec = beLockMinExec(sl);
+  /** Peak/Target/TimeDecay — never bank below Soft loss size */
+  const minBank = minProfitBank(sl);
   const mfeFloor =
     Math.max(
       absEntry * cal.peak_mfe_pct,
@@ -505,13 +515,13 @@ export function decideBestOutcomeExit(
   // Armed after reverse 1m — PeakProtect giveback only, green only, real MFE
   if (wantPeakOnly) {
     if (
-      execFav >= minExec &&
+      execFav >= minBank &&
       peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
     ) {
       const givePct = ((1 - peakRet) * 100).toFixed(0);
       return {
         exit: true,
-        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}% · exec ${execFav.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}% · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
     return { exit: false, reason: '' };
@@ -520,19 +530,19 @@ export function decideBestOutcomeExit(
   if (wantFullProfit) {
     if (
       gate === 'all' &&
-      execFav >= minExec &&
+      execFav >= minBank &&
       peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
     ) {
       return {
         exit: true,
-        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · exec ${execFav.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
 
-    if (fav >= tp && execFav >= minExec) {
+    if (fav >= tp && execFav >= minBank) {
       return {
         exit: true,
-        reason: `Target / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)}`,
+        reason: `Target / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
 
@@ -540,19 +550,19 @@ export function decideBestOutcomeExit(
       Math.max(
         scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, absEntry),
         absEntry * 0.00035,
-        sl * 0.9,
+        minBank,
         scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry) * 0.4
       ) * profile.timedecay_min_fav_mult;
     const holdNeed = profile.timedecay_hold_ms;
     if (
       heldMs > holdNeed &&
       fav >= minFav &&
-      execFav >= minExec &&
+      execFav >= minBank &&
       mfe >= mfeFloor
     ) {
       return {
         exit: true,
-        reason: `TimeDecay · ${profile.family} · held ${Math.round(heldMs / 1000)}s · lock UPL ${fav.toFixed(5)} ≥ min ${minFav.toFixed(5)} · exec ${execFav.toFixed(5)}`,
+        reason: `TimeDecay · ${profile.family} · held ${Math.round(heldMs / 1000)}s · lock UPL ${fav.toFixed(5)} ≥ min ${minFav.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
   }

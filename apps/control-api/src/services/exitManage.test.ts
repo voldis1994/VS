@@ -12,6 +12,7 @@ import {
   scaleDeskAbs,
   softLossLine,
   targetTakeProfitDistance,
+  minProfitBank,
   BE_LOCK_FRAC,
   DESK_REF_MID,
   HARDINV_ABS_CAP,
@@ -105,15 +106,14 @@ describe('positive R:R Soft HardInv', () => {
     expect(cheap).toBeLessThan(0.05);
   });
 
-  it('softLossLine BE-lock is thin spread cushion — not 45% Soft harvest', () => {
+  it('softLossLine BE-lock is true flat — not a Soft-slice harvest', () => {
     const sl = 2.0;
     expect(softLossLine(sl, 0.5)).toBe(-sl);
-    expect(softLossLine(sl, 2.0)).toBeCloseTo(sl * BE_LOCK_FRAC, 5);
-    expect(BE_LOCK_FRAC).toBeLessThanOrEqual(0.1);
-    // Soft full loss must dwarf BE lock (Funds +£0.03 vs −£0.10 was ~0.45)
-    expect(sl / softLossLine(sl, sl)).toBeGreaterThanOrEqual(8);
+    expect(softLossLine(sl, 2.0)).toBe(0);
+    expect(BE_LOCK_FRAC).toBe(0);
+    expect(minProfitBank(sl)).toBe(sl);
     const oilSl = hardInvStopDistance(2.15, 'TREND_UP');
-    expect(softLossLine(oilSl, oilSl + 0.001)).toBeCloseTo(oilSl * BE_LOCK_FRAC, 8);
+    expect(softLossLine(oilSl, oilSl + 0.001)).toBe(0);
   });
 
   it('Peak MFE floor ≥ Soft HardInv so winners are not micro-scalped', () => {
@@ -230,13 +230,11 @@ describe('decideBestOutcomeExit', () => {
     expect(d.hardinv_breaching).toBe(false);
   });
 
-  it('BE-lock cuts when MFE reached Soft SL then price returns near lock with exec edge', () => {
+  it('BE-lock cuts when MFE reached Soft SL then price returns to flat (true BE)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
-    const lock = softLossLine(sl, sl + 0.5);
-    const minExec = beLockMinExec(sl);
-    // Slightly under lock so fav ≤ lossLine (avoid float equality miss)
-    const mid = 2000 + lock - 0.02;
+    // Mid flat / slightly red after Soft-sized MFE — Soft BE cut (not tiny +win)
+    const mid = 1999.98;
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -249,7 +247,7 @@ describe('decideBestOutcomeExit', () => {
       mid,
       'live_loss',
       now,
-      { bid: 2000 + minExec + 0.05, ask: mid + 0.3 }
+      { bid: 1999.9, ask: mid + 0.3 }
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/BE-lock/);
@@ -258,7 +256,6 @@ describe('decideBestOutcomeExit', () => {
   it('BE-lock cuts at ~flat after Soft MFE — does not gift ride to full Soft loss', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(4330, 'TREND_UP');
-    // Mid flat after Soft-sized MFE — must Soft BE-cut (not wait for −Soft)
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -277,12 +274,51 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/BE-lock/);
   });
 
+  it('PeakProtect does NOT bank below Soft HardInv (Funds +£0.01 vs −£0.06)', () => {
+    const entry = 4330;
+    const sl = hardInvStopDistance(entry, 'TREND_UP');
+    const mfeNeed = scaleDeskAbs(PEAK_MFE_ABS_FLOOR, entry);
+    // Tiny green after reverse — below Soft — must HOLD
+    const tiny = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        regime: 'TREND_DOWN',
+        mfe: mfeNeed + 0.5,
+        peak_retention: 0.5,
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      entry - Math.min(sl * 0.4, 1.0),
+      'peak_protect_only',
+      Date.now(),
+      { bid: entry - Math.min(sl * 0.4, 1.0) - 0.1, ask: entry - Math.min(sl * 0.4, 1.0) }
+    );
+    expect(tiny.exit).toBe(false);
+    // Exec ≥ Soft → Peak may cut
+    const mid = entry - (sl + 0.2);
+    const ok = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        regime: 'TREND_DOWN',
+        mfe: mfeNeed + 0.5,
+        peak_retention: 0.5,
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      mid,
+      'peak_protect_only',
+      Date.now(),
+      { bid: mid - 0.1, ask: mid }
+    );
+    expect(minProfitBank(sl)).toBe(sl);
+    expect(ok.exit).toBe(true);
+  });
+
   it('BE-lock does NOT scratch mid-green when bid/ask would be cash-red (Funds magic-minus)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
-    const lock = softLossLine(sl, sl + 0.5);
-    // Mid still green but ≤ lock — would Soft-cut without exec guard
-    const mid = 2000 + Math.max(lock - 0.01, 0.02);
+    // Mid still green (above flat BE) — Soft not yet at lossLine; would need fav≤0
+    const mid = 2000.15;
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -297,10 +333,8 @@ describe('decideBestOutcomeExit', () => {
       now,
       { bid: 1999.7, ask: mid + 0.3 }
     );
+    // fav > 0 → not at BE lossLine yet → no Soft cut
     expect(d.exit).toBe(false);
-    expect(executableFavorable('BUY', 2000, 1999.7, mid + 0.3, mid)).toBeLessThan(
-      beLockMinExec(sl)
-    );
   });
 
   it('PeakProtect never cuts red after reverse (screenshot micro-loss bug)', () => {

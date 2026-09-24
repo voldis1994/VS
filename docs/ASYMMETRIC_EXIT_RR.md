@@ -28,7 +28,7 @@ Peak also **disarmed on every green 1m continue**, so the trail was thrown away 
 5. **Peak min giveback 0.85**, retention ~65% — lock more of a real leg.
 6. **Target ≥ max(pct, abs, 4pt floor)** — Target stays above Soft HardInv.
 7. **TimeDecay min fav ≥2pt** (and ≥0.9× Soft SL) — no +0.75 harvests.
-8. **BE-lock:** after MFE ≥ Soft SL, Soft line moves to **~5% of Soft SL** (spread cushion only — not a profit harvest). Old 45% Soft banked tiny Funds wins (+£0.03) against full Soft losses (−£0.10). Cut only if mid ≤ lock; while mid still green, require **executable** bid/ask edge ≥ **25% of Soft SL** — otherwise HOLD (mid-flat + spread = magic-minus). Full Soft −SL still cuts real losers. Real winners = Peak/Target.
+8. **BE-lock:** after MFE ≥ Soft SL, Soft line moves to **true flat (0)** — not a profit harvest. Old 45%/5% Soft banked tiny Funds wins against full Soft losses. Cut when mid ≤ flat; while mid still green, require executable edge for magic-minus guard. Peak/Target/TimeDecay bank **≥ Soft HardInv** (1:1 min vs Soft loss).
 9. **1m continue keeps Peak armed** — trail stays on.
 10. **One desk for all markets:** Soft/Peak/Target abs knobs tuned at REF (~2000). Same candle regimes everywhere — abs pts scale with `entry/REF` (same % R:R on every epic).
 
