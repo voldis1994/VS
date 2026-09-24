@@ -58,7 +58,11 @@ From **robot START** (`entry_enabled`), desk watches closed trades and every
 **5 closes** softly retunes Soft/Peak/Target + regime allowlist (demote ≤1
 clear loser/cycle, keep ≥5 regimes). Lot unchanged. No daily/% entry blocks.
 
-Status: desk panel **AUTO-CAL · ULTIMATE**, or `GET /api/desk/calibration` → `auto`.
+Status: **MAIN DASHBOARD** + desk panel **AUTO-CAL · LIVE BRAIN**, or
+`GET /api/desk/auto-calibrate`.
+
+After an **applied** calibrate: **3 min entry cooldown** (open trades still managed)
+so the desk can settle knobs/regimes before the next setup.
 
 ## Explicitly out of scope
 

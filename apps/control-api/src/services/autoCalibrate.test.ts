@@ -1,10 +1,12 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   AUTO_CALIBRATE_EVERY_N,
+  AUTO_CALIBRATE_COOLDOWN_MS,
   MIN_ENABLED_REGIMES,
   _resetAutoCalibrateForTests,
   beginAutoCalibrateSession,
   getAutoCalibrateStatus,
+  isAutoCalibrateCooldownActive,
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
 } from './autoCalibrate.js';
@@ -106,5 +108,25 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 2 }),
     ]);
     expect(r.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
+  });
+
+  it('applied cycle starts 3m entry cooldown and records history', () => {
+    beginAutoCalibrateSession('test');
+    expect(isAutoCalibrateCooldownActive()).toBe(false);
+    for (let i = 0; i < 4; i++) {
+      noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection' }));
+    }
+    const cycle = noteClosedTradeForAutoCalibrate(
+      trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation', regime: 'RANGE' })
+    );
+    expect(cycle?.applied).toBe(true);
+    expect(isAutoCalibrateCooldownActive()).toBe(true);
+    const st = getAutoCalibrateStatus();
+    expect(st.cooling_down).toBe(true);
+    expect(st.cooldown_left_s).toBeGreaterThan(160);
+    expect(st.cooldown_left_s).toBeLessThanOrEqual(AUTO_CALIBRATE_COOLDOWN_MS / 1000);
+    expect(st.history.length).toBeGreaterThanOrEqual(1);
+    expect(st.history[0]?.applied).toBe(true);
+    expect(st.knobs_now.peak_mfe_abs).toBeGreaterThan(3);
   });
 });

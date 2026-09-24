@@ -26,6 +26,41 @@ type SystemEvent = {
   payload?: unknown;
 };
 
+type AutoCalStatus = {
+  enabled: boolean;
+  session_started_at: string | null;
+  closes_in_session: number;
+  closes_until_next: number;
+  cycles_run: number;
+  last_cycle_at: string | null;
+  last_summary: string | null;
+  last_changes: string[];
+  cooling_down: boolean;
+  cooldown_left_s: number;
+  session_sum_pts: number;
+  session_expectancy_pts: number;
+  session_wins: number;
+  session_losses: number;
+  last_window_expectancy: number | null;
+  history: Array<{
+    at: string;
+    summary: string;
+    changes: string[];
+    applied: boolean;
+    window_expectancy: number;
+    window_sum_pts: number;
+    closes_at_cycle: number;
+    cooldown_sec: number;
+  }>;
+  knobs_now: {
+    hardinv_abs: number;
+    peak_mfe_abs: number;
+    peak_retention: number;
+    target_abs: number;
+    enabled_regimes: number;
+  };
+};
+
 function seedSeries(seed: number, len: number, base = 10000): number[] {
   const out: number[] = [];
   let v = base + (seed % 500);
@@ -64,22 +99,25 @@ export function OverviewPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [runnerOn, setRunnerOn] = useState(false);
   const [showExtraPanels, setShowExtraPanels] = useState(false);
+  const [auto, setAuto] = useState<AutoCalStatus | null>(null);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [pos, ev] = await Promise.all([
+        const [pos, ev, autoRes] = await Promise.all([
           apiFetch<Position[]>('/api/positions').catch(() => [] as Position[]),
           apiFetch<SystemEvent[]>('/api/system/events').catch(() => [] as SystemEvent[]),
+          apiFetch<AutoCalStatus>('/api/desk/auto-calibrate').catch(() => null),
         ]);
         setPositions(pos);
         setEvents(ev.slice(0, 12));
+        if (autoRes) setAuto(autoRes);
       } catch {
         /* ignore */
       }
     };
     void load();
-    const t = setInterval(() => void load(), 5000);
+    const t = setInterval(() => void load(), 3000);
     return () => clearInterval(t);
   }, []);
 
@@ -182,6 +220,129 @@ export function OverviewPage() {
           </div>
         </div>
         {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
+      </div>
+
+
+      <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>
+        <div className="section-title">AUTO-CAL · LIVE BRAIN</div>
+        <p className="hint-line" style={{ marginTop: 0 }}>
+          Ik pēc 5 closes pats koriģē Soft/Peak/Target + regimes. Pēc izmaiņas — 3 min entry
+          cooldown (open trades joprojām MANAGE). Lot nemaina.
+        </p>
+        {!auto && <div className="empty-state">Loading auto-cal…</div>}
+        {auto && (
+          <>
+            <div className="metric-row" style={{ marginTop: 8 }}>
+              <div className="metric-box">
+                <div className="label">Status</div>
+                <div className="value" style={{ fontSize: 16 }}>
+                  {!auto.enabled
+                    ? 'PAUSED'
+                    : auto.cooling_down
+                      ? `COOLDOWN ${auto.cooldown_left_s}s`
+                      : 'WATCHING'}
+                </div>
+              </div>
+              <div className="metric-box">
+                <div className="label">Closes / next</div>
+                <div className="value">
+                  {auto.closes_in_session}
+                  <span style={{ opacity: 0.6, fontSize: 14 }}> / {auto.closes_until_next}</span>
+                </div>
+              </div>
+              <div className="metric-box">
+                <div className="label">Cycles</div>
+                <div className="value">{auto.cycles_run}</div>
+              </div>
+              <div className="metric-box">
+                <div className="label">Session E (pts)</div>
+                <div
+                  className={`value ${auto.session_expectancy_pts >= 0 ? 'pos' : 'neg'}`}
+                >
+                  {auto.session_expectancy_pts >= 0 ? '+' : ''}
+                  {auto.session_expectancy_pts.toFixed(2)}
+                </div>
+              </div>
+              <div className="metric-box">
+                <div className="label">Session sum</div>
+                <div className={`value ${auto.session_sum_pts >= 0 ? 'pos' : 'neg'}`}>
+                  {auto.session_sum_pts >= 0 ? '+' : ''}
+                  {auto.session_sum_pts.toFixed(2)}
+                </div>
+              </div>
+              <div className="metric-box">
+                <div className="label">W / L</div>
+                <div className="value">
+                  {auto.session_wins}/{auto.session_losses}
+                </div>
+              </div>
+            </div>
+            {auto.knobs_now && (
+              <div className="hint-line mono" style={{ marginTop: 8 }}>
+                NOW Soft {auto.knobs_now.hardinv_abs} · Peak MFE {auto.knobs_now.peak_mfe_abs} ·
+                keep {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
+                {auto.knobs_now.target_abs} · regimes {auto.knobs_now.enabled_regimes}
+              </div>
+            )}
+            {auto.last_summary && (
+              <div className="hint-line" style={{ marginTop: 6 }}>
+                <strong>Last cycle:</strong> {auto.last_summary}
+              </div>
+            )}
+            {auto.last_changes?.length > 0 && (
+              <div className="hint-line" style={{ marginTop: 4, color: 'var(--accent)' }}>
+                <strong>Changed:</strong> {auto.last_changes.join(' · ')}
+              </div>
+            )}
+            {auto.history?.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div className="label" style={{ marginBottom: 4 }}>
+                  Recent calibrate history
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>E</th>
+                      <th>Sum</th>
+                      <th>Result</th>
+                      <th>Changes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auto.history.slice(0, 5).map((h, i) => (
+                      <tr key={`${h.at}-${i}`}>
+                        <td className="mono">{new Date(h.at).toLocaleTimeString()}</td>
+                        <td
+                          className="mono"
+                          style={{
+                            color:
+                              h.window_expectancy >= 0 ? 'var(--success)' : 'var(--danger)',
+                          }}
+                        >
+                          {h.window_expectancy.toFixed(2)}
+                        </td>
+                        <td className="mono">{h.window_sum_pts.toFixed(2)}</td>
+                        <td>{h.applied ? 'APPLIED' : 'hold'}</td>
+                        <td style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {h.changes.length ? h.changes.join(', ') : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="actions" style={{ marginTop: 10, gap: 8 }}>
+              <Link className="btn btn-go" to="/robot">
+                OPEN ROBOT
+              </Link>
+              <Link className="btn" to="/trades">
+                TRADES / EXPECTANCY
+              </Link>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="panel desk-control-jump" style={{ marginBottom: 12 }}>

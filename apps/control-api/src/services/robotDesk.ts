@@ -43,7 +43,11 @@ import {
 } from './tradeLedger.js';
 import {
   AUTO_CALIBRATE_EVERY_N,
+  AUTO_CALIBRATE_COOLDOWN_MS,
   beginAutoCalibrateSession,
+  getAutoCalibrateStatus,
+  isAutoCalibrateCooldownActive,
+  autoCalibrateCooldownLeftSec,
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
@@ -616,12 +620,13 @@ async function persistClosedTradeLedger(
         epic: s.epic,
       });
       if (cycle?.applied) {
+        const st = getAutoCalibrateStatus();
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `AUTO-CAL · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'}`,
+          detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · COOLDOWN ${Math.round(AUTO_CALIBRATE_COOLDOWN_MS / 60_000)}m (no new entry) · session E=${st.session_expectancy_pts.toFixed(2)}`,
         });
       } else if (cycle) {
         pushTick(s, {
@@ -629,7 +634,7 @@ async function persistClosedTradeLedger(
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `AUTO-CAL watch · ${cycle.summary}`,
+          detail: `AUTO-CAL hold · ${cycle.summary}`,
         });
       }
     }
@@ -2446,7 +2451,22 @@ async function robotCycleLocked(s: Internal) {
     );
 
     if (onCloseTick && entryBar) {
-      if (!regimeAllowedForEntry(s.regime)) {
+      if (isAutoCalibrateCooldownActive()) {
+        const left = autoCalibrateCooldownLeftSec();
+        s.pending_entry = null;
+        s.entry_close_latch = null;
+        refreshEntryWatch(s, {
+          status_override: 'WAITING_TRIGGER',
+          last_reason: `AUTO-CAL COOLDOWN ${left}s · no new entry · manage open`,
+        });
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · AUTO-CAL COOLDOWN · ${left}s left · rearranging setups · no new entry`,
+        });
+      } else if (!regimeAllowedForEntry(s.regime)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
@@ -2584,7 +2604,21 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
-      if (!regimeAllowedForEntry(s.regime)) {
+      if (isAutoCalibrateCooldownActive()) {
+        const left = autoCalibrateCooldownLeftSec();
+        s.pending_entry = null;
+        refreshEntryWatch(s, {
+          status_override: 'WAITING_TRIGGER',
+          last_reason: `AUTO-CAL COOLDOWN ${left}s`,
+        });
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · AUTO-CAL COOLDOWN · pending cleared · ${left}s`,
+        });
+      } else if (!regimeAllowedForEntry(s.regime)) {
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
@@ -2873,7 +2907,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL ON · watch from START · calibrate every ${AUTO_CALIBRATE_EVERY_N} closes · until next=${st.closes_until_next}`,
+      detail: `AUTO-CAL ON · every ${AUTO_CALIBRATE_EVERY_N} closes · then ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m entry cooldown · next=${st.closes_until_next}`,
     });
   }
   pushTick(session, {

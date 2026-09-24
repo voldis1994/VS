@@ -45,6 +45,28 @@ export type AutoCalStatus = {
   last_cycle_at: string | null;
   last_summary: string | null;
   last_changes: string[];
+  cooling_down?: boolean;
+  cooldown_left_s?: number;
+  session_sum_pts?: number;
+  session_expectancy_pts?: number;
+  session_wins?: number;
+  session_losses?: number;
+  last_window_expectancy?: number | null;
+  history?: Array<{
+    at: string;
+    summary: string;
+    changes: string[];
+    applied: boolean;
+    window_expectancy: number;
+    window_sum_pts: number;
+  }>;
+  knobs_now?: {
+    hardinv_abs: number;
+    peak_mfe_abs: number;
+    peak_retention: number;
+    target_abs: number;
+    enabled_regimes: number;
+  };
 };
 
 type MarketOpt = {
@@ -337,9 +359,24 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
           {auto ? (
             <>
               <div className="hint-line mono">
-                {auto.enabled ? 'ON' : 'OFF'} · closes {auto.closes_in_session} · next in{' '}
-                {auto.closes_until_next} · cycles {auto.cycles_run}
+                {auto.enabled ? 'ON' : 'OFF'}
+                {auto.cooling_down
+                  ? ` · COOLDOWN ${auto.cooldown_left_s ?? 0}s`
+                  : ` · closes ${auto.closes_in_session} · next ${auto.closes_until_next}`}
+                {' · '}cycles {auto.cycles_run}
               </div>
+              <div className="hint-line mono" style={{ marginTop: 4 }}>
+                Session E={Number(auto.session_expectancy_pts ?? 0).toFixed(2)} · sum{' '}
+                {Number(auto.session_sum_pts ?? 0).toFixed(2)} · W/L {auto.session_wins ?? 0}/
+                {auto.session_losses ?? 0}
+              </div>
+              {auto.knobs_now && (
+                <div className="hint-line mono" style={{ marginTop: 2 }}>
+                  Knobs Soft {auto.knobs_now.hardinv_abs} · Peak {auto.knobs_now.peak_mfe_abs}/
+                  {Math.round(auto.knobs_now.peak_retention * 100)}% · Target {auto.knobs_now.target_abs} ·
+                  regimes {auto.knobs_now.enabled_regimes}
+                </div>
+              )}
               {auto.last_summary && (
                 <div className="hint-line" style={{ marginTop: 4 }}>
                   Last: {auto.last_summary}
@@ -347,7 +384,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
               )}
               {auto.last_changes?.length > 0 && (
                 <div className="hint-line" style={{ marginTop: 2 }}>
-                  {auto.last_changes.join(' · ')}
+                  Changed: {auto.last_changes.join(' · ')}
                 </div>
               )}
               <div className="actions" style={{ marginTop: 6, gap: 6 }}>
