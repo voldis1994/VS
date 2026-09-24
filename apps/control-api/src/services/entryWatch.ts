@@ -13,6 +13,7 @@ import {
   flipFilterReason,
   requiredFlipSide,
   sameDirLockLeftSec,
+  sameDirLockMs,
   sameDirectionBlocked,
 } from './flipFilter.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
@@ -298,6 +299,8 @@ export type BuildWatchInput = {
   closed_bars?: TenSecBar[];
   last_closed_side?: 'BUY' | 'SELL' | null;
   closed_at_ms?: number | null;
+  /** Last close was Soft/SL loss — longer flip lock */
+  last_close_was_loss?: boolean;
   cooldown_left_s?: number;
   status_override?: EntryWatchStatus | null;
   last_reason?: string;
@@ -315,8 +318,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const mkt = marketOf(bar);
   const lastClosedSide = input.last_closed_side ?? null;
   const closedAtMs = input.closed_at_ms ?? null;
-  const lockLeft = sameDirLockLeftSec(closedAtMs);
-  const needSide = requiredFlipSide(lastClosedSide, closedAtMs);
+  const wasLoss = Boolean(input.last_close_was_loss);
+  const lockMs = sameDirLockMs(wasLoss);
+  const lockLeft = sameDirLockLeftSec(closedAtMs, Date.now(), lockMs);
+  const needSide = requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss });
   const rawSig =
     bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
       ? decideEntryWithStructure({
@@ -330,7 +335,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
         })
       : null;
   const flipBlocked = Boolean(
-    rawSig && sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs)
+    rawSig &&
+      sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs, Date.now(), {
+        wasLoss,
+      })
   );
   const sig = flipBlocked ? null : rawSig;
 
@@ -340,6 +348,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   else if (!input.entry_enabled) status = 'MANAGE_ONLY';
   else if (input.cooldown_left_s && input.cooldown_left_s > 0) status = 'COOLDOWN';
   else if (input.status_override === 'FLIP_FILTER' || flipBlocked) status = 'FLIP_FILTER';
+  else if (needSide && lockLeft > 0) status = 'FLIP_FILTER';
   else if (input.status_override) status = input.status_override;
   else if (!zone.zone_ready || !bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';
@@ -351,8 +360,13 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   let last_reason = input.last_reason || '';
   if (!last_reason) {
     if (status === 'ARMED' && sig) last_reason = sig.reason;
-    else if (status === 'FLIP_FILTER' && rawSig && lastClosedSide)
-      last_reason = flipFilterReason(rawSig.direction, lastClosedSide, lockLeft);
+    else if (status === 'FLIP_FILTER' && lastClosedSide && needSide)
+      last_reason = flipFilterReason(
+        needSide === 'BUY' ? 'SELL' : 'BUY',
+        lastClosedSide,
+        lockLeft,
+        wasLoss
+      );
     else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
       last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
@@ -369,7 +383,9 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   }
 
   const flipNote = needSide
-    ? ` · FLIP LOCK 45s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
+    ? wasLoss
+      ? ` · FLIP AFTER LOSS ${Math.ceil(lockMs / 60_000)}m: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
+      : ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
   const story: MarketStory = readMarketStory(

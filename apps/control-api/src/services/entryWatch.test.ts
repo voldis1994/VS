@@ -73,7 +73,7 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/wait-only/i);
   });
 
-  it('FLIP LOCK blocks same direction for 45s after close', () => {
+  it('FLIP LOCK blocks same direction after close (win lock)', () => {
     // Micro dip → RANGE fade BUY (not SPIKE follow SELL)
     const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
@@ -87,16 +87,39 @@ describe('entryWatch', () => {
       closed_bar_count: 90,
       last_closed_side: 'BUY',
       closed_at_ms: Date.now() - 10_000,
+      last_close_was_loss: false,
     });
     expect(w.status).toBe('FLIP_FILTER');
     expect(w.need_side).toBe('SELL');
     expect(w.lock_left_s).toBeGreaterThan(0);
-    expect(w.lock_left_s).toBeLessThanOrEqual(45);
+    expect(w.lock_left_s).toBeLessThanOrEqual(90);
     expect(w.armed).toBe(false);
     expect(w.last_reason).toMatch(/FLIP LOCK/);
   });
 
-  it('same direction allowed again after 45s lock', () => {
+  it('FLIP AFTER LOSS blocks same direction for 12m', () => {
+    // Green bounce → TREND_DOWN rally-sell same as last SELL loss
+    const b = bar(2000, 2000.8, 1999.9, 1999.7);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'TREND_DOWN',
+      last_closed: b,
+      forming_c: null,
+      just_closed: true,
+      closed_bar_count: 90,
+      last_closed_side: 'SELL',
+      closed_at_ms: Date.now() - 5 * 60_000,
+      last_close_was_loss: true,
+    });
+    expect(w.status).toBe('FLIP_FILTER');
+    expect(w.need_side).toBe('BUY');
+    expect(w.lock_left_s).toBeGreaterThan(60);
+    expect(w.last_reason).toMatch(/FLIP AFTER LOSS/);
+  });
+
+  it('same direction allowed again after win lock', () => {
     const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
       running: true,

@@ -19,7 +19,7 @@ import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot, listRobotSessions, robotIdFor } from './robotDesk.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
-import { sameDirectionBlocked, sameDirLockLeftSec, flipFilterReason } from './flipFilter.js';
+import { sameDirectionBlocked, sameDirLockLeftSec, sameDirLockMs, flipFilterReason } from './flipFilter.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -385,15 +385,26 @@ async function executeForSubscription(
     );
     const capitalAccountId = (acc.rows[0]?.external_account_id as string | null) || null;
 
-    // 3m same-dir lock — parity with Admin robot brain
+    // Flip lock — longer after Soft/SL loss (parity with Admin robot brain)
     const manageId = robotIdFor(sub.account_id, sub.epic);
     const manage = listRobotSessions().find((r) => r.id === manageId);
     if (
       manage &&
-      sameDirectionBlocked(direction, manage.last_closed_side, manage.closed_at_ms)
+      sameDirectionBlocked(direction, manage.last_closed_side, manage.closed_at_ms, Date.now(), {
+        wasLoss: manage.last_close_was_loss,
+      })
     ) {
-      const left = sameDirLockLeftSec(manage.closed_at_ms);
-      const detail = flipFilterReason(direction, manage.last_closed_side!, left);
+      const left = sameDirLockLeftSec(
+        manage.closed_at_ms,
+        Date.now(),
+        sameDirLockMs(manage.last_close_was_loss)
+      );
+      const detail = flipFilterReason(
+        direction,
+        manage.last_closed_side!,
+        left,
+        manage.last_close_was_loss
+      );
       return finish(
         {
           client_id: sub.client_id,

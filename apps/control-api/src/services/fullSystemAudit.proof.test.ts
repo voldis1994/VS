@@ -200,16 +200,29 @@ describe('PROOF: minute→10s seed does not inject 1m EXPANSION ranges', () => {
   });
 });
 
-describe('PROOF: flip lock is real (45s same-dir)', () => {
-  it('blocks same side inside lock window', () => {
+describe('PROOF: flip lock is real (win + after-loss)', () => {
+  it('blocks same side inside win lock window', () => {
     const closedAt = Date.now() - 10_000;
-    expect(sameDirectionBlocked('BUY', 'BUY', closedAt)).toBe(true);
-    expect(sameDirectionBlocked('SELL', 'BUY', closedAt)).toBe(false);
+    expect(sameDirectionBlocked('BUY', 'BUY', closedAt, Date.now(), { wasLoss: false })).toBe(
+      true
+    );
+    expect(sameDirectionBlocked('SELL', 'BUY', closedAt, Date.now(), { wasLoss: false })).toBe(
+      false
+    );
   });
 
-  it('allows same side after lock expires', () => {
+  it('after Soft loss still blocks same side at 5 minutes', () => {
+    const closedAt = Date.now() - 5 * 60_000;
+    expect(
+      sameDirectionBlocked('SELL', 'SELL', closedAt, Date.now(), { wasLoss: true })
+    ).toBe(true);
+  });
+
+  it('allows same side after win lock expires', () => {
     const closedAt = Date.now() - SAME_DIR_LOCK_MS - 1000;
-    expect(sameDirectionBlocked('BUY', 'BUY', closedAt)).toBe(false);
+    expect(sameDirectionBlocked('BUY', 'BUY', closedAt, Date.now(), { wasLoss: false })).toBe(
+      false
+    );
   });
 });
 

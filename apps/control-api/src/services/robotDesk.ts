@@ -38,11 +38,14 @@ import { softExitMarketGate } from './softExitMarketGate.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
+  exitReasonWasLoss,
   flipFilterReason,
   requiredFlipSide,
   sameDirLockLeftSec,
+  sameDirLockMs,
   sameDirectionBlocked,
 } from './flipFilter.js';
+import { sameDirNextMoveConfirms } from './sameDirNextMove.js';
 import { buildEntryWatch, type EntryWatch } from './entryWatch.js';
 import {
   allowEntryFromFeeds,
@@ -107,9 +110,11 @@ export type RobotSession = {
   reads_ok: number;
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
-  /** Last closed trade side — same direction blocked for 45s after close */
+  /** Last closed trade side — same direction blocked after close */
   last_closed_side: 'BUY' | 'SELL' | null;
-  /** Epoch ms of last close — fanout + Admin share the 3m flip lock */
+  /** True when last close was Soft/SL/structure loss — long flip lock */
+  last_close_was_loss: boolean;
+  /** Epoch ms of last close — fanout + Admin share the flip lock */
   closed_at_ms: number;
   safety_sl: number | null;
   /** Broker SAFETY TP (profitLevel) attached at open — opposite of SAFETY SL */
@@ -315,6 +320,7 @@ function refreshEntryWatch(
     closed_bars: s.closedBars,
     last_closed_side: s.last_closed_side,
     closed_at_ms: s.closed_at_ms,
+    last_close_was_loss: s.last_close_was_loss,
     cooldown_left_s: opts?.cooldown_left_s,
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
@@ -884,12 +890,13 @@ async function exitTrade(
     const listed = await listCapitalOpenPositions(session);
     if (listed.ok && !matchOpenOnEpic(listed.positions, s.epic)) {
       if (s.open_side) s.last_closed_side = s.open_side;
+      s.last_close_was_loss = exitReasonWasLoss(reason) || true; // unknown UPL — treat as loss flip
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · same-dir lock 45s ≠ ${s.last_closed_side || '—'}`,
+        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · FLIP AFTER LOSS · ≠ ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
       clearTradeState(s);
@@ -933,12 +940,28 @@ async function exitTrade(
   s.closed_at_ms = Date.now();
   s.error = null;
   if (s.open_side) s.last_closed_side = s.open_side;
+  {
+    let wasLoss = exitReasonWasLoss(reason);
+    if (
+      !wasLoss &&
+      s.open_side &&
+      s.entry_price != null &&
+      quote.mid != null &&
+      Number.isFinite(quote.mid)
+    ) {
+      wasLoss = favorableMove(s.open_side, s.entry_price, quote.mid) < -1e-9;
+    }
+    s.last_close_was_loss = wasLoss;
+  }
+  const lockLabel = s.last_close_was_loss
+    ? `FLIP AFTER LOSS ${Math.ceil(sameDirLockMs(true) / 60_000)}m`
+    : `FLIP LOCK ${Math.ceil(sameDirLockMs(false) / 1000)}s`;
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · same-dir lock 45s ≠ ${s.last_closed_side}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · ${lockLabel} ≠ ${s.last_closed_side}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1001,17 +1024,46 @@ async function enterTradeLocked(
     s.pending_entry = null;
     return;
   }
-  if (sameDirectionBlocked(direction, s.last_closed_side, s.closed_at_ms)) {
-    const left = sameDirLockLeftSec(s.closed_at_ms);
+  if (sameDirectionBlocked(direction, s.last_closed_side, s.closed_at_ms, Date.now(), {
+    wasLoss: s.last_close_was_loss,
+  })) {
+    const left = sameDirLockLeftSec(
+      s.closed_at_ms,
+      Date.now(),
+      sameDirLockMs(s.last_close_was_loss)
+    );
     pushTick(s, {
       phase: 'WAIT',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: flipFilterReason(direction, s.last_closed_side!, left),
+      detail: flipFilterReason(direction, s.last_closed_side!, left, s.last_close_was_loss),
     });
     s.pending_entry = null;
     return;
+  }
+  // Same-dir after lock: only if next move still agrees (no blind SELL spam)
+  if (s.last_closed_side && direction === s.last_closed_side) {
+    const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+    const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+    const nextOk = sameDirNextMoveConfirms({
+      side: direction,
+      regime: s.regime,
+      closedBars: s.closedBars,
+      closed1m: closed1m ? { open: closed1m.open, close: closed1m.close } : null,
+      prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
+    });
+    if (!nextOk.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SAME-DIR BLOCK · ${nextOk.reason}`,
+      });
+      s.pending_entry = null;
+      return;
+    }
   }
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
@@ -1718,6 +1770,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
     } else if (s.open_side) {
       const closedSide = s.open_side;
       s.last_closed_side = closedSide;
+      s.last_close_was_loss = true;
       s.closed_at_ms = Date.now();
       clearTradeState(s);
       pushTick(s, {
@@ -1726,7 +1779,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         ask: quote.ask,
         mid: quote.mid,
         detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 45s ≠ ${closedSide}`
+          ? `Broker flat on this epic — trade closed externally · FLAT · FLIP AFTER LOSS ≠ ${closedSide}`
           : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
       });
       return;
@@ -2063,12 +2116,13 @@ async function robotCycleLocked(s: Internal) {
         // Local thought open but broker flat → treat as closed
         const closedSide = s.open_side;
         s.last_closed_side = closedSide;
+        s.last_close_was_loss = true; // external close — unknown UPL, force flip window
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 45s ≠ ${closedSide}`,
+          detail: `Broker flat on this epic — trade closed externally · FLAT · FLIP AFTER LOSS ≠ ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -2316,22 +2370,90 @@ async function robotCycleLocked(s: Internal) {
           closedBars: s.closedBars,
         });
         if (sig) {
-          if (sameDirectionBlocked(sig.direction, s.last_closed_side, s.closed_at_ms)) {
-            const need = requiredFlipSide(s.last_closed_side, s.closed_at_ms);
-            const left = sameDirLockLeftSec(s.closed_at_ms);
+          const flipOpts = { wasLoss: s.last_close_was_loss };
+          const lockMs = sameDirLockMs(s.last_close_was_loss);
+          if (
+            sameDirectionBlocked(
+              sig.direction,
+              s.last_closed_side,
+              s.closed_at_ms,
+              Date.now(),
+              flipOpts
+            )
+          ) {
+            const need = requiredFlipSide(
+              s.last_closed_side,
+              s.closed_at_ms,
+              Date.now(),
+              flipOpts
+            );
+            const left = sameDirLockLeftSec(s.closed_at_ms, Date.now(), lockMs);
             s.pending_entry = null;
             s.entry_close_latch = null;
             refreshEntryWatch(s, {
               status_override: 'FLIP_FILTER',
-              last_reason: flipFilterReason(sig.direction, s.last_closed_side!, left),
+              last_reason: flipFilterReason(
+                sig.direction,
+                s.last_closed_side!,
+                left,
+                s.last_close_was_loss
+              ),
             });
             pushTick(s, {
               phase: 'DECIDE',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `${ohlcLine} · FLIP LOCK 45s · blocked ${sig.direction} ${sig.setup} · need ${need} · ${left}s left (last ${s.last_closed_side})`,
+              detail: `${ohlcLine} · ${s.last_close_was_loss ? 'FLIP AFTER LOSS' : 'FLIP LOCK'} · blocked ${sig.direction} ${sig.setup} · need ${need} · ${left}s left (last ${s.last_closed_side})`,
             });
+          } else if (
+            s.last_closed_side &&
+            sig.direction === s.last_closed_side
+          ) {
+            const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+            const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+            const nextOk = sameDirNextMoveConfirms({
+              side: sig.direction,
+              regime: s.regime,
+              closedBars: s.closedBars,
+              closed1m: closed1m
+                ? { open: closed1m.open, close: closed1m.close }
+                : null,
+              prevClosed1m: prev1m
+                ? { open: prev1m.open, close: prev1m.close }
+                : null,
+            });
+            if (!nextOk.ok) {
+              s.pending_entry = null;
+              s.entry_close_latch = null;
+              refreshEntryWatch(s, {
+                status_override: 'WAITING_TRIGGER',
+                last_reason: nextOk.reason,
+              });
+              pushTick(s, {
+                phase: 'DECIDE',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `${ohlcLine} · SAME-DIR BLOCK · ${nextOk.reason}`,
+              });
+            } else {
+              direction = sig.direction;
+              setupType = sig.setup;
+              reason = `${sig.reason} · ${nextOk.tag}`;
+              s.entry_close_latch = null;
+              refreshEntryWatch(s, {
+                status_override: 'ARMED',
+                last_reason: reason,
+              });
+              pushTick(s, {
+                phase: 'DECIDE',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `ARMED ${sig.direction} ${sig.setup} · same-dir OK · ${nextOk.tag}`,
+              });
+            }
           } else {
             direction = sig.direction;
             setupType = sig.setup;
@@ -2380,15 +2502,65 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · pending cleared · regime OFF`,
         });
       } else if (
-        sameDirectionBlocked(s.pending_entry.direction, s.last_closed_side, s.closed_at_ms)
+        sameDirectionBlocked(
+          s.pending_entry.direction,
+          s.last_closed_side,
+          s.closed_at_ms,
+          Date.now(),
+          { wasLoss: s.last_close_was_loss }
+        )
       ) {
         const blockedDir = s.pending_entry.direction;
-        const left = sameDirLockLeftSec(s.closed_at_ms);
+        const left = sameDirLockLeftSec(
+          s.closed_at_ms,
+          Date.now(),
+          sameDirLockMs(s.last_close_was_loss)
+        );
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'FLIP_FILTER',
-          last_reason: flipFilterReason(blockedDir, s.last_closed_side!, left),
+          last_reason: flipFilterReason(
+            blockedDir,
+            s.last_closed_side!,
+            left,
+            s.last_close_was_loss
+          ),
         });
+      } else if (
+        s.last_closed_side &&
+        s.pending_entry.direction === s.last_closed_side
+      ) {
+        const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
+        const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+        const nextOk = sameDirNextMoveConfirms({
+          side: s.pending_entry.direction,
+          regime: s.regime,
+          closedBars: s.closedBars,
+          closed1m: closed1m ? { open: closed1m.open, close: closed1m.close } : null,
+          prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
+        });
+        if (!nextOk.ok) {
+          s.pending_entry = null;
+          refreshEntryWatch(s, {
+            status_override: 'WAITING_TRIGGER',
+            last_reason: nextOk.reason,
+          });
+        } else {
+          direction = s.pending_entry.direction;
+          setupType = s.pending_entry.setup;
+          reason = `${s.pending_entry.reason} · retry · ${nextOk.tag}`;
+          refreshEntryWatch(s, {
+            status_override: 'ARMED',
+            last_reason: reason,
+          });
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `ARMED RETRY ${direction} · same bar ${barKey} · ${reason}`,
+          });
+        }
       } else {
         direction = s.pending_entry.direction;
         setupType = s.pending_entry.setup;
@@ -2555,6 +2727,7 @@ export async function startRobotSession(input: {
     reads_fail: 0,
     open_side: null,
     last_closed_side: null,
+    last_close_was_loss: false,
     safety_sl: null,
     safety_tp: null,
     error: null,
