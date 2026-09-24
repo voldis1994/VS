@@ -1,9 +1,9 @@
-/** After close: block same direction for 3 minutes (all regimes). Opposite OK immediately. */
+/** After close: block same direction briefly. Opposite OK immediately. */
 
 export type TradeSide = 'BUY' | 'SELL';
 
-/** Same-direction lock after each close — then same side may trade again. */
-export const SAME_DIR_LOCK_MS = 3 * 60_000;
+/** Same-direction lock after each close — was 3m (setup missed while hunting). */
+export const SAME_DIR_LOCK_MS = 45_000;
 
 export function sameDirLockActive(
   closedAtMs: number | null | undefined,
@@ -25,7 +25,7 @@ export function sameDirLockLeftSec(
 }
 
 /**
- * True when signal matches last closed side AND the 3 min lock is still active.
+ * True when signal matches last closed side AND the lock is still active.
  * After the lock expires, same direction is allowed again.
  */
 export function sameDirectionBlocked(
@@ -58,7 +58,7 @@ export function flipFilterReason(
   lastClosedSide: TradeSide,
   leftSec: number
 ): string {
-  return `FLIP LOCK ${Math.ceil(SAME_DIR_LOCK_MS / 60_000)}m · last ${lastClosedSide} · ${leftSec}s left · blocked ${signal} · need ${
+  return `FLIP LOCK ${Math.ceil(SAME_DIR_LOCK_MS / 1000)}s · last ${lastClosedSide} · ${leftSec}s left · blocked ${signal} · need ${
     lastClosedSide === 'BUY' ? 'SELL' : 'BUY'
   }`;
 }

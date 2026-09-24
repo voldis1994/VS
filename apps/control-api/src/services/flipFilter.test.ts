@@ -8,7 +8,7 @@ import {
   sameDirectionBlocked,
 } from './flipFilter.js';
 
-describe('flipFilter — 3 min same-direction lock after close', () => {
+describe('flipFilter — 45s same-direction lock after close', () => {
   const t0 = 1_000_000;
 
   it('allows any side when no prior close', () => {
@@ -17,14 +17,14 @@ describe('flipFilter — 3 min same-direction lock after close', () => {
     expect(requiredFlipSide(null, null, t0)).toBeNull();
   });
 
-  it('blocks same direction within 3 min; allows opposite', () => {
-    expect(sameDirectionBlocked('BUY', 'BUY', t0, t0 + 60_000)).toBe(true);
-    expect(sameDirectionBlocked('SELL', 'BUY', t0, t0 + 60_000)).toBe(false);
-    expect(requiredFlipSide('BUY', t0, t0 + 60_000)).toBe('SELL');
-    expect(sameDirLockLeftSec(t0, t0 + 60_000)).toBe(120);
+  it('blocks same direction within 45s; allows opposite', () => {
+    expect(sameDirectionBlocked('BUY', 'BUY', t0, t0 + 20_000)).toBe(true);
+    expect(sameDirectionBlocked('SELL', 'BUY', t0, t0 + 20_000)).toBe(false);
+    expect(requiredFlipSide('BUY', t0, t0 + 20_000)).toBe('SELL');
+    expect(sameDirLockLeftSec(t0, t0 + 20_000)).toBe(25);
   });
 
-  it('allows same direction again after 3 min', () => {
+  it('allows same direction again after 45s', () => {
     expect(sameDirLockActive(t0, t0 + SAME_DIR_LOCK_MS)).toBe(false);
     expect(sameDirectionBlocked('BUY', 'BUY', t0, t0 + SAME_DIR_LOCK_MS)).toBe(false);
     expect(sameDirectionBlocked('BUY', 'BUY', t0, t0 + SAME_DIR_LOCK_MS + 1)).toBe(false);
@@ -39,9 +39,9 @@ describe('flipFilter — 3 min same-direction lock after close', () => {
   });
 
   it('explains the lock with seconds left', () => {
-    const msg = flipFilterReason('BUY', 'BUY', 90);
-    expect(msg).toMatch(/FLIP LOCK 3m/);
-    expect(msg).toMatch(/90s/);
+    const msg = flipFilterReason('BUY', 'BUY', 30);
+    expect(msg).toMatch(/FLIP LOCK 45s/);
+    expect(msg).toMatch(/30s/);
     expect(msg).toMatch(/SELL/);
   });
 });

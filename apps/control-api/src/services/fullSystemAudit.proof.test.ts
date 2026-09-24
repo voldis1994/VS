@@ -200,9 +200,9 @@ describe('PROOF: minute→10s seed does not inject 1m EXPANSION ranges', () => {
   });
 });
 
-describe('PROOF: flip lock is real (3m same-dir)', () => {
+describe('PROOF: flip lock is real (45s same-dir)', () => {
   it('blocks same side inside lock window', () => {
-    const closedAt = Date.now() - 30_000;
+    const closedAt = Date.now() - 10_000;
     expect(sameDirectionBlocked('BUY', 'BUY', closedAt)).toBe(true);
     expect(sameDirectionBlocked('SELL', 'BUY', closedAt)).toBe(false);
   });
