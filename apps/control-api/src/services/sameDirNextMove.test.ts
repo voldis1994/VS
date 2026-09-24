@@ -1,8 +1,16 @@
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { sameDirNextMoveConfirms } from './sameDirNextMove.js';
 import * as softGate from './softExitMarketGate.js';
 
 describe('sameDirNextMoveConfirms', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import {
   SAME_DIR_LOCK_MS,
   SAME_DIR_LOCK_AFTER_LOSS_MS,
@@ -12,6 +13,13 @@ import {
 } from './flipFilter.js';
 
 describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   const t0 = 1_000_000;
 
   it('allows any side when no prior close', () => {

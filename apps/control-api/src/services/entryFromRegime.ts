@@ -9,6 +9,7 @@ import {
   rangePct,
   type TenSecBar,
 } from './tenSecondOhlc.js';
+import { tradeOpenAtStart } from './tradeOpenPolicy.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -39,8 +40,8 @@ function describe(bar: TenSecBar): string {
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
- * Anti-chase: RANGE never follows SPIKE; TREND waits for pullback (no with-trend chase).
- * COMPRESSION / TRANSITION are wait-only (no fade / no follow).
+ * Open-at-start: COMPRESSION / TRANSITION also trade (fade); auto-cal demotes losers later.
+ * Anti-chase still preferred on TREND (pullback only).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -51,9 +52,13 @@ export function decideEntryFrom10sRegime(
 
   if (r === 'UNKNOWN') return null;
 
-  // COMPRESSION / TRANSITION — wait-only (docs + structure audit).
-  // Thin squeeze / unclear next: no fade, no follow — wait for RANGE/EXPANSION/BREAKOUT.
-  if (r === 'COMPRESSION' || r === 'TRANSITION') return null;
+  // COMPRESSION / TRANSITION — open book (was wait-only). Fade moving 10s like RANGE.
+  if (r === 'COMPRESSION' || r === 'TRANSITION') {
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} open fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} open fade rally · ${candle}` };
+    return null;
+  }
 
   // TREND: pullback only — do NOT buy green / sell red continuation (chase).
   if (r === 'TREND_UP') {
@@ -111,7 +116,7 @@ export function decideEntryFrom10sRegime(
 
   // RANGE — same anti-chase: SPIKE WAIT; micro fade only
   if (r === 'RANGE') {
-    if (isSpike10s(bar)) return null;
+    if (!tradeOpenAtStart() && isSpike10s(bar)) return null;
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };

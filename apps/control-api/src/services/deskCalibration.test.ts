@@ -20,8 +20,8 @@ describe('deskCalibration', () => {
     expect(c.target_abs).toBe(5.0);
     expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
     expect(c.enabled_regimes.includes('UNKNOWN')).toBe(false);
-    expect(c.enabled_regimes.includes('COMPRESSION')).toBe(false);
-    expect(c.enabled_regimes.includes('TRANSITION')).toBe(false);
+    expect(c.enabled_regimes.includes('COMPRESSION')).toBe(true);
+    expect(c.enabled_regimes.includes('TRANSITION')).toBe(true);
     expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
   });
 
@@ -34,11 +34,11 @@ describe('deskCalibration', () => {
     expect(c.enabled_regimes).toEqual(['TREND_UP']);
   });
 
-  it('filters wait-only regimes from allowlist', () => {
+  it('keeps COMPRESSION/TRANSITION; only UNKNOWN filtered', () => {
     const c = setDeskCalibration({
-      enabled_regimes: ['TREND_UP', 'COMPRESSION', 'TRANSITION'] as never,
+      enabled_regimes: ['TREND_UP', 'COMPRESSION', 'TRANSITION', 'UNKNOWN'] as never,
     });
-    expect(c.enabled_regimes).toEqual(['TREND_UP']);
+    expect(c.enabled_regimes.sort()).toEqual(['COMPRESSION', 'TRANSITION', 'TREND_UP'].sort());
   });
 
   it('regimeAllowedForEntry respects allowlist', () => {

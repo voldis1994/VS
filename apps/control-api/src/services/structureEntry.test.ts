@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
@@ -84,6 +85,13 @@ describe('zone geometry uses entry close', () => {
 });
 
 describe('executable gates (not impossible AND-stacks)', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   it('TREND_UP dip mid-zone: structure OK, full scalp needs 30m story+1m confirm', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331.5 });
     const entry = book[book.length - 1]!;
@@ -245,6 +253,13 @@ describe('executable gates (not impossible AND-stacks)', () => {
 });
 
 describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   function selloffVBook(): TenSecBar[] {
     // Dump then bounce: trek ~8pt, net near 0 — must stay DOWN bias
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 7 * 60_000;
@@ -340,13 +355,13 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(structureGate(buy, 'EXPANSION', mid, zoneGeometry(midBook, mid), null).ok).toBe(false);
   });
 
-  it('COMPRESSION + TRANSITION + UNKNOWN are wait-only at the gate', () => {
+  it('COMPRESSION + TRANSITION open at gate; UNKNOWN still blocked', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4325.5 });
     const entry = book[book.length - 1]!;
     const z = zoneGeometry(book, entry);
     const buy = { direction: 'BUY' as const, setup: 'FADE' as const, reason: 'x' };
-    expect(structureGate(buy, 'COMPRESSION', entry, z, null).ok).toBe(false);
-    expect(structureGate(buy, 'TRANSITION', entry, z, null).ok).toBe(false);
+    expect(structureGate(buy, 'COMPRESSION', entry, z, null).ok).toBe(true);
+    expect(structureGate(buy, 'TRANSITION', entry, z, null).ok).toBe(true);
     expect(structureGate(buy, 'UNKNOWN', entry, z, null).ok).toBe(false);
   });
 

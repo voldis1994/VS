@@ -49,9 +49,8 @@ describe('entry close latch / zone-seed race', () => {
     };
     expect(Math.abs(bodyPct(bar))).toBeGreaterThanOrEqual(MOVE);
     expect(isMoving10s(bar)).toBe(true);
-    // COMPRESSION is wait-only — use RANGE for the fade arm check
     expect(decideEntryFrom10sRegime(bar, 'RANGE')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(bar, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(bar, 'COMPRESSION')?.direction).toBe('SELL');
   });
 
   it('range-only micro bar below MOVE_RANGE stays QUIET (no false arm)', () => {

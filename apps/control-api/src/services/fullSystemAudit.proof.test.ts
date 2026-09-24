@@ -1,8 +1,9 @@
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
 /**
  * Proof tests — assert REAL execution of full-system audit fixes.
  * If these pass, the code paths run; comments alone cannot make them green.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { withCapitalAccountSession, withConnectionLock } from './capitalCom.js';
@@ -201,6 +202,13 @@ describe('PROOF: minute→10s seed does not inject 1m EXPANSION ranges', () => {
 });
 
 describe('PROOF: flip lock is real (win + after-loss)', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   it('blocks same side inside win lock window', () => {
     const closedAt = Date.now() - 10_000;
     expect(sameDirectionBlocked('BUY', 'BUY', closedAt, Date.now(), { wasLoss: false })).toBe(

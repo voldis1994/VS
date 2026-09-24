@@ -1,4 +1,5 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { buildEntryWatch, watchRecipe } from './entryWatch.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { setDeskCalibration, defaultDeskCalibration } from './deskCalibration.js';
@@ -8,6 +9,13 @@ function bar(o: number, h: number, l: number, c: number): TenSecBar {
 }
 
 describe('entryWatch', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   beforeEach(() => {
     setDeskCalibration(defaultDeskCalibration());
   });
@@ -53,11 +61,10 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/RANGE/);
   });
 
-  it('COMPRESSION recipe: wait-only (no fade / no chase)', () => {
+  it('COMPRESSION recipe: OPEN fade (no wait-only)', () => {
     const r = watchRecipe('COMPRESSION');
-    expect(r.looking_for).toMatch(/wait-only/i);
-    expect(r.looking_for).toMatch(/EXPANSION|BREAKOUT/i);
-    expect(r.setup).toBeNull();
+    expect(r.looking_for).toMatch(/OPEN fade/i);
+    expect(r.setup).toBe('FADE');
     const b = bar(2000, 2000.2, 1998.5, 1999);
     const w = buildEntryWatch({
       running: true,
@@ -70,7 +77,7 @@ describe('entryWatch', () => {
       closed_bar_count: 100,
     });
     expect(w.looking_for).toMatch(/COMPRESSION/);
-    expect(w.looking_for).toMatch(/wait-only/i);
+    expect(w.looking_for).toMatch(/OPEN fade/i);
   });
 
   it('FLIP LOCK blocks same direction after close (win lock)', () => {
