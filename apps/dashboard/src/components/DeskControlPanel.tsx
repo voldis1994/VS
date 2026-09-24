@@ -29,6 +29,7 @@ export type DeskCalibration = {
   peak_retention: number;
   peak_min_giveback_abs: number;
   target_abs: number;
+  entry_filter_level?: number;
   hardinv_pct: number;
   target_pct: number;
   peak_mfe_pct: number;
@@ -331,8 +332,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            Sākumā tirgo VISU (open book). Kopš START ik pēc 5 closes pats maigi koriģē
-            Soft/Peak/Target + regimes. Lot nemaina. Nav soft entry / daily/% bloķētāju.
+            Sākumā tirgo VISU (entry filters OPEN). Ik pēc 5 closes pats koriģē
+            Soft/Peak/Target + regimes + entry filtru līmeni (0→3) pēc outcome. Lot nemaina.
           </p>
           {auto ? (
             <>
@@ -340,6 +341,18 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 {auto.enabled ? 'ON' : 'OFF'} · closes {auto.closes_in_session} · next in{' '}
                 {auto.closes_until_next} · cycles {auto.cycles_run}
               </div>
+              {cal && (
+                <div className="hint-line mono" style={{ marginTop: 4 }}>
+                  Entry filters L{cal.entry_filter_level ?? 0} ·{' '}
+                  {(cal.entry_filter_level ?? 0) === 0
+                    ? 'OPEN'
+                    : (cal.entry_filter_level ?? 0) === 1
+                      ? 'FLIP lock'
+                      : (cal.entry_filter_level ?? 0) === 2
+                        ? 'FLIP+structure'
+                        : 'STRICT'}
+                </div>
+              )}
               {auto.last_summary && (
                 <div className="hint-line" style={{ marginTop: 4 }}>
                   Last: {auto.last_summary}
@@ -445,6 +458,25 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
                 onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
               />
+              <label className="field-label">Entry filter level (0–3)</label>
+              <input
+                className="input"
+                type="number"
+                step="1"
+                min={0}
+                max={3}
+                value={cal.entry_filter_level ?? 0}
+                disabled={calBusy}
+                onChange={(e) =>
+                  setCal({ ...cal, entry_filter_level: Number(e.target.value) })
+                }
+                onBlur={() =>
+                  void saveCalibration({ entry_filter_level: cal.entry_filter_level ?? 0 })
+                }
+              />
+              <p className="hint-line" style={{ marginTop: 2 }}>
+                0=OPEN · 1=flip · 2=+structure · 3=strict. Auto-cal paceļ/pazemina pēc closes.
+              </p>
               <div className="actions" style={{ marginTop: 6 }}>
                 <button
                   className="btn btn-primary"

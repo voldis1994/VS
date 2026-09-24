@@ -107,4 +107,31 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
   });
+
+  it('raises entry_filter_level after negative outcome window', () => {
+    const base = defaultDeskCalibration();
+    expect(base.entry_filter_level).toBe(0);
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: -2, exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: -1.5, exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: -0.8 }),
+      trade({ pnl_pts: 0.2 }),
+      trade({ pnl_pts: -1.2 }),
+    ]);
+    expect(r.applied).toBe(true);
+    expect(r.next.entry_filter_level).toBe(1);
+    expect(r.changes.some((c) => c.startsWith('entry_filter_level'))).toBe(true);
+  });
+
+  it('softens entry_filter_level after clearly positive window', () => {
+    const base = { ...defaultDeskCalibration(), entry_filter_level: 2 };
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: 2.5 }),
+      trade({ pnl_pts: 1.8 }),
+      trade({ pnl_pts: 3.0 }),
+      trade({ pnl_pts: 1.2 }),
+      trade({ pnl_pts: -0.4 }),
+    ]);
+    expect(r.next.entry_filter_level).toBe(1);
+  });
 });

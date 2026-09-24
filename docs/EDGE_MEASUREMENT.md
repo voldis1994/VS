@@ -65,3 +65,17 @@ Status: desk panel **AUTO-CAL · ULTIMATE**, or `GET /api/desk/calibration` → 
 - Daily / weekly loss halts
 - % equity or Kelly position sizing
 - Any gate that blocks a valid structure entry because of “risk %”
+
+
+## Entry filter ladder (auto-cal)
+
+`entry_filter_level` (desk cal, default **0**):
+
+| Level | Soft filters |
+|------:|--------------|
+| 0 | OPEN — flip/structure/next-move off |
+| 1 | Flip / same-dir lock |
+| 2 | + structure / 1m bias / story knives |
+| 3 | + same-dir next-move + RANGE spike block |
+
+Robot **START** resets to 0. Auto-cal raises after bad closes, softens after clear positive expectancy. Never daily/% equity blocks.

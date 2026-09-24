@@ -9,7 +9,7 @@ import {
   rangePct,
   type TenSecBar,
 } from './tenSecondOhlc.js';
-import { tradeOpenAtStart } from './tradeOpenPolicy.js';
+import { entrySpikeBlockEnabled } from './tradeOpenPolicy.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -116,7 +116,7 @@ export function decideEntryFrom10sRegime(
 
   // RANGE — same anti-chase: SPIKE WAIT; micro fade only
   if (r === 'RANGE') {
-    if (!tradeOpenAtStart() && isSpike10s(bar)) return null;
+    if (entrySpikeBlockEnabled() && isSpike10s(bar)) return null;
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };

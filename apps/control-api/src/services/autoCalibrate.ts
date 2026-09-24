@@ -1,9 +1,11 @@
 /**
  * Ultimate desk auto-calibrate — watches closes since robot START and
- * softly retunes Soft/Peak/Target + regime allowlist every N closes.
+ * softly retunes Soft/Peak/Target + entry_filter_level + regime allowlist
+ * every N closes.
  *
  * Soft by design: never daily/% entry blocks, never empty allowlist,
  * never starve below MIN_ENABLED_REGIMES. Lot size untouched.
+ * Entry filters start OPEN (0); auto-cal raises after bad closes.
  */
 import {
   getDeskCalibration,
@@ -85,9 +87,18 @@ export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrate
   state.trades = [];
   state.cycles_run = 0;
   state.last_cycle_at = null;
-  state.last_summary = `Session start · ${reason}`;
+  state.last_summary = `Session start · ${reason} · entry filters OPEN`;
   state.last_changes = [];
   state.demoted.clear();
+  // Fresh START → trade everything again; auto-cal will re-tighten from outcomes
+  try {
+    const cur = getDeskCalibration();
+    if ((cur.entry_filter_level || 0) !== 0) {
+      setDeskCalibration({ entry_filter_level: 0 });
+    }
+  } catch {
+    /* ignore */
+  }
   return getAutoCalibrateStatus();
 }
 
@@ -250,6 +261,28 @@ export function proposeAutoCalibration(
   if (next.target_abs <= next.hardinv_abs + 1) {
     next.target_abs = next.hardinv_abs + 3;
     changes.push(`target_abs floor vs Soft →${next.target_abs.toFixed(1)}`);
+  }
+
+  // --- Entry filter ladder (0 OPEN → 3 STRICT) — from market outcomes ---
+  const levelBefore = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
+  const needTighterEntries =
+    expectancy < 0 ||
+    softLosses >= 2 ||
+    (losses.length >= 3 && wins.length <= 1) ||
+    (microWins >= 2 && expectancy < 0.1);
+
+  if (needTighterEntries && levelBefore < 3) {
+    next.entry_filter_level = levelBefore + 1;
+    changes.push(`entry_filter_level ${levelBefore}→${next.entry_filter_level}`);
+  } else if (
+    !needTighterEntries &&
+    expectancy >= 0.35 &&
+    avgWin >= avgLossAbs * 1.0 &&
+    wins.length >= losses.length + 1 &&
+    levelBefore > 0
+  ) {
+    next.entry_filter_level = levelBefore - 1;
+    changes.push(`entry_filter_level ${levelBefore}→${next.entry_filter_level}`);
   }
 
   // --- Soft regime book ---
