@@ -223,12 +223,14 @@ describe('executable gates (not impossible AND-stacks)', () => {
     // RANGE fade BUY or structure-start must not arm against DOWN bias
     expect(fadeBuy).toBeNull();
 
+    // RANGE fade BUY blocked into selloff; TREND_UP still waits on scalp / bias gate
     const dipBar = bar(4328.5, 4327.5, m0 + 5 * 60_000 + 10_000);
     const trendUp = decideEntryWithStructure({
       bar: dipBar,
       regime: 'TREND_UP',
       closedBars: [...book, dipBar],
     });
+    // Active multi-1m DOWN bias still blocks knife — story override alone is not enough
     expect(trendUp).toBeNull();
   });
 

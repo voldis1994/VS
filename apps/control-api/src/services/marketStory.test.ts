@@ -76,6 +76,27 @@ describe('30m market story — 1m scalp grade', () => {
     expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
   });
 
+  it('TREND_UP / BREAKOUT_UP allow BUY even when 30m story still SELLOFF (no SELL-only starve)', () => {
+    const story = {
+      chapter: 'SELLOFF' as const,
+      allow: 'SELL' as const,
+      summary_lv: 'STĀSTS · 30m selloff',
+      detail: 'test',
+      confidence: 0.8,
+      zone_pos: 0.3,
+      net_pts: -6,
+      red_1m: 9,
+      green_1m: 2,
+      swing: 'LL_LH' as const,
+      last_1m: null,
+    };
+    expect(storyAllowsDirection(story, 'BUY', 'RANGE').ok).toBe(false);
+    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP').ok).toBe(true);
+    expect(storyAllowsDirection(story, 'BUY', 'BREAKOUT_UP').ok).toBe(true);
+    expect(storyAllowsDirection(story, 'BUY', 'PULLBACK_UPTREND').ok).toBe(true);
+    expect(storyAllowsDirection(story, 'SELL', 'TREND_DOWN').ok).toBe(true);
+  });
+
   it('V-bounce selloff (net≈0, trek large) is SELLOFF not "troksnis"', () => {
     // Reproduces 09:07 Gold: dump → bounce → dump, net small, trek ~7pt, pos near LO
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 35 * 60_000;

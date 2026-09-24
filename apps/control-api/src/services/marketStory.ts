@@ -323,10 +323,38 @@ export function storyAllowsDirection(
   regime?: string | null
 ): { ok: true } | { ok: false; reason: string } {
   const r = String(regime || '').toUpperCase();
+  // Structured exceptions — always OK
   if (direction === 'BUY' && (r === 'FAILED_BREAKOUT_DOWN' || r === 'REVERSAL_CANDIDATE')) {
     return { ok: true };
   }
   if (direction === 'SELL' && (r === 'FAILED_BREAKOUT_UP' || r === 'REVERSAL_CANDIDATE')) {
+    return { ok: true };
+  }
+  // Live 10s regime is fresher than 30m story — do not SELL-only starve when
+  // classifier already flipped bullish (Funds overnight: story SELLOFF blocked every BUY).
+  // Still never knife-buy a BOUNCE_IN_SELL chapter.
+  if (
+    direction === 'BUY' &&
+    (r === 'TREND_UP' || r === 'BREAKOUT_UP' || r === 'PULLBACK_UPTREND')
+  ) {
+    if (story.chapter === 'BOUNCE_IN_SELL') {
+      return {
+        ok: false,
+        reason: `${story.summary_lv} · bloķē BUY bounce selloffā`,
+      };
+    }
+    return { ok: true };
+  }
+  if (
+    direction === 'SELL' &&
+    (r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN' || r === 'PULLBACK_DOWNTREND')
+  ) {
+    if (story.chapter === 'DIP_IN_RALLY') {
+      return {
+        ok: false,
+        reason: `${story.summary_lv} · bloķē SELL dip rallijā`,
+      };
+    }
     return { ok: true };
   }
   // Breakout follow: structure pierce is the confirm — don't starve on RANGE_CHOP allow=NONE
