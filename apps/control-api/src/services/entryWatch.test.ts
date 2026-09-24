@@ -73,7 +73,7 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/wait-only/i);
   });
 
-  it('FLIP LOCK blocks same direction for 3 min after close', () => {
+  it('FLIP LOCK blocks same direction for 45s after close', () => {
     // Micro dip → RANGE fade BUY (not SPIKE follow SELL)
     const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
@@ -86,17 +86,17 @@ describe('entryWatch', () => {
       just_closed: true,
       closed_bar_count: 90,
       last_closed_side: 'BUY',
-      closed_at_ms: Date.now() - 30_000,
+      closed_at_ms: Date.now() - 10_000,
     });
     expect(w.status).toBe('FLIP_FILTER');
     expect(w.need_side).toBe('SELL');
     expect(w.lock_left_s).toBeGreaterThan(0);
-    expect(w.lock_left_s).toBeLessThanOrEqual(180);
+    expect(w.lock_left_s).toBeLessThanOrEqual(45);
     expect(w.armed).toBe(false);
     expect(w.last_reason).toMatch(/FLIP LOCK/);
   });
 
-  it('same direction allowed again after 3 min lock', () => {
+  it('same direction allowed again after 45s lock', () => {
     const b = bar(2000, 2000.05, 1999.7, 1999.5);
     const w = buildEntryWatch({
       running: true,

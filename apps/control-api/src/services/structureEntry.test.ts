@@ -220,18 +220,19 @@ describe('executable gates (not impossible AND-stacks)', () => {
       regime: 'RANGE',
       closedBars: book,
     });
-    // RANGE fade BUY or structure-start must not arm against DOWN bias
+    // RANGE fade BUY blocked into selloff
     expect(fadeBuy).toBeNull();
 
-    // RANGE fade BUY blocked into selloff; TREND_UP still waits on scalp / bias gate
+    // Raw TREND_UP dip-buy SETUP trades now (no bias/scalp hunt) — user: setup → trade
     const dipBar = bar(4328.5, 4327.5, m0 + 5 * 60_000 + 10_000);
     const trendUp = decideEntryWithStructure({
       bar: dipBar,
       regime: 'TREND_UP',
       closedBars: [...book, dipBar],
     });
-    // Active multi-1m DOWN bias still blocks knife — story override alone is not enough
-    expect(trendUp).toBeNull();
+    expect(trendUp).not.toBeNull();
+    expect(trendUp!.direction).toBe('BUY');
+    expect(trendUp!.reason).toMatch(/SETUP NOW/);
   });
 
   it('every tradable regime has an explicit gate branch (no silent default-only)', () => {
@@ -355,23 +356,20 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     book.push(trigger);
     expect(minuteTrendBias(book)).toBe('DOWN');
 
-    // Counter-trend fades (FAILED_BREAKOUT_DOWN / REVERSAL) may still BUY by design
-    const continuation = [
+    // Counter-trend fades (FAILED_BREAKOUT_DOWN / REVERSAL) may still BUY by design.
+    // Bullish raw setups (PULLBACK_UPTREND / EXPANSION) trade NOW on green — not knife-blocked.
+    const mustNotBuy = [
       'RANGE',
-      'TREND_UP',
       'TREND_DOWN',
-      'PULLBACK_UPTREND',
       'PULLBACK_DOWNTREND',
       'COMPRESSION',
-      'EXPANSION',
-      'BREAKOUT_UP',
       'BREAKOUT_DOWN',
       'FAILED_BREAKOUT_UP',
       'TRANSITION',
       'UNKNOWN',
     ] as const;
 
-    for (const regime of continuation) {
+    for (const regime of mustNotBuy) {
       const armed = decideEntryWithStructure({
         bar: trigger,
         regime,
@@ -450,7 +448,7 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     ).toBe(false);
   });
 
-  it('SEEDING story never arms (no scalp-skip knife)', () => {
+  it('SEEDING + raw 10s regime SETUP trades now (no scalp hunt)', () => {
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 90_000;
     const book: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
@@ -463,14 +461,55 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
         ticks: 8,
       });
     }
-    const trigger = bar(4324, 4325, m0 + MIN_BARS_FOR_ZONE * 10_000);
+    // FAILED_BREAKOUT_DOWN fade BUY needs rally 10s — raw setup must fire without scalp
+    const trigger = bar(4324, 4325.5, m0 + MIN_BARS_FOR_ZONE * 10_000);
     book.push(trigger);
-    expect(
-      decideEntryWithStructure({
-        bar: trigger,
-        regime: 'FAILED_BREAKOUT_DOWN',
-        closedBars: book,
-      })
-    ).toBeNull();
+    const sig = decideEntryWithStructure({
+      bar: trigger,
+      regime: 'FAILED_BREAKOUT_DOWN',
+      closedBars: book,
+    });
+    expect(sig).not.toBeNull();
+    expect(sig!.direction).toBe('BUY');
+    expect(sig!.reason).toMatch(/SETUP NOW/);
+  });
+
+  it('raw TREND_DOWN rally-sell trades without 1m scalp GAIDI', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
+    // Build enough 1m red history so story is not empty, but scalp would still wait
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 12 * 60_000;
+    const rich: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      rich.push({
+        open_time_ms: m0 + i * 10_000,
+        open: 4335,
+        high: i === 3 ? 4338 : 4335.2,
+        low: i === 10 ? 4328 : 4334.8,
+        close: 4335,
+        ticks: 6,
+      });
+    }
+    for (let m = 0; m < 8; m++) {
+      const start = m0 + MIN_BARS_FOR_ZONE * 10_000 + m * 60_000;
+      const o = 4336 - m * 0.8;
+      for (let k = 0; k < 6; k++) {
+        rich.push(bar(o - k * 0.05, o - k * 0.05 - 0.04, start + k * 10_000));
+      }
+    }
+    const trigger = bar(4329, 4327.5, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
+    // Wait — TREND_DOWN needs rally-sell not dip. Use green bounce rally:
+    const rallyTrig = bar(4328, 4329.2, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
+    rich.push(rallyTrig);
+    const sig = decideEntryWithStructure({
+      bar: rallyTrig,
+      regime: 'TREND_DOWN',
+      closedBars: rich,
+    });
+    expect(sig).not.toBeNull();
+    expect(sig!.direction).toBe('SELL');
+    expect(sig!.setup).toBe('PULLBACK');
+    expect(sig!.reason).toMatch(/SETUP NOW/);
+    void book;
+    void trigger;
   });
 });

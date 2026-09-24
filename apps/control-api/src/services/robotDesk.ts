@@ -107,7 +107,7 @@ export type RobotSession = {
   reads_ok: number;
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
-  /** Last closed trade side — same direction blocked for 3 min after close */
+  /** Last closed trade side — same direction blocked for 45s after close */
   last_closed_side: 'BUY' | 'SELL' | null;
   /** Epoch ms of last close — fanout + Admin share the 3m flip lock */
   closed_at_ms: number;
@@ -889,7 +889,7 @@ async function exitTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · same-dir lock 3m ≠ ${s.last_closed_side || '—'}`,
+        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · same-dir lock 45s ≠ ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
       clearTradeState(s);
@@ -938,7 +938,7 @@ async function exitTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · same-dir lock 3m ≠ ${s.last_closed_side}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · same-dir lock 45s ≠ ${s.last_closed_side}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1726,7 +1726,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         ask: quote.ask,
         mid: quote.mid,
         detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 3m ≠ ${closedSide}`
+          ? `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 45s ≠ ${closedSide}`
           : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
       });
       return;
@@ -2068,7 +2068,7 @@ async function robotCycleLocked(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 3m ≠ ${closedSide}`,
+          detail: `Broker flat on this epic — trade closed externally · FLAT · same-dir lock 45s ≠ ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -2212,7 +2212,7 @@ async function robotCycleLocked(s: Internal) {
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    const POST_CLOSE_COOLDOWN_MS = 60_000;
+    const POST_CLOSE_COOLDOWN_MS = 15_000;
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       const left = Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000);
       refreshEntryWatch(s, {
@@ -2224,7 +2224,7 @@ async function robotCycleLocked(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${left}s after close · stop chop re-entry · ${s.entry_watch?.looking_for || ''}`,
+        detail: `cooldown ${left}s after close · ${s.entry_watch?.looking_for || ''}`,
       });
       return null;
     }
@@ -2330,7 +2330,7 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `${ohlcLine} · FLIP LOCK 3m · blocked ${sig.direction} ${sig.setup} · need ${need} · ${left}s left (last ${s.last_closed_side})`,
+              detail: `${ohlcLine} · FLIP LOCK 45s · blocked ${sig.direction} ${sig.setup} · need ${need} · ${left}s left (last ${s.last_closed_side})`,
             });
           } else {
             direction = sig.direction;

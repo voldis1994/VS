@@ -53,9 +53,9 @@ export type EntryWatch = {
   direction: 'BUY' | 'SELL' | null;
   setup: string | null;
   armed: boolean;
-  /** Last closed side — same side blocked for 3 min after close */
+  /** Last closed side — same side blocked for 45s after close */
   last_closed_side: 'BUY' | 'SELL' | null;
-  /** Required flip side while 3m lock active, or null when lock expired */
+  /** Required flip side while 45s lock active, or null when lock expired */
   need_side: 'BUY' | 'SELL' | null;
   /** Seconds left on same-direction lock (0 = expired / inactive) */
   lock_left_s: number;
@@ -369,7 +369,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   }
 
   const flipNote = needSide
-    ? ` · FLIP LOCK 3m: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
+    ? ` · FLIP LOCK 45s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
   const story: MarketStory = readMarketStory(

@@ -465,11 +465,34 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const candidate = raw ?? started;
   if (!candidate) return null;
 
-  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
+  // Raw 10s regime setup already chose direction — do not re-block with lagging
+  // 1m bias (that forced 10× GAIDI hunts). Structure-start still uses live bias.
+  const gate = structureGate(
+    candidate,
+    regime,
+    input.bar,
+    zone,
+    m1,
+    raw ? 'FLAT' : bias
+  );
   if (!gate.ok) return null;
 
-  // Never arm while story is SEEDING — that path skipped scalp and let
-  // FAILED_BREAKOUT / REVERSAL BUY with only structureGate (knife scratches).
+  // Raw 10s regime setup = TRADE NOW. Do not re-hunt with 1m scalp GAIDI /
+  // SEEDING waits (Funds: setup shown, entry searched 10×). Only hard knives.
+  if (raw) {
+    if (candidate.direction === 'BUY' && story.chapter === 'BOUNCE_IN_SELL') {
+      return null;
+    }
+    if (candidate.direction === 'SELL' && story.chapter === 'DIP_IN_RALLY') {
+      return null;
+    }
+    return {
+      ...candidate,
+      reason: `${candidate.reason} · ${gate.tag} · SETUP NOW · ${story.summary_lv}`,
+    };
+  }
+
+  // Weaker structure-start path still needs story scalp confirm
   if (story.chapter === 'SEEDING') return null;
 
   const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
