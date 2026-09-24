@@ -42,6 +42,14 @@ decide which regimes stay in desk calibration — do not add entry rate-limits.
 `decideBestOutcomeExit` and returns the same expectancy shape. Unit tests:
 `strategyReplay.test.ts`, `tradeLedger.test.ts`.
 
+## Auto-calibrate (ultimate)
+
+From **robot START** (`entry_enabled`), desk watches closed trades and every
+**5 closes** softly retunes Soft/Peak/Target + regime allowlist (demote ≤1
+clear loser/cycle, keep ≥5 regimes). Lot unchanged. No daily/% entry blocks.
+
+Status: desk panel **AUTO-CAL · ULTIMATE**, or `GET /api/desk/calibration` → `auto`.
+
 ## Explicitly out of scope
 
 - Daily / weekly loss halts
