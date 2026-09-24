@@ -87,7 +87,7 @@ describe('closed1mProfitPolicy', () => {
 });
 
 describe('positive R:R Soft HardInv', () => {
-  it('caps Soft HardInv near ~2.2 on Gold (not 4–6pt % runaway)', () => {
+  it('caps Soft HardInv near ~2.0 on Gold (not 4–6pt % runaway)', () => {
     const trend = hardInvStopDistance(2650, 'TREND_UP');
     const range = hardInvStopDistance(2650, 'RANGE');
     const capAt = scaleDeskAbs(HARDINV_ABS_CAP, 2650);
@@ -417,16 +417,20 @@ describe('decideBestOutcomeExit', () => {
   });
 
   it('target banks wins at ≥ TARGET_ABS_FLOOR (positive R:R)', () => {
+    const entry = 2000;
+    const tp = targetTakeProfitDistance(entry, 'TREND_UP');
+    const mid = entry + tp + 0.15;
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 2000,
+        entry_price: entry,
         regime: 'TREND_UP',
-        mfe: 7.1,
+        mfe: tp + 0.15,
         peak_retention: 1,
       }),
-      2007.1
+      mid
     );
+    expect(tp).toBeGreaterThanOrEqual(TARGET_ABS_FLOOR);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
   });
@@ -462,7 +466,7 @@ describe('decideBestOutcomeExit', () => {
       now
     );
     expect(tooSmall.exit).toBe(false);
-    expect(TIMEDECAY_MIN_FAV_ABS).toBeGreaterThanOrEqual(2);
+    expect(TIMEDECAY_MIN_FAV_ABS).toBeGreaterThanOrEqual(3);
 
     // Real lock on TREND (RANGE hits Target earlier — by design for fades)
     const entry = 4352.73;
@@ -500,32 +504,38 @@ describe('decideBestOutcomeExit', () => {
   it('RANGE Target/TimeDecay tighter than TREND (fade ≠ trend run)', () => {
     const now = Date.now();
     const aged = new Date(now - 8 * 60_000).toISOString();
-    // RANGE: target ~0.55× → fires earlier on same mid move
+    const entry = 2000;
+    const rangeDist = targetTakeProfitDistance(entry, 'RANGE');
+    const trendDist = targetTakeProfitDistance(entry, 'TREND_UP');
+    expect(rangeDist).toBeLessThan(trendDist);
+    // Mid between RANGE TP and TREND TP — only fade Target should fire
+    const mid = entry + (rangeDist + trendDist) / 2;
+    const fav = mid - entry;
     const rangeTp = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 2000,
+        entry_price: entry,
         entry_regime: 'RANGE',
         regime: 'RANGE',
-        mfe: 3,
+        mfe: fav,
         peak_retention: 1,
         entry_at: aged,
       }),
-      2002.5, // +2.5 — below TREND TP (~4.6) but near RANGE TP (~2.5)
+      mid,
       'target_time',
       now
     );
     const trendTp = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 2000,
+        entry_price: entry,
         entry_regime: 'TREND_UP',
         regime: 'TREND_UP',
-        mfe: 3,
+        mfe: fav,
         peak_retention: 1,
         entry_at: aged,
       }),
-      2002.5,
+      mid,
       'target_time',
       now
     );
