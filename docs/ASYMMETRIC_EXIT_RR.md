@@ -34,6 +34,21 @@ Peak also **disarmed on every green 1m continue**, so the trail was thrown away 
 
 One-shot upgrade: disk `desk-calibration.json` with scalp signature (`peak_mfe_abs < 2` + `hardinv_pct ≥ 0.0012`) is replaced by the new defaults (regimes kept).
 
+## 2026-09-24 let-winners-run (Funds Gold 0.03)
+
+Live sample still showed **+£0.01…£0.05** Peak/TimeDecay vs **−£0.09…£0.21** Soft. Knobs moved again:
+
+| Knob | Was | Now |
+|------|-----|-----|
+| `hardinv_abs` | 2.2 | **2.0** |
+| `peak_mfe_abs` | 3.0 | **4.5** |
+| `peak_retention` | 0.65 | **0.75** |
+| `peak_min_giveback_abs` | 0.85 | **1.2** |
+| `target_abs` | 5.0 | **7.0** |
+| TimeDecay min fav | 2.0 | **3.0** |
+
+One-shot: disk `peak_mfe_abs < 4` + `target_abs < 6.5` → new defaults (regimes kept). Lot size unchanged.
+
 ## Verify
 
 ```bash

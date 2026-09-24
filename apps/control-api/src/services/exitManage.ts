@@ -52,7 +52,7 @@ export type ExitDecision = {
 };
 
 /** Keep ~65% of MFE → give back at most ~35% once a real leg exists. */
-export const PEAK_MFE_RETENTION = 0.65;
+export const PEAK_MFE_RETENTION = 0.75;
 export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
@@ -62,11 +62,11 @@ export const MAX_MFE_GIVEBACK = 0.35;
  */
 export const HARDINV_ABS_FLOOR = 1.5;
 /** Cap Soft HardInv — `hardinv_abs` calibration knob is a CAP, not a floor. */
-export const HARDINV_ABS_CAP = 2.2;
-export const PEAK_MFE_ABS_FLOOR = 3.0;
+export const HARDINV_ABS_CAP = 2.0;
+export const PEAK_MFE_ABS_FLOOR = 4.5;
 /** Need real giveback in price pts before Peak cuts (chop-safe). */
-export const PEAK_MIN_GIVEBACK_ABS = 0.85;
-export const TARGET_ABS_FLOOR = 4.0;
+export const PEAK_MIN_GIVEBACK_ABS = 1.2;
+export const TARGET_ABS_FLOOR = 5.5;
 /** Broker SAFETY TP must be ≥ this × SAFETY SL distance — never TP < SL */
 export const SAFETY_TP_MIN_RR = 1.5;
 
@@ -190,7 +190,7 @@ export const TIMEDECAY_MIN_HOLD_MS = 12 * 60_000;
  * TimeDecay must lock REAL mid edge — at least ~half Soft HardInv,
  * never +0.75 winners against −4 Soft losses.
  */
-export const TIMEDECAY_MIN_FAV_ABS = 2.0;
+export const TIMEDECAY_MIN_FAV_ABS = 3.0;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;

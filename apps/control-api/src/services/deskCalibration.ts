@@ -37,16 +37,16 @@ const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
 
 export function defaultDeskCalibration(): DeskCalibration {
   return {
-    // Positive R:R — Soft HardInv CAP ~2.2; Peak only after real ≥3pt leg; Target ≥4–5
-    // (old scalp profile banked +0.5 Peak vs −4 Soft HardInv → 80% wins, net minus)
-    hardinv_abs: 2.2,
-    peak_mfe_abs: 3.0,
-    peak_retention: 0.65,
-    peak_min_giveback_abs: 0.85,
-    target_abs: 5.0,
-    hardinv_pct: 0.0008,
-    target_pct: 0.0025,
-    peak_mfe_pct: 0.0009,
+    // Let winners run vs Soft — Funds showed +£0.01…£0.05 Peak vs −£0.10…£0.21 Soft.
+    // Soft CAP ~2.0; Peak only after ≥4.5pt MFE; retain 75%; Target ~7.
+    hardinv_abs: 2.0,
+    peak_mfe_abs: 4.5,
+    peak_retention: 0.75,
+    peak_min_giveback_abs: 1.2,
+    target_abs: 7.0,
+    hardinv_pct: 0.0007,
+    target_pct: 0.0032,
+    peak_mfe_pct: 0.0014,
     enabled_regimes: [...TRADABLE_DEFAULT],
     updated_at: new Date().toISOString(),
   };
@@ -103,16 +103,25 @@ function loadFromDisk(): DeskCalibration {
     const file = calibrationPath();
     if (!fs.existsSync(file)) return defaultDeskCalibration();
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<DeskCalibration>;
-    // One-shot upgrade: scalp asymmetry (Peak <2pt + wide HardInv %) → positive R:R defaults
+    // One-shot upgrades (regimes kept):
+    // 1) old scalp: Peak <2 + wide HardInv %
+    // 2) micro-Peak: Peak <4 / Target <6.5 (Funds +£0.01…£0.05 vs Soft −£0.21)
     const peakAbs = Number(raw.peak_mfe_abs);
     const hiPct = Number(raw.hardinv_pct);
-    if (
+    const targetAbs = Number(raw.target_abs);
+    const scalpLegacy =
       Number.isFinite(peakAbs) &&
       peakAbs > 0 &&
       peakAbs < 2.0 &&
       Number.isFinite(hiPct) &&
-      hiPct >= 0.0012
-    ) {
+      hiPct >= 0.0012;
+    const microPeak =
+      Number.isFinite(peakAbs) &&
+      peakAbs > 0 &&
+      peakAbs < 4.0 &&
+      Number.isFinite(targetAbs) &&
+      targetAbs < 6.5;
+    if (scalpLegacy || microPeak) {
       return sanitize({
         ...defaultDeskCalibration(),
         enabled_regimes: raw.enabled_regimes,
