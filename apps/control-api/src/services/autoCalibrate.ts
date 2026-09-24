@@ -7,6 +7,8 @@
  * never starve below MIN_ENABLED_REGIMES. Lot size untouched.
  * Entry filters start OPEN (0); auto-cal raises after bad closes.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   getDeskCalibration,
   setDeskCalibration,
@@ -70,6 +72,7 @@ export type AutoCalibrateStatus = {
     peak_retention: number;
     target_abs: number;
     safety_tp_rr: number;
+    entry_filter_level: number;
     enabled_regimes: number;
   };
 };
@@ -109,17 +112,84 @@ const state: SessionState = {
 };
 
 let enabled = true;
+let hydrated = false;
+
+function sessionPath(): string {
+  const env = process.env.AUTO_CALIBRATE_SESSION_PATH?.trim();
+  if (env) return env;
+  return path.join(process.cwd(), 'data', 'auto-calibrate-session.json');
+}
+
+function persistSession(): void {
+  try {
+    const file = sessionPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const payload = {
+      enabled,
+      started_at: state.started_at,
+      trades: state.trades.slice(-80),
+      cycles_run: state.cycles_run,
+      last_cycle_at: state.last_cycle_at,
+      last_summary: state.last_summary,
+      last_changes: state.last_changes,
+      demoted: [...state.demoted],
+      cooldown_until_ms: state.cooldown_until_ms,
+      last_window_expectancy: state.last_window_expectancy,
+      history: state.history.slice(0, 12),
+    };
+    fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8');
+  } catch {
+    /* best effort */
+  }
+}
+
+function hydrateSession(): void {
+  if (hydrated) return;
+  hydrated = true;
+  try {
+    const file = sessionPath();
+    if (!fs.existsSync(file)) return;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    if (typeof raw.enabled === 'boolean') enabled = raw.enabled;
+    state.started_at = typeof raw.started_at === 'string' ? raw.started_at : null;
+    state.trades = Array.isArray(raw.trades) ? (raw.trades as SessionTrade[]) : [];
+    state.cycles_run = Number(raw.cycles_run) || 0;
+    state.last_cycle_at = typeof raw.last_cycle_at === 'string' ? raw.last_cycle_at : null;
+    state.last_summary = typeof raw.last_summary === 'string' ? raw.last_summary : null;
+    state.last_changes = Array.isArray(raw.last_changes)
+      ? (raw.last_changes as string[])
+      : [];
+    state.demoted = new Set(
+      Array.isArray(raw.demoted) ? (raw.demoted as string[]).map((x) => String(x)) : []
+    );
+    state.cooldown_until_ms =
+      raw.cooldown_until_ms != null && Number.isFinite(Number(raw.cooldown_until_ms))
+        ? Number(raw.cooldown_until_ms)
+        : null;
+    state.last_window_expectancy =
+      raw.last_window_expectancy != null && Number.isFinite(Number(raw.last_window_expectancy))
+        ? Number(raw.last_window_expectancy)
+        : null;
+    state.history = Array.isArray(raw.history) ? (raw.history as AutoCalCycleRecord[]) : [];
+  } catch {
+    /* ignore corrupt disk */
+  }
+}
 
 export function setAutoCalibrateEnabled(on: boolean): void {
+  hydrateSession();
   enabled = Boolean(on);
+  persistSession();
 }
 
 export function isAutoCalibrateEnabled(): boolean {
+  hydrateSession();
   return enabled;
 }
 
-/** Call when operator STARTS an entry-capable robot — resets the watch window. */
+/** Explicit reset (manual / operator). Clears watch + reopens entry filters. */
 export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrateStatus {
+  hydrateSession();
   state.started_at = new Date().toISOString();
   state.trades = [];
   state.cycles_run = 0;
@@ -130,7 +200,6 @@ export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrate
   state.cooldown_until_ms = null;
   state.last_window_expectancy = null;
   state.history = [];
-  // Fresh START → trade everything again; auto-cal will re-tighten from outcomes
   try {
     const cur = getDeskCalibration();
     if ((cur.entry_filter_level || 0) !== 0) {
@@ -139,7 +208,22 @@ export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrate
   } catch {
     /* ignore */
   }
+  persistSession();
   return getAutoCalibrateStatus();
+}
+
+/**
+ * Robot START — do NOT wipe progress. Only open a session if none exists.
+ * Manual Reset watch / POST reset still uses beginAutoCalibrateSession.
+ */
+export function ensureAutoCalibrateSession(reason = 'robot_start'): AutoCalibrateStatus {
+  hydrateSession();
+  if (state.started_at) {
+    state.last_summary = `Watch continues · ${reason} · closes=${state.trades.length}`;
+    persistSession();
+    return getAutoCalibrateStatus();
+  }
+  return beginAutoCalibrateSession(reason);
 }
 
 export function isAutoCalibrateCooldownActive(nowMs = Date.now()): boolean {
@@ -169,6 +253,7 @@ function sessionStats() {
 }
 
 export function getAutoCalibrateStatus(nowMs = Date.now()): AutoCalibrateStatus {
+  hydrateSession();
   const n = state.trades.length;
   const mod = n % AUTO_CALIBRATE_EVERY_N;
   const until =
@@ -199,6 +284,7 @@ export function getAutoCalibrateStatus(nowMs = Date.now()): AutoCalibrateStatus 
       peak_retention: cal.peak_retention,
       target_abs: cal.target_abs,
       safety_tp_rr: cal.safety_tp_rr,
+      entry_filter_level: cal.entry_filter_level,
       enabled_regimes: cal.enabled_regimes.length,
     },
   };
@@ -210,19 +296,23 @@ export function getAutoCalibrateStatus(nowMs = Date.now()): AutoCalibrateStatus 
  * Never throws. Open positions still managed during cooldown.
  */
 export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibrateProposeResult | null {
+  hydrateSession();
   if (!enabled) return null;
   if (!state.started_at) {
-    // First close without explicit start — open a session so learning still works
     beginAutoCalibrateSession('first_close');
   }
-  const pts = Number(trade.pnl_pts);
-  if (!Number.isFinite(pts)) return null;
+  let pts = Number(trade.pnl_pts);
+  if (!Number.isFinite(pts)) {
+    // Still count the close — missing mid must not freeze auto-cal
+    pts = 0;
+  }
 
   state.trades.push({
     ...trade,
     pnl_pts: pts,
     at: trade.at || new Date().toISOString(),
   });
+  persistSession();
 
   if (state.trades.length % AUTO_CALIBRATE_EVERY_N !== 0) return null;
 
@@ -254,6 +344,7 @@ export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibr
     state.last_summary = proposed.summary;
     state.last_changes = proposed.changes;
     pushHistory(false, 0);
+    persistSession();
     return proposed;
   }
 
@@ -271,6 +362,7 @@ export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibr
   state.last_summary = `${proposed.summary} · COOLDOWN ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m`;
   state.last_changes = proposed.changes;
   pushHistory(true, AUTO_CALIBRATE_COOLDOWN_MS / 1000);
+  persistSession();
   return { ...proposed, next: saved };
 }
 
@@ -454,6 +546,20 @@ export function proposeAutoCalibration(
 
   next.enabled_regimes = [...enabled] as RegimeName[];
 
+  // Every cycle must leave a visible footprint when window is not clearly healthy
+  if (!changes.length && expectancy < 0.25) {
+    const rrBefore = next.safety_tp_rr || 1.5;
+    next.safety_tp_rr = Math.min(3.5, rrBefore + 0.15);
+    if (next.safety_tp_rr !== rrBefore) {
+      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
+    }
+    if ((next.entry_filter_level || 0) < 3 && expectancy < 0) {
+      const lv = Math.round(Number(next.entry_filter_level) || 0);
+      next.entry_filter_level = lv + 1;
+      changes.push(`entry_filter_level ${lv}→${next.entry_filter_level}`);
+    }
+  }
+
   const summary =
     `n=${windowTrades.length} E=${expectancy.toFixed(2)} ` +
     `W/L=${wins.length}/${losses.length} avgW=${avgWin.toFixed(2)} avgL=${avgLossAbs.toFixed(2)}` +
@@ -470,6 +576,7 @@ export function proposeAutoCalibration(
 /** Test helper — wipe session state. */
 export function _resetAutoCalibrateForTests(): void {
   enabled = true;
+  hydrated = true; // skip disk during unit tests
   state.started_at = null;
   state.trades = [];
   state.cycles_run = 0;
@@ -480,4 +587,10 @@ export function _resetAutoCalibrateForTests(): void {
   state.cooldown_until_ms = null;
   state.last_window_expectancy = null;
   state.history = [];
+  try {
+    const file = sessionPath();
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch {
+    /* ignore */
+  }
 }

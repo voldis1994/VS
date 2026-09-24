@@ -7,6 +7,7 @@ import {
   beginAutoCalibrateSession,
   getAutoCalibrateStatus,
   isAutoCalibrateCooldownActive,
+  ensureAutoCalibrateSession,
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
 } from './autoCalibrate.js';
@@ -158,6 +159,26 @@ describe('autoCalibrate', () => {
     expect(r.applied).toBe(true);
     expect(r.next.entry_filter_level).toBe(1);
     expect(r.changes.some((c) => c.startsWith('entry_filter_level'))).toBe(true);
+  });
+
+  it('ensureAutoCalibrateSession does not wipe closes on robot START', () => {
+    beginAutoCalibrateSession('first');
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -1 }));
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -0.5 }));
+    const st = ensureAutoCalibrateSession('robot restart');
+    expect(st.closes_in_session).toBe(2);
+    expect(st.session_started_at).toBeTruthy();
+  });
+
+  it('counts close even when pnl is 0 / scratch', () => {
+    beginAutoCalibrateSession('test');
+    for (let i = 0; i < 4; i++) {
+      expect(noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 0 }))).toBeNull();
+    }
+    expect(getAutoCalibrateStatus().closes_in_session).toBe(4);
+    const cycle = noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 0 }));
+    expect(cycle).toBeTruthy();
+    expect(getAutoCalibrateStatus().cycles_run).toBe(1);
   });
 
   it('softens entry_filter_level after clearly positive window', () => {

@@ -5,6 +5,7 @@ import { Logo } from '../components/Logo';
 import {
   ALL_DESK_REGIMES,
   DeskCalibration,
+  type AutoCalStatus,
 } from '../components/DeskControlPanel';
 
 type RobotTick = {
@@ -139,6 +140,7 @@ export function RobotUnitPage() {
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
   const [cal, setCal] = useState<DeskCalibration | null>(null);
+  const [auto, setAuto] = useState<AutoCalStatus | null>(null);
   const [calBusy, setCalBusy] = useState(false);
   const [calMsg, setCalMsg] = useState<string | null>(null);
   const [lotEdit, setLotEdit] = useState('');
@@ -161,9 +163,17 @@ export function RobotUnitPage() {
   }, [accountId, epic]);
 
   useEffect(() => {
-    void apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration')
-      .then((res) => setCal(res.calibration))
-      .catch(() => setCal(null));
+    const loadCal = () => {
+      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>('/api/desk/calibration')
+        .then((res) => {
+          setCal(res.calibration);
+          if (res.auto) setAuto(res.auto);
+        })
+        .catch(() => setCal(null));
+    };
+    loadCal();
+    const id = setInterval(loadCal, 3000);
+    return () => clearInterval(id);
   }, []);
 
   // Boot: start from query if needed, then lock onto unit id

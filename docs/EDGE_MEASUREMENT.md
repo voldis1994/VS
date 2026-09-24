@@ -94,3 +94,11 @@ After an applied TP change, open positions are amended via Capital `PUT /positio
 
 Robot **START** resets to 0. Auto-cal raises after bad closes, softens after clear positive expectancy. Never daily/% equity blocks.
 
+
+
+## Auto-cal persistence
+
+Session state is saved to `data/auto-calibrate-session.json` so closes/cycles
+survive process restart. Robot **START** continues the watch (does not wipe).
+Use **Reset watch** (or POST reset) for a fresh OPEN session.
+Every close logs `AUTO-CAL watch n/5` even before a cycle.

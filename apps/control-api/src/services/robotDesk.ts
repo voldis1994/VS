@@ -46,6 +46,7 @@ import {
   AUTO_CALIBRATE_EVERY_N,
   AUTO_CALIBRATE_COOLDOWN_MS,
   beginAutoCalibrateSession,
+  ensureAutoCalibrateSession,
   getAutoCalibrateStatus,
   isAutoCalibrateCooldownActive,
   autoCalibrateCooldownLeftSec,
@@ -584,8 +585,8 @@ async function persistClosedTradeLedger(
     s.entry_at != null ? Math.max(0, Date.now() - new Date(s.entry_at).getTime()) : null;
   const pnlCash =
     s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : null;
+  const pnlPts = computePnlPts(s.open_side, s.entry_price, exitMid);
   try {
-    const pnlPts = computePnlPts(s.open_side, s.entry_price, exitMid);
     await recordClosedTrade({
       broker_account_id: s.account_id,
       connection_id: s.connection_id,
@@ -608,42 +609,62 @@ async function persistClosedTradeLedger(
       robot_id: s.id,
       opened_at: s.entry_at,
     });
-    if (pnlPts != null) {
-      const cycle = noteClosedTradeForAutoCalibrate({
-        pnl_pts: pnlPts,
-        regime: s.entry_regime || s.regime,
-        setup_type: s.entry_setup,
-        exit_reason: reason,
-        mfe: s.mfe,
-        mae: s.mae,
-        at: new Date().toISOString(),
-        robot_id: s.id,
-        epic: s.epic,
+  } catch {
+    /* DB ledger best-effort — never block auto-cal */
+  }
+
+  // Auto-cal ALWAYS runs (even if DB fail / missing exit mid)
+  const ptsForCal =
+    pnlPts != null && Number.isFinite(pnlPts)
+      ? pnlPts
+      : s.unrealized != null && Number.isFinite(s.unrealized)
+        ? Number(s.unrealized)
+        : Number.isFinite(s.mfe)
+          ? Number(s.mfe)
+          : 0;
+  try {
+    const cycle = noteClosedTradeForAutoCalibrate({
+      pnl_pts: ptsForCal,
+      regime: s.entry_regime || s.regime,
+      setup_type: s.entry_setup,
+      exit_reason: reason,
+      mfe: s.mfe,
+      mae: s.mae,
+      at: new Date().toISOString(),
+      robot_id: s.id,
+      epic: s.epic,
+    });
+    const st = getAutoCalibrateStatus();
+    if (cycle?.applied) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · COOLDOWN ${Math.round(AUTO_CALIBRATE_COOLDOWN_MS / 60_000)}m (no new entry) · session E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level}`,
       });
-      if (cycle?.applied) {
-        const st = getAutoCalibrateStatus();
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · COOLDOWN ${Math.round(AUTO_CALIBRATE_COOLDOWN_MS / 60_000)}m (no new entry) · session E=${st.session_expectancy_pts.toFixed(2)}`,
-        });
-        if (cycleTouchesBrokerTp(cycle.changes)) {
-          void syncAllOpenRobotsBrokerTp();
-        }
-      } else if (cycle) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `AUTO-CAL hold · ${cycle.summary}`,
-        });
+      if (cycleTouchesBrokerTp(cycle.changes)) {
+        void syncAllOpenRobotsBrokerTp();
       }
+    } else if (cycle) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `AUTO-CAL hold · ${cycle.summary} · closes ${st.closes_in_session}`,
+      });
+    } else {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${st.knobs_now.safety_tp_rr}`,
+      });
     }
   } catch {
-    /* best effort — never interrupt live exit */
+    /* never interrupt live exit */
   }
 }
 
@@ -2998,13 +3019,14 @@ export async function startRobotSession(input: {
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   // Entry-capable START resets auto-calibrate watch (ultimate self-tune from this moment)
   if (session.entry_enabled) {
-    const st = beginAutoCalibrateSession(`robot ${id}`);
+    // Continue existing watch — do NOT wipe closes on every START
+    const st = ensureAutoCalibrateSession(`robot ${id}`);
     pushTick(session, {
       phase: 'INFO',
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL ON · every ${AUTO_CALIBRATE_EVERY_N} closes · then ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m entry cooldown · next=${st.closes_until_next}`,
+      detail: `AUTO-CAL ON · closes ${st.closes_in_session} · every ${AUTO_CALIBRATE_EVERY_N} · cooldown ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m · next=${st.closes_until_next} · filters L${st.knobs_now.entry_filter_level}`,
     });
   }
   pushTick(session, {

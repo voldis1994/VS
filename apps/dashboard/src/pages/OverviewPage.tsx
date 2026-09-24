@@ -57,6 +57,8 @@ type AutoCalStatus = {
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
+    safety_tp_rr?: number;
+    entry_filter_level?: number;
     enabled_regimes: number;
   };
 };
@@ -281,7 +283,9 @@ export function OverviewPage() {
               <div className="hint-line mono" style={{ marginTop: 8 }}>
                 NOW Soft {auto.knobs_now.hardinv_abs} · Peak MFE {auto.knobs_now.peak_mfe_abs} ·
                 keep {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
-                {auto.knobs_now.target_abs} · regimes {auto.knobs_now.enabled_regimes}
+                {auto.knobs_now.target_abs} · TP RR {auto.knobs_now.safety_tp_rr ?? 1.5} ·
+                filters L{auto.knobs_now.entry_filter_level ?? 0} · regimes{' '}
+                {auto.knobs_now.enabled_regimes}
               </div>
             )}
             {auto.last_summary && (

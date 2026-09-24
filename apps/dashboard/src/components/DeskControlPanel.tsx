@@ -67,6 +67,8 @@ export type AutoCalStatus = {
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
+    safety_tp_rr?: number;
+    entry_filter_level?: number;
     enabled_regimes: number;
   };
 };
