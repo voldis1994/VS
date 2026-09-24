@@ -80,3 +80,17 @@ on gold-like prices because SL≈0.2% dominates.
 Auto-cal raises `safety_tp_rr` when winners are too small; **SL stays fixed**.
 After an applied TP change, open positions are amended via Capital `PUT /positions`
 (`profitLevel` only).
+
+## Entry filter ladder (auto-cal)
+
+`entry_filter_level` (desk cal, default **0**):
+
+| Level | Soft filters |
+|------:|--------------|
+| 0 | OPEN — flip/structure/next-move off |
+| 1 | Flip / same-dir lock |
+| 2 | + structure / 1m bias / story knives |
+| 3 | + same-dir next-move + RANGE spike block |
+
+Robot **START** resets to 0. Auto-cal raises after bad closes, softens after clear positive expectancy. Never daily/% equity blocks.
+

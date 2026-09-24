@@ -18,7 +18,7 @@ import {
 } from './regimes.js';
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
-import { tradeOpenAtStart } from './tradeOpenPolicy.js';
+import { entryStructureEnabled } from './tradeOpenPolicy.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -315,8 +315,8 @@ export function structureGate(
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
 
-  // Ultimate open-at-start: no structure soft-blocks — auto-cal corrects later
-  if (tradeOpenAtStart()) {
+  // Level <2: no structure soft-blocks — auto-cal raises later
+  if (!entryStructureEnabled()) {
     if (regime === 'UNKNOWN') return { ok: false, reason: 'UNKNOWN · no entry' };
     return { ok: true, tag: `open · ${posTag}` };
   }
@@ -482,8 +482,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   );
   if (!gate.ok) return null;
 
-  // Open-at-start: skip story knives / scalp GAIDI — trade the setup now
-  if (tradeOpenAtStart()) {
+  // Structure off: skip story knives / scalp GAIDI — trade the setup now
+  if (!entryStructureEnabled()) {
     return {
       ...candidate,
       reason: `${candidate.reason} · ${gate.tag} · OPEN START · ${story.summary_lv}`,

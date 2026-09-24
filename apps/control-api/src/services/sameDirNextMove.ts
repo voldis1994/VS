@@ -9,7 +9,7 @@ import {
 } from './exitManage.js';
 import { peekNextEntrySide } from './softExitMarketGate.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { tradeOpenAtStart } from './tradeOpenPolicy.js';
+import { entrySameDirConfirmEnabled } from './tradeOpenPolicy.js';
 
 export type SameDirNextMoveResult =
   | { ok: true; tag: string }
@@ -23,7 +23,7 @@ export function sameDirNextMoveConfirms(input: {
   prevClosed1m?: CandleOHLC | null;
 }): SameDirNextMoveResult {
   const { side } = input;
-  if (tradeOpenAtStart()) {
+  if (!entrySameDirConfirmEnabled()) {
     return { ok: true, tag: 'open · no same-dir gate' };
   }
 

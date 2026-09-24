@@ -1,4 +1,4 @@
-import { tradeOpenAtStart } from './tradeOpenPolicy.js';
+import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 /**
  * After close: block same direction for a while.
  * After Soft/SL loss: longer same-dir block — but do NOT force opposite
@@ -54,7 +54,7 @@ export function sameDirectionBlocked(
   nowMs = Date.now(),
   opts?: SameDirBlockOpts | number
 ): boolean {
-  if (tradeOpenAtStart()) return false;
+  if (!entryFlipLockEnabled()) return false;
   if (!signal || !lastClosedSide) return false;
   if (signal !== lastClosedSide) return false;
   const lock =

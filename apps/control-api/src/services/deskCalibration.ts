@@ -27,6 +27,11 @@ export type DeskCalibration = {
   /** Peak MFE floor as fraction of price */
   peak_mfe_pct: number;
   /**
+   * Soft entry filter ladder (auto-cal owned).
+   * 0=OPEN … 3=STRICT. Start at 0; auto-cal raises after bad closes.
+   */
+  entry_filter_level: number;
+  /**
    * Regimes allowed to open new entries.
    * Empty → none (operator must pick). UNKNOWN never trades.
    */
@@ -58,6 +63,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     hardinv_pct: 0.0008,
     target_pct: 0.0025,
     peak_mfe_pct: 0.0009,
+    entry_filter_level: 0,
     enabled_regimes: [...TRADABLE_DEFAULT],
     updated_at: new Date().toISOString(),
   };
@@ -105,6 +111,9 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     hardinv_pct: clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02),
     target_pct: clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05),
     peak_mfe_pct: clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), 0.00005, 0.02),
+    entry_filter_level: Math.round(
+      clamp(Number(p.entry_filter_level ?? base.entry_filter_level), 0, 3)
+    ),
     enabled_regimes: enabled,
     updated_at: new Date().toISOString(),
   };
@@ -191,6 +200,7 @@ export function deskCalibrationCatalog() {
       'target_abs',
       'target_pct',
       'safety_tp_rr',
+      'entry_filter_level',
       'enabled_regimes',
     ],
   };
