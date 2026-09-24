@@ -38,8 +38,14 @@ import { softExitMarketGate } from './softExitMarketGate.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
 import {
   recordClosedTrade,
+  computePnlPts,
   type TradeLedgerSource,
 } from './tradeLedger.js';
+import {
+  AUTO_CALIBRATE_EVERY_N,
+  beginAutoCalibrateSession,
+  noteClosedTradeForAutoCalibrate,
+} from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   exitReasonWasLoss,
@@ -574,6 +580,7 @@ async function persistClosedTradeLedger(
   const pnlCash =
     s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : null;
   try {
+    const pnlPts = computePnlPts(s.open_side, s.entry_price, exitMid);
     await recordClosedTrade({
       broker_account_id: s.account_id,
       connection_id: s.connection_id,
@@ -584,7 +591,7 @@ async function persistClosedTradeLedger(
       exit_mid: exitMid,
       quantity: s.lot_size,
       pnl: pnlCash,
-      pnl_pts: null,
+      pnl_pts: pnlPts,
       exit_reason: reason,
       regime: s.entry_regime || s.regime,
       setup_type: s.entry_setup,
@@ -596,6 +603,36 @@ async function persistClosedTradeLedger(
       robot_id: s.id,
       opened_at: s.entry_at,
     });
+    if (pnlPts != null) {
+      const cycle = noteClosedTradeForAutoCalibrate({
+        pnl_pts: pnlPts,
+        regime: s.entry_regime || s.regime,
+        setup_type: s.entry_setup,
+        exit_reason: reason,
+        mfe: s.mfe,
+        mae: s.mae,
+        at: new Date().toISOString(),
+        robot_id: s.id,
+        epic: s.epic,
+      });
+      if (cycle?.applied) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `AUTO-CAL · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'}`,
+        });
+      } else if (cycle) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `AUTO-CAL watch · ${cycle.summary}`,
+        });
+      }
+    }
   } catch {
     /* best effort — never interrupt live exit */
   }
@@ -2828,6 +2865,17 @@ export async function startRobotSession(input: {
   };
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
+  // Entry-capable START resets auto-calibrate watch (ultimate self-tune from this moment)
+  if (session.entry_enabled) {
+    const st = beginAutoCalibrateSession(`robot ${id}`);
+    pushTick(session, {
+      phase: 'INFO',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: `AUTO-CAL ON · watch from START · calibrate every ${AUTO_CALIBRATE_EVERY_N} closes · until next=${st.closes_until_next}`,
+    });
+  }
   pushTick(session, {
     phase: 'INFO',
     bid: null,

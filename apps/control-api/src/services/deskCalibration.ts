@@ -35,6 +35,10 @@ const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
   (r) => !WAIT_ONLY_REGIMES.has(r)
 ) as RegimeName[];
 
+export function tradableDefaultRegimes(): RegimeName[] {
+  return [...TRADABLE_DEFAULT];
+}
+
 export function defaultDeskCalibration(): DeskCalibration {
   return {
     // Positive R:R — Soft HardInv CAP ~2.2; Peak only after real ≥3pt leg; Target ≥4–5

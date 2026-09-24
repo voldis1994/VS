@@ -36,6 +36,17 @@ export type DeskCalibration = {
   updated_at?: string;
 };
 
+export type AutoCalStatus = {
+  enabled: boolean;
+  session_started_at: string | null;
+  closes_in_session: number;
+  closes_until_next: number;
+  cycles_run: number;
+  last_cycle_at: string | null;
+  last_summary: string | null;
+  last_changes: string[];
+};
+
 type MarketOpt = {
   instrument_id: number;
   epic?: string;
@@ -68,6 +79,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
   const [cal, setCal] = useState<DeskCalibration | null>(null);
   const [calBusy, setCalBusy] = useState(false);
   const [calMsg, setCalMsg] = useState<string | null>(null);
+  const [auto, setAuto] = useState<AutoCalStatus | null>(null);
 
   useEffect(() => {
     void apiFetch<DeskAccount[]>('/api/trading/accounts')
@@ -86,9 +98,17 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
   }, []);
 
   useEffect(() => {
-    void apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration')
-      .then((res) => setCal(res.calibration))
-      .catch(() => setCal(null));
+    const load = () => {
+      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>('/api/desk/calibration')
+        .then((res) => {
+          setCal(res.calibration);
+          if (res.auto) setAuto(res.auto);
+        })
+        .catch(() => setCal(null));
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -306,6 +326,60 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
             </button>
           </div>
           {msg && <div className="hint-line">{msg}</div>}
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">AUTO-CAL · ULTIMATE</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
+            Kopš START skaita closes · ik pēc 5 pats maigi retune Soft/Peak/Target + regimes.
+            Lot nemaina. Nekādu daily/% entry bloķētāju.
+          </p>
+          {auto ? (
+            <>
+              <div className="hint-line mono">
+                {auto.enabled ? 'ON' : 'OFF'} · closes {auto.closes_in_session} · next in{' '}
+                {auto.closes_until_next} · cycles {auto.cycles_run}
+              </div>
+              {auto.last_summary && (
+                <div className="hint-line" style={{ marginTop: 4 }}>
+                  Last: {auto.last_summary}
+                </div>
+              )}
+              {auto.last_changes?.length > 0 && (
+                <div className="hint-line" style={{ marginTop: 2 }}>
+                  {auto.last_changes.join(' · ')}
+                </div>
+              )}
+              <div className="actions" style={{ marginTop: 6, gap: 6 }}>
+                <button
+                  className="btn"
+                  disabled={calBusy}
+                  onClick={() => {
+                    void apiFetch<{ auto: AutoCalStatus }>('/api/desk/auto-calibrate', {
+                      method: 'POST',
+                      body: JSON.stringify({ enabled: !auto.enabled }),
+                    }).then((r) => setAuto(r.auto));
+                  }}
+                >
+                  {auto.enabled ? 'Pause auto' : 'Resume auto'}
+                </button>
+                <button
+                  className="btn"
+                  disabled={calBusy}
+                  onClick={() => {
+                    void apiFetch<{ auto: AutoCalStatus }>('/api/desk/auto-calibrate', {
+                      method: 'POST',
+                      body: JSON.stringify({ reset: true }),
+                    }).then((r) => setAuto(r.auto));
+                  }}
+                >
+                  Reset watch
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">Auto-cal loading…</div>
+          )}
         </section>
 
         <section className="panel control-panel">
