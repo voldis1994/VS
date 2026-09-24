@@ -36,6 +36,10 @@ import {
 } from './exitManage.js';
 import { softExitMarketGate } from './softExitMarketGate.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
+import {
+  recordClosedTrade,
+  type TradeLedgerSource,
+} from './tradeLedger.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   exitReasonWasLoss,
@@ -550,6 +554,53 @@ function capitalMinuteCandleKey(c: CapitalPriceCandle, prev: CapitalPriceCandle 
   return `${t}|${p}`;
 }
 
+
+/** Snapshot + persist closed trade BEFORE clearTradeState. Never blocks entries. */
+async function persistClosedTradeLedger(
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  reason: string,
+  source: TradeLedgerSource
+): Promise<void> {
+  if (!s.open_side || s.entry_price == null || !Number.isFinite(s.entry_price)) return;
+  const exitMid =
+    quote.mid != null && Number.isFinite(quote.mid)
+      ? quote.mid
+      : s.last_mid != null && Number.isFinite(s.last_mid)
+        ? s.last_mid
+        : null;
+  const holdMs =
+    s.entry_at != null ? Math.max(0, Date.now() - new Date(s.entry_at).getTime()) : null;
+  const pnlCash =
+    s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : null;
+  try {
+    await recordClosedTrade({
+      broker_account_id: s.account_id,
+      connection_id: s.connection_id,
+      epic: s.epic,
+      direction: s.open_side,
+      entry_price: s.entry_price,
+      exit_price: exitMid,
+      exit_mid: exitMid,
+      quantity: s.lot_size,
+      pnl: pnlCash,
+      pnl_pts: null,
+      exit_reason: reason,
+      regime: s.entry_regime || s.regime,
+      setup_type: s.entry_setup,
+      mfe: s.mfe,
+      mae: s.mae,
+      peak_retention: s.peak_retention,
+      hold_ms: holdMs,
+      source,
+      robot_id: s.id,
+      opened_at: s.entry_at,
+    });
+  } catch {
+    /* best effort — never interrupt live exit */
+  }
+}
+
 function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
@@ -898,6 +949,12 @@ async function exitTrade(
         detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · SAME-DIR LOCK after Soft · blocked ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
+      await persistClosedTradeLedger(
+        s,
+        quote,
+        reason || 'EXTERNAL · ghost clear (no dealId + broker flat)',
+        'external'
+      );
       clearTradeState(s);
       return;
     }
@@ -975,19 +1032,7 @@ async function exitTrade(
     });
   }
 
-  try {
-    await pool.query(
-      `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
-       WHERE broker_account_id = $1 AND status = 'OPEN'
-         AND instrument_id IN (
-           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
-         )`,
-      [s.account_id, s.connection_id, s.epic]
-    );
-  } catch {
-    /* best effort */
-  }
-
+  await persistClosedTradeLedger(s, quote, reason, 'desk');
   clearTradeState(s);
 }
 
@@ -1777,6 +1822,10 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
       s.last_closed_side = closedSide;
       s.last_close_was_loss = true;
       s.closed_at_ms = Date.now();
+      const flatReason = marketAllowsTrading(quote.market_status)
+        ? 'EXTERNAL · broker flat (manage cycle)'
+        : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
+      await persistClosedTradeLedger(s, quote, flatReason, 'external');
       clearTradeState(s);
       pushTick(s, {
         phase: 'INFO',
@@ -2130,6 +2179,12 @@ async function robotCycleLocked(s: Internal) {
           detail: `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
+        await persistClosedTradeLedger(
+          s,
+          quote,
+          'EXTERNAL · broker flat (entry cycle)',
+          'external'
+        );
         clearTradeState(s);
       }
     } else {

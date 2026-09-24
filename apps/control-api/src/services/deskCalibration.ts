@@ -28,8 +28,11 @@ export type DeskCalibration = {
   updated_at: string;
 };
 
+/** Wait-only regimes never enter — keep them out of the default allowlist (UI trap). */
+const WAIT_ONLY_REGIMES = new Set<RegimeName>(['COMPRESSION', 'TRANSITION', 'UNKNOWN']);
+
 const TRADABLE_DEFAULT: RegimeName[] = REGIME_NAMES.filter(
-  (r) => r !== 'UNKNOWN'
+  (r) => !WAIT_ONLY_REGIMES.has(r)
 ) as RegimeName[];
 
 export function defaultDeskCalibration(): DeskCalibration {
@@ -70,7 +73,10 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     ...new Set(
       regimesRaw
         .map((r) => String(r || '').trim().toUpperCase())
-        .filter((r): r is RegimeName => (REGIME_NAMES as readonly string[]).includes(r) && r !== 'UNKNOWN')
+        .filter(
+        (r): r is RegimeName =>
+          (REGIME_NAMES as readonly string[]).includes(r) && !WAIT_ONLY_REGIMES.has(r as RegimeName)
+      )
     ),
   ] as RegimeName[];
 
@@ -150,6 +156,7 @@ export function regimeAllowedForEntry(regime?: string | null): boolean {
 export function deskCalibrationCatalog() {
   return {
     regimes: [...REGIME_NAMES],
+    wait_only: ['COMPRESSION', 'TRANSITION', 'UNKNOWN'],
     tradable_default: [...TRADABLE_DEFAULT],
     knobs: [
       'hardinv_abs',
