@@ -14,6 +14,12 @@ export type DeskCalibration = {
   peak_min_giveback_abs: number;
   /** Soft Target absolute floor (pts) — should be > hardinv */
   target_abs: number;
+  /**
+   * Broker SAFETY TP as multiple of SAFETY SL distance.
+   * This is what Capital profitLevel uses — Soft Target alone does not move
+   * broker TP when SL cushion (≈0.2%) dominates. Auto-cal tunes THIS.
+   */
+  safety_tp_rr: number;
   /** Soft HardInv as fraction of price (capped by hardinv_abs) */
   hardinv_pct: number;
   /** Target as fraction of price */
@@ -48,6 +54,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     peak_retention: 0.65,
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
+    safety_tp_rr: 1.5,
     hardinv_pct: 0.0008,
     target_pct: 0.0025,
     peak_mfe_pct: 0.0009,
@@ -94,6 +101,7 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
       20
     ),
     target_abs: clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100),
+    safety_tp_rr: clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0),
     hardinv_pct: clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02),
     target_pct: clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05),
     peak_mfe_pct: clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), 0.00005, 0.02),
@@ -182,6 +190,7 @@ export function deskCalibrationCatalog() {
       'peak_min_giveback_abs',
       'target_abs',
       'target_pct',
+      'safety_tp_rr',
       'enabled_regimes',
     ],
   };

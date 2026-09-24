@@ -5,6 +5,7 @@ import {
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
+  updateCapitalPosition,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -628,6 +629,9 @@ async function persistClosedTradeLedger(
           mid: quote.mid,
           detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · COOLDOWN ${Math.round(AUTO_CALIBRATE_COOLDOWN_MS / 60_000)}m (no new entry) · session E=${st.session_expectancy_pts.toFixed(2)}`,
         });
+        if (cycleTouchesBrokerTp(cycle.changes)) {
+          void syncAllOpenRobotsBrokerTp();
+        }
       } else if (cycle) {
         pushTick(s, {
           phase: 'INFO',
@@ -1945,6 +1949,99 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
       s.peak_protect_armed ? 'ON' : 'OFF'
     } · no new orders`,
   });
+}
+
+
+function cycleTouchesBrokerTp(changes: string[]): boolean {
+  return changes.some((c) => /safety_tp_rr|target_abs|target_pct/i.test(c));
+}
+
+/** Raise Capital profitLevel to match new safety_tp_rr — stopLevel untouched. */
+async function syncOpenRobotBrokerTp(s: Internal): Promise<void> {
+  if (!s.open_side || s.entry_price == null || !Number.isFinite(s.entry_price)) return;
+  if (!s.deal_id) return;
+  const entry = s.entry_price;
+  const stopDist =
+    s.safety_sl != null && Number.isFinite(s.safety_sl)
+      ? Math.abs(entry - s.safety_sl)
+      : null;
+  const tp = safetyTakeProfitLevel(
+    s.open_side,
+    entry,
+    s.entry_regime || s.regime,
+    null,
+    stopDist
+  );
+  if (s.safety_tp != null && Math.abs(s.safety_tp - tp) < 0.05) return;
+
+  const { rows } = await pool.query(
+    `SELECT bc.environment, bc.identifier, bc.broker_name
+     FROM broker_connections bc WHERE bc.id = $1`,
+    [s.connection_id]
+  );
+  if (!rows.length || rows[0].broker_name !== 'capital_com') return;
+  const creds = await loadCreds(s.connection_id);
+  const accRow = await pool.query(
+    `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+    [s.account_id]
+  );
+  const capitalAccountId =
+    (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
+  const leaseInput: CapitalLeaseInput = {
+    environment: rows[0].environment as string,
+    apiKey: creds.api_key || '',
+    identifier: String(rows[0].identifier || '').trim(),
+    password: creds.password || '',
+    connectionId: s.connection_id,
+    capitalAccountId,
+    requireAccountId: true,
+  };
+
+  const leased = await withCapitalAccountSession(leaseInput, async (session) => {
+    return updateCapitalPosition(session, s.deal_id!, { profitLevel: tp });
+  });
+  if (!leased.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: null,
+      ask: null,
+      mid: entry,
+      detail: `AUTO-CAL broker TP amend deferred · ${leased.result.detail}`,
+    });
+    return;
+  }
+  const res = leased.value;
+  if (res.ok) {
+    const prev = s.safety_tp;
+    s.safety_tp = tp;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: null,
+      ask: null,
+      mid: entry,
+      detail: `AUTO-CAL broker TP ${prev ?? '—'}→${tp} · SL stays ${s.safety_sl ?? '—'} · ${res.detail}`,
+    });
+  } else {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: null,
+      ask: null,
+      mid: entry,
+      detail: `AUTO-CAL broker TP amend failed · ${res.detail}`,
+    });
+  }
+}
+
+async function syncAllOpenRobotsBrokerTp(): Promise<void> {
+  for (const s of sessions.values()) {
+    if (s.running && s.open_side && s.deal_id) {
+      try {
+        await syncOpenRobotBrokerTp(s);
+      } catch {
+        /* best effort */
+      }
+    }
+  }
 }
 
 async function robotCycle(s: Internal) {

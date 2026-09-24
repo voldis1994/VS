@@ -18,6 +18,7 @@ describe('deskCalibration', () => {
     expect(c.peak_mfe_abs).toBe(3.0);
     expect(c.peak_min_giveback_abs).toBe(0.85);
     expect(c.target_abs).toBe(5.0);
+    expect(c.safety_tp_rr).toBe(1.5);
     expect(c.enabled_regimes.includes('TREND_UP')).toBe(true);
     expect(c.enabled_regimes.includes('UNKNOWN')).toBe(false);
     expect(c.enabled_regimes.includes('COMPRESSION')).toBe(true);

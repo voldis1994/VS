@@ -1100,6 +1100,69 @@ export async function closeCapitalPosition(
   };
 }
 
+/** Amend open position TP/SL. Prefer profitLevel-only to keep SAFETY SL fixed. */
+export async function updateCapitalPosition(
+  session: CapitalSession,
+  dealId: string,
+  input: {
+    profitLevel?: number;
+    profitDistance?: number;
+    stopLevel?: number;
+    stopDistance?: number;
+  }
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  const id = String(dealId || '').trim();
+  if (!id) {
+    return { ok: false, status: 400, json: null, detail: 'updateCapitalPosition: empty dealId' };
+  }
+  const body: Record<string, unknown> = {};
+  if (
+    input.profitDistance != null &&
+    Number.isFinite(input.profitDistance) &&
+    input.profitDistance > 0
+  ) {
+    body.profitDistance = input.profitDistance;
+  } else if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
+    body.profitLevel = input.profitLevel;
+  }
+  if (
+    input.stopDistance != null &&
+    Number.isFinite(input.stopDistance) &&
+    input.stopDistance > 0
+  ) {
+    body.stopDistance = input.stopDistance;
+  } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
+    body.stopLevel = input.stopLevel;
+  }
+  if (!Object.keys(body).length) {
+    return { ok: false, status: 400, json: null, detail: 'updateCapitalPosition: empty body' };
+  }
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, body);
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com update dealId=${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
+    };
+  }
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  const notes = Object.entries(body)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(' ');
+  return {
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef
+      ? `Updated dealId=${id} ${notes} dealRef=${dealRef}`
+      : `Updated dealId=${id} ${notes}`,
+  };
+}
+
 export async function createCapitalPosition(
   session: CapitalSession,
   input: {

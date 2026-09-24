@@ -69,3 +69,14 @@ so the desk can settle knobs/regimes before the next setup.
 - Daily / weekly loss halts
 - % equity or Kelly position sizing
 - Any gate that blocks a valid structure entry because of “risk %”
+
+
+## Broker SAFETY TP (auto-cal)
+
+Capital **SAFETY TP** is driven by `safety_tp_rr` (multiple of SAFETY SL cushion),
+not only Soft `target_abs`. Soft Target alone often does not move visible broker TP
+on gold-like prices because SL≈0.2% dominates.
+
+Auto-cal raises `safety_tp_rr` when winners are too small; **SL stays fixed**.
+After an applied TP change, open positions are amended via Capital `PUT /positions`
+(`profitLevel` only).
