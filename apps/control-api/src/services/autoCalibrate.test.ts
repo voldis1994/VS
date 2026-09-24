@@ -107,4 +107,19 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
   });
+
+  it('raises broker SAFETY TP R:R (safety_tp_rr) and leaves Soft HardInv/SL alone', () => {
+    const base = defaultDeskCalibration();
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: 0.4 }),
+      trade({ pnl_pts: 0.3 }),
+      trade({ pnl_pts: -2.5 }),
+      trade({ pnl_pts: 0.2 }),
+      trade({ pnl_pts: -1.8 }),
+    ]);
+    expect(r.applied).toBe(true);
+    expect(r.next.safety_tp_rr).toBeGreaterThan(base.safety_tp_rr);
+    expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
+    expect(r.changes.some((c) => c.startsWith('safety_tp_rr'))).toBe(true);
+  });
 });

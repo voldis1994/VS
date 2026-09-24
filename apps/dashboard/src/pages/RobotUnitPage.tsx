@@ -574,6 +574,20 @@ export function RobotUnitPage() {
                       onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
                       onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
                     />
+                    <label className="field-label">Broker TP R:R (vs SL)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.05"
+                      min={1.5}
+                      max={4}
+                      value={cal.safety_tp_rr ?? 1.5}
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
+                      onBlur={() =>
+                        void saveCalibration({ safety_tp_rr: cal.safety_tp_rr ?? 1.5 })
+                      }
+                    />
                     <div className="actions" style={{ marginTop: 4 }}>
                       <button
                         className="btn btn-primary"

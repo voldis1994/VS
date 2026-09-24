@@ -595,6 +595,17 @@ describe('decideBestOutcomeExit', () => {
 });
 
 describe('broker SAFETY TP (opposite of Soft HardInv)', () => {
+  it('safety_tp_rr moves broker TP while SL ref fixed', () => {
+    const entry = 4300;
+    const stopPts = entry * 0.002; // ~8.6
+    setDeskCalibration({ ...defaultDeskCalibration(), safety_tp_rr: 1.5 });
+    const narrow = safetyTakeProfitDistance(entry, 'RANGE', { stopDistancePrice: stopPts });
+    setDeskCalibration({ ...defaultDeskCalibration(), safety_tp_rr: 2.5 });
+    const wide = safetyTakeProfitDistance(entry, 'RANGE', { stopDistancePrice: stopPts });
+    expect(wide).toBeGreaterThan(narrow + 1);
+    expect(Math.abs(wide - stopPts * 2.5)).toBeLessThan(0.05);
+  });
+
   it('BUY TP above entry; SELL below — always ≥ 1.5× SAFETY SL', () => {
     const entry = 2650;
     const safetySl = entry * 0.002; // same cushion % as broker SAFETY SL

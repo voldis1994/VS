@@ -22,5 +22,6 @@
     "REVERSAL_CANDIDATE",
     "TRANSITION"
   ],
-  "updated_at": "2026-09-24T15:05:18.000Z"
+  "updated_at": "2026-09-24T15:05:18.000Z",
+  "safety_tp_rr": 1.5
 }

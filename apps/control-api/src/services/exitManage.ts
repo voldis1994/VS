@@ -120,7 +120,9 @@ export function safetyTakeProfitDistance(
     opts.stopDistancePrice > 0
       ? opts.stopDistancePrice
       : Math.max(softSl, cushion);
-  dist = Math.max(dist, slRef * SAFETY_TP_MIN_RR, softSl * SAFETY_TP_MIN_RR);
+  const cal = getDeskCalibration();
+  const rr = Math.max(SAFETY_TP_MIN_RR, Number(cal.safety_tp_rr) || SAFETY_TP_MIN_RR);
+  dist = Math.max(dist, slRef * rr, softSl * rr);
   return dist;
 }
 
@@ -167,7 +169,11 @@ export function safetyTakeProfitDistancePts(
   const min = minPts != null && minPts > 0 ? minPts : 0;
   let pts = ps != null ? distPrice / ps : distPrice;
   if (stopDistancePts != null && stopDistancePts > 0) {
-    pts = Math.max(pts, stopDistancePts * SAFETY_TP_MIN_RR);
+    const rr = Math.max(
+      SAFETY_TP_MIN_RR,
+      Number(getDeskCalibration().safety_tp_rr) || SAFETY_TP_MIN_RR
+    );
+    pts = Math.max(pts, stopDistancePts * rr);
   }
   pts = Math.max(pts, min * 1.05, min + 1e-9);
   return pts >= 10 ? Math.ceil(pts) : Math.round(pts * 100) / 100;

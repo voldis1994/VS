@@ -29,6 +29,7 @@ export type DeskCalibration = {
   peak_retention: number;
   peak_min_giveback_abs: number;
   target_abs: number;
+  safety_tp_rr: number;
   hardinv_pct: number;
   target_pct: number;
   peak_mfe_pct: number;
@@ -445,6 +446,21 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
                 onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
               />
+              <label className="field-label">Broker TP R:R (vs SL)</label>
+              <input
+                className="input"
+                type="number"
+                step="0.05"
+                min={1.5}
+                max={4}
+                value={cal.safety_tp_rr}
+                disabled={calBusy}
+                onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
+                onBlur={() => void saveCalibration({ safety_tp_rr: cal.safety_tp_rr })}
+              />
+              <p className="hint-line" style={{ marginTop: 2 }}>
+                Auto-cal maina šo — Capital SAFETY TP. SL paliek kā atvērts.
+              </p>
               <div className="actions" style={{ marginTop: 6 }}>
                 <button
                   className="btn btn-primary"

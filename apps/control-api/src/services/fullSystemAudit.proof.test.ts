@@ -370,6 +370,8 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('safetyTakeProfitLevel');
     expect(src).toContain('profitDistance');
     expect(src).toContain('safety_tp');
+    expect(src).toContain('updateCapitalPosition');
+    expect(src).toContain('safety_tp_rr');
   });
 
   it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {

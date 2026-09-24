@@ -11,7 +11,6 @@ import {
   tradableDefaultRegimes,
   type DeskCalibration,
 } from './deskCalibration.js';
-import { summarizeExitReason } from './tradeLedger.js';
 import type { RegimeName } from './regimes.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
@@ -180,9 +179,6 @@ export function proposeAutoCalibration(
     ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length)
     : 0;
   const expectancy = sum / windowTrades.length;
-  const softLosses = windowTrades.filter((t) =>
-    /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason))
-  ).length;
   const microWins = windowTrades.filter(
     (t) => t.pnl_pts > 1e-9 && t.pnl_pts < Math.max(1.0, avgLossAbs * 0.45)
   ).length;
@@ -192,21 +188,28 @@ export function proposeAutoCalibration(
     enabled_regimes: [...current.enabled_regimes],
   };
 
-  // --- Soft / Peak / Target nudges (small steps, clamped by setDeskCalibration) ---
+  // --- Soft Peak/Target + BROKER TP (safety_tp_rr). SL stays fixed. ---
   const needBiggerWinners =
     expectancy < 0.15 ||
     (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
     microWins >= 2;
 
   if (needBiggerWinners) {
+    // Visible Capital SAFETY TP — raise R:R vs FIXED SL cushion
+    const rrBefore = next.safety_tp_rr;
+    next.safety_tp_rr = Math.min(3.5, (next.safety_tp_rr || 1.5) + 0.25);
+    if (next.safety_tp_rr !== rrBefore) {
+      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
+    }
+
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     next.peak_mfe_abs = Math.min(8.5, next.peak_mfe_abs + 0.5);
     next.peak_retention = Math.min(0.85, next.peak_retention + 0.04);
     next.peak_min_giveback_abs = Math.min(2.2, next.peak_min_giveback_abs + 0.15);
-    next.target_abs = Math.min(12, next.target_abs + 0.75);
-    next.target_pct = Math.min(0.01, next.target_pct * 1.08);
+    next.target_abs = Math.min(20, next.target_abs + 1.25);
+    next.target_pct = Math.min(0.015, next.target_pct * 1.12);
     next.peak_mfe_pct = Math.min(0.01, next.peak_mfe_pct * 1.08);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`);
@@ -219,14 +222,7 @@ export function proposeAutoCalibration(
     }
   }
 
-  if (softLosses >= 2 && avgLossAbs >= 1.5) {
-    const hiBefore = next.hardinv_abs;
-    next.hardinv_abs = Math.max(1.6, next.hardinv_abs - 0.15);
-    next.hardinv_pct = Math.max(0.0004, next.hardinv_pct * 0.92);
-    if (next.hardinv_abs !== hiBefore) {
-      changes.push(`hardinv_abs ${hiBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)}`);
-    }
-  }
+  // Soft HardInv / broker SL: intentionally NOT auto-tuned — SL stays as opened.
 
   // Already healthy — tiny retention polish only
   if (
