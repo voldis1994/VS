@@ -63,6 +63,7 @@ type RobotSession = {
   id: string;
   account_id: number;
   account_name: string;
+  client_id?: number;
   client_name?: string;
   environment: string;
   epic: string;
@@ -162,9 +163,14 @@ export function RobotUnitPage() {
     setError(null);
   }, [accountId, epic]);
 
+  const unitClientId = session?.client_id ?? null;
+  const unitCalQs = unitClientId ? `?client_id=${unitClientId}` : '';
+
   useEffect(() => {
     const loadCal = () => {
-      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>('/api/desk/calibration')
+      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>(
+        `/api/desk/calibration${unitCalQs}`
+      )
         .then((res) => {
           setCal(res.calibration);
           if (res.auto) setAuto(res.auto);
@@ -174,7 +180,7 @@ export function RobotUnitPage() {
     loadCal();
     const id = setInterval(loadCal, 3000);
     return () => clearInterval(id);
-  }, []);
+  }, [unitCalQs]);
 
   // Boot: start from query if needed, then lock onto unit id
   useEffect(() => {
@@ -222,10 +228,13 @@ export function RobotUnitPage() {
     setCalBusy(true);
     setCalMsg(null);
     try {
-      const res = await apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration', {
-        method: 'PUT',
-        body: JSON.stringify({ ...cal, ...patch }),
-      });
+      const res = await apiFetch<{ calibration: DeskCalibration }>(
+        `/api/desk/calibration${unitCalQs}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ ...cal, ...patch, client_id: unitClientId }),
+        }
+      );
       setCal(res.calibration);
       setCalMsg('Saved');
     } catch (e) {

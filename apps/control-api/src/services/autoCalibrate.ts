@@ -18,6 +18,7 @@ import {
 } from './deskCalibration.js';
 import { summarizeExitReason } from './tradeLedger.js';
 import type { RegimeName } from './regimes.js';
+import { resolveDeskClientId } from './deskClientScope.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
 /** After an applied calibrate — pause NEW entries so desk can settle setups. */
@@ -69,6 +70,7 @@ export type AutoCalCycleRecord = {
 };
 
 export type AutoCalibrateStatus = {
+  client_id: number;
   enabled: boolean;
   session_started_at: string | null;
   closes_in_session: number;
@@ -119,44 +121,68 @@ type SessionState = {
   history: AutoCalCycleRecord[];
 };
 
-const state: SessionState = {
-  started_at: null,
-  trades: [],
-  cycles_run: 0,
-  last_cycle_at: null,
-  last_summary: null,
-  last_changes: [],
-  demoted: new Set(),
-  cooldown_until_ms: null,
-  last_window_expectancy: null,
-  history: [],
+type ClientBucket = {
+  enabled: boolean;
+  hydrated: boolean;
+  state: SessionState;
 };
 
-let enabled = true;
-let hydrated = false;
+const buckets = new Map<number, ClientBucket>();
 
-function sessionPath(): string {
+function emptyState(): SessionState {
+  return {
+    started_at: null,
+    trades: [],
+    cycles_run: 0,
+    last_cycle_at: null,
+    last_summary: null,
+    last_changes: [],
+    demoted: new Set(),
+    cooldown_until_ms: null,
+    last_window_expectancy: null,
+    history: [],
+  };
+}
+
+function sessionPath(clientId: number): string {
   const env = process.env.AUTO_CALIBRATE_SESSION_PATH?.trim();
-  if (env) return env;
+  if (env && clientId <= 0) return env;
+  if (clientId > 0) {
+    return path.join(process.cwd(), 'data', 'auto-calibrate', `client-${clientId}.json`);
+  }
   return path.join(process.cwd(), 'data', 'auto-calibrate-session.json');
 }
 
-function persistSession(): void {
+function bucket(clientId?: number | null): ClientBucket {
+  const id = resolveDeskClientId(clientId);
+  let b = buckets.get(id);
+  if (!b) {
+    b = { enabled: true, hydrated: false, state: emptyState() };
+    buckets.set(id, b);
+  }
+  return b;
+}
+
+function persistSession(clientId?: number | null): void {
+  const id = resolveDeskClientId(clientId);
+  const b = bucket(id);
   try {
-    const file = sessionPath();
+    const file = sessionPath(id);
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    const st = b.state;
     const payload = {
-      enabled,
-      started_at: state.started_at,
-      trades: state.trades.slice(-80),
-      cycles_run: state.cycles_run,
-      last_cycle_at: state.last_cycle_at,
-      last_summary: state.last_summary,
-      last_changes: state.last_changes,
-      demoted: [...state.demoted],
-      cooldown_until_ms: state.cooldown_until_ms,
-      last_window_expectancy: state.last_window_expectancy,
-      history: state.history.slice(0, 12),
+      client_id: id,
+      enabled: b.enabled,
+      started_at: st.started_at,
+      trades: st.trades.slice(-80),
+      cycles_run: st.cycles_run,
+      last_cycle_at: st.last_cycle_at,
+      last_summary: st.last_summary,
+      last_changes: st.last_changes,
+      demoted: [...st.demoted],
+      cooldown_until_ms: st.cooldown_until_ms,
+      last_window_expectancy: st.last_window_expectancy,
+      history: st.history.slice(0, 12),
     };
     fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8');
   } catch {
@@ -164,43 +190,44 @@ function persistSession(): void {
   }
 }
 
-function hydrateSession(): void {
-  if (hydrated) return;
-  hydrated = true;
+function hydrateSession(clientId?: number | null): void {
+  const id = resolveDeskClientId(clientId);
+  const b = bucket(id);
+  if (b.hydrated) return;
+  b.hydrated = true;
   try {
-    const file = sessionPath();
+    const file = sessionPath(id);
     if (!fs.existsSync(file)) return;
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
-    if (typeof raw.enabled === 'boolean') enabled = raw.enabled;
-    state.started_at = typeof raw.started_at === 'string' ? raw.started_at : null;
-    state.trades = Array.isArray(raw.trades) ? (raw.trades as SessionTrade[]) : [];
-    state.cycles_run = Number(raw.cycles_run) || 0;
-    state.last_cycle_at = typeof raw.last_cycle_at === 'string' ? raw.last_cycle_at : null;
-    state.last_summary = typeof raw.last_summary === 'string' ? raw.last_summary : null;
-    state.last_changes = Array.isArray(raw.last_changes)
-      ? (raw.last_changes as string[])
-      : [];
-    state.demoted = new Set(
+    if (typeof raw.enabled === 'boolean') b.enabled = raw.enabled;
+    const st = b.state;
+    st.started_at = typeof raw.started_at === 'string' ? raw.started_at : null;
+    st.trades = Array.isArray(raw.trades) ? (raw.trades as SessionTrade[]) : [];
+    st.cycles_run = Number(raw.cycles_run) || 0;
+    st.last_cycle_at = typeof raw.last_cycle_at === 'string' ? raw.last_cycle_at : null;
+    st.last_summary = typeof raw.last_summary === 'string' ? raw.last_summary : null;
+    st.last_changes = Array.isArray(raw.last_changes) ? (raw.last_changes as string[]) : [];
+    st.demoted = new Set(
       Array.isArray(raw.demoted) ? (raw.demoted as string[]).map((x) => String(x)) : []
     );
-    state.cooldown_until_ms =
+    st.cooldown_until_ms =
       raw.cooldown_until_ms != null && Number.isFinite(Number(raw.cooldown_until_ms))
         ? Number(raw.cooldown_until_ms)
         : null;
-    state.last_window_expectancy =
+    st.last_window_expectancy =
       raw.last_window_expectancy != null && Number.isFinite(Number(raw.last_window_expectancy))
         ? Number(raw.last_window_expectancy)
         : null;
-    state.history = Array.isArray(raw.history) ? (raw.history as AutoCalCycleRecord[]) : [];
+    st.history = Array.isArray(raw.history) ? (raw.history as AutoCalCycleRecord[]) : [];
   } catch {
     /* ignore corrupt disk */
   }
 }
 
-
-function ensureCoreRegimesOn(): void {
+function ensureCoreRegimesOn(clientId?: number | null): void {
+  const id = resolveDeskClientId(clientId);
   try {
-    const cur = getDeskCalibration();
+    const cur = getDeskCalibration(id);
     const have = new Set(cur.enabled_regimes.map((r) => String(r).toUpperCase()));
     let changed = false;
     for (const r of CORE_ALWAYS_ON_REGIMES) {
@@ -210,80 +237,103 @@ function ensureCoreRegimesOn(): void {
       }
     }
     if (changed) {
-      setDeskCalibration({ enabled_regimes: [...have] as never });
+      setDeskCalibration({ enabled_regimes: [...have] as never }, id);
     }
   } catch {
     /* ignore */
   }
 }
 
-export function setAutoCalibrateEnabled(on: boolean): void {
-  hydrateSession();
-  enabled = Boolean(on);
-  persistSession();
+export function setAutoCalibrateEnabled(on: boolean, clientId?: number | null): void {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const b = bucket(id);
+  b.enabled = Boolean(on);
+  persistSession(id);
 }
 
-export function isAutoCalibrateEnabled(): boolean {
-  hydrateSession();
-  return enabled;
+export function isAutoCalibrateEnabled(clientId?: number | null): boolean {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  return bucket(id).enabled;
 }
 
 /** Explicit reset (manual / operator). Clears watch + reopens entry filters. */
-export function beginAutoCalibrateSession(reason = 'robot_start'): AutoCalibrateStatus {
-  hydrateSession();
-  state.started_at = new Date().toISOString();
-  state.trades = [];
-  state.cycles_run = 0;
-  state.last_cycle_at = null;
-  state.last_summary = `Session start · ${reason} · entry filters OPEN`;
-  state.last_changes = [];
-  state.demoted.clear();
-  state.cooldown_until_ms = null;
-  state.last_window_expectancy = null;
-  state.history = [];
+export function beginAutoCalibrateSession(
+  reason = 'robot_start',
+  clientId?: number | null
+): AutoCalibrateStatus {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const st = bucket(id).state;
+  st.started_at = new Date().toISOString();
+  st.trades = [];
+  st.cycles_run = 0;
+  st.last_cycle_at = null;
+  st.last_summary = `Session start · client ${id} · ${reason} · entry filters OPEN`;
+  st.last_changes = [];
+  st.demoted.clear();
+  st.cooldown_until_ms = null;
+  st.last_window_expectancy = null;
+  st.history = [];
   try {
-    const cur = getDeskCalibration();
+    const cur = getDeskCalibration(id);
     if ((cur.entry_filter_level || 0) !== 0) {
-      setDeskCalibration({ entry_filter_level: 0 });
+      setDeskCalibration({ entry_filter_level: 0 }, id);
     }
   } catch {
     /* ignore */
   }
-  ensureCoreRegimesOn();
-  persistSession();
-  return getAutoCalibrateStatus();
+  ensureCoreRegimesOn(id);
+  persistSession(id);
+  return getAutoCalibrateStatus(undefined, id);
 }
 
 /**
  * Robot START — do NOT wipe progress. Only open a session if none exists.
  * Manual Reset watch / POST reset still uses beginAutoCalibrateSession.
  */
-export function ensureAutoCalibrateSession(reason = 'robot_start'): AutoCalibrateStatus {
-  hydrateSession();
-  ensureCoreRegimesOn();
-  if (state.started_at) {
-    state.last_summary = `Watch continues · ${reason} · closes=${state.trades.length}`;
-    persistSession();
-    return getAutoCalibrateStatus();
+export function ensureAutoCalibrateSession(
+  reason = 'robot_start',
+  clientId?: number | null
+): AutoCalibrateStatus {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  ensureCoreRegimesOn(id);
+  const st = bucket(id).state;
+  if (st.started_at) {
+    st.last_summary = `Watch continues · client ${id} · ${reason} · closes=${st.trades.length}`;
+    persistSession(id);
+    return getAutoCalibrateStatus(undefined, id);
   }
-  return beginAutoCalibrateSession(reason);
+  return beginAutoCalibrateSession(reason, id);
 }
 
-export function isAutoCalibrateCooldownActive(nowMs = Date.now()): boolean {
-  return (
-    state.cooldown_until_ms != null &&
-    Number.isFinite(state.cooldown_until_ms) &&
-    nowMs < state.cooldown_until_ms
-  );
+
+
+export function isAutoCalibrateCooldownActive(
+  nowMs = Date.now(),
+  clientId?: number | null
+): boolean {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const until = bucket(id).state.cooldown_until_ms;
+  return until != null && Number.isFinite(until) && nowMs < until;
 }
 
-export function autoCalibrateCooldownLeftSec(nowMs = Date.now()): number {
-  if (!isAutoCalibrateCooldownActive(nowMs) || state.cooldown_until_ms == null) return 0;
-  return Math.max(0, Math.ceil((state.cooldown_until_ms - nowMs) / 1000));
+export function autoCalibrateCooldownLeftSec(
+  nowMs = Date.now(),
+  clientId?: number | null
+): number {
+  const id = resolveDeskClientId(clientId);
+  if (!isAutoCalibrateCooldownActive(nowMs, id)) return 0;
+  const until = bucket(id).state.cooldown_until_ms;
+  if (until == null) return 0;
+  return Math.max(0, Math.ceil((until - nowMs) / 1000));
 }
 
-function sessionStats() {
-  const pts = state.trades.map((t) => t.pnl_pts);
+function sessionStats(clientId: number) {
+  const pts = bucket(clientId).state.trades.map((t) => t.pnl_pts);
   const sum = pts.reduce((a, b) => a + b, 0);
   const wins = pts.filter((p) => p > 1e-9).length;
   const losses = pts.filter((p) => p < -1e-9).length;
@@ -295,32 +345,38 @@ function sessionStats() {
   };
 }
 
-export function getAutoCalibrateStatus(nowMs = Date.now()): AutoCalibrateStatus {
-  hydrateSession();
-  const n = state.trades.length;
+export function getAutoCalibrateStatus(
+  nowMs?: number,
+  clientId?: number | null
+): AutoCalibrateStatus {
+  const now = nowMs ?? Date.now();
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const st = bucket(id).state;
+  const n = st.trades.length;
   const mod = n % AUTO_CALIBRATE_EVERY_N;
   const until =
     n === 0 ? AUTO_CALIBRATE_EVERY_N : mod === 0 && n > 0 ? AUTO_CALIBRATE_EVERY_N : AUTO_CALIBRATE_EVERY_N - mod;
-  const cooling = isAutoCalibrateCooldownActive(nowMs);
-  const left = autoCalibrateCooldownLeftSec(nowMs);
-  const cal = getDeskCalibration();
-  const stats = sessionStats();
+  const cooling = isAutoCalibrateCooldownActive(now, id);
+  const left = autoCalibrateCooldownLeftSec(now, id);
+  const cal = getDeskCalibration(id);
+  const stats = sessionStats(id);
   return {
-    enabled,
-    session_started_at: state.started_at,
+    client_id: id,
+    enabled: bucket(id).enabled,
+    session_started_at: st.started_at,
     closes_in_session: n,
-    closes_until_next: state.started_at ? until : AUTO_CALIBRATE_EVERY_N,
-    cycles_run: state.cycles_run,
-    last_cycle_at: state.last_cycle_at,
-    last_summary: state.last_summary,
-    last_changes: [...state.last_changes],
+    closes_until_next: st.started_at ? until : AUTO_CALIBRATE_EVERY_N,
+    cycles_run: st.cycles_run,
+    last_cycle_at: st.last_cycle_at,
+    last_summary: st.last_summary,
+    last_changes: [...st.last_changes],
     cooling_down: cooling,
-    cooldown_until:
-      state.cooldown_until_ms != null ? new Date(state.cooldown_until_ms).toISOString() : null,
+    cooldown_until: st.cooldown_until_ms != null ? new Date(st.cooldown_until_ms).toISOString() : null,
     cooldown_left_s: left,
     ...stats,
-    last_window_expectancy: state.last_window_expectancy,
-    history: state.history.slice(0, 8),
+    last_window_expectancy: st.last_window_expectancy,
+    history: st.history.slice(0, 8),
     knobs_now: {
       hardinv_abs: cal.hardinv_abs,
       peak_mfe_abs: cal.peak_mfe_abs,
@@ -338,15 +394,20 @@ export function getAutoCalibrateStatus(nowMs = Date.now()): AutoCalibrateStatus 
  * softly retunes desk calibration. Applied change starts entry cooldown.
  * Never throws. Open positions still managed during cooldown.
  */
-export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibrateProposeResult | null {
-  hydrateSession();
-  if (!enabled) return null;
+export function noteClosedTradeForAutoCalibrate(
+  trade: SessionTrade,
+  clientId?: number | null
+): AutoCalibrateProposeResult | null {
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const b = bucket(id);
+  const state = b.state;
+  if (!b.enabled) return null;
   if (!state.started_at) {
-    beginAutoCalibrateSession('first_close');
+    beginAutoCalibrateSession('first_close', id);
   }
   let pts = Number(trade.pnl_pts);
   if (!Number.isFinite(pts)) {
-    // Still count the close — missing mid must not freeze auto-cal
     pts = 0;
   }
 
@@ -355,12 +416,12 @@ export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibr
     pnl_pts: pts,
     at: trade.at || new Date().toISOString(),
   });
-  persistSession();
+  persistSession(id);
 
   if (state.trades.length % AUTO_CALIBRATE_EVERY_N !== 0) return null;
 
   const window = state.trades.slice(-AUTO_CALIBRATE_EVERY_N);
-  const current = getDeskCalibration();
+  const current = getDeskCalibration(id);
   const proposed = proposeAutoCalibration(current, window, state.demoted);
   const windowSum = window.reduce((a, t) => a + t.pnl_pts, 0);
   const windowE = window.length ? windowSum / window.length : 0;
@@ -387,25 +448,24 @@ export function noteClosedTradeForAutoCalibrate(trade: SessionTrade): AutoCalibr
     state.last_summary = proposed.summary;
     state.last_changes = proposed.changes;
     pushHistory(false, 0);
-    persistSession();
+    persistSession(id);
     return proposed;
   }
 
-  const saved = setDeskCalibration(proposed.next);
+  const saved = setDeskCalibration(proposed.next, id);
   for (const ch of proposed.changes) {
     const m = /^regime OFF (.+)$/.exec(ch);
     if (m) state.demoted.add(m[1]!);
     const p = /^regime ON (.+)$/.exec(ch);
     if (p) state.demoted.delete(p[1]!);
   }
-  // Change applied → cooldown so desk can settle next setups (manage open stays live)
   state.cooldown_until_ms = Date.now() + AUTO_CALIBRATE_COOLDOWN_MS;
   state.cycles_run += 1;
   state.last_cycle_at = at;
   state.last_summary = `${proposed.summary} · COOLDOWN ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m`;
   state.last_changes = proposed.changes;
   pushHistory(true, AUTO_CALIBRATE_COOLDOWN_MS / 1000);
-  persistSession();
+  persistSession(id);
   return { ...proposed, next: saved };
 }
 
@@ -628,23 +688,26 @@ export function proposeAutoCalibration(
 }
 
 /** Test helper — wipe session state. */
-export function _resetAutoCalibrateForTests(): void {
-  enabled = true;
-  hydrated = true; // skip disk during unit tests
-  state.started_at = null;
-  state.trades = [];
-  state.cycles_run = 0;
-  state.last_cycle_at = null;
-  state.last_summary = null;
-  state.last_changes = [];
-  state.demoted.clear();
-  state.cooldown_until_ms = null;
-  state.last_window_expectancy = null;
-  state.history = [];
+export function _resetAutoCalibrateForTests(clientId: number = 0): void {
+  const id = resolveDeskClientId(clientId);
+  const b = bucket(id);
+  b.enabled = true;
+  b.hydrated = true; // skip disk during unit tests
+  b.state = emptyState();
   try {
-    const file = sessionPath();
+    const file = sessionPath(id);
     if (fs.existsSync(file)) fs.unlinkSync(file);
   } catch {
     /* ignore */
+  }
+  // Also wipe sibling test clients commonly used
+  for (const other of [0, 1, 2, 7, 99]) {
+    if (other === id) continue;
+    if (buckets.has(other)) {
+      const ob = bucket(other);
+      ob.enabled = true;
+      ob.hydrated = true;
+      ob.state = emptyState();
+    }
   }
 }

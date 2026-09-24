@@ -27,6 +27,7 @@ type SystemEvent = {
 };
 
 type AutoCalStatus = {
+  client_id?: number;
   enabled: boolean;
   session_started_at: string | null;
   closes_in_session: number;
@@ -109,7 +110,11 @@ export function OverviewPage() {
         const [pos, ev, autoRes] = await Promise.all([
           apiFetch<Position[]>('/api/positions').catch(() => [] as Position[]),
           apiFetch<SystemEvent[]>('/api/system/events').catch(() => [] as SystemEvent[]),
-          apiFetch<AutoCalStatus>('/api/desk/auto-calibrate').catch(() => null),
+          apiFetch<AutoCalStatus>(
+            selectedClientId
+              ? `/api/desk/auto-calibrate?client_id=${selectedClientId}`
+              : '/api/desk/auto-calibrate'
+          ).catch(() => null),
         ]);
         setPositions(pos);
         setEvents(ev.slice(0, 12));
@@ -121,7 +126,7 @@ export function OverviewPage() {
     void load();
     const t = setInterval(() => void load(), 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [selectedClientId]);
 
   useEffect(() => {
     setRunnerOn(Boolean(status?.live_enabled) && (status?.mode || '').toUpperCase() === 'LIVE');
@@ -226,7 +231,10 @@ export function OverviewPage() {
 
 
       <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>
-        <div className="section-title">AUTO-CAL · LIVE BRAIN</div>
+        <div className="section-title">
+          AUTO-CAL · LIVE BRAIN
+          {selectedClientId ? ` · client #${selectedClientId}` : ''}
+        </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
           Ik pēc 5 closes pats koriģē Soft/Peak/Target + regimes. Pēc izmaiņas — 3 min entry
           cooldown (open trades joprojām MANAGE). Lot nemaina.

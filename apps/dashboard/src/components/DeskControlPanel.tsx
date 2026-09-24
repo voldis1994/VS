@@ -39,6 +39,7 @@ export type DeskCalibration = {
 };
 
 export type AutoCalStatus = {
+  client_id?: number;
   enabled: boolean;
   session_started_at: string | null;
   closes_in_session: number;
@@ -107,6 +108,10 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
   const [calMsg, setCalMsg] = useState<string | null>(null);
   const [auto, setAuto] = useState<AutoCalStatus | null>(null);
 
+  const clientIdForCal =
+    accounts.find((a) => a.account_id === accountId)?.client_id ?? null;
+  const calQs = clientIdForCal ? `?client_id=${clientIdForCal}` : '';
+
   useEffect(() => {
     void apiFetch<DeskAccount[]>('/api/trading/accounts')
       .then((rows) => {
@@ -125,7 +130,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
 
   useEffect(() => {
     const load = () => {
-      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>('/api/desk/calibration')
+      void apiFetch<{ calibration: DeskCalibration; auto?: AutoCalStatus }>(
+        `/api/desk/calibration${calQs}`
+      )
         .then((res) => {
           setCal(res.calibration);
           if (res.auto) setAuto(res.auto);
@@ -135,7 +142,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
     load();
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [calQs]);
 
   useEffect(() => {
     if (!accountId) {
@@ -189,9 +196,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
     setCalBusy(true);
     setCalMsg(null);
     try {
-      const res = await apiFetch<{ calibration: DeskCalibration }>('/api/desk/calibration', {
+      const res = await apiFetch<{ calibration: DeskCalibration }>(`/api/desk/calibration${calQs}`, {
         method: 'PUT',
-        body: JSON.stringify({ ...cal, ...patch }),
+        body: JSON.stringify({ ...cal, ...patch, client_id: clientIdForCal }),
       });
       setCal(res.calibration);
       setCalMsg('Saved');
@@ -365,6 +372,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
             <>
               <div className="hint-line mono">
                 {auto.enabled ? 'ON' : 'OFF'}
+                {clientIdForCal ? ` · client #${clientIdForCal}` : ''}
                 {auto.cooling_down
                   ? ` · COOLDOWN ${auto.cooldown_left_s ?? 0}s`
                   : ` · closes ${auto.closes_in_session} · next ${auto.closes_until_next}`}
@@ -411,7 +419,10 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                   onClick={() => {
                     void apiFetch<{ auto: AutoCalStatus }>('/api/desk/auto-calibrate', {
                       method: 'POST',
-                      body: JSON.stringify({ enabled: !auto.enabled }),
+                      body: JSON.stringify({
+                        enabled: !auto.enabled,
+                        client_id: clientIdForCal,
+                      }),
                     }).then((r) => setAuto(r.auto));
                   }}
                 >
@@ -423,7 +434,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                   onClick={() => {
                     void apiFetch<{ auto: AutoCalStatus }>('/api/desk/auto-calibrate', {
                       method: 'POST',
-                      body: JSON.stringify({ reset: true }),
+                      body: JSON.stringify({ reset: true, client_id: clientIdForCal }),
                     }).then((r) => setAuto(r.auto));
                   }}
                 >

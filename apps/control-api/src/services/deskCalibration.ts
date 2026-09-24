@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { REGIME_NAMES, type RegimeName } from './regimes.js';
+import { resolveDeskClientId } from './deskClientScope.js';
 
 export type DeskCalibration = {
   /** Soft HardInv absolute CAP (price points) — not a floor */
@@ -69,13 +70,21 @@ export function defaultDeskCalibration(): DeskCalibration {
   };
 }
 
-function calibrationPath(): string {
+function legacyCalibrationPath(): string {
   const env = process.env.DESK_CALIBRATION_PATH?.trim();
   if (env) return env;
   return path.join(process.cwd(), 'data', 'desk-calibration.json');
 }
 
-let cached: DeskCalibration | null = null;
+function calibrationPath(clientId: number): string {
+  if (clientId > 0) {
+    return path.join(process.cwd(), 'data', 'desk-calibration', `client-${clientId}.json`);
+  }
+  return legacyCalibrationPath();
+}
+
+/** Per-client cache (0 = legacy/global). */
+const cacheByClient = new Map<number, DeskCalibration>();
 
 function clamp(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo;
@@ -119,12 +128,21 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
   };
 }
 
-function loadFromDisk(): DeskCalibration {
+function loadFromDisk(clientId: number): DeskCalibration {
   try {
-    const file = calibrationPath();
-    if (!fs.existsSync(file)) return defaultDeskCalibration();
+    const file = calibrationPath(clientId);
+    if (!fs.existsSync(file)) {
+      // Seed new client from legacy global if present
+      if (clientId > 0) {
+        const legacy = legacyCalibrationPath();
+        if (fs.existsSync(legacy)) {
+          const raw = JSON.parse(fs.readFileSync(legacy, 'utf8')) as Partial<DeskCalibration>;
+          return sanitize(raw);
+        }
+      }
+      return defaultDeskCalibration();
+    }
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<DeskCalibration>;
-    // One-shot upgrade: scalp asymmetry (Peak <2pt + wide HardInv %) → positive R:R defaults
     const peakAbs = Number(raw.peak_mfe_abs);
     const hiPct = Number(raw.hardinv_pct);
     if (
@@ -139,7 +157,6 @@ function loadFromDisk(): DeskCalibration {
         enabled_regimes: raw.enabled_regimes,
       });
     }
-    // Ultimate: open book — expand to full tradable if COMPRESSION/TRANSITION missing
     const sanitized = sanitize(raw);
     const hasCompress = sanitized.enabled_regimes.includes('COMPRESSION');
     const hasTrans = sanitized.enabled_regimes.includes('TRANSITION');
@@ -155,33 +172,50 @@ function loadFromDisk(): DeskCalibration {
   }
 }
 
-function saveToDisk(cfg: DeskCalibration): void {
-  const file = calibrationPath();
+function saveToDisk(clientId: number, cfg: DeskCalibration): void {
+  const file = calibrationPath(clientId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
 }
 
-export function getDeskCalibration(): DeskCalibration {
-  if (!cached) cached = loadFromDisk();
+export function getDeskCalibration(clientId?: number | null): DeskCalibration {
+  const id = resolveDeskClientId(clientId);
+  let cached = cacheByClient.get(id);
+  if (!cached) {
+    cached = loadFromDisk(id);
+    cacheByClient.set(id, cached);
+  }
   return cached;
 }
 
-export function setDeskCalibration(partial: Partial<DeskCalibration>): DeskCalibration {
-  const next = sanitize({ ...getDeskCalibration(), ...partial });
-  cached = next;
-  saveToDisk(next);
+export function setDeskCalibration(
+  partial: Partial<DeskCalibration>,
+  clientId?: number | null
+): DeskCalibration {
+  const id = resolveDeskClientId(clientId);
+  const next = sanitize({ ...getDeskCalibration(id), ...partial });
+  cacheByClient.set(id, next);
+  saveToDisk(id, next);
   return next;
 }
 
 /** True when this regime is allowed to open a new entry. */
-export function regimeAllowedForEntry(regime?: string | null): boolean {
+export function regimeAllowedForEntry(
+  regime?: string | null,
+  clientId?: number | null
+): boolean {
   const r = String(regime || '')
     .trim()
     .toUpperCase();
   if (!r || r === 'UNKNOWN') return false;
-  const cfg = getDeskCalibration();
+  const cfg = getDeskCalibration(clientId);
   if (!cfg.enabled_regimes.length) return false;
   return cfg.enabled_regimes.includes(r as RegimeName);
+}
+
+/** Test helper — clear all client caches. */
+export function _resetDeskCalibrationCacheForTests(): void {
+  cacheByClient.clear();
 }
 
 export function deskCalibrationCatalog() {

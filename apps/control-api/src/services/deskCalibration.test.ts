@@ -4,11 +4,20 @@ import {
   getDeskCalibration,
   regimeAllowedForEntry,
   setDeskCalibration,
+  _resetDeskCalibrationCacheForTests,
 } from './deskCalibration.js';
 
 describe('deskCalibration', () => {
   beforeEach(() => {
+    _resetDeskCalibrationCacheForTests();
     setDeskCalibration(defaultDeskCalibration());
+  });
+
+  it('isolates calibration per client_id', () => {
+    setDeskCalibration({ target_abs: 5 }, 1);
+    setDeskCalibration({ target_abs: 9 }, 2);
+    expect(getDeskCalibration(1).target_abs).toBe(5);
+    expect(getDeskCalibration(2).target_abs).toBe(9);
   });
 
   it('defaults positive R:R — HardInv CAP 2.2 / Peak MFE ≥3 / Target ≥5', () => {

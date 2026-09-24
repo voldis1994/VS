@@ -110,3 +110,14 @@ Auto-cal will **not** turn off: RANGE, TREND_*, PULLBACK_*, EXPANSION,
 COMPRESSION, TRANSITION. Only satellite regimes (BREAKOUT_*, FAILED_*,
 REVERSAL_CANDIDATE) may soft-demote. Floor remains ≥5 enabled. Trading
 cannot be starved by closing all liquid regimes.
+
+
+## Per-client auto-cal
+
+Each **client** has its own:
+- auto-cal session (`data/auto-calibrate/client-{id}.json`)
+- desk calibration knobs (`data/desk-calibration/client-{id}.json`)
+
+API: pass `?client_id=` / body `client_id`. Dashboard uses the selected
+client / account. Robots run inside that client scope — client A never
+retunes client B.

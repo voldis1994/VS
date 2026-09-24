@@ -12,7 +12,7 @@ import {
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
 } from './autoCalibrate.js';
-import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js';
+import { defaultDeskCalibration, setDeskCalibration, _resetDeskCalibrationCacheForTests } from './deskCalibration.js';
 
 function trade(partial: {
   pnl_pts: number;
@@ -35,6 +35,7 @@ function trade(partial: {
 describe('autoCalibrate', () => {
   beforeEach(() => {
     _resetAutoCalibrateForTests();
+    _resetDeskCalibrationCacheForTests();
     setDeskCalibration(defaultDeskCalibration());
   });
 
@@ -178,6 +179,18 @@ describe('autoCalibrate', () => {
     expect(r.applied).toBe(true);
     expect(r.next.entry_filter_level).toBe(1);
     expect(r.changes.some((c) => c.startsWith('entry_filter_level'))).toBe(true);
+  });
+
+  it('isolates auto-cal per client — A closes do not count for B', () => {
+    beginAutoCalibrateSession('A', 1);
+    beginAutoCalibrateSession('B', 2);
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -1 }), 1);
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -1 }), 1);
+    expect(getAutoCalibrateStatus(undefined, 1).closes_in_session).toBe(2);
+    expect(getAutoCalibrateStatus(undefined, 2).closes_in_session).toBe(0);
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 1 }), 2);
+    expect(getAutoCalibrateStatus(undefined, 1).closes_in_session).toBe(2);
+    expect(getAutoCalibrateStatus(undefined, 2).closes_in_session).toBe(1);
   });
 
   it('ensureAutoCalibrateSession does not wipe closes on robot START', () => {

@@ -37,6 +37,7 @@ import {
 } from './exitManage.js';
 import { softExitMarketGate } from './softExitMarketGate.js';
 import { regimeAllowedForEntry } from './deskCalibration.js';
+import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
   recordClosedTrade,
   computePnlPts,
@@ -623,18 +624,21 @@ async function persistClosedTradeLedger(
           ? Number(s.mfe)
           : 0;
   try {
-    const cycle = noteClosedTradeForAutoCalibrate({
-      pnl_pts: ptsForCal,
-      regime: s.entry_regime || s.regime,
-      setup_type: s.entry_setup,
-      exit_reason: reason,
-      mfe: s.mfe,
-      mae: s.mae,
-      at: new Date().toISOString(),
-      robot_id: s.id,
-      epic: s.epic,
-    });
-    const st = getAutoCalibrateStatus();
+    const cycle = noteClosedTradeForAutoCalibrate(
+      {
+        pnl_pts: ptsForCal,
+        regime: s.entry_regime || s.regime,
+        setup_type: s.entry_setup,
+        exit_reason: reason,
+        mfe: s.mfe,
+        mae: s.mae,
+        at: new Date().toISOString(),
+        robot_id: s.id,
+        epic: s.epic,
+      },
+      s.client_id
+    );
+    const st = getAutoCalibrateStatus(undefined, s.client_id);
     if (cycle?.applied) {
       pushTick(s, {
         phase: 'INFO',
@@ -2070,7 +2074,7 @@ async function robotCycle(s: Internal) {
   s.cycle_busy = true;
   s.cycle_busy_since = Date.now();
   try {
-    await robotCycleLocked(s);
+    await runWithDeskClientAsync(s.client_id || 0, () => robotCycleLocked(s));
   } finally {
     s.cycle_busy = false;
     s.cycle_busy_since = 0;
@@ -2569,8 +2573,8 @@ async function robotCycleLocked(s: Internal) {
     );
 
     if (onCloseTick && entryBar) {
-      if (isAutoCalibrateCooldownActive()) {
-        const left = autoCalibrateCooldownLeftSec();
+      if (isAutoCalibrateCooldownActive(Date.now(), s.client_id)) {
+        const left = autoCalibrateCooldownLeftSec(Date.now(), s.client_id);
         s.pending_entry = null;
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
@@ -2584,7 +2588,7 @@ async function robotCycleLocked(s: Internal) {
           mid: quote.mid,
           detail: `${ohlcLine} · AUTO-CAL COOLDOWN · ${left}s left · rearranging setups · no new entry`,
         });
-      } else if (!regimeAllowedForEntry(s.regime)) {
+      } else if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
@@ -2722,8 +2726,8 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
-      if (isAutoCalibrateCooldownActive()) {
-        const left = autoCalibrateCooldownLeftSec();
+      if (isAutoCalibrateCooldownActive(Date.now(), s.client_id)) {
+        const left = autoCalibrateCooldownLeftSec(Date.now(), s.client_id);
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'WAITING_TRIGGER',
@@ -2736,7 +2740,7 @@ async function robotCycleLocked(s: Internal) {
           mid: quote.mid,
           detail: `${ohlcLine} · AUTO-CAL COOLDOWN · pending cleared · ${left}s`,
         });
-      } else if (!regimeAllowedForEntry(s.regime)) {
+      } else if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
@@ -3020,7 +3024,7 @@ export async function startRobotSession(input: {
   // Entry-capable START resets auto-calibrate watch (ultimate self-tune from this moment)
   if (session.entry_enabled) {
     // Continue existing watch — do NOT wipe closes on every START
-    const st = ensureAutoCalibrateSession(`robot ${id}`);
+    const st = ensureAutoCalibrateSession(`robot ${id}`, session.client_id);
     pushTick(session, {
       phase: 'INFO',
       bid: null,
