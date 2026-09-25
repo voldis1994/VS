@@ -208,6 +208,10 @@ export type EntryMindInput = {
   m1_strong?: boolean;
   /** Multi-1m trek bias */
   bias?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** Higher timeframes — easier to read the market (5m / 15m / 30m) */
+  tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 /**
@@ -232,13 +236,24 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   const m1 = (input.m1_dir || 'FLAT').toUpperCase() as 'UP' | 'DOWN' | 'FLAT';
   const bias = (input.bias || 'FLAT').toUpperCase() as 'UP' | 'DOWN' | 'FLAT';
   const strong = Boolean(input.m1_strong);
+  const tf5 = (input.tf5_dir || 'FLAT').toUpperCase() as 'UP' | 'DOWN' | 'FLAT';
+  const tf15 = (input.tf15_dir || 'FLAT').toUpperCase() as 'UP' | 'DOWN' | 'FLAT';
+  const tf30 = (input.tf30_dir || 'FLAT').toUpperCase() as 'UP' | 'DOWN' | 'FLAT';
   const storyLine = input.story_summary || `STĀSTS · ${chapter}`;
 
-  const tapeUp = m1 === 'UP' || bias === 'UP';
-  const tapeDown = m1 === 'DOWN' || bias === 'DOWN';
-  const tapeFight = tapeUp && tapeDown; // shouldn't happen; treat as unclear
+  const htUp = [tf5, tf15, tf30].filter((d) => d === 'UP').length;
+  const htDown = [tf5, tf15, tf30].filter((d) => d === 'DOWN').length;
+  const higherUp = htUp >= 2 || (htUp >= 1 && htDown === 0 && (tf15 === 'UP' || tf30 === 'UP'));
+  const higherDown =
+    htDown >= 2 || (htDown >= 1 && htUp === 0 && (tf15 === 'DOWN' || tf30 === 'DOWN'));
 
-  const situation = `Flat · 1m ${m1}${strong ? ' (spēcīga)' : ''} · bias ${bias} · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
+  const tapeUp = m1 === 'UP' || bias === 'UP' || higherUp;
+  const tapeDown = m1 === 'DOWN' || bias === 'DOWN' || higherDown;
+  const tapeFight =
+    (m1 === 'UP' && higherDown && !higherUp) ||
+    (m1 === 'DOWN' && higherUp && !higherDown);
+
+  const situation = `Flat · 1m ${m1}${strong ? ' (spēcīga)' : ''} · bias ${bias} · 5m ${tf5} · 15m ${tf15} · 30m ${tf30} · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
     pos != null && Number.isFinite(pos) ? pos.toFixed(2) : '—'
   } · 10s ${body > 0 ? 'zaļš' : body < 0 ? 'sarkans' : 'kluss'}${
     input.last_closed_side

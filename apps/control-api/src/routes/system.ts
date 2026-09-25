@@ -28,7 +28,8 @@ export async function registerSystemRoutes(
       const [pos, execs, clients, brokers, markets] = await Promise.all([
         pool.query(`SELECT COUNT(*)::int AS n FROM positions WHERE status = 'OPEN'`),
         pool.query(
-          `SELECT COUNT(*)::int AS n FROM executions WHERE executed_at::date = CURRENT_DATE`
+          `SELECT COUNT(*)::int AS n FROM trades
+           WHERE closed_at IS NOT NULL AND closed_at::date = CURRENT_DATE`
         ),
         pool.query(`SELECT COUNT(*)::int AS n FROM clients WHERE enabled = true`),
         pool.query(

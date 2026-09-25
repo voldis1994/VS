@@ -206,6 +206,42 @@ export function minuteTrendBias(
   return 'FLAT';
 }
 
+/**
+ * Higher-TF direction from the same 10s book (5m / 15m / 30m).
+ * Close vs open of the last completed bucket — easy chart read for the mind.
+ */
+export function higherTfDir(
+  bars: TenSecBar[],
+  minutes: 5 | 15 | 30
+): 'UP' | 'DOWN' | 'FLAT' {
+  if (!bars.length) return 'FLAT';
+  const bucketMs = minutes * 60_000;
+  const map = new Map<number, TenSecBar[]>();
+  for (const b of bars) {
+    if (!Number.isFinite(b.open_time_ms)) continue;
+    const k = Math.floor(b.open_time_ms / bucketMs) * bucketMs;
+    let list = map.get(k);
+    if (!list) {
+      list = [];
+      map.set(k, list);
+    }
+    list.push(b);
+  }
+  const keys = [...map.keys()].sort((a, b) => a - b);
+  const lastBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const closedKeys = keys.filter((k) => k < lastBucket);
+  if (!closedKeys.length) return 'FLAT';
+  const k = closedKeys[closedKeys.length - 1]!;
+  const list = map.get(k)!;
+  if (list.length < Math.max(2, Math.floor((minutes * 6) / 3))) return 'FLAT';
+  list.sort((a, b) => a.open_time_ms - b.open_time_ms);
+  const open = list[0]!.open;
+  const close = list[list.length - 1]!.close;
+  if (close > open) return 'UP';
+  if (close < open) return 'DOWN';
+  return 'FLAT';
+}
+
 /** Counter-trend entries that may ignore 1m bias (structured fade / reversal). */
 function allowsAgainstBias(
   regime: RegimeName,
@@ -513,6 +549,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
+  const tf5 = higherTfDir(input.closedBars, 5);
+  const tf15 = higherTfDir(input.closedBars, 15);
+  const tf30 = higherTfDir(input.closedBars, 30);
   const story = readMarketStory(input.closedBars, input.bar);
 
   // Prefer Capital 1m (what the human sees) over 10s-book aggregate
@@ -547,6 +586,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     m1_dir: md,
     m1_strong: m1Strong,
     bias,
+    tf5_dir: tf5,
+    tf15_dir: tf15,
+    tf30_dir: tf30,
   });
 
   // Learner advises once it has enough closes (same pattern as manage brain)

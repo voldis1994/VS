@@ -9,6 +9,7 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
+  fetchCapitalActivity,
   listCapitalOpenPositions,
   type CapitalComSessionResult,
   type CapitalMarketQuote,
@@ -247,6 +248,9 @@ type Internal = RobotSession & {
   last_entry_features: EntryFeatures | null;
   /** Mega market context frozen at fill */
   entry_market: MarketContextSnapshot | null;
+  /** Deal ids already counted (EXTERNAL / activity reconcile) — no double CLOSES */
+  counted_deal_ids: Set<string>;
+  last_activity_reconcile_ms: number;
   /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
@@ -616,6 +620,7 @@ async function persistClosedTradeLedger(
   source: TradeLedgerSource
 ): Promise<void> {
   if (!s.open_side || s.entry_price == null || !Number.isFinite(s.entry_price)) return;
+  markDealCounted(s, s.deal_id);
   const exitMid =
     quote.mid != null && Number.isFinite(quote.mid)
       ? quote.mid
@@ -760,6 +765,24 @@ async function persistClosedTradeLedger(
         detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${st.knobs_now.safety_tp_rr}`,
       });
     }
+    // Push live counters to COMMAND so CLOSES/LEARNER update without full refresh
+    if (s.client_id) {
+      emitToClient(s.client_id, {
+        type: 'auto_cal_update',
+        closes_in_session: st.closes_in_session,
+        closes_until_next: st.closes_until_next,
+        session_expectancy_pts: st.session_expectancy_pts,
+        session_sum_pts: st.session_sum_pts,
+        session_wins: st.session_wins,
+        session_losses: st.session_losses,
+        cycles_run: st.cycles_run,
+        last_summary: st.last_summary,
+        exit_reason: exitReason,
+        source,
+        robot_id: s.id,
+        epic: s.epic,
+      });
+    }
   } catch {
     /* never interrupt live exit */
   }
@@ -790,6 +813,148 @@ function clearTradeState(s: Internal) {
   s.last_learner_features = null;
   s.last_entry_features = null;
   s.entry_market = null;
+}
+
+/** Mark a Capital dealId as already counted toward CLOSES / LEARNER. */
+function markDealCounted(s: Internal, dealId: string | null | undefined) {
+  const id = String(dealId || '').trim();
+  if (id) s.counted_deal_ids.add(id);
+}
+
+/**
+ * Pull Capital activity history so Limit TP/SL closes still increment
+ * COMMAND CLOSES even when the desk missed the broker-flat edge.
+ */
+async function reconcileCapitalActivityCloses(
+  session: CapitalSession,
+  s: Internal,
+  quote: QuoteLite
+): Promise<void> {
+  if (Date.now() - s.last_activity_reconcile_ms < 25_000) return;
+  s.last_activity_reconcile_ms = Date.now();
+  let act: Awaited<ReturnType<typeof fetchCapitalActivity>>;
+  try {
+    act = await fetchCapitalActivity(session, 2 * 60 * 60);
+  } catch {
+    return;
+  }
+  if (!act.ok || !act.items.length) return;
+
+  const epicWant = s.epic.trim().toLowerCase();
+  let added = 0;
+  for (const item of act.items) {
+    const dealId = String(item.deal_id || '').trim();
+    if (!dealId || s.counted_deal_ids.has(dealId)) continue;
+    const epic = String(item.epic || '').trim().toLowerCase();
+    if (epic && epic !== epicWant && !epic.includes(epicWant) && !epicWant.includes(epic)) {
+      continue;
+    }
+    const actType = String(item.activity || '').toUpperCase();
+    // Position closes / limit fills — skip opens
+    if (/OPEN|ACCEPTED|WORKING|CREATED/i.test(actType) && !/CLOSE|LIMIT|STOP|DELETED|POSITION/i.test(actType)) {
+      continue;
+    }
+    if (!/CLOSE|LIMIT|STOP|POSITION|DEAL|TRADE|DELETED/i.test(actType)) continue;
+
+    const side = item.direction;
+    if (!side) continue;
+
+    s.counted_deal_ids.add(dealId);
+    const pnlCash =
+      item.profit_loss != null && Number.isFinite(item.profit_loss)
+        ? item.profit_loss
+        : 0;
+    // Approximate pts from cash when lot known — else 0 still counts the close
+    const soft = hardInvStopDistance(
+      item.level != null && Number.isFinite(item.level) ? item.level : s.last_mid || 2000,
+      s.regime
+    );
+    const pnlPts =
+      s.lot_size > 0 && Number.isFinite(pnlCash)
+        ? pnlCash / Math.max(s.lot_size, 1e-9)
+        : pnlCash;
+
+    try {
+      await recordClosedTrade({
+        broker_account_id: s.account_id,
+        connection_id: s.connection_id,
+        epic: s.epic,
+        direction: side,
+        entry_price:
+          item.level != null && Number.isFinite(item.level)
+            ? item.level
+            : s.last_mid || 0,
+        exit_price: item.level,
+        exit_mid: item.level,
+        quantity: item.size ?? s.lot_size,
+        pnl: pnlCash,
+        pnl_pts: pnlPts,
+        exit_reason: `EXTERNAL · Capital activity ${actType} · deal ${dealId}`,
+        regime: s.regime,
+        setup_type: null,
+        mfe: Math.max(0, pnlPts),
+        mae: Math.min(0, pnlPts),
+        peak_retention: null,
+        hold_ms: null,
+        source: 'external',
+        robot_id: s.id,
+        opened_at: item.date,
+      });
+    } catch {
+      /* best effort */
+    }
+
+    const cycle = noteClosedTradeForAutoCalibrate(
+      {
+        pnl_pts: Number.isFinite(pnlPts) ? pnlPts : 0,
+        regime: s.regime,
+        setup_type: null,
+        exit_reason: `EXTERNAL · Capital activity ${actType}`,
+        mfe: Math.max(0, pnlPts),
+        mae: Math.min(0, pnlPts),
+        at: item.date || new Date().toISOString(),
+        robot_id: s.id,
+        epic: s.epic,
+      },
+      s.client_id
+    );
+    const st = getAutoCalibrateStatus(undefined, s.client_id);
+    added += 1;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RECONCILE CLOSE · ${side} ${actType} · deal ${dealId.slice(0, 12)} · CLOSES ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N}${
+        cycle?.applied ? ` · AUTO-CAL ${cycle.summary}` : ''
+      } · Soft≈${soft.toFixed(1)}`,
+    });
+    if (s.client_id) {
+      emitToClient(s.client_id, {
+        type: 'auto_cal_update',
+        closes_in_session: st.closes_in_session,
+        closes_until_next: st.closes_until_next,
+        session_expectancy_pts: st.session_expectancy_pts,
+        session_sum_pts: st.session_sum_pts,
+        session_wins: st.session_wins,
+        session_losses: st.session_losses,
+        cycles_run: st.cycles_run,
+        last_summary: st.last_summary,
+        source: 'reconcile',
+        robot_id: s.id,
+        epic: s.epic,
+      });
+    }
+  }
+  if (added > 0) {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RECONCILE · +${added} Capital closes → COMMAND CLOSES updated`,
+    });
+  }
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -2055,6 +2220,10 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
           ? `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`
           : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
       });
+      const rec = await withCapitalAccountSession(leaseInput, async (session) => {
+        await reconcileCapitalActivityCloses(session, s, quote);
+      });
+      if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
       return;
     }
   } else {
@@ -2067,7 +2236,14 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
     });
   }
 
-  if (!s.open_side) return;
+  if (!s.open_side) {
+    // Flat — still pull Capital activity so Limit closes update COMMAND CLOSES
+    const rec = await withCapitalAccountSession(leaseInput, async (session) => {
+      await reconcileCapitalActivityCloses(session, s, quote);
+    });
+    if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
+    return;
+  }
 
   s.mode = 'MANAGE';
   refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
@@ -3118,11 +3294,13 @@ export async function startRobotSession(input: {
     last_learner_features: null,
     last_entry_features: null,
     entry_market: null,
+    counted_deal_ids: new Set(),
+    last_activity_reconcile_ms: 0,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
-  // Entry-capable START → factory OPEN TRADE-ALL (wipe watch + default knobs)
+  // Entry-capable START → ensure auto-cal session exists (do NOT wipe counted closes)
   if (session.entry_enabled) {
     const st = ensureAutoCalibrateSession(`robot ${id}`, session.client_id);
     pushTick(session, {
@@ -3130,7 +3308,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL OPEN TRADE-ALL · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · every ${AUTO_CALIBRATE_EVERY_N} · cooldown ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m`,
+      detail: `AUTO-CAL session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {
