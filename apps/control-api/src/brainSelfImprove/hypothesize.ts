@@ -446,49 +446,67 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   ];
 }
 
-/** Absolute last resort — always returns a unique hypothesis (never null). */
+/** Absolute last resort — always returns a unique untried hypothesis. */
 function forceExploreHypothesis(
   analysis: AnalysisResult,
   g: BrainGenome,
   tried: Set<string>
 ): BrainHypothesis {
-  const nextStep = (g.explore_step || 0) + 1 + tried.size;
-  const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
-  const v: Variant = {
-    title: `Force explore #${nextStep}`,
-    rationale: `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
-    task: `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
-    genome_delta: {
+  const baseStep = (g.explore_step || 0) + 1;
+  for (let i = 0; i < 64; i++) {
+    const nextStep = baseStep + tried.size + i;
+    const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
+    const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, nextStep % 2 === 0 ? -1 : 1);
+    const nonce = `${Date.now().toString(36)}_${i}`;
+    const genome_delta: Record<string, unknown> = {
       explore_step: nextStep,
       peak_keep: keep,
-      last_lesson: `Force explore #${nextStep}`,
-    },
-    patches: [
+      soft_plus_giveback: gb,
+      version: (g.version || 1) + 1,
+      last_lesson: `Force explore #${nextStep} · ${nonce}`,
+    };
+    const patches = compactPatches([
       genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
-    ],
-  };
-  const hypo = tryVariant('explore', v, g, tried);
-  if (hypo) return hypo;
-  // Signature collision impossible in practice — synthesize unique delta with version bump
-  const patches = compactPatches(v.patches);
+      genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
+    ]);
+    const signature = hypothesisSignature({
+      pattern_id: 'explore',
+      patches,
+      genome_delta,
+    });
+    if (tried.has(signature)) continue;
+    return {
+      id: `hyp_explore_${signature.slice(0, 8)}`,
+      pattern_id: 'explore',
+      title: `Force explore #${nextStep}`,
+      rationale: `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
+      task: `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
+      patches,
+      genome_delta,
+      signature,
+      created_at: new Date().toISOString(),
+    };
+  }
+  // Absolute fallback — nonce alone guarantees uniqueness
+  const nextStep = baseStep + tried.size + 99;
   const genome_delta = {
-    ...v.genome_delta,
-    version: (g.version || 1) + 1,
     explore_step: nextStep,
+    last_lesson: `Force explore emergency ${Date.now()}`,
+    version: (g.version || 1) + Math.max(1, tried.size),
   };
   const signature = hypothesisSignature({
     pattern_id: 'explore',
-    patches,
+    patches: [],
     genome_delta,
   });
   return {
     id: `hyp_explore_${signature.slice(0, 8)}`,
     pattern_id: 'explore',
-    title: v.title,
-    rationale: v.rationale,
-    task: v.task,
-    patches,
+    title: `Force explore #${nextStep}`,
+    rationale: `Emergency unique explore · top=${analysis.top_pattern?.id || 'none'}`,
+    task: `explore_step=${nextStep}`,
+    patches: [],
     genome_delta,
     signature,
     created_at: new Date().toISOString(),
