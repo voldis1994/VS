@@ -1416,7 +1416,7 @@ async function exitTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · SAME-DIR LOCK after Soft · blocked ${s.last_closed_side || '—'}`,
+        detail: `EXIT: no dealId + broker flat — clear ghost · FLAT · last ${s.last_closed_side || '—'}`,
       });
       s.closed_at_ms = Date.now();
       await persistClosedTradeLedger(
@@ -1480,8 +1480,8 @@ async function exitTrade(
     s.last_close_was_loss = wasLoss;
   }
   const lockLabel = s.last_close_was_loss
-    ? `SAME-DIR LOCK after Soft ${Math.ceil(sameDirLockMs(true) / 60_000)}m · blocked ${s.last_closed_side}`
-    : `FLIP LOCK ${Math.ceil(sameDirLockMs(false) / 1000)}s · ≠ ${s.last_closed_side}`;
+    ? `last Soft ${s.last_closed_side || '—'} · mind may re-enter`
+    : `last ${s.last_closed_side || '—'} · mind may re-enter`;
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
@@ -2356,7 +2356,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         ask: quote.ask,
         mid: quote.mid,
         detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`
+          ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
           : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
       });
       const rec = await withCapitalAccountSession(leaseInput, async (session) => {
@@ -2738,7 +2738,7 @@ async function robotCycleLocked(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `Broker flat on this epic — trade closed externally · FLAT · SAME-DIR LOCK after Soft · blocked ${closedSide}`,
+          detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
         });
         s.closed_at_ms = Date.now();
         await persistClosedTradeLedger(
@@ -2888,7 +2888,8 @@ async function robotCycleLocked(s: Internal) {
 
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    const POST_CLOSE_COOLDOWN_MS = 15_000;
+    // Brief broker settle only — not a trade filter
+    const POST_CLOSE_COOLDOWN_MS = 3_000;
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       const left = Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000);
       refreshEntryWatch(s, {
@@ -2959,10 +2960,6 @@ async function robotCycleLocked(s: Internal) {
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
-    const barKey = entryBar ? closedBarKey(entryBar) : '';
-    if (s.pending_entry && s.pending_entry.bar_key !== barKey) {
-      s.pending_entry = null;
-    }
 
     const onCloseTick = Boolean(
       entryBar &&
@@ -2970,7 +2967,27 @@ async function robotCycleLocked(s: Internal) {
           (latch && closedBarKey(latch) === closedBarKey(entryBar)))
     );
 
-    if (onCloseTick && entryBar) {
+    // Mind executes NOW — do not wait for FORMING 10s close when PRĀTS has a side.
+    const midPx = quote.mid;
+    const mindBar: TenSecBar | null =
+      entryBar ??
+      (midPx != null && Number.isFinite(midPx)
+        ? {
+            open_time_ms: Math.floor(Date.now() / 10_000) * 10_000,
+            open: midPx,
+            high: midPx,
+            low: midPx,
+            close: midPx,
+            ticks: 1,
+          }
+        : null);
+    const barKey = mindBar ? closedBarKey(mindBar) : '';
+    if (s.pending_entry && s.pending_entry.bar_key !== barKey) {
+      s.pending_entry = null;
+    }
+    const decideNow = Boolean(mindBar);
+
+    if (decideNow && mindBar) {
       if (isAutoCalibrateCooldownActive(Date.now(), s.client_id)) {
         const left = autoCalibrateCooldownLeftSec(Date.now(), s.client_id);
         s.pending_entry = null;
@@ -3000,7 +3017,7 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        // Mind reads Capital 30m→15m→5m→1m first; setup is only the trigger
+        // Mind reads Capital 30m→15m→5m→1m — BUY/SELL executes (no FORMING starve)
         try {
           await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
         } catch {
@@ -3011,7 +3028,7 @@ async function robotCycleLocked(s: Internal) {
         const capitalTf15 = capitalCandleDir(s.last_tf15_candles);
         const capitalTf30 = capitalCandleDir(s.last_tf30_candles);
         const sig = decideEntryWithStructure({
-          bar: entryBar,
+          bar: mindBar,
           regime: s.regime,
           closedBars: s.closedBars,
           last_closed_side: s.last_closed_side,
@@ -3104,7 +3121,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `ARMED ${sig.direction} ${sig.setup} · next-move OK · ${nextOk.tag}`,
+                detail: `ARMED ${sig.direction} ${sig.setup} · PRĀTS NOW · ${nextOk.tag}`,
               });
             }
           } else {
@@ -3121,21 +3138,23 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `ARMED ${sig.direction} ${sig.setup} · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger}`,
+              detail: `ARMED ${sig.direction} ${sig.setup} · PRĀTS NOW · ${
+                onCloseTick ? '10s close' : 'forming/live'
+              }`,
             });
           }
         } else {
           s.entry_close_latch = null;
           refreshEntryWatch(s, {
-            status_override: 'WAITING_TRIGGER',
-            last_reason: `${s.regime} · trigeris nav · nākamā svece`,
+            status_override: onCloseTick ? 'WAITING_TRIGGER' : 'FORMING',
+            last_reason: `${s.regime} · PRĀTS WAIT · gaida skaidru pusi`,
           });
           pushTick(s, {
             phase: 'DECIDE',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `${ohlcLine} · WATCH · ${s.entry_watch?.looking_for} · ${s.entry_watch?.bar_vs_trigger} · wait next candle`,
+            detail: `${ohlcLine} · PRĀTS WAIT · ${s.entry_watch?.looking_for || ''}`,
           });
         }
       }

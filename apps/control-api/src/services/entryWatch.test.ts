@@ -104,10 +104,10 @@ describe('entryWatch', () => {
     expect(w.last_reason).toMatch(/FLIP LOCK/);
   });
 
-  it('after Soft blocks same direction for 12m — no forced opposite', () => {
-    // Green bounce → TREND_DOWN rally-sell same as last SELL loss
+  it('after Soft — L≥1 same-dir lock (no forced opposite); L0 shows no 12m fake wait', () => {
     const b = bar(2000, 2000.8, 1999.9, 1999.7);
-    const w = buildEntryWatch({
+    // L3 (suite default): short Soft same-dir lock still applies
+    const wStrict = buildEntryWatch({
       running: true,
       open_side: null,
       entry_enabled: true,
@@ -117,17 +117,34 @@ describe('entryWatch', () => {
       just_closed: true,
       closed_bar_count: 90,
       last_closed_side: 'SELL',
-      closed_at_ms: Date.now() - 5 * 60_000,
+      closed_at_ms: Date.now() - 10_000,
       last_close_was_loss: true,
     });
-    expect(w.need_side).toBeNull(); // no auto-flip after Soft
-    expect(w.lock_left_s).toBeGreaterThan(60);
-    expect(w.looking_for).toMatch(/SAME-DIR LOCK after Soft/);
-    // If setup fires same-dir → FLIP_FILTER; otherwise note still on looking_for
-    if (w.status === 'FLIP_FILTER') {
-      expect(w.last_reason).toMatch(/SAME-DIR LOCK after Soft/);
-    }
-    expect(w.armed).toBe(false);
+    expect(wStrict.need_side).toBeNull(); // no auto-flip after Soft
+    expect(wStrict.lock_left_s).toBeGreaterThan(0);
+    expect(wStrict.lock_left_s).toBeLessThanOrEqual(90);
+    expect(wStrict.looking_for).not.toMatch(/12m/);
+
+    // L0 OPEN (mind robot): no SAME-DIR lock text — PRĀTS may re-enter
+    _setTradeOpenAtStartForTests(true);
+    const wOpen = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'TREND_DOWN',
+      last_closed: b,
+      forming_c: null,
+      just_closed: true,
+      closed_bar_count: 90,
+      last_closed_side: 'SELL',
+      closed_at_ms: Date.now() - 10_000,
+      last_close_was_loss: true,
+    });
+    expect(wOpen.lock_left_s).toBe(0);
+    expect(wOpen.need_side).toBeNull();
+    expect(wOpen.looking_for).not.toMatch(/SAME-DIR LOCK after Soft/);
+    expect(wOpen.status).not.toBe('FLIP_FILTER');
+    _setTradeOpenAtStartForTests(false);
   });
 
   it('same direction allowed again after win lock', () => {

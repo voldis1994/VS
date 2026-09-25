@@ -25,6 +25,7 @@ import {
 import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
 import { readMarketStory, type MarketStory } from './marketStory.js';
 import { readMultiTfStack, sideFromMultiTf, type TfDir } from './multiTfRead.js';
+import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 
 const DIP = ENTRY_DIP;
 const RALLY = ENTRY_RALLY;
@@ -363,8 +364,13 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const closedAtMs = input.closed_at_ms ?? null;
   const wasLoss = Boolean(input.last_close_was_loss);
   const lockMs = sameDirLockMs(wasLoss);
-  const lockLeft = sameDirLockLeftSec(closedAtMs, Date.now(), lockMs);
-  const needSide = requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss });
+  const lockEnabled = entryFlipLockEnabled();
+  const lockLeft = lockEnabled
+    ? sameDirLockLeftSec(closedAtMs, Date.now(), lockMs)
+    : 0;
+  const needSide = lockEnabled
+    ? requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss })
+    : null;
   const rawSig =
     bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
       ? decideEntryWithStructure({
@@ -429,9 +435,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
 
   const flipNote = needSide
     ? ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
-    : wasLoss && lockLeft > 0 && lastClosedSide
-      ? ` · SAME-DIR LOCK after Soft ${Math.ceil(lockMs / 60_000)}m: blocked ${lastClosedSide} · ${lockLeft}s · pretējo tikai ar next-move`
-      : '';
+    : '';
 
   const story: MarketStory = readMarketStory(
     input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],

@@ -570,12 +570,20 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     return null;
   }
 
-  // Setup is only a trigger for the side the mind already chose
+  // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
-  const candidate = raw ?? started;
-  if (!candidate) return null;
-  if (candidate.direction !== side) return null;
+  const matched =
+    raw && raw.direction === side
+      ? raw
+      : started && started.direction === side
+        ? started
+        : null;
+  const candidate: RegimeEntry = matched ?? {
+    direction: side,
+    setup: 'PRĀTS',
+    reason: `${regime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
+  };
 
   const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
@@ -588,10 +596,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   });
 
   if (!entryStructureEnabled()) {
-    return withMind(`${gate.tag} · OPEN · ${story.summary_lv}`);
+    return withMind(
+      matched
+        ? `${gate.tag} · OPEN · ${story.summary_lv}`
+        : `${gate.tag} · PRĀTS NOW · ${story.summary_lv}`
+    );
   }
 
-  if (raw) {
+  if (matched === raw && raw) {
     return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
   }
 
