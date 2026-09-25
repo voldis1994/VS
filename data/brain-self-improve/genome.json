@@ -9,5 +9,6 @@
   "soft_same_side_pause_min": 2,
   "wait_on_1m_fight": true,
   "mind_bank_on_turn": true,
+  "explore_step": 0,
   "last_lesson": "factory genome"
 }
