@@ -62,11 +62,8 @@ import {
 } from './tradeLedger.js';
 import {
   AUTO_CALIBRATE_EVERY_N,
-  AUTO_CALIBRATE_COOLDOWN_MS,
   ensureAutoCalibrateSession,
   getAutoCalibrateStatus,
-  isAutoCalibrateCooldownActive,
-  autoCalibrateCooldownLeftSec,
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
@@ -815,7 +812,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · COOLDOWN ${Math.round(AUTO_CALIBRATE_COOLDOWN_MS / 60_000)}m (no new entry) · session E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level}`,
+        detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · knobs updated · entries stay open · session E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level}`,
       });
       if (cycleTouchesBrokerTp(cycle.changes)) {
         void syncAllOpenRobotsBrokerTp();
@@ -2988,22 +2985,7 @@ async function robotCycleLocked(s: Internal) {
     const decideNow = Boolean(mindBar);
 
     if (decideNow && mindBar) {
-      if (isAutoCalibrateCooldownActive(Date.now(), s.client_id)) {
-        const left = autoCalibrateCooldownLeftSec(Date.now(), s.client_id);
-        s.pending_entry = null;
-        s.entry_close_latch = null;
-        refreshEntryWatch(s, {
-          status_override: 'WAITING_TRIGGER',
-          last_reason: `AUTO-CAL COOLDOWN ${left}s · no new entry · manage open`,
-        });
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · AUTO-CAL COOLDOWN · ${left}s left · rearranging setups · no new entry`,
-        });
-      } else if (!regimeAllowedForEntry(s.regime, s.client_id)) {
+      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
@@ -3160,21 +3142,7 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
-      if (isAutoCalibrateCooldownActive(Date.now(), s.client_id)) {
-        const left = autoCalibrateCooldownLeftSec(Date.now(), s.client_id);
-        s.pending_entry = null;
-        refreshEntryWatch(s, {
-          status_override: 'WAITING_TRIGGER',
-          last_reason: `AUTO-CAL COOLDOWN ${left}s`,
-        });
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · AUTO-CAL COOLDOWN · pending cleared · ${left}s`,
-        });
-      } else if (!regimeAllowedForEntry(s.regime, s.client_id)) {
+      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
