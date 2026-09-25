@@ -25,6 +25,8 @@ export type BrainGenome = {
   wait_on_1m_fight: boolean;
   /** Mind BANK when Soft+ and market turns (always on if true) */
   mind_bank_on_turn: boolean;
+  /** Monotonic explore counter — always advances so learning never stalls */
+  explore_step: number;
   /** Extra note from last accepted cycle */
   last_lesson: string;
 };
@@ -40,6 +42,7 @@ const DEFAULT_GENOME: BrainGenome = {
   soft_same_side_pause_min: 2,
   wait_on_1m_fight: true,
   mind_bank_on_turn: true,
+  explore_step: 0,
   last_lesson: 'factory genome',
 };
 
@@ -87,6 +90,7 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     ),
     wait_on_1m_fight: p.wait_on_1m_fight !== false,
     mind_bank_on_turn: p.mind_bank_on_turn !== false,
+    explore_step: Math.max(0, Math.floor(Number(p.explore_step) || 0)),
     last_lesson: String(p.last_lesson || DEFAULT_GENOME.last_lesson).slice(0, 240),
   };
 }

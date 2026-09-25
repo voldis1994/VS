@@ -329,57 +329,170 @@ function genericVariants(g: BrainGenome, label: string): Variant[] {
   ];
 }
 
-/** Explore steps when all pattern variants exhausted — still learns, never permanent SKIPPED. */
+/** Bounce a numeric knob inside [lo,hi] — never stuck at a wall. */
+function bounceNum(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  let next = Number((cur + dir * step).toFixed(2));
+  if (next > hi) next = Number((cur - step).toFixed(2));
+  if (next < lo) next = Number((cur + step).toFixed(2));
+  if (next === cur) {
+    // Force a distinct value inside the range
+    next = Number((lo + ((cur - lo + step) % Math.max(0.01, hi - lo))).toFixed(2));
+    if (next === cur) next = cur >= (lo + hi) / 2 ? lo : hi;
+  }
+  return Math.min(hi, Math.max(lo, next));
+}
+
+function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  let next = cur + dir * step;
+  if (next > hi) next = cur - step;
+  if (next < lo) next = cur + step;
+  if (next === cur) next = cur === hi ? lo : hi;
+  return Math.min(hi, Math.max(lo, next));
+}
+
+/**
+ * Explore when pattern variants exhausted.
+ * Always bumps explore_step so signature is unique and tryVariant never no-ops.
+ */
 function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const step = 0.02 + (rejectedN % 3) * 0.01;
-  const keep = Math.min(0.88, Number((g.peak_keep + step).toFixed(2)));
-  const gb = Math.min(0.85, Number((g.soft_plus_giveback + step).toFixed(2)));
-  const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - step).toFixed(2)));
-  const pause = Math.min(8, g.soft_same_side_pause_closes + 1 + (rejectedN % 2));
+  const dir: 1 | -1 = rejectedN % 2 === 0 ? 1 : -1;
+  const nextStep = (g.explore_step || 0) + 1;
+  const keep = bounceNum(g.peak_keep, step, 0.65, 0.88, dir);
+  const gb = bounceNum(g.soft_plus_giveback, step, 0.55, 0.85, dir);
+  const arm = bounceNum(g.peak_arm_soft_mult, step, 0.5, 1.2, dir === 1 ? -1 : 1);
+  const pause = bounceInt(g.soft_same_side_pause_closes, 1, 1, 12, dir);
+  const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
+  const flipWait = !g.wait_on_1m_fight;
+  const flipTrig = !g.require_1m_trigger;
+
   return [
     {
-      title: `Explore Keep+${step} (rejected=${rejectedN})`,
-      rationale: 'All pattern hypotheses tried — explore Peak Keep.',
-      task: `Raise peak_keep to ${keep}.`,
-      genome_delta: { peak_keep: keep, last_lesson: `Explore keep ${keep}` },
-      patches: [genomePatch('peak_keep', keep, `explore Keep ${keep}`)],
+      title: `Explore Keep→${keep} (step #${nextStep})`,
+      rationale: 'Pattern variants exhausted — bounce Peak Keep.',
+      task: `peak_keep ${g.peak_keep}→${keep}; explore_step=${nextStep}`,
+      genome_delta: {
+        peak_keep: keep,
+        explore_step: nextStep,
+        last_lesson: `Explore keep ${keep} #${nextStep}`,
+      },
+      patches: [
+        genomePatch('peak_keep', keep, `explore Keep ${keep}`),
+        genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
+      ],
     },
     {
-      title: `Explore giveback+${step}`,
-      rationale: 'Explore Soft+ giveback bank.',
-      task: `Raise soft_plus_giveback to ${gb}.`,
+      title: `Explore giveback→${gb} (step #${nextStep + 1})`,
+      rationale: 'Bounce Soft+ giveback bank.',
+      task: `soft_plus_giveback→${gb}`,
       genome_delta: {
         soft_plus_giveback: gb,
         mind_bank_on_turn: true,
+        explore_step: nextStep + 1,
         last_lesson: `Explore giveback ${gb}`,
       },
       patches: [
         genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
+        genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
         genomePatch('mind_bank_on_turn', true, 'mind bank on'),
       ],
     },
     {
-      title: `Explore Peak arm −${step}`,
-      rationale: 'Explore earlier Peak arm.',
-      task: `Lower peak_arm_soft_mult to ${arm}.`,
-      genome_delta: { peak_arm_soft_mult: arm, last_lesson: `Explore arm ${arm}` },
-      patches: [genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`)],
+      title: `Explore arm→${arm} (step #${nextStep + 2})`,
+      rationale: 'Bounce Peak arm mult.',
+      task: `peak_arm_soft_mult→${arm}`,
+      genome_delta: {
+        peak_arm_soft_mult: arm,
+        explore_step: nextStep + 2,
+        last_lesson: `Explore arm ${arm}`,
+      },
+      patches: [
+        genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`),
+        genomePatch('explore_step', nextStep + 2, `explore_step ${nextStep + 2}`),
+      ],
     },
     {
-      title: `Explore Soft pause → ${pause}`,
-      rationale: 'Explore longer Soft same-side pause.',
-      task: `soft_same_side_pause_closes=${pause}.`,
+      title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
+      rationale: 'Bounce Soft same-side pause knobs.',
+      task: `pause_closes=${pause} pause_min=${pauseMin}`,
       genome_delta: {
         soft_same_side_pause_closes: pause,
-        require_1m_trigger: true,
-        last_lesson: `Explore pause ${pause}`,
+        soft_same_side_pause_min: pauseMin,
+        explore_step: nextStep + 3,
+        last_lesson: `Explore pause ${pause}/${pauseMin}`,
       },
       patches: [
         genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
-        genomePatch('require_1m_trigger', true, '1m trigger'),
+        genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
+        genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
+      ],
+    },
+    {
+      title: `Explore flip 1m gates (step #${nextStep + 4})`,
+      rationale: 'Toggle wait_on_1m_fight / require_1m_trigger to escape local maximum.',
+      task: `wait=${flipWait} trigger=${flipTrig}`,
+      genome_delta: {
+        wait_on_1m_fight: flipWait,
+        require_1m_trigger: flipTrig,
+        explore_step: nextStep + 4,
+        last_lesson: `Explore flip wait=${flipWait} trig=${flipTrig}`,
+      },
+      patches: [
+        genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
+        genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
+        genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
       ],
     },
   ];
+}
+
+/** Absolute last resort — always returns a unique hypothesis (never null). */
+function forceExploreHypothesis(
+  analysis: AnalysisResult,
+  g: BrainGenome,
+  tried: Set<string>
+): BrainHypothesis {
+  const nextStep = (g.explore_step || 0) + 1 + tried.size;
+  const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
+  const v: Variant = {
+    title: `Force explore #${nextStep}`,
+    rationale: `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
+    task: `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
+    genome_delta: {
+      explore_step: nextStep,
+      peak_keep: keep,
+      last_lesson: `Force explore #${nextStep}`,
+    },
+    patches: [
+      genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+      genomePatch('peak_keep', keep, `force Keep ${keep}`),
+    ],
+  };
+  const hypo = tryVariant('explore', v, g, tried);
+  if (hypo) return hypo;
+  // Signature collision impossible in practice — synthesize unique delta with version bump
+  const patches = compactPatches(v.patches);
+  const genome_delta = {
+    ...v.genome_delta,
+    version: (g.version || 1) + 1,
+    explore_step: nextStep,
+  };
+  const signature = hypothesisSignature({
+    pattern_id: 'explore',
+    patches,
+    genome_delta,
+  });
+  return {
+    id: `hyp_explore_${signature.slice(0, 8)}`,
+    pattern_id: 'explore',
+    title: v.title,
+    rationale: v.rationale,
+    task: v.task,
+    patches,
+    genome_delta,
+    signature,
+    created_at: new Date().toISOString(),
+  };
 }
 
 function variantsForPatternId(
@@ -462,7 +575,14 @@ export function buildHypothesis(
   analysis: AnalysisResult,
   exp?: BrainExperience | null
 ): BrainHypothesis | null {
-  if (!analysis.top_pattern && !analysis.soft_losses && !analysis.patterns.length) {
+  // Only true empty session may skip — Soft/pattern present → always a hypothesis
+  if (
+    !analysis.top_pattern &&
+    !analysis.soft_losses &&
+    !analysis.patterns.length &&
+    !analysis.micro_scratches &&
+    !analysis.green_not_banked
+  ) {
     return null;
   }
   const g = getBrainGenome();
@@ -478,11 +598,12 @@ export function buildHypothesis(
     }
   }
 
-  // Never stall forever — explore knobs stepped by rejected count
   const rejectedN = exp?.rejected_signatures?.length || 0;
   for (const v of exploreVariants(g, rejectedN)) {
     const hypo = tryVariant('explore', v, g, tried);
     if (hypo) return hypo;
   }
-  return null;
+
+  // NEVER permanent SKIPPED while Soft/patterns exist
+  return forceExploreHypothesis(analysis, g, tried);
 }

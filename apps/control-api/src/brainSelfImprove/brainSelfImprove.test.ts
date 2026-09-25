@@ -122,8 +122,8 @@ describe('brainSelfImprove analyze + hypothesize', () => {
   it('falls back to explore when all pattern variants are exhausted', () => {
     const analysis = analyzeTrades(syntheticLessonTrades());
     const rejected: string[] = [];
-    let last: string | null = null;
-    for (let i = 0; i < 20; i++) {
+    let sawExplore = false;
+    for (let i = 0; i < 30; i++) {
       const exp: BrainExperience = {
         version: 1,
         updated_at: new Date().toISOString(),
@@ -139,12 +139,45 @@ describe('brainSelfImprove analyze + hypothesize', () => {
       };
       const hypo = buildHypothesis(analysis, exp);
       expect(hypo).toBeTruthy();
-      if (last) expect(hypo!.signature).not.toBe(last);
-      last = hypo!.signature;
       rejected.push(hypo!.signature);
-      if (hypo!.pattern_id === 'explore') break;
+      if (hypo!.pattern_id === 'explore') {
+        sawExplore = true;
+        break;
+      }
     }
-    expect(rejected.length).toBeGreaterThan(1);
+    expect(sawExplore).toBe(true);
+  });
+
+  it('never returns null while Soft losses exist (even after 50 rejects)', () => {
+    const analysis = analyzeTrades(syntheticLessonTrades());
+    const rejected: string[] = [];
+    for (let i = 0; i < 50; i++) {
+      _resetBrainGenomeForTests({
+        peak_keep: 0.88,
+        soft_plus_giveback: 0.85,
+        peak_arm_soft_mult: 0.5,
+        soft_same_side_pause_closes: 12,
+        soft_same_side_pause_min: 6,
+        explore_step: i,
+      });
+      const exp: BrainExperience = {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: analysis.patterns,
+        rejected_signatures: [...rejected],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      };
+      const hypo = buildHypothesis(analysis, exp);
+      expect(hypo).toBeTruthy();
+      rejected.push(hypo!.signature);
+    }
+    expect(new Set(rejected).size).toBe(50);
   });
 
   it('does not inflate soft_loss count across repeated analyzes', () => {
