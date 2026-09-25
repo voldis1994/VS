@@ -199,8 +199,8 @@ describe('autoCalibrate', () => {
     expect(r.applied).toBe(true);
     expect(r.next.safety_tp_rr).toBeLessThan(tall.safety_tp_rr);
     expect(r.next.target_abs).toBeLessThan(tall.target_abs);
-    expect(r.next.entry_filter_level).toBeLessThan(3);
-    expect(r.changes.some((c) => /pullback|ease|open/.test(c))).toBe(true);
+    expect(r.next.entry_filter_level).toBe(0);
+    expect(r.changes.some((c) => /pullback|ease|PRĀTS|MĀCĪBA|OPEN/.test(c))).toBe(true);
   });
 
   it('never raises Target / TP RR past hard caps', () => {
@@ -221,7 +221,7 @@ describe('autoCalibrate', () => {
     expect(r.next.target_abs).toBeLessThanOrEqual(AUTO_CAL_MAX_TARGET_ABS);
   });
 
-  it('raises entry_filter_level after negative outcome window', () => {
+  it('never raises entry_filter_level — human mind keeps filters OPEN', () => {
     const base = defaultDeskCalibration();
     expect(base.entry_filter_level).toBe(0);
     const r = proposeAutoCalibration(base, [
@@ -232,8 +232,8 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: -1.2 }),
     ]);
     expect(r.applied).toBe(true);
-    expect(r.next.entry_filter_level).toBe(1);
-    expect(r.changes.some((c) => c.startsWith('entry_filter_level'))).toBe(true);
+    expect(r.next.entry_filter_level).toBe(0);
+    expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('MĀCĪBA'))).toBe(true);
   });
 
   it('isolates auto-cal per client — A closes do not count for B', () => {
@@ -307,6 +307,6 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 1.2 }),
       trade({ pnl_pts: -0.4 }),
     ]);
-    expect(r.next.entry_filter_level).toBe(1);
+    expect(r.next.entry_filter_level).toBe(0);
   });
 });

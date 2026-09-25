@@ -364,8 +364,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            MEGA BRAIN: 30m zona + buyer/seller proxy (G/R) + story + multi-feed +
-            velocity. Pēc 5 closes vērtē outcome (MFE/MAE/story) un maina īsto knobs.
+            PRĀTS kā traders: redz zonu/pressure/stāstu un izlemj HOLD/TRAIL/CUT/BANK.
+            Pēc 5 closes raksta MĀCĪBU (Peak/Target) — ne filtrus.
           </p>
           {auto ? (
             <>

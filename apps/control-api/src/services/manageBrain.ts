@@ -11,6 +11,7 @@ import {
   storyFightsSide,
   type MarketContextSnapshot,
 } from './marketContext.js';
+import { thinkLikeTrader } from './traderMind.js';
 
 export type ManageBrainAction = 'HOLD' | 'TRAIL' | 'CUT' | 'BANK';
 
@@ -234,8 +235,10 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
 
   score = clamp(score, -2.5, 2.5);
 
-  // --- Map score → action (conservative: Soft safety untouched) ---
-  let action: ManageBrainAction = 'HOLD';
+  // --- Human mind decides (situation → thesis → risk → action) ---
+  const thought = thinkLikeTrader(input);
+  const action = thought.decision;
+
   let soft_gate_override: boolean | null = null;
   let peak_retention_override: number | null = null;
   let peak_mfe_floor_override: number | null = null;
@@ -247,29 +250,25 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     Boolean(thesisFail);
 
-  if (score >= 1.1 && greenSoft && marketChanged) {
-    action = 'BANK';
+  if (action === 'BANK') {
     soft_gate_override = true;
     force_peak_arm = true;
     peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.8), 0.72, 0.88);
-  } else if (score >= 0.65 && mfe >= soft * 0.75) {
-    action = 'CUT';
+  } else if (action === 'CUT') {
     force_peak_arm = true;
     peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.78), 0.72, 0.88);
     peak_mfe_floor_override = Math.max(soft, input.peak_mfe_floor * 0.85);
-  } else if (score <= -0.55 || input.minute_policy === 'continue') {
-    action = 'HOLD';
+  } else if (action === 'HOLD') {
     soft_gate_override = false;
     if (mfe >= soft) force_peak_arm = true;
   } else {
-    action = 'TRAIL';
     force_peak_arm = mfe >= soft * 0.6 || input.peak_protect_armed;
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 
-  const reason = `BRAIN ${action} · score ${score.toFixed(2)} · ${bits.slice(0, 5).join(' · ') || 'neutral'}${
-    input.entry_setup ? ` · setup ${input.entry_setup}` : ''
-  }`;
+  // Prefer human spoken reason; keep score for telemetry
+  void greenSoft;
+  const reason = `${thought.spoken} · E-score ${score.toFixed(2)}`;
 
   return {
     action,
