@@ -13,8 +13,14 @@ import {
   ensureAutoCalibrateSession,
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
+  resetClientToOpenTradeAll,
 } from './autoCalibrate.js';
-import { defaultDeskCalibration, setDeskCalibration, _resetDeskCalibrationCacheForTests } from './deskCalibration.js';
+import {
+  defaultDeskCalibration,
+  getDeskCalibration,
+  setDeskCalibration,
+  _resetDeskCalibrationCacheForTests,
+} from './deskCalibration.js';
 
 function trade(partial: {
   pnl_pts: number;
@@ -242,13 +248,43 @@ describe('autoCalibrate', () => {
     expect(getAutoCalibrateStatus(undefined, 2).closes_in_session).toBe(1);
   });
 
-  it('ensureAutoCalibrateSession does not wipe closes on robot START', () => {
+  it('ensureAutoCalibrateSession factory-opens on robot START — wipe + trade-all defaults', () => {
     beginAutoCalibrateSession('first');
+    setDeskCalibration({
+      ...defaultDeskCalibration(),
+      hardinv_abs: 4.5,
+      peak_mfe_abs: 5,
+      target_abs: 8,
+      safety_tp_rr: 2.5,
+      entry_filter_level: 3,
+    });
     noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -1 }));
     noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -0.5 }));
     const st = ensureAutoCalibrateSession('robot restart');
-    expect(st.closes_in_session).toBe(2);
+    expect(st.closes_in_session).toBe(0);
     expect(st.session_started_at).toBeTruthy();
+    expect(st.last_summary).toMatch(/OPEN TRADE-ALL/);
+    const cal = getDeskCalibration();
+    expect(cal.hardinv_abs).toBe(2.2);
+    expect(cal.peak_mfe_abs).toBe(3);
+    expect(cal.target_abs).toBe(5);
+    expect(cal.safety_tp_rr).toBe(1.5);
+    expect(cal.entry_filter_level).toBe(0);
+  });
+
+  it('resetClientToOpenTradeAll restores defaults and clears watch', () => {
+    beginAutoCalibrateSession('dirty');
+    setDeskCalibration({
+      ...defaultDeskCalibration(),
+      entry_filter_level: 2,
+      hardinv_abs: 3.5,
+    });
+    noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 1 }));
+    const st = resetClientToOpenTradeAll(undefined, 'factory_open');
+    expect(st.closes_in_session).toBe(0);
+    expect(getDeskCalibration().entry_filter_level).toBe(0);
+    expect(getDeskCalibration().hardinv_abs).toBe(2.2);
+    expect(st.last_changes.some((c) => c.includes('factory open'))).toBe(true);
   });
 
   it('counts close even when pnl is 0 / scratch', () => {

@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          Ik pēc 5 closes koriģē. Ja Peak/Target/TP RR pārāk augsti un E joprojām − —
-          pullback (ease), nevis ceļ bezgalīgi. Cap: TP RR≤2.0 · Target≤7 · Peak≤4.5.
+          «SĀKT NO JAUNA» atjauno Soft 2.2 · Peak 3 · Target 5 · TP RR 1.5 · filters L0 ·
+          visi regimes. Robot START dara to pašu. Pēc tam ik 5 closes auto-cal (+ pullback).
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (
@@ -346,7 +346,33 @@ export function OverviewPage() {
               </div>
             )}
             <div className="actions" style={{ marginTop: 10, gap: 8 }}>
-              <Link className="btn btn-go" to="/robot">
+              <button
+                type="button"
+                className="btn btn-go"
+                onClick={() => {
+                  void apiFetch<{ auto: AutoCalStatus }>(
+                    '/api/desk/auto-calibrate',
+                    {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        factory_open: true,
+                        reset: true,
+                        client_id: selectedClientId ?? undefined,
+                      }),
+                    }
+                  )
+                    .then((r) => {
+                      setAuto(r.auto);
+                      setMsg('OPEN TRADE-ALL · Soft 2.2 · Peak 3 · Target 5 · filters L0 · sākam no jauna');
+                    })
+                    .catch((e) =>
+                      setMsg(e instanceof Error ? e.message : 'Factory open failed')
+                    );
+                }}
+              >
+                SĀKT NO JAUNA · TRADE ALL
+              </button>
+              <Link className="btn" to="/robot">
                 OPEN ROBOT
               </Link>
               <Link className="btn" to="/trades">

@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  defaultDeskCalibration,
   getDeskCalibration,
   setDeskCalibration,
   tradableDefaultRegimes,
@@ -290,7 +291,24 @@ export function isAutoCalibrateEnabled(clientId?: number | null): boolean {
   return bucket(id).enabled;
 }
 
-/** Explicit reset (manual / operator). Clears watch + reopens entry filters. */
+/**
+ * Factory open: Soft/Peak/Target/TP RR defaults, filters L0, ALL regimes ON,
+ * wipe auto-cal watch. Use on robot START / Reset — start trading everything again.
+ */
+export function resetClientToOpenTradeAll(
+  clientId?: number | null,
+  reason = 'factory_open'
+): AutoCalibrateStatus {
+  const id = resolveDeskClientId(clientId);
+  try {
+    setDeskCalibration({ ...defaultDeskCalibration() }, id);
+  } catch {
+    /* ignore */
+  }
+  return beginAutoCalibrateSession(reason, id);
+}
+
+/** Clear watch window; always restores OPEN trade-all calibration. */
 export function beginAutoCalibrateSession(
   reason = 'robot_start',
   clientId?: number | null
@@ -302,46 +320,31 @@ export function beginAutoCalibrateSession(
   st.trades = [];
   st.cycles_run = 0;
   st.last_cycle_at = null;
-  st.last_summary = `Session start · client ${id} · ${reason} · entry filters OPEN`;
-  st.last_changes = [];
+  st.last_summary = `OPEN TRADE-ALL · client ${id} · ${reason} · filters L0 · all regimes`;
+  st.last_changes = ['factory open · Soft 2.2 · Peak 3 · Target 5 · TP RR 1.5 · filters 0'];
   st.demoted.clear();
   st.cooldown_until_ms = null;
   st.last_window_expectancy = null;
   st.history = [];
   st.raise_streak = 0;
   try {
-    const cur = getDeskCalibration(id);
-    if ((cur.entry_filter_level || 0) !== 0) {
-      setDeskCalibration({ entry_filter_level: 0 }, id);
-    }
+    setDeskCalibration({ ...defaultDeskCalibration() }, id);
   } catch {
     /* ignore */
   }
   ensureCoreRegimesOn(id);
-  clampOverreachKnobs(id);
   persistSession(id);
   return getAutoCalibrateStatus(undefined, id);
 }
 
 /**
- * Robot START — do NOT wipe progress. Only open a session if none exists.
- * Manual Reset watch / POST reset still uses beginAutoCalibrateSession.
+ * Robot START — fresh OPEN TRADE-ALL (operator: sākam no jauna).
  */
 export function ensureAutoCalibrateSession(
   reason = 'robot_start',
   clientId?: number | null
 ): AutoCalibrateStatus {
-  const id = resolveDeskClientId(clientId);
-  hydrateSession(id);
-  ensureCoreRegimesOn(id);
-  clampOverreachKnobs(id);
-  const st = bucket(id).state;
-  if (st.started_at) {
-    st.last_summary = `Watch continues · client ${id} · ${reason} · closes=${st.trades.length}`;
-    persistSession(id);
-    return getAutoCalibrateStatus(undefined, id);
-  }
-  return beginAutoCalibrateSession(reason, id);
+  return resetClientToOpenTradeAll(clientId, reason);
 }
 
 
