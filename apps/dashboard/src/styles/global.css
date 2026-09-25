@@ -2444,8 +2444,14 @@ button.regime-chip { cursor: pointer; }
 .command-dash {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: 0;
+  gap: 10px;
+  min-height: calc(100dvh - var(--header-h) - var(--footer-h) - 24px);
+  width: 100%;
+}
+.command-dash > .panel,
+.command-dash > .cmd-hero {
+  overflow: visible;
+  flex: 0 0 auto;
 }
 .cmd-hero {
   display: flex;
@@ -2488,6 +2494,24 @@ button.regime-chip { cursor: pointer; }
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+/* Override global .metric-row { 1fr 1fr } — that sparse 2-col was the broken COMMAND look */
+.command-dash .metric-row,
+.command-dash .cmd-metrics,
+.command-dash .cmd-kpis {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)) !important;
+  gap: 8px;
+  width: 100%;
+}
+.cmd-kpi-panel {
+  padding-bottom: 10px;
+}
+.cmd-kpi-panel .section-title {
+  margin-bottom: 8px;
+}
+.cmd-kpi-panel .metric-box {
+  min-height: 52px;
+}
 .cmd-metrics .metric-box .value {
   font-size: 18px;
 }
@@ -2516,14 +2540,55 @@ button.regime-chip { cursor: pointer; }
   margin: 0;
 }
 .cmd-tables {
-  margin: 0;
+  margin: 0 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 280px;
+}
+.cmd-tables > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.cmd-tables .table-wrap {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 200px;
+  overflow: auto;
+  border: 1px solid rgba(57, 255, 20, 0.22);
+}
+.cmd-tables table {
+  width: 100%;
+}
+.cmd-tables .empty-state,
+.cmd-tables td.mono {
+  color: var(--text-primary);
+  opacity: 0.85;
+  padding: 14px 10px;
 }
 .cmd-events {
   margin: 0;
+  flex: 0 0 auto;
 }
 .cmd-events .log-list {
-  max-height: 140px;
+  max-height: 120px;
   overflow: auto;
+}
+@media (max-width: 1100px) {
+  .cmd-tables {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .cmd-tables .table-wrap {
+    min-height: 160px;
+    max-height: 40vh;
+  }
 }
 @media (max-width: 900px) {
   .cmd-hero {
@@ -2531,5 +2596,8 @@ button.regime-chip { cursor: pointer; }
   }
   .cmd-hero-actions {
     width: 100%;
+  }
+  .command-dash {
+    min-height: 0;
   }
 }

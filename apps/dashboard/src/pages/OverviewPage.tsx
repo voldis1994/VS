@@ -111,6 +111,26 @@ export function OverviewPage() {
     () => accounts.reduce((s, a) => s + (a.capital_market_count || 0), 0),
     [accounts]
   );
+  const deskAccounts = useMemo(() => {
+    if (!selectedClientId) return accounts;
+    const filtered = accounts.filter((a) => a.client_id === selectedClientId);
+    return filtered.length ? filtered : accounts;
+  }, [accounts, selectedClientId]);
+
+  const deskPositions = useMemo(() => {
+    if (!selectedClientId) return positions;
+    const names = new Set(
+      deskAccounts.map((a) => (a.display_name || '').toLowerCase()).filter(Boolean)
+    );
+    const client = clients.find((c) => c.id === selectedClientId);
+    const clientName = (client?.name || '').toLowerCase();
+    const filtered = positions.filter((p) => {
+      if (clientName && (p.client_name || '').toLowerCase() === clientName) return true;
+      if (p.account_name && names.has(p.account_name.toLowerCase())) return true;
+      return false;
+    });
+    return filtered.length || positions.length === 0 ? filtered : positions;
+  }, [positions, selectedClientId, deskAccounts, clients]);
 
   const applyOperatingMode = async (mode: string) => {
     setBusy(true);
@@ -343,42 +363,48 @@ export function OverviewPage() {
         )}
       </section>
 
-      <div className="metric-row cmd-kpis">
-        <div className="metric-box">
-          <div className="label">Accounts</div>
-          <div className="value">{accounts.length}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Clients</div>
-          <div className="value">{clients.length}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Open</div>
-          <div className="value">{status?.open_positions ?? positions.length}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Today fills</div>
-          <div className="value pos">{status?.today_executions ?? 0}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Live</div>
-          <div className="value">{liveAccounts}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Markets</div>
-          <div className="value">{totalMarkets.toLocaleString()}</div>
-        </div>
-        <div className="metric-box">
-          <div className="label">Runner</div>
-          <div className="value" style={{ fontSize: 14 }}>
-            {runnerOn ? 'LIVE' : 'IDLE'}
+      <section className="panel cmd-kpi-panel">
+        <div className="section-title">DESK SNAPSHOT</div>
+        <div className="metric-row cmd-kpis">
+          <div className="metric-box">
+            <div className="label">Accounts</div>
+            <div className="value">{accounts.length}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Clients</div>
+            <div className="value">{clients.length}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Open</div>
+            <div className="value">{status?.open_positions ?? positions.length}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Today fills</div>
+            <div className="value pos">{status?.today_executions ?? 0}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Live</div>
+            <div className="value">{liveAccounts}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Markets</div>
+            <div className="value">{totalMarkets.toLocaleString()}</div>
+          </div>
+          <div className="metric-box">
+            <div className="label">Runner</div>
+            <div className="value" style={{ fontSize: 14 }}>
+              {runnerOn ? 'LIVE' : 'IDLE'}
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="dash-grid dash-mid cmd-tables">
+      <div className="cmd-tables">
         <section className="panel">
-          <div className="section-title">ACCOUNTS</div>
+          <div className="section-title">
+            ACCOUNTS
+            {selectedClientId ? ` · client #${selectedClientId}` : ''} · {deskAccounts.length}
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -391,14 +417,14 @@ export function OverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {accounts.length === 0 && (
+                {deskAccounts.length === 0 && (
                   <tr>
                     <td colSpan={5} className="mono">
                       No accounts — Brokers → Test
                     </td>
                   </tr>
                 )}
-                {accounts.map((a) => (
+                {deskAccounts.map((a) => (
                   <tr
                     key={a.account_id}
                     className={selectedAccountId === a.account_id ? 'row-active' : ''}
@@ -426,7 +452,12 @@ export function OverviewPage() {
         </section>
 
         <section className="panel">
-          <div className="section-title">OPEN POSITIONS</div>
+          <div className="section-title">
+            OPEN POSITIONS · {deskPositions.length}
+            {(status?.open_positions ?? 0) > deskPositions.length
+              ? ` (status ${status?.open_positions})`
+              : ''}
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -441,14 +472,16 @@ export function OverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {positions.length === 0 && (
+                {deskPositions.length === 0 && (
                   <tr>
                     <td colSpan={7} className="mono">
-                      Flat
+                      {(status?.open_positions ?? 0) > 0
+                        ? `Status rāda ${status?.open_positions} open — DB sync gaida`
+                        : 'Flat — nav atvērtu pozīciju'}
                     </td>
                   </tr>
                 )}
-                {positions.map((p) => (
+                {deskPositions.map((p) => (
                   <tr key={p.id}>
                     <td className="mono">{p.id}</td>
                     <td>{p.account_name || '—'}</td>
