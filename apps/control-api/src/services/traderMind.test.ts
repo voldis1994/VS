@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { thinkLikeTrader, thinkEntryLikeTrader, reviewSessionLikeHuman } from './traderMind.js';
 import type { ManageBrainInput } from './manageBrain.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
+
+beforeEach(() => {
+  _resetBrainGenomeForTests();
+});
 
 function base(partial: Partial<ManageBrainInput> = {}): ManageBrainInput {
   return {
