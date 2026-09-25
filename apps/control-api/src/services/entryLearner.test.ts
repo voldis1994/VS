@@ -10,7 +10,7 @@ afterEach(() => {
   _resetEntryLearnerForTests(0);
 });
 
-function selloffInput() {
+function selloffInput(extra: Record<string, unknown> = {}) {
   return {
     regime: 'RANGE',
     story: {
@@ -32,22 +32,48 @@ function selloffInput() {
     last_closed_side: 'BUY' as const,
     last_close_was_loss: true,
     moving: true,
+    m1_dir: 'DOWN' as const,
+    m1_strong: true,
+    bias: 'DOWN' as const,
+    ...extra,
   };
 }
 
 describe('entryLearner', () => {
-  it('prior chooses SELL on selloff features (not blind BUY)', () => {
+  it('prior chooses SELL on selloff + 1m DOWN', () => {
     const d = entryLearnerChoose(selloffInput(), 0, () => 0.99);
     expect(d.action).toBe('SELL');
     expect(d.detail).toMatch(/PRĀTS ENTRY SELL/);
     expect(d.probs.SELL).toBeGreaterThan(d.probs.BUY);
   });
 
+  it('does NOT SELL into clear 1m UP rally (Gold knife case)', () => {
+    const d = entryLearnerChoose(
+      selloffInput({
+        m1_dir: 'UP',
+        m1_strong: true,
+        bias: 'UP',
+        bar: {
+          open_time_ms: 1,
+          open: 4300,
+          high: 4305,
+          low: 4299,
+          close: 4304,
+          ticks: 8,
+        },
+      }),
+      0,
+      () => 0.99
+    );
+    expect(d.action).not.toBe('SELL');
+    expect(['WAIT', 'BUY']).toContain(d.action);
+    expect(d.detail).toMatch(/1m UP|WAIT|BUY/);
+  });
+
   it('learns from loss — BUY into selloff features gets weaker', () => {
     const input = selloffInput();
     const before = entryLearnerChoose(input, 0, () => 0.99);
     const feat = extractEntryFeatures(input);
-    // Simulate: we took BUY and lost hard
     for (let i = 0; i < 8; i++) {
       entryLearnerLearnFromClose({
         clientId: 0,
@@ -74,6 +100,8 @@ describe('entryLearner', () => {
           zone_pos: 0.5,
         },
         moving: false,
+        m1_dir: 'FLAT',
+        bias: 'FLAT',
       },
       0,
       () => 0.99

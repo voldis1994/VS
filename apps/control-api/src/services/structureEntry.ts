@@ -477,6 +477,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const story = readMarketStory(input.closedBars, input.bar);
 
   // Online entry brain — chooses BUY/SELL/WAIT from features (+ learns on close)
+  const md = minuteDir(m1);
+  const m1Strong =
+    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5;
   const mind = entryLearnerChoose(
     {
       regime,
@@ -486,6 +489,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       last_closed_side: input.last_closed_side ?? null,
       last_close_was_loss: Boolean(input.last_close_was_loss),
       moving: isMoving10s(input.bar),
+      m1_dir: md,
+      m1_strong: m1Strong,
+      bias,
     },
     input.client_id
   );

@@ -1,10 +1,10 @@
 /**
- * EntryLearner — online policy that CHOOSES BUY / SELL / WAIT from live
- * market features and learns from YOUR closed-trade pnl.
+ * EntryLearner — real TypeScript brain: chooses BUY / SELL / WAIT from live
+ * market features (30m story + regime + **live 1m impulse**) and learns from
+ * closed-trade pnl.
  *
- * This is the entry "brain": not a filter ladder, not a static if/else script.
- * Softmax weights start with informative priors (selloff→SELL, etc.) and
- * update every close so each market's outcomes reshape the next choice.
+ * v2: 1m tape is first-class. Selling into a clear 1m rally (or buying a 1m
+ * selloff) is incoherent with the picture → WAIT / flip preference.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +16,7 @@ import { normalizeRegime } from './regimes.js';
 export const ENTRY_LEARNER_ACTIONS = ['BUY', 'SELL', 'WAIT'] as const;
 export type EntryLearnerAction = (typeof ENTRY_LEARNER_ACTIONS)[number];
 
-/** Stable feature order — do not reorder without resetting weights. */
+/** Stable feature order — bump ENTRY_LEARNER_VERSION if changed. */
 export const ENTRY_FEATURE_NAMES = [
   'story_allow_buy',
   'story_allow_sell',
@@ -45,14 +45,22 @@ export const ENTRY_FEATURE_NAMES = [
   'last_buy_loss',
   'last_sell_loss',
   'moving',
+  /** Live 1m tape — what a human sees on Capital 1m */
+  'm1_up',
+  'm1_down',
+  'm1_strong',
+  'bias_up',
+  'bias_down',
 ] as const;
+
+export const ENTRY_LEARNER_VERSION = 2;
 
 export type EntryFeatures = number[];
 
 type ActionWeights = Record<EntryLearnerAction, number[]>;
 
 type EntryLearnerState = {
-  version: 1;
+  version: number;
   updates: number;
   weights: ActionWeights;
   updated_at: string;
@@ -83,39 +91,44 @@ function emptyWeights(): ActionWeights {
   const ix = (name: (typeof ENTRY_FEATURE_NAMES)[number]) =>
     ENTRY_FEATURE_NAMES.indexOf(name);
 
-  // Priors: work WITH the picture (not blind RANGE fade)
-  // Directional regimes beat lagging 30m chapter when both present.
-  w.SELL[ix('story_allow_sell')] = 1.2;
-  w.SELL[ix('chapter_selloff')] = 1.15;
-  w.SELL[ix('chapter_bounce_sell')] = 1.0;
-  w.SELL[ix('regime_down')] = 2.6;
-  w.SELL[ix('regime_failed_up')] = 2.2;
-  w.SELL[ix('red_dom')] = 0.7;
-  w.SELL[ix('bar_sell')] = 0.45;
-  w.SELL[ix('last_buy_loss')] = 0.85;
-  w.SELL[ix('chapter_break_down')] = 1.0;
-  w.SELL[ix('regime_range')] = 0.15;
+  w.SELL[ix('story_allow_sell')] = 1.0;
+  w.SELL[ix('chapter_selloff')] = 0.9;
+  w.SELL[ix('chapter_bounce_sell')] = 0.8;
+  w.SELL[ix('regime_down')] = 2.2;
+  w.SELL[ix('regime_failed_up')] = 2.0;
+  w.SELL[ix('red_dom')] = 0.6;
+  w.SELL[ix('bar_sell')] = 0.4;
+  w.SELL[ix('last_buy_loss')] = 0.7;
+  w.SELL[ix('chapter_break_down')] = 0.9;
+  w.SELL[ix('m1_down')] = 2.4;
+  w.SELL[ix('bias_down')] = 1.6;
+  w.SELL[ix('m1_strong')] = 0.3;
+  w.SELL[ix('m1_up')] = -3.2;
+  w.SELL[ix('bias_up')] = -2.0;
 
-  w.BUY[ix('story_allow_buy')] = 1.2;
-  w.BUY[ix('chapter_rally')] = 1.15;
-  w.BUY[ix('chapter_dip_rally')] = 1.0;
-  w.BUY[ix('regime_up')] = 2.6;
-  w.BUY[ix('regime_failed_down')] = 2.2;
-  w.BUY[ix('green_share')] = 0.7;
-  w.BUY[ix('bar_buy')] = 0.45;
-  w.BUY[ix('last_sell_loss')] = 0.85;
-  w.BUY[ix('chapter_break_up')] = 1.0;
-  w.BUY[ix('regime_range')] = 0.15;
+  w.BUY[ix('story_allow_buy')] = 1.0;
+  w.BUY[ix('chapter_rally')] = 0.9;
+  w.BUY[ix('chapter_dip_rally')] = 0.8;
+  w.BUY[ix('regime_up')] = 2.2;
+  w.BUY[ix('regime_failed_down')] = 2.0;
+  w.BUY[ix('green_share')] = 0.6;
+  w.BUY[ix('bar_buy')] = 0.4;
+  w.BUY[ix('last_sell_loss')] = 0.7;
+  w.BUY[ix('chapter_break_up')] = 0.9;
+  w.BUY[ix('m1_up')] = 2.4;
+  w.BUY[ix('bias_up')] = 1.6;
+  w.BUY[ix('m1_strong')] = 0.3;
+  w.BUY[ix('m1_down')] = -3.2;
+  w.BUY[ix('bias_down')] = -2.0;
 
-  w.WAIT[ix('story_none')] = 1.35;
-  w.WAIT[ix('chapter_chop')] = 1.45;
-  // Live directional regime → don't sit WAIT when classifier already picked a side
-  w.WAIT[ix('regime_down')] = -1.5;
-  w.WAIT[ix('regime_up')] = -1.5;
-  w.WAIT[ix('regime_failed_up')] = -1.2;
-  w.WAIT[ix('regime_failed_down')] = -1.2;
-  w.WAIT[ix('regime_reversal')] = -0.8;
-  // Prefer WAIT over knife BUY into bounce-in-sell / SELL into dip-in-rally
+  w.WAIT[ix('story_none')] = 1.2;
+  w.WAIT[ix('chapter_chop')] = 1.3;
+  w.WAIT[ix('regime_down')] = -1.2;
+  w.WAIT[ix('regime_up')] = -1.2;
+  w.WAIT[ix('regime_failed_up')] = -1.0;
+  w.WAIT[ix('regime_failed_down')] = -1.0;
+  w.WAIT[ix('m1_up')] = 0.35;
+  w.WAIT[ix('m1_down')] = 0.35;
   w.BUY[ix('chapter_bounce_sell')] = -1.8;
   w.SELL[ix('chapter_dip_rally')] = -1.8;
   w.WAIT[ix('chapter_bounce_sell')] = 0.55;
@@ -129,7 +142,7 @@ function hydrate(clientId: number): EntryLearnerState {
   const hit = cache.get(id);
   if (hit) return hit;
   let st: EntryLearnerState = {
-    version: 1,
+    version: ENTRY_LEARNER_VERSION,
     updates: 0,
     weights: emptyWeights(),
     updated_at: new Date().toISOString(),
@@ -138,20 +151,25 @@ function hydrate(clientId: number): EntryLearnerState {
     const file = learnerPath(id);
     if (fs.existsSync(file)) {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<EntryLearnerState>;
-      if (raw.weights && raw.version === 1) {
+      if (raw.weights && Number(raw.version) === ENTRY_LEARNER_VERSION) {
         const w = emptyWeights();
+        let ok = true;
         for (const a of ENTRY_LEARNER_ACTIONS) {
           const src = raw.weights[a];
-          if (Array.isArray(src) && src.length === ENTRY_FEATURE_NAMES.length) {
-            w[a] = src.map((x) => clamp(Number(x) || 0, -MAX_W, MAX_W));
+          if (!Array.isArray(src) || src.length !== ENTRY_FEATURE_NAMES.length) {
+            ok = false;
+            break;
           }
+          w[a] = src.map((x) => clamp(Number(x) || 0, -MAX_W, MAX_W));
         }
-        st = {
-          version: 1,
-          updates: Number(raw.updates) || 0,
-          weights: w,
-          updated_at: String(raw.updated_at || st.updated_at),
-        };
+        if (ok) {
+          st = {
+            version: ENTRY_LEARNER_VERSION,
+            updates: Number(raw.updates) || 0,
+            weights: w,
+            updated_at: String(raw.updated_at || st.updated_at),
+          };
+        }
       }
     }
   } catch {
@@ -185,6 +203,12 @@ export type EntryFeatureInput = {
   last_closed_side?: 'BUY' | 'SELL' | null;
   last_close_was_loss?: boolean;
   moving?: boolean;
+  /** Live 1m direction from the robot's 10s book */
+  m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** |1m body| is meaningful (not flat noise) */
+  m1_strong?: boolean;
+  /** Multi-1m trek bias */
+  bias?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 export function extractEntryFeatures(input: EntryFeatureInput): EntryFeatures {
@@ -201,6 +225,9 @@ export function extractEntryFeatures(input: EntryFeatureInput): EntryFeatures {
       : input.story.zone_pos;
   const body = input.bar ? bodyPct(input.bar) : 0;
   const conf = Number.isFinite(input.story.confidence) ? input.story.confidence : 0;
+  const md = input.m1_dir || 'FLAT';
+  const bias = input.bias || 'FLAT';
+  const m1Strong = input.m1_strong ? 1 : 0;
 
   const feat: Record<(typeof ENTRY_FEATURE_NAMES)[number], number> = {
     story_allow_buy: allow === 'BUY' || allow === 'BOTH' ? 1 : 0,
@@ -245,6 +272,11 @@ export function extractEntryFeatures(input: EntryFeatureInput): EntryFeatures {
     last_sell_loss:
       input.last_close_was_loss && input.last_closed_side === 'SELL' ? 1 : 0,
     moving: input.moving ? 1 : 0,
+    m1_up: md === 'UP' ? 1 : 0,
+    m1_down: md === 'DOWN' ? 1 : 0,
+    m1_strong: m1Strong,
+    bias_up: bias === 'UP' ? 1 : 0,
+    bias_down: bias === 'DOWN' ? 1 : 0,
   };
 
   return ENTRY_FEATURE_NAMES.map((name) => feat[name]);
@@ -290,6 +322,38 @@ export type EntryLearnerDecision = {
   detail: string;
 };
 
+/**
+ * Live 1m coherence — if softmax fights a clear 1m impulse, wait (or flip
+ * with story). This is reading the tape, not a random block list.
+ */
+function coherencyWith1m(
+  action: EntryLearnerAction,
+  features: EntryFeatures,
+  probs: Record<EntryLearnerAction, number>
+): { action: EntryLearnerAction; note: string } {
+  const ix = (name: (typeof ENTRY_FEATURE_NAMES)[number]) =>
+    ENTRY_FEATURE_NAMES.indexOf(name);
+  const m1Up = features[ix('m1_up')]! >= 1;
+  const m1Down = features[ix('m1_down')]! >= 1;
+  const strong = features[ix('m1_strong')]! >= 0.5;
+  const biasUp = features[ix('bias_up')]! >= 1;
+  const biasDown = features[ix('bias_down')]! >= 1;
+
+  if (action === 'SELL' && (m1Up || biasUp) && (strong || biasUp)) {
+    if (probs.BUY! > probs.WAIT! && features[ix('story_allow_buy')]!) {
+      return { action: 'BUY', note: '1m UP · pārslēdzu SELL→BUY (ar stāstu)' };
+    }
+    return { action: 'WAIT', note: '1m UP · SELL pret sveci — WAIT' };
+  }
+  if (action === 'BUY' && (m1Down || biasDown) && (strong || biasDown)) {
+    if (probs.SELL! > probs.WAIT! && features[ix('story_allow_sell')]!) {
+      return { action: 'SELL', note: '1m DOWN · pārslēdzu BUY→SELL (ar stāstu)' };
+    }
+    return { action: 'WAIT', note: '1m DOWN · BUY pret sveci — WAIT' };
+  }
+  return { action, note: '' };
+}
+
 export function entryLearnerChoose(
   input: EntryFeatureInput,
   clientId?: number | null,
@@ -312,10 +376,22 @@ export function entryLearnerChoose(
     action = ENTRY_LEARNER_ACTIONS[Math.floor(rng() * ENTRY_LEARNER_ACTIONS.length)]!;
     explored = true;
   }
+
+  let note = '';
+  if (!explored) {
+    const coh = coherencyWith1m(action, features, probs);
+    action = coh.action;
+    note = coh.note;
+  }
+
   const confidence = probs[action] ?? 0.33;
   const top = ENTRY_LEARNER_ACTIONS.map(
     (a) => `${a}:${(probs[a]! * 100).toFixed(0)}%`
   ).join(' ');
+  const detail = `PRĀTS ENTRY ${action} · conf ${(confidence * 100).toFixed(0)}% · n=${st.updates} · ${top}${
+    explored ? ' · explore' : ''
+  }${note ? ` · ${note}` : ''}`;
+
   return {
     action,
     confidence,
@@ -323,20 +399,13 @@ export function entryLearnerChoose(
     features,
     updates: st.updates,
     explored,
-    detail: `PRĀTS ENTRY ${action} · conf ${(confidence * 100).toFixed(0)}% · n=${st.updates} · ${top}${
-      explored ? ' · explore' : ''
-    }`,
+    detail,
   };
 }
 
-/**
- * Learn from a closed trade that was opened with these features.
- * reward = tanh(pnl / softScale); reinforces the side that was traded.
- */
 export function entryLearnerLearnFromClose(opts: {
   clientId?: number | null;
   features: EntryFeatures | null | undefined;
-  /** Side that was actually traded */
   action: 'BUY' | 'SELL' | string | null | undefined;
   pnl_pts: number;
   soft_scale?: number;
@@ -362,7 +431,6 @@ export function entryLearnerLearnFromClose(opts: {
       w[i] = clamp(w[i]! + g, -MAX_W, MAX_W);
     }
   }
-  // If loss on BUY into selloff features, also nudge WAIT up slightly
   if (reward < -0.15) {
     const wWait = st.weights.WAIT;
     for (let i = 0; i < wWait.length; i++) {
@@ -386,11 +454,10 @@ export function getEntryLearnerStatus(clientId?: number | null): {
   return { client_id: id, updates: st.updates, updated_at: st.updated_at };
 }
 
-/** Test helper */
 export function _resetEntryLearnerForTests(clientId: number = 0): void {
   const id = resolveDeskClientId(clientId);
   cache.set(id, {
-    version: 1,
+    version: ENTRY_LEARNER_VERSION,
     updates: 0,
     weights: emptyWeights(),
     updated_at: new Date().toISOString(),
