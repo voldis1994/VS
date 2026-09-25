@@ -6,7 +6,13 @@ import {
   normalizeRegime,
 } from './regimes.js';
 import type { RegimeEntry } from './entryFromRegime.js';
-import { decideEntryWithStructure } from './structureEntry.js';
+import {
+  decideEntryWithStructure,
+  higherTfDir,
+  minuteTrendBias,
+  lastClosed1mFromTenSec,
+  minuteDir,
+} from './structureEntry.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import {
@@ -18,6 +24,7 @@ import {
 } from './flipFilter.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
 import { readMarketStory, type MarketStory } from './marketStory.js';
+import { readMultiTfStack, sideFromMultiTf, type TfDir } from './multiTfRead.js';
 
 const DIP = ENTRY_DIP;
 const RALLY = ENTRY_RALLY;
@@ -304,7 +311,43 @@ export type BuildWatchInput = {
   cooldown_left_s?: number;
   status_override?: EntryWatchStatus | null;
   last_reason?: string;
+  /** Capital closed TF dirs — preferred over 10s-book aggregates */
+  capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
+
+function pickTfDir(
+  capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
+  book: 'UP' | 'DOWN' | 'FLAT'
+): TfDir {
+  return capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+}
+
+/** Multi-TF stack line for Entry Watch / LIVE LOG. */
+export function multiTfWatchLine(input: {
+  closed_bars?: TenSecBar[];
+  capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+}): { summary: string; bias: TfDir; mind: 'BUY' | 'SELL' | 'WAIT'; thesis: string } {
+  const bars = input.closed_bars ?? [];
+  const m1Book = minuteDir(lastClosed1mFromTenSec(bars));
+  const biasBook = minuteTrendBias(bars);
+  const m1 = pickTfDir(input.capital_m1_dir, m1Book !== 'FLAT' ? m1Book : biasBook);
+  const tf5 = pickTfDir(input.capital_tf5_dir, higherTfDir(bars, 5));
+  const tf15 = pickTfDir(input.capital_tf15_dir, higherTfDir(bars, 15));
+  const tf30 = pickTfDir(input.capital_tf30_dir, higherTfDir(bars, 30));
+  const stack = readMultiTfStack({ tf30, tf15, tf5, tf1: m1 });
+  return {
+    summary: stack.summary,
+    bias: stack.bias,
+    mind: sideFromMultiTf(stack),
+    thesis: stack.thesis_lv,
+  };
+}
 
 export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const regime = normalizeRegime(input.regime);
@@ -334,6 +377,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
               : [],
           last_closed_side: lastClosedSide,
           last_close_was_loss: wasLoss,
+          capital_m1_dir: input.capital_m1_dir,
+          capital_tf5_dir: input.capital_tf5_dir,
+          capital_tf15_dir: input.capital_tf15_dir,
+          capital_tf30_dir: input.capital_tf30_dir,
         })
       : null;
   const flipBlocked = Boolean(
@@ -390,7 +437,23 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
     bar
   );
-  const lookBase = `${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
+  const tfLine = multiTfWatchLine({
+    closed_bars: input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
+    capital_m1_dir: input.capital_m1_dir,
+    capital_tf5_dir: input.capital_tf5_dir,
+    capital_tf15_dir: input.capital_tf15_dir,
+    capital_tf30_dir: input.capital_tf30_dir,
+  });
+  // Lead with Capital multi-TF stack — not the old story-only "meklē SELL"
+  const mindSide =
+    sig?.direction ??
+    (tfLine.mind !== 'WAIT' ? tfLine.mind : null) ??
+    (flipBlocked ? null : recipe.direction);
+  const mindTag =
+    tfLine.mind === 'WAIT'
+      ? `PRĀTS WAIT · ${tfLine.summary}`
+      : `PRĀTS ${tfLine.mind} · ${tfLine.summary}`;
+  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
 
   return {
     regime,
@@ -399,11 +462,11 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     status,
     looking_for: lookingForWithZone(lookBase, zone, regime),
     bar_vs_trigger: vs,
-    market_story: story.summary_lv,
+    market_story: `${tfLine.summary} · ${story.summary_lv}`,
     story_chapter: story.chapter,
     story_allow: story.allow,
-    story_detail: story.detail,
-    direction: sig?.direction ?? (flipBlocked ? null : recipe.direction),
+    story_detail: `${tfLine.thesis} · ${story.detail}`,
+    direction: mindSide,
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',
     last_closed_side: lastClosedSide,

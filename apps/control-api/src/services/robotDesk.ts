@@ -381,6 +381,10 @@ function refreshEntryWatch(
     cooldown_left_s: opts?.cooldown_left_s,
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
+    capital_m1_dir: capitalCandleDir(s.last_minute_candles),
+    capital_tf5_dir: capitalCandleDir(s.last_tf5_candles),
+    capital_tf15_dir: capitalCandleDir(s.last_tf15_candles),
+    capital_tf30_dir: capitalCandleDir(s.last_tf30_candles),
   });
 }
 
@@ -3167,15 +3171,25 @@ async function robotCycleLocked(s: Internal) {
         });
       }
     } else {
+      // Flat FORMING — still refresh Capital 30/15/5/1m so Entry Watch shows the stack
+      try {
+        await refreshCapitalMultiTf(session, s);
+      } catch {
+        /* keep previous */
+      }
       refreshEntryWatch(s, {
         status_override: entryBar ? 'FORMING' : 'SEEDING',
       });
+      const tfHint =
+        s.entry_watch?.looking_for?.match(/PRĀTS[^·]*·\s*30m[↑↓→]\s*15m[↑↓→]\s*5m[↑↓→]\s*1m[↑↓→]/)?.[0] ||
+        s.entry_watch?.market_story?.split(' · ')[0] ||
+        '';
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.entry_watch?.looking_for || 'WATCH'} · forming C=${
+        detail: `${ohlcLine} · ${tfHint || s.entry_watch?.looking_for || 'WATCH'} · forming C=${
           ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'
         } · ${s.entry_watch?.bar_vs_trigger || 'wait bar close'}`,
       });

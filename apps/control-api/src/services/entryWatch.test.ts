@@ -170,4 +170,47 @@ describe('entryWatch', () => {
     expect(w.looking_for).toMatch(/45\/90/);
     expect(w.last_reason).toMatch(/Lasa tirgu/);
   });
+
+  it('Entry Watch leads with Capital multi-TF stack (not story-only SELL)', () => {
+    const b = bar(2000, 2001, 1999, 2000.5);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'RANGE',
+      last_closed: b,
+      forming_c: 2000.4,
+      just_closed: false,
+      closed_bar_count: 120,
+      capital_m1_dir: 'UP',
+      capital_tf5_dir: 'UP',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
+    });
+    expect(w.looking_for).toMatch(/PRĀTS BUY · 30m↑ 15m↑ 5m↑ 1m↑/);
+    expect(w.market_story).toMatch(/30m↑/);
+    expect(w.direction).toBe('BUY');
+  });
+
+  it('aligned UP stack does not set mind side to SELL', () => {
+    const b = bar(2000, 2000.2, 1999, 1999.5);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: null,
+      entry_enabled: true,
+      regime: 'RANGE',
+      last_closed: b,
+      forming_c: null,
+      just_closed: false,
+      closed_bar_count: 120,
+      capital_m1_dir: 'DOWN',
+      capital_tf5_dir: 'UP',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
+    });
+    expect(w.looking_for).toMatch(/30m↑ 15m↑ 5m↑/);
+    expect(w.looking_for).toMatch(/PRĀTS/);
+    expect(w.looking_for).not.toMatch(/^STĀSTS · selloff/);
+    expect(w.direction).not.toBe('SELL');
+  });
 });
