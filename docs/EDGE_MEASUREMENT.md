@@ -121,3 +121,11 @@ Each **client** has its own:
 API: pass `?client_id=` / body `client_id`. Dashboard uses the selected
 client / account. Robots run inside that client scope — client A never
 retunes client B.
+
+
+## Auto-cal caps + pullback
+
+Endless raise of Peak/Target/`safety_tp_rr` made Soft exits eat all edge.
+Hard caps: TP RR ≤ 2.0, Target ≤ 7, Peak MFE ≤ 4.5, retention ≤ 0.75.
+After 2+ raise cycles with still-negative expectancy → **pullback** (ease
+knobs down, soften entry filters from L3). Robot START clamps overreached knobs.

@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          Ik pēc 5 closes pats koriģē Soft/Peak/Target + regimes. Pēc izmaiņas — 3 min entry
-          cooldown (open trades joprojām MANAGE). Lot nemaina.
+          Ik pēc 5 closes koriģē. Ja Peak/Target/TP RR pārāk augsti un E joprojām − —
+          pullback (ease), nevis ceļ bezgalīgi. Cap: TP RR≤2.0 · Target≤7 · Peak≤4.5.
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (

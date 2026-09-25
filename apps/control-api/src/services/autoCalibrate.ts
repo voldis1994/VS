@@ -25,6 +25,13 @@ export const AUTO_CALIBRATE_EVERY_N = 5;
 export const AUTO_CALIBRATE_COOLDOWN_MS = 3 * 60_000;
 /** Never drop below this many regimes — entries stay possible. */
 export const MIN_ENABLED_REGIMES = 5;
+/** Hard caps — raising past these makes Soft exits eat all edge. */
+export const AUTO_CAL_MAX_SAFETY_TP_RR = 2.0;
+export const AUTO_CAL_MAX_TARGET_ABS = 7.0;
+export const AUTO_CAL_MAX_PEAK_MFE_ABS = 4.5;
+export const AUTO_CAL_MAX_PEAK_RETENTION = 0.75;
+/** After this many consecutive "raise winners" cycles with still-bad E → pull back. */
+export const AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK = 2;
 
 /**
  * Core liquid regimes — auto-cal NEVER turns these OFF.
@@ -119,6 +126,8 @@ type SessionState = {
   cooldown_until_ms: number | null;
   last_window_expectancy: number | null;
   history: AutoCalCycleRecord[];
+  /** Consecutive cycles that raised Peak/Target/TP RR */
+  raise_streak: number;
 };
 
 type ClientBucket = {
@@ -141,6 +150,7 @@ function emptyState(): SessionState {
     cooldown_until_ms: null,
     last_window_expectancy: null,
     history: [],
+    raise_streak: 0,
   };
 }
 
@@ -183,6 +193,7 @@ function persistSession(clientId?: number | null): void {
       cooldown_until_ms: st.cooldown_until_ms,
       last_window_expectancy: st.last_window_expectancy,
       history: st.history.slice(0, 12),
+      raise_streak: st.raise_streak,
     };
     fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8');
   } catch {
@@ -219,6 +230,7 @@ function hydrateSession(clientId?: number | null): void {
         ? Number(raw.last_window_expectancy)
         : null;
     st.history = Array.isArray(raw.history) ? (raw.history as AutoCalCycleRecord[]) : [];
+    st.raise_streak = Number(raw.raise_streak) || 0;
   } catch {
     /* ignore corrupt disk */
   }
@@ -239,6 +251,26 @@ function ensureCoreRegimesOn(clientId?: number | null): void {
     if (changed) {
       setDeskCalibration({ enabled_regimes: [...have] as never }, id);
     }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Snap already-overreached knobs back to caps (live sessions that climbed too far). */
+function clampOverreachKnobs(clientId?: number | null): void {
+  const id = resolveDeskClientId(clientId);
+  try {
+    const cur = getDeskCalibration(id);
+    const patch: Partial<typeof cur> = {};
+    if (cur.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) patch.safety_tp_rr = AUTO_CAL_MAX_SAFETY_TP_RR;
+    if (cur.target_abs > AUTO_CAL_MAX_TARGET_ABS) patch.target_abs = AUTO_CAL_MAX_TARGET_ABS;
+    if (cur.peak_mfe_abs > AUTO_CAL_MAX_PEAK_MFE_ABS) patch.peak_mfe_abs = AUTO_CAL_MAX_PEAK_MFE_ABS;
+    if (cur.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
+      patch.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
+    }
+    // L3 with bad climb — open one step so trades can happen again
+    if ((cur.entry_filter_level || 0) >= 3) patch.entry_filter_level = 2;
+    if (Object.keys(patch).length) setDeskCalibration(patch, id);
   } catch {
     /* ignore */
   }
@@ -276,6 +308,7 @@ export function beginAutoCalibrateSession(
   st.cooldown_until_ms = null;
   st.last_window_expectancy = null;
   st.history = [];
+  st.raise_streak = 0;
   try {
     const cur = getDeskCalibration(id);
     if ((cur.entry_filter_level || 0) !== 0) {
@@ -285,6 +318,7 @@ export function beginAutoCalibrateSession(
     /* ignore */
   }
   ensureCoreRegimesOn(id);
+  clampOverreachKnobs(id);
   persistSession(id);
   return getAutoCalibrateStatus(undefined, id);
 }
@@ -300,6 +334,7 @@ export function ensureAutoCalibrateSession(
   const id = resolveDeskClientId(clientId);
   hydrateSession(id);
   ensureCoreRegimesOn(id);
+  clampOverreachKnobs(id);
   const st = bucket(id).state;
   if (st.started_at) {
     st.last_summary = `Watch continues · client ${id} · ${reason} · closes=${st.trades.length}`;
@@ -422,7 +457,9 @@ export function noteClosedTradeForAutoCalibrate(
 
   const window = state.trades.slice(-AUTO_CALIBRATE_EVERY_N);
   const current = getDeskCalibration(id);
-  const proposed = proposeAutoCalibration(current, window, state.demoted);
+  const proposed = proposeAutoCalibration(current, window, state.demoted, {
+    raise_streak: state.raise_streak,
+  });
   const windowSum = window.reduce((a, t) => a + t.pnl_pts, 0);
   const windowE = window.length ? windowSum / window.length : 0;
   state.last_window_expectancy = windowE;
@@ -442,6 +479,11 @@ export function noteClosedTradeForAutoCalibrate(
     if (state.history.length > 12) state.history.length = 12;
   };
 
+  const raisedWinners = proposed.changes.some((c) =>
+    /^(safety_tp_rr|peak_mfe_abs|peak_retention|target_abs) /.test(c) && c.includes('→')
+  );
+  const pulledBack = proposed.changes.some((c) => c.includes('pullback') || c.includes('ease'));
+
   if (!proposed.applied) {
     state.cycles_run += 1;
     state.last_cycle_at = at;
@@ -451,6 +493,10 @@ export function noteClosedTradeForAutoCalibrate(
     persistSession(id);
     return proposed;
   }
+
+  if (pulledBack) state.raise_streak = 0;
+  else if (raisedWinners) state.raise_streak += 1;
+  else state.raise_streak = Math.max(0, state.raise_streak - 1);
 
   const saved = setDeskCalibration(proposed.next, id);
   for (const ch of proposed.changes) {
@@ -473,8 +519,10 @@ export function noteClosedTradeForAutoCalibrate(
 export function proposeAutoCalibration(
   current: DeskCalibration,
   windowTrades: SessionTrade[],
-  demotedSession: Set<string> = new Set()
+  demotedSession: Set<string> = new Set(),
+  opts?: { raise_streak?: number }
 ): AutoCalibrateProposeResult {
+  const raiseStreak = Math.max(0, Number(opts?.raise_streak) || 0);
   const changes: string[] = [];
   if (!windowTrades.length) {
     return {
@@ -506,29 +554,70 @@ export function proposeAutoCalibration(
     enabled_regimes: [...current.enabled_regimes],
   };
 
-  // --- Soft Peak/Target + BROKER TP (safety_tp_rr). SL stays fixed. ---
+  // --- Detect overreach: raised Peak/Target/TP so far Soft always eats the trade ---
+  const rrNow = next.safety_tp_rr || 1.5;
+  const alreadyTall =
+    rrNow >= AUTO_CAL_MAX_SAFETY_TP_RR - 0.01 ||
+    next.target_abs >= AUTO_CAL_MAX_TARGET_ABS - 0.01 ||
+    next.peak_mfe_abs >= AUTO_CAL_MAX_PEAK_MFE_ABS - 0.01 ||
+    next.target_abs >= next.hardinv_abs * 2.8;
+
+  const asymmetryBad =
+    avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.85 && microWins >= 2;
+
+  const needPullBack =
+    expectancy < 0.05 &&
+    (raiseStreak >= AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK ||
+      alreadyTall ||
+      (asymmetryBad && softLosses >= 2));
+
   const needBiggerWinners =
-    expectancy < 0.15 ||
-    (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
-    microWins >= 2;
+    !needPullBack &&
+    !alreadyTall &&
+    raiseStreak < AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK &&
+    (expectancy < 0.15 ||
+      (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
+      microWins >= 2);
 
-  if (needBiggerWinners) {
-    // Visible Capital SAFETY TP — raise R:R vs FIXED SL cushion
-    const rrBefore = next.safety_tp_rr;
-    next.safety_tp_rr = Math.min(3.5, (next.safety_tp_rr || 1.5) + 0.25);
+  if (needPullBack) {
+    // Targets unreachable — ease back toward Soft so winners can bank before Soft chops
+    const rrBefore = next.safety_tp_rr || 1.5;
+    next.safety_tp_rr = Math.max(1.5, rrBefore - 0.25);
     if (next.safety_tp_rr !== rrBefore) {
-      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
+      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} pullback`);
     }
-
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    next.peak_mfe_abs = Math.min(8.5, next.peak_mfe_abs + 0.5);
-    next.peak_retention = Math.min(0.85, next.peak_retention + 0.04);
-    next.peak_min_giveback_abs = Math.min(2.2, next.peak_min_giveback_abs + 0.15);
-    next.target_abs = Math.min(20, next.target_abs + 1.25);
-    next.target_pct = Math.min(0.015, next.target_pct * 1.12);
-    next.peak_mfe_pct = Math.min(0.01, next.peak_mfe_pct * 1.08);
+    next.peak_mfe_abs = Math.max(next.hardinv_abs + 1.5, next.peak_mfe_abs - 0.5);
+    next.peak_retention = Math.max(0.65, next.peak_retention - 0.04);
+    next.peak_min_giveback_abs = Math.max(0.85, next.peak_min_giveback_abs - 0.15);
+    next.target_abs = Math.max(next.hardinv_abs + 3, next.target_abs - 1.25);
+    next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
+    if (next.peak_mfe_abs !== peakBefore) {
+      changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`);
+    }
+    if (next.peak_retention !== retBefore) {
+      changes.push(`peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ease`);
+    }
+    if (next.target_abs !== tgtBefore) {
+      changes.push(`target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)} ease`);
+    }
+  } else if (needBiggerWinners) {
+    const rrBefore = next.safety_tp_rr || 1.5;
+    next.safety_tp_rr = Math.min(AUTO_CAL_MAX_SAFETY_TP_RR, rrBefore + 0.15);
+    if (next.safety_tp_rr !== rrBefore) {
+      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
+    }
+    const peakBefore = next.peak_mfe_abs;
+    const retBefore = next.peak_retention;
+    const tgtBefore = next.target_abs;
+    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.peak_mfe_abs + 0.35);
+    next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.03);
+    next.peak_min_giveback_abs = Math.min(1.5, next.peak_min_giveback_abs + 0.1);
+    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.target_abs + 0.75);
+    next.target_pct = Math.min(0.004, next.target_pct * 1.06);
+    next.peak_mfe_pct = Math.min(0.002, next.peak_mfe_pct * 1.05);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`);
     }
@@ -545,40 +634,71 @@ export function proposeAutoCalibration(
   // Already healthy — tiny retention polish only
   if (
     !needBiggerWinners &&
+    !needPullBack &&
     expectancy >= 0.3 &&
     avgWin >= avgLossAbs * 0.95 &&
     wins.length >= losses.length
   ) {
     const retBefore = next.peak_retention;
-    next.peak_retention = Math.min(0.82, next.peak_retention + 0.01);
+    next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.01);
     if (next.peak_retention !== retBefore) {
       changes.push(`peak_retention hold+ ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)}`);
     }
   }
 
-  // Ensure Peak stays above Soft CAP
+  // Ensure Peak stays above Soft CAP (but never above hard max)
   if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
-    next.peak_mfe_abs = next.hardinv_abs + 1.5;
+    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.hardinv_abs + 1.5);
     changes.push(`peak_mfe_abs floor vs Soft →${next.peak_mfe_abs.toFixed(1)}`);
   }
   if (next.target_abs <= next.hardinv_abs + 1) {
-    next.target_abs = next.hardinv_abs + 3;
+    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.hardinv_abs + 3);
     changes.push(`target_abs floor vs Soft →${next.target_abs.toFixed(1)}`);
   }
+  // Clamp any overshoot from older sessions
+  if (next.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) {
+    const b = next.safety_tp_rr;
+    next.safety_tp_rr = AUTO_CAL_MAX_SAFETY_TP_RR;
+    changes.push(`safety_tp_rr ${b.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} cap`);
+  }
+  if (next.target_abs > AUTO_CAL_MAX_TARGET_ABS) {
+    const b = next.target_abs;
+    next.target_abs = AUTO_CAL_MAX_TARGET_ABS;
+    changes.push(`target_abs ${b.toFixed(1)}→${next.target_abs.toFixed(1)} cap`);
+  }
+  if (next.peak_mfe_abs > AUTO_CAL_MAX_PEAK_MFE_ABS) {
+    const b = next.peak_mfe_abs;
+    next.peak_mfe_abs = AUTO_CAL_MAX_PEAK_MFE_ABS;
+    changes.push(`peak_mfe_abs ${b.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} cap`);
+  }
+  if (next.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
+    const b = next.peak_retention;
+    next.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
+    changes.push(`peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} cap`);
+  }
 
-  // --- Entry filter ladder (0 OPEN → 3 STRICT) — from market outcomes ---
+  // --- Entry filter ladder ---
   const levelBefore = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
-  const needTighterEntries =
-    expectancy < 0 ||
-    softLosses >= 2 ||
-    (losses.length >= 3 && wins.length <= 1) ||
-    (microWins >= 2 && expectancy < 0.1);
+  // If L3 + still losing → soften (strict filters starve and don't fix R:R)
+  const needSofterEntries =
+    needPullBack ||
+    (levelBefore >= 2 && expectancy < 0 && softLosses >= 2) ||
+    (levelBefore >= 3 && expectancy < 0.1);
 
-  if (needTighterEntries && levelBefore < 3) {
+  const needTighterEntries =
+    !needSofterEntries &&
+    !needPullBack &&
+    levelBefore < 2 &&
+    (expectancy < -0.5 || (losses.length >= 4 && wins.length === 0));
+
+  if (needSofterEntries && levelBefore > 0) {
+    next.entry_filter_level = levelBefore - 1;
+    changes.push(`entry_filter_level ${levelBefore}→${next.entry_filter_level} open`);
+  } else if (needTighterEntries) {
     next.entry_filter_level = levelBefore + 1;
     changes.push(`entry_filter_level ${levelBefore}→${next.entry_filter_level}`);
   } else if (
-    !needTighterEntries &&
+    !needSofterEntries &&
     expectancy >= 0.35 &&
     avgWin >= avgLossAbs * 1.0 &&
     wins.length >= losses.length + 1 &&
@@ -660,19 +780,7 @@ export function proposeAutoCalibration(
 
   next.enabled_regimes = [...enabled] as RegimeName[];
 
-  // Every cycle must leave a visible footprint when window is not clearly healthy
-  if (!changes.length && expectancy < 0.25) {
-    const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.min(3.5, rrBefore + 0.15);
-    if (next.safety_tp_rr !== rrBefore) {
-      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
-    }
-    if ((next.entry_filter_level || 0) < 3 && expectancy < 0) {
-      const lv = Math.round(Number(next.entry_filter_level) || 0);
-      next.entry_filter_level = lv + 1;
-      changes.push(`entry_filter_level ${lv}→${next.entry_filter_level}`);
-    }
-  }
+  // No forced raise — hold is OK when already capped / balanced
 
   const summary =
     `n=${windowTrades.length} E=${expectancy.toFixed(2)} ` +

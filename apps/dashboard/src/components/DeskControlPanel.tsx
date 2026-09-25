@@ -365,8 +365,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
             Sākumā tirgo VISU (entry filters OPEN). Ik pēc 5 closes pats koriģē
-            Soft/Peak/Target + entry filters + satellite regimes. Core (RANGE/TREND/…)
-            nekad auto-OFF — nevar aizvērt visu ciet. Lot nemaina.
+            Soft/Peak/Target + filters. Ja mērķi pārāk tālu — pullback (neceļ bezgalīgi).
+            Core regimes nekad auto-OFF. Lot nemaina.
           </p>
           {auto ? (
             <>

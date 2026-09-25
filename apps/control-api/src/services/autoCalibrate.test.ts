@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   AUTO_CALIBRATE_EVERY_N,
   AUTO_CALIBRATE_COOLDOWN_MS,
+  AUTO_CAL_MAX_SAFETY_TP_RR,
+  AUTO_CAL_MAX_TARGET_ABS,
   CORE_ALWAYS_ON_REGIMES,
   MIN_ENABLED_REGIMES,
   _resetAutoCalibrateForTests,
@@ -162,8 +164,55 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.applied).toBe(true);
     expect(r.next.safety_tp_rr).toBeGreaterThan(base.safety_tp_rr);
+    expect(r.next.safety_tp_rr).toBeLessThanOrEqual(AUTO_CAL_MAX_SAFETY_TP_RR);
     expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
     expect(r.changes.some((c) => c.startsWith('safety_tp_rr'))).toBe(true);
+  });
+
+  it('pulls back when targets overreached and expectancy still negative', () => {
+    const tall = {
+      ...defaultDeskCalibration(),
+      safety_tp_rr: 2.0,
+      peak_mfe_abs: 4.5,
+      peak_retention: 0.75,
+      target_abs: 7.0,
+      entry_filter_level: 3,
+    };
+    const r = proposeAutoCalibration(
+      tall,
+      [
+        trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection' }),
+        trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.2, exit_reason: 'PeakProtection' }),
+        trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: -0.9 }),
+      ],
+      new Set(),
+      { raise_streak: 3 }
+    );
+    expect(r.applied).toBe(true);
+    expect(r.next.safety_tp_rr).toBeLessThan(tall.safety_tp_rr);
+    expect(r.next.target_abs).toBeLessThan(tall.target_abs);
+    expect(r.next.entry_filter_level).toBeLessThan(3);
+    expect(r.changes.some((c) => /pullback|ease|open/.test(c))).toBe(true);
+  });
+
+  it('never raises Target / TP RR past hard caps', () => {
+    const nearCap = {
+      ...defaultDeskCalibration(),
+      safety_tp_rr: AUTO_CAL_MAX_SAFETY_TP_RR,
+      target_abs: AUTO_CAL_MAX_TARGET_ABS,
+      peak_mfe_abs: 4.5,
+    };
+    const r = proposeAutoCalibration(nearCap, [
+      trade({ pnl_pts: 0.2 }),
+      trade({ pnl_pts: -2 }),
+      trade({ pnl_pts: 0.3 }),
+      trade({ pnl_pts: -1.5 }),
+      trade({ pnl_pts: 0.1 }),
+    ]);
+    expect(r.next.safety_tp_rr).toBeLessThanOrEqual(AUTO_CAL_MAX_SAFETY_TP_RR);
+    expect(r.next.target_abs).toBeLessThanOrEqual(AUTO_CAL_MAX_TARGET_ABS);
   });
 
   it('raises entry_filter_level after negative outcome window', () => {
