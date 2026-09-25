@@ -20,6 +20,7 @@ import {
 import { summarizeExitReason } from './tradeLedger.js';
 import type { RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
+import type { MarketContextCompact } from './marketContext.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
 /** After an applied calibrate — pause NEW entries so desk can settle setups. */
@@ -64,6 +65,10 @@ export type SessionTrade = {
   at: string;
   robot_id?: string | null;
   epic?: string | null;
+  /** Market context at entry (frozen) */
+  entry_ctx?: MarketContextCompact | null;
+  /** Market context at exit */
+  exit_ctx?: MarketContextCompact | null;
 };
 
 export type AutoCalCycleRecord = {
@@ -552,10 +557,61 @@ export function proposeAutoCalibration(
     (t) => t.pnl_pts > 1e-9 && t.pnl_pts < Math.max(1.0, avgLossAbs * 0.45)
   ).length;
 
+  // --- Outcome patterns from MFE/MAE + market context (not blind Peak raise) ---
+  const peakExits = windowTrades.filter((t) =>
+    /PeakProtection|TimeDecay|Target/i.test(String(t.exit_reason || ''))
+  );
+  const highMfeTinyPnl = windowTrades.filter(
+    (t) => t.mfe > 0 && t.pnl_pts > 0 && t.pnl_pts < t.mfe * 0.35 && t.mfe >= avgLossAbs * 0.8
+  ).length;
+  const softWithAdverseStory = windowTrades.filter((t) => {
+    if (!/HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason))) return false;
+    const ch = String(t.entry_ctx?.chapter || '').toUpperCase();
+    return (
+      ch === 'BOUNCE_IN_SELL' ||
+      ch === 'DIP_IN_RALLY' ||
+      ch === 'EXHAUST_HI' ||
+      ch === 'EXHAUST_LO' ||
+      ch === 'RANGE_CHOP'
+    );
+  }).length;
+  const divergentFeedLosses = windowTrades.filter(
+    (t) =>
+      t.pnl_pts < -1e-9 &&
+      String(t.entry_ctx?.feed_agreement || '').toUpperCase() === 'DIVERGENT'
+  ).length;
+  const leftWinnerOnTable =
+    peakExits.length >= 2 && highMfeTinyPnl >= 2 && expectancy < 0.2;
+
   const next: DeskCalibration = {
     ...current,
     enabled_regimes: [...current.enabled_regimes],
   };
+
+  // Soft losses from knife/adverse story → tighten ENTRY filters, do NOT raise Peak
+  if (softWithAdverseStory >= 2 && softLosses >= 2) {
+    const levelBefore = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
+    if (levelBefore < 2) {
+      next.entry_filter_level = levelBefore + 1;
+      changes.push(
+        `entry_filter_level ${levelBefore}→${next.entry_filter_level} (adverse story Soft losses)`
+      );
+    }
+  }
+  // Divergent multi-feed on losses → tighten filters (market disagreement)
+  if (divergentFeedLosses >= 2) {
+    const levelBefore = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
+    if (levelBefore < 2 && !changes.some((c) => c.startsWith('entry_filter_level'))) {
+      next.entry_filter_level = levelBefore + 1;
+      changes.push(
+        `entry_filter_level ${levelBefore}→${next.entry_filter_level} (feed DIVERGENT losses)`
+      );
+    }
+  }
+  // Left winners on table (high MFE → tiny Peak bank) → prefer pullback over raise
+  if (leftWinnerOnTable) {
+    changes.push('pattern · high-MFE tiny-bank → prefer Peak ease');
+  }
 
   // --- Detect overreach: raised Peak/Target/TP so far Soft always eats the trade ---
   const rrNow = next.safety_tp_rr || 1.5;
@@ -572,11 +628,16 @@ export function proposeAutoCalibration(
     expectancy < 0.05 &&
     (raiseStreak >= AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK ||
       alreadyTall ||
+      leftWinnerOnTable ||
       (asymmetryBad && softLosses >= 2));
+
+  // Soft/adverse-story losses: skip Peak raise — entry quality is the fix
+  const skipPeakRaise = softWithAdverseStory >= 2 && softLosses >= 2;
 
   const needBiggerWinners =
     !needPullBack &&
     !alreadyTall &&
+    !skipPeakRaise &&
     raiseStreak < AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK &&
     (expectancy < 0.15 ||
       (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
