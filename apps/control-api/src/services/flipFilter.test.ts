@@ -39,19 +39,19 @@ describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
     expect(sameDirLockLeftSec(t0, t0 + 30_000, sameDirLockMs(false))).toBe(60);
   });
 
-  it('after Soft loss keeps same-dir blocked for 12m — no forced opposite', () => {
+  it('after Soft loss keeps same-dir blocked for lock window — no forced opposite', () => {
     expect(sameDirLockMs(true)).toBe(SAME_DIR_LOCK_AFTER_LOSS_MS);
-    // 5 min after Soft loss — same still blocked
+    // 30s after Soft loss — same still blocked
     expect(
-      sameDirectionBlocked('SELL', 'SELL', t0, t0 + 5 * 60_000, { wasLoss: true })
+      sameDirectionBlocked('SELL', 'SELL', t0, t0 + 30_000, { wasLoss: true })
     ).toBe(true);
     // Opposite allowed by lock (next-move gate is robotDesk)
     expect(
-      sameDirectionBlocked('BUY', 'SELL', t0, t0 + 5 * 60_000, { wasLoss: true })
+      sameDirectionBlocked('BUY', 'SELL', t0, t0 + 30_000, { wasLoss: true })
     ).toBe(false);
     // Do NOT advertise forced flip after Soft
-    expect(requiredFlipSide('SELL', t0, t0 + 5 * 60_000, { wasLoss: true })).toBeNull();
-    // After 12m — same-dir allowed again
+    expect(requiredFlipSide('SELL', t0, t0 + 30_000, { wasLoss: true })).toBeNull();
+    // After lock expires — same-dir allowed again
     expect(
       sameDirectionBlocked(
         'SELL',

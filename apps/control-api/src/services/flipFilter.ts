@@ -7,14 +7,15 @@ import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 
 export type TradeSide = 'BUY' | 'SELL';
 
-/** Same-direction lock after a green / scratch close. */
+/** Same-direction lock after a green / scratch close (L≥1 only). */
 export const SAME_DIR_LOCK_MS = 90_000;
 
 /**
- * After Soft/SL / structure loss — do not re-open the SAME side quickly.
- * Opposite is allowed only when next-move confirms (robotDesk) — never auto-flip.
+ * After Soft/SL loss — legacy L≥1 only (was 12 minutes).
+ * Mind robot is L0 OPEN: entryFlipLockEnabled() is false → no block.
+ * Shortened so UI never advertises a fake 12m wait.
  */
-export const SAME_DIR_LOCK_AFTER_LOSS_MS = 12 * 60_000;
+export const SAME_DIR_LOCK_AFTER_LOSS_MS = 90_000;
 
 export function sameDirLockMs(wasLoss?: boolean | null): number {
   return wasLoss ? SAME_DIR_LOCK_AFTER_LOSS_MS : SAME_DIR_LOCK_MS;
