@@ -76,7 +76,7 @@ describe('brainSelfImprove analyze + hypothesize', () => {
   it('detects Soft SELL spam and builds a genome hypothesis', () => {
     const analysis = analyzeTrades(syntheticLessonTrades());
     expect(analysis.soft_sell_losses).toBeGreaterThanOrEqual(2);
-    expect(analysis.top_pattern).toBeTruthy();
+    expect(analysis.top_pattern?.id).toBe('soft_sell_spam');
     const hypo = buildHypothesis(analysis);
     expect(hypo).toBeTruthy();
     expect(hypo!.patches.length + Object.keys(hypo!.genome_delta || {}).length).toBeGreaterThan(0);
@@ -107,6 +107,41 @@ describe('brainSelfImprove analyze + hypothesize', () => {
     const second = buildHypothesis(analysis, exp);
     expect(second).toBeTruthy();
     expect(second!.signature).not.toBe(first!.signature);
+  });
+
+  it('falls back to explore when all pattern variants are exhausted', () => {
+    const analysis = analyzeTrades(syntheticLessonTrades());
+    const rejected: string[] = [];
+    let last: string | null = null;
+    for (let i = 0; i < 20; i++) {
+      const exp: BrainExperience = {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: analysis.patterns,
+        rejected_signatures: [...rejected],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      };
+      const hypo = buildHypothesis(analysis, exp);
+      expect(hypo).toBeTruthy();
+      if (last) expect(hypo!.signature).not.toBe(last);
+      last = hypo!.signature;
+      rejected.push(hypo!.signature);
+      if (hypo!.pattern_id === 'explore') break;
+    }
+    expect(rejected.length).toBeGreaterThan(1);
+  });
+
+  it('does not inflate soft_loss count across repeated analyzes', () => {
+    const trades = syntheticLessonTrades();
+    const a1 = analyzeTrades(trades);
+    const a2 = analyzeTrades(trades);
+    expect(a1.top_pattern?.count).toBe(a2.top_pattern?.count);
   });
 });
 

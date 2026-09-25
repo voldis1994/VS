@@ -41,11 +41,16 @@ export async function runBrainCycle(opts?: {
     const existing = exp.patterns.find((x) => x.id === p.id);
     if (!existing) exp.patterns.push(p);
     else {
-      existing.count = Math.max(existing.count, p.count);
+      // Window counts are source of truth — do not keep inflated lifetime +=
+      existing.count = p.count;
       existing.evidence = p.evidence;
       existing.last_seen = p.last_seen;
       existing.label = p.label;
     }
+  }
+  // Drop stale soft_loss inflation if window no longer shows undirected Soft
+  if (!analysis.patterns.some((p) => p.id === 'soft_loss')) {
+    exp.patterns = exp.patterns.filter((p) => p.id !== 'soft_loss' || p.count <= 0);
   }
   brainLog(analysis.summary);
   if (analysis.top_pattern) {
