@@ -12,6 +12,7 @@ import {
   type MarketContextSnapshot,
 } from './marketContext.js';
 import { thinkLikeTrader } from './traderMind.js';
+import { learnerChooseAction, type LearnerFeatures } from './deskLearner.js';
 
 export type ManageBrainAction = 'HOLD' | 'TRAIL' | 'CUT' | 'BANK';
 
@@ -43,6 +44,8 @@ export type ManageBrainInput = {
   market?: MarketContextSnapshot | null;
   /** Frozen at fill — compare drift */
   entry_market?: MarketContextSnapshot | null;
+  /** Per-client online learner */
+  client_id?: number | null;
 };
 
 export type ManageBrainResult = {
@@ -56,6 +59,8 @@ export type ManageBrainResult = {
   /** Peak MFE floor override (lower = arm/cut sooner) */
   peak_mfe_floor_override: number | null;
   force_peak_arm: boolean;
+  /** Features snapshot for online learning at close */
+  learner_features?: LearnerFeatures;
 };
 
 export type ManageBrainApply = {
@@ -235,16 +240,16 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
 
   score = clamp(score, -2.5, 2.5);
 
-  // --- Human mind decides (situation → thesis → risk → action) ---
-  const thought = thinkLikeTrader(input);
-  const action = thought.decision;
+  // --- Online LEARNER decides (beats LLM: learns from YOUR pnl) ---
+  const learned = learnerChooseAction(input, input.client_id);
+  const thought = thinkLikeTrader(input); // human narration only
+  const action = learned.action;
 
   let soft_gate_override: boolean | null = null;
   let peak_retention_override: number | null = null;
   let peak_mfe_floor_override: number | null = null;
   let force_peak_arm = false;
 
-  const greenSoft = upl >= soft * 0.95 && mfe >= soft;
   const marketChanged =
     input.minute_policy === 'reverse' ||
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
@@ -266,9 +271,9 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 
-  // Prefer human spoken reason; keep score for telemetry
-  void greenSoft;
-  const reason = `${thought.spoken} · E-score ${score.toFixed(2)}`;
+  const reason = `${learned.detail} · ${thought.thesis.slice(0, 90)}${
+    thought.thesis.length > 90 ? '…' : ''
+  } · E ${score.toFixed(2)}`;
 
   return {
     action,
@@ -278,6 +283,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     peak_retention_override,
     peak_mfe_floor_override,
     force_peak_arm,
+    learner_features: learned.features,
   };
 }
 

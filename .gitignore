@@ -59,3 +59,7 @@ coverage/
 *.pem
 *.key
 credentials.json
+
+# Online desk learner weights
+data/desk-learner/
+data/desk-learner-session.json

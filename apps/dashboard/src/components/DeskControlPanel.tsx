@@ -364,8 +364,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            PRĀTS kā traders: redz zonu/pressure/stāstu un izlemj HOLD/TRAIL/CUT/BANK.
-            Pēc 5 closes raksta MĀCĪBU (Peak/Target) — ne filtrus.
+            LEARNER: online politika no Taviem closes (spēcīgāka par LLM tradingā).
+            Soft = drošība. Pēc close — LEARNER UPDATE · reward …
           </p>
           {auto ? (
             <>

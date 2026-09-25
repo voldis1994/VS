@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   applyManageBrainToExit,
   scoreManageAction,
   type ManageBrainInput,
 } from './manageBrain.js';
+import { _resetLearnerForTests } from './deskLearner.js';
+
+beforeEach(() => {
+  _resetLearnerForTests(0);
+});
 
 function base(partial: Partial<ManageBrainInput> = {}): ManageBrainInput {
   return {
@@ -95,7 +100,9 @@ describe('manageBrain', () => {
         next_entry_side: 'BUY',
       })
     );
-    expect(['TRAIL', 'HOLD']).toContain(r.action);
+    expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
+    expect(r.reason).toMatch(/LEARNER/);
+    expect(r.learner_features?.length).toBeGreaterThan(10);
   });
 
   it('applyManageBrainToExit forces Peak arm and softGate override', () => {

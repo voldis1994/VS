@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          Cilvēka PRĀTS: situācija → tēze → risks → lēmums. Filtrus neaiztiec.
-          Pēc 5 closes — MĀCĪBA (Peak/Target), ne filter ladder.
+          LEARNER (online) māsās no Tava pnl — ne LLM. Katrs close = update.
+          Soft HardInv paliek cieta drošība; Peak/Target modulē LEARNER.
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (
