@@ -420,25 +420,18 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     ).toBe(false);
   });
 
-  it('BUY vs DOWN bias is always blocked (no LO knife exception)', () => {
+  it('at L0 OPEN, structureGate does not knife on 1m bias (mind owns side)', () => {
+    _setTradeOpenAtStartForTests(true);
     const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4324, lastOpen: 4322 });
     const lo = loBook[loBook.length - 1]!;
-    const buy = { direction: 'BUY' as const, setup: 'PULLBACK' as const, reason: 'knife' };
+    const buy = { direction: 'BUY' as const, setup: 'PULLBACK' as const, reason: 'mind BUY' };
     expect(
       structureGate(buy, 'TREND_UP', lo, zoneGeometry(loBook, lo), null, 'DOWN').ok
-    ).toBe(false);
+    ).toBe(true);
 
-    const midBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
-    const mid = midBook[midBook.length - 1]!;
-    expect(
-      structureGate(buy, 'TREND_UP', mid, zoneGeometry(midBook, mid), null, 'DOWN').ok
-    ).toBe(false);
-  });
-
-  it('RANGE fade SELL blocked when 1m UP (Gold rally knife — always SELL bug)', () => {
     const hiBook = zoneBook({ lo: 4300, hi: 4312, lastClose: 4311, lastOpen: 4309.5 });
     const hi = hiBook[hiBook.length - 1]!;
-    const sell = { direction: 'SELL' as const, setup: 'FADE' as const, reason: 'RANGE fade rally' };
+    const sell = { direction: 'SELL' as const, setup: 'FADE' as const, reason: 'mind SELL' };
     const m1Up = {
       open_time_ms: 0,
       open: 4303,
@@ -447,19 +440,13 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
       close: 4311,
       bars: 6,
     };
-    // Live 1m green — even FAILED_BREAKOUT_UP must not knife-SELL
     expect(
       structureGate(sell, 'RANGE', hi, zoneGeometry(hiBook, hi), m1Up, 'UP').ok
-    ).toBe(false);
-    expect(
-      structureGate(sell, 'FAILED_BREAKOUT_UP', hi, zoneGeometry(hiBook, hi), m1Up, 'UP').ok
-    ).toBe(false);
-    expect(
-      structureGate(sell, 'COMPRESSION', hi, zoneGeometry(hiBook, hi), m1Up, 'FLAT').ok
-    ).toBe(false);
+    ).toBe(true);
+    _setTradeOpenAtStartForTests(null);
   });
 
-  it('structure start does not fire BUY into DOWN bias', () => {
+  it('structure start fires zone-half trigger even if bias disagrees (mind filters side)', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4325, lastOpen: 4322 });
     const trigger = book[book.length - 1]!;
     const z = zoneGeometry(book, trigger);
@@ -471,11 +458,10 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
       close: 4325,
       bars: 6,
     };
-    expect(structureStartEntry(trigger, 'TREND_UP', z, m1Red, 'DOWN')).toBeNull();
-    // With agreeing bias, 10s rally can start without waiting for green 1m
+    // Trigger only — mind already chose BUY/SELL/WAIT before this runs
+    expect(structureStartEntry(trigger, 'TREND_UP', z, m1Red, 'DOWN')?.direction).toBe('BUY');
     expect(structureStartEntry(trigger, 'TREND_UP', z, m1Red, 'FLAT')?.direction).toBe('BUY');
   });
-
   it('FAILED_BREAKOUT sides stay near the failed edge', () => {
     const loBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4323, lastOpen: 4324.5 });
     const lo = loBook[loBook.length - 1]!;

@@ -1,12 +1,12 @@
 /**
  * Ultimate open start + auto-cal entry ladder.
  *
- * Level 0 — OPEN: soft entry filters off (boot / fresh session).
- * Level 1 — flip / same-dir lock
- * Level 2 — + structure / 1m bias / story knives
- * Level 3 — + same-dir next-move confirm + RANGE spike block
+ * Level 0 — OPEN: soft entry filters off. Side choice = multi-TF mind.
+ * Level 1 — flip / same-dir lock (legacy; auto-cal keeps 0)
+ * Level 2 — + structure zone soft-blocks (legacy)
+ * Level 3 — + same-dir next-move + RANGE spike (legacy)
  *
- * Auto-cal raises/lowers this from closed-trade outcomes.
+ * Auto-cal forces level 0 — human mind, not filter ladder.
  * Still never: daily/% equity blocks, lot size changes.
  */
 import { getDeskCalibration } from './deskCalibration.js';

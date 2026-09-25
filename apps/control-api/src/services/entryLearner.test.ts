@@ -47,7 +47,7 @@ describe('entryLearner', () => {
     expect(d.probs.SELL).toBeGreaterThan(d.probs.BUY);
   });
 
-  it('does NOT SELL into clear 1m UP rally (Gold knife case)', () => {
+  it('learner softmax may pick any side — mind (multi-TF) owns knife veto', () => {
     const d = entryLearnerChoose(
       selloffInput({
         m1_dir: 'UP',
@@ -65,9 +65,10 @@ describe('entryLearner', () => {
       0,
       () => 0.99
     );
-    expect(d.action).not.toBe('SELL');
-    expect(['WAIT', 'BUY']).toContain(d.action);
-    expect(d.detail).toMatch(/1m UP|WAIT|BUY/);
+    // No coherency knife list — action is softmax / explore only
+    expect(['BUY', 'SELL', 'WAIT']).toContain(d.action);
+    expect(d.detail).toMatch(/PRĀTS ENTRY/);
+    expect(d.detail).not.toMatch(/1m UP · SELL pret/);
   });
 
   it('learns from loss — BUY into selloff features gets weaker', () => {

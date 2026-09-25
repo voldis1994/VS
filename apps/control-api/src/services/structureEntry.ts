@@ -246,58 +246,6 @@ export function higherTfDir(
   return 'FLAT';
 }
 
-/** Counter-trend entries that may ignore 1m bias (structured fade / reversal). */
-function allowsAgainstBias(
-  regime: RegimeName,
-  direction: 'BUY' | 'SELL',
-  /** Last closed 1m color — fade only if tape agrees or is quiet */
-  m1Dir: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
-): boolean {
-  // Never fade a live 1m impulse the other way (Gold rally → endless SELL)
-  if (direction === 'SELL' && m1Dir === 'UP') return false;
-  if (direction === 'BUY' && m1Dir === 'DOWN') return false;
-  if (direction === 'BUY' && regime === 'FAILED_BREAKOUT_DOWN') return true;
-  if (direction === 'SELL' && regime === 'FAILED_BREAKOUT_UP') return true;
-  if (regime === 'REVERSAL_CANDIDATE') return true;
-  return false;
-}
-
-function against1mBias(
-  direction: 'BUY' | 'SELL',
-  bias: 'UP' | 'DOWN' | 'FLAT',
-  regime: RegimeName,
-  _zone: ZoneGeometry | null,
-  m1Dir: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
-): string | null {
-  if (allowsAgainstBias(regime, direction, m1Dir)) return null;
-
-  // Multi-bar 1m bias — never fade/bounce against the trek
-  if (direction === 'BUY' && bias === 'DOWN') {
-    return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
-  }
-  if (direction === 'SELL' && bias === 'UP') {
-    return `SELL vs 1m bias UP (${regime}) · fade into rally`;
-  }
-
-  // Last closed 1m color — knife only on fade/chop regimes (RANGE fade green→SELL).
-  // BREAKOUT_UP may pierce after a red 1m; TREND pullback may buy a dip 1m.
-  const fadeLike =
-    regime === 'RANGE' ||
-    regime === 'COMPRESSION' ||
-    regime === 'TRANSITION' ||
-    regime === 'FAILED_BREAKOUT_UP' ||
-    regime === 'FAILED_BREAKOUT_DOWN';
-  if (fadeLike) {
-    if (direction === 'BUY' && m1Dir === 'DOWN') {
-      return `BUY vs 1m DOWN (${regime}) · bounce into selloff`;
-    }
-    if (direction === 'SELL' && m1Dir === 'UP') {
-      return `SELL vs 1m UP (${regime}) · fade into rally`;
-    }
-  }
-  return null;
-}
-
 function rally(bar: TenSecBar): boolean {
   return bodyPct(bar) >= ENTRY_RALLY;
 }
@@ -313,7 +261,8 @@ function tag(zone: ZoneGeometry, md: string, bias?: string): string {
 
 /**
  * Structure-start for regimes that can begin a 1m leg from the zone half.
- * Does NOT require TREND_ENTER on 10s — only MOVING + 1m color agreement.
+ * Does NOT require TREND_ENTER on 10s — only MOVING + zone half.
+ * Side bias knives live in the entry mind (multi-TF), not here.
  */
 export function structureStartEntry(
   bar: TenSecBar,
@@ -337,9 +286,6 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      // Never start long into a multi-1m selloff (bounce knife)
-      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY', md)) break;
-      // 10s rally can start the leg before last closed 1m flips — bias must already agree
       if (zone.pos <= START_LO && rally(bar)) {
         return {
           direction: 'BUY',
@@ -360,7 +306,6 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL', md)) break;
       if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',
@@ -383,6 +328,7 @@ export type StructureGateResult =
 /**
  * Per-regime structure gate — soft, executable.
  * Unknown / thin zone → pass raw 10s (do not starve).
+ * 1m / multi-TF side choice lives in the entry mind — not knife lists here.
  */
 export function structureGate(
   sig: RegimeEntry,
@@ -393,23 +339,12 @@ export function structureGate(
   bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
 ): StructureGateResult {
   if (!zone) {
-    // Even without zone: never SELL into live 1m UP / BUY into 1m DOWN
-    const mdThin = minuteDir(m1);
-    const againstThin = against1mBias(sig.direction, bias, regime, null, mdThin);
-    if (againstThin) return { ok: false, reason: againstThin };
     return { ok: true, tag: 'zona thin · raw 10s' };
   }
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
 
-  // 1m knife guard is ALWAYS on — even when structure soft-blocks are L0 OPEN.
-  // Old path skipped against1mBias when filters=0 → endless RANGE fade SELL into rally.
-  const against = against1mBias(sig.direction, bias, regime, zone, md);
-  if (against) {
-    return { ok: false, reason: against };
-  }
-
-  // Level <2: no further structure soft-blocks — auto-cal raises later
+  // Level <2: no structure soft-blocks — mind already chose the side
   if (!entryStructureEnabled()) {
     if (regime === 'UNKNOWN') return { ok: false, reason: 'UNKNOWN · no entry' };
     return { ok: true, tag: `open · ${posTag}` };
@@ -620,19 +555,16 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     learned.updates >= 20 &&
     learned.confidence >= thought.confidence + 0.08 &&
     !learned.explored;
-  let side = learnerReady ? learned.action : thought.choice;
-
-  // Tape veto — mind that sees 1m UP never lets learner knife-SELL the rally
-  if (side === 'SELL' && (md === 'UP' || bias === 'UP')) {
-    side = thought.choice === 'BUY' ? 'BUY' : 'WAIT';
-  }
-  if (side === 'BUY' && (md === 'DOWN' || bias === 'DOWN')) {
-    side = thought.choice === 'SELL' ? 'SELL' : 'WAIT';
+  // Mind leads. Learner may reinforce the same side — never knife opposite.
+  let side = thought.choice;
+  if (learnerReady && learned.action === thought.choice) {
+    side = learned.action;
   }
 
-  const mindDetail = learnerReady
-    ? `${thought.spoken} · LEARNER ${learned.action} n=${learned.updates}`
-    : thought.spoken;
+  const mindDetail =
+    learnerReady && learned.action === thought.choice
+      ? `${thought.spoken} · LEARNER ${learned.action} n=${learned.updates}`
+      : thought.spoken;
 
   if (side === 'WAIT') {
     return null;
