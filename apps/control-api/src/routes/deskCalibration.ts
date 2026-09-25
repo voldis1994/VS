@@ -7,9 +7,9 @@ import {
   type DeskCalibration,
 } from '../services/deskCalibration.js';
 import {
-  beginAutoCalibrateSession,
   getAutoCalibrateStatus,
   isAutoCalibrateEnabled,
+  resetClientToOpenTradeAll,
   setAutoCalibrateEnabled,
 } from '../services/autoCalibrate.js';
 import { runWithDeskClientAsync } from '../services/deskClientScope.js';
@@ -65,6 +65,7 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
     const body = (request.body || {}) as {
       enabled?: boolean;
       reset?: boolean;
+      factory_open?: boolean;
       client_id?: number;
     };
     const clientId = parseClientId(body.client_id);
@@ -72,15 +73,21 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
       if (typeof body.enabled === 'boolean') {
         setAutoCalibrateEnabled(body.enabled, clientId);
       }
-      if (body.reset) {
-        beginAutoCalibrateSession('manual_reset', clientId);
+      if (body.reset || body.factory_open) {
+        resetClientToOpenTradeAll(clientId, body.factory_open ? 'factory_open' : 'manual_reset');
       }
       await logAudit('admin', 'desk_auto_calibrate', 'desk', 'auto', null, {
         client_id: clientId,
         enabled: isAutoCalibrateEnabled(clientId),
-        reset: Boolean(body.reset),
+        reset: Boolean(body.reset || body.factory_open),
+        factory_open: Boolean(body.factory_open || body.reset),
       });
-      return { success: true, client_id: clientId, auto: getAutoCalibrateStatus(undefined, clientId) };
+      return {
+        success: true,
+        client_id: clientId,
+        calibration: getDeskCalibration(clientId),
+        auto: getAutoCalibrateStatus(undefined, clientId),
+      };
     });
   });
 }

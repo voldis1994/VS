@@ -364,9 +364,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            Sākumā tirgo VISU (entry filters OPEN). Ik pēc 5 closes pats koriģē
-            Soft/Peak/Target + filters. Ja mērķi pārāk tālu — pullback (neceļ bezgalīgi).
-            Core regimes nekad auto-OFF. Lot nemaina.
+            START / «Sākt no jauna» = OPEN TRADE-ALL (Soft 2.2 · Peak 3 · Target 5 ·
+            filters L0 · visi regimes). Pēc tam ik 5 closes auto-cal. Lot nemaina.
           </p>
           {auto ? (
             <>
@@ -432,13 +431,24 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                   className="btn"
                   disabled={calBusy}
                   onClick={() => {
-                    void apiFetch<{ auto: AutoCalStatus }>('/api/desk/auto-calibrate', {
+                    void apiFetch<{
+                      auto: AutoCalStatus;
+                      calibration?: DeskCalibration;
+                    }>('/api/desk/auto-calibrate', {
                       method: 'POST',
-                      body: JSON.stringify({ reset: true, client_id: clientIdForCal }),
-                    }).then((r) => setAuto(r.auto));
+                      body: JSON.stringify({
+                        factory_open: true,
+                        reset: true,
+                        client_id: clientIdForCal,
+                      }),
+                    }).then((r) => {
+                      setAuto(r.auto);
+                      if (r.calibration) setCal(r.calibration);
+                      setCalMsg('OPEN TRADE-ALL · Soft 2.2 · Peak 3 · Target 5 · filters L0');
+                    });
                   }}
                 >
-                  Reset watch
+                  Sākt no jauna
                 </button>
               </div>
             </>

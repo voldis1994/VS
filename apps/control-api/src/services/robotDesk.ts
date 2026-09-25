@@ -46,7 +46,6 @@ import {
 import {
   AUTO_CALIBRATE_EVERY_N,
   AUTO_CALIBRATE_COOLDOWN_MS,
-  beginAutoCalibrateSession,
   ensureAutoCalibrateSession,
   getAutoCalibrateStatus,
   isAutoCalibrateCooldownActive,
@@ -3021,16 +3020,15 @@ export async function startRobotSession(input: {
   };
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
-  // Entry-capable START resets auto-calibrate watch (ultimate self-tune from this moment)
+  // Entry-capable START → factory OPEN TRADE-ALL (wipe watch + default knobs)
   if (session.entry_enabled) {
-    // Continue existing watch — do NOT wipe closes on every START
     const st = ensureAutoCalibrateSession(`robot ${id}`, session.client_id);
     pushTick(session, {
       phase: 'INFO',
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL ON · closes ${st.closes_in_session} · every ${AUTO_CALIBRATE_EVERY_N} · cooldown ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m · next=${st.closes_until_next} · filters L${st.knobs_now.entry_filter_level}`,
+      detail: `AUTO-CAL OPEN TRADE-ALL · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · every ${AUTO_CALIBRATE_EVERY_N} · cooldown ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m`,
     });
   }
   pushTick(session, {
