@@ -523,9 +523,10 @@ export function decideBestOutcomeExit(
     let breaching = false;
     let structureBreaching = false;
 
-    // 1) Structure invalidation — regime thesis dead at the zone (faster confirm).
-    // Never bank micro-green (< Soft): that was same-minute +£0.01…+£0.13 scratch
-    // while Peak/Target still require ≥ Soft. Cut losers/flat; bank only ≥ Soft.
+    // 1) Structure invalidation — regime thesis dead at the zone.
+    // Soft-sized only: never scratch micro-green OR micro-red (same-minute
+    // −£0.06…−£0.17 SELL scratches while Soft is still ~3–4pt). Soft HardInv
+    // owns shallow losers; structure may only cut Soft-sized green/red.
     const structReason = structureInvalidationReason(
       s.open_side,
       mid,
@@ -533,8 +534,8 @@ export function decideBestOutcomeExit(
       s.entry_zone
     );
     if (structReason && heldMs >= STRUCTURE_GRACE_MS) {
-      const microGreen = execFav > 0 && execFav < minBank;
-      if (!microGreen) {
+      const softSized = execFav >= minBank || execFav <= -minBank;
+      if (softSized) {
         structureBreaching = true;
         const since = s.structure_breach_since_ms;
         if (since != null && Number.isFinite(since) && since > 0) {
