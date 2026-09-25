@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertPatchesAllowed,
-  BRAIN_ALLOWED_REL_PATHS,
+  listAllowedTradingRelPaths,
   normalizeRepoPath,
   type BrainPatch,
 } from './guards.js';
@@ -57,7 +57,7 @@ export function createCandidateSession(cycleId: string): CandidateSession {
   const touched: string[] = [];
   const genomeAbs = genomePath();
 
-  for (const rel of BRAIN_ALLOWED_REL_PATHS) {
+  for (const rel of listAllowedTradingRelPaths()) {
     const isGenome = rel === GENOME_REL;
     const abs = isGenome ? genomeAbs : path.join(repoRoot(), rel);
     if (!fs.existsSync(abs)) continue;
