@@ -218,6 +218,14 @@ start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set CLIENT_PANEL_DIST=
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 
+REM Autonomous trading-brain self-improve — separate CMD (lot/broker/security blocked)
+if exist "%ROOT%\BRAIN.bat" (
+  start "MR-BrainSelfImprove" /D "%ROOT%" cmd /k call BRAIN.bat
+  echo [OK] BRAIN self-improve logs → MR-BrainSelfImprove
+) else (
+  echo [WARN] BRAIN.bat nav — smadzenes nepalaizas autonomi
+)
+
 if exist "%ROOT%\tools\client-public.mjs" (
   start "MR-ClientPublic" /D "%ROOT%" cmd /k set CLIENT_PUBLIC_PORT=18080^& set CLIENT_DIST=%ROOT%\apps\dashboard\dist-client^& node tools\client-public.mjs
 ) else (

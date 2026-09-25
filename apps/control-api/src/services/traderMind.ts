@@ -18,6 +18,8 @@ import {
 } from './marketContext.js';
 import type { ManageBrainAction, ManageBrainInput } from './manageBrain.js';
 import { readMultiTfStack, sideFromMultiTf, type TfDir } from './multiTfRead.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
+import { getSoftPauseSide } from '../brainSelfImprove/experience.js';
 
 export type TraderThought = {
   situation: string;
@@ -145,14 +147,19 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   let confidence = 0.55;
 
   const greenSoft = upl >= soft * 0.95 && mfe >= soft;
-  const keep = 0.75;
+  const genome = getBrainGenome();
+  const keep = genome.soft_plus_giveback;
   const givingBack = retention < keep && mfe >= soft && upl > 0;
   const marketChanged =
     input.minute_policy === 'reverse' ||
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     (mkt != null && storyFightsSide(mkt.story?.allow, input.open_side));
 
-  if (greenSoft && (marketChanged || againstUs || givingBack)) {
+  if (
+    genome.mind_bank_on_turn &&
+    greenSoft &&
+    (marketChanged || againstUs || givingBack)
+  ) {
     decision = 'BANK';
     why = givingBack
       ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'
@@ -468,6 +475,31 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `Pēc Soft ${input.last_closed_side} — negāžu to pašu pusi bez svaiga 1m apstiprinājuma.`;
       why = 'Same-dir Soft spam → Soft SL ķēde. Gaidu triggeri vai otru pusi.';
+      confidence = 0.35;
+    }
+  }
+
+  // Autonomous brain memory — Soft loss streak pause (from BRAIN.bat self-improve)
+  const paused = getSoftPauseSide();
+  if (paused && choice === paused) {
+    choice = 'WAIT';
+    thesis = `Smadzenes pauzē ${paused} — Soft ķēde iegaumēta (self-improve).`;
+    why = 'Pieredze: atkārtots Soft uz šo pusi; mācos, nevis spamu.';
+    confidence = 0.3;
+  }
+
+  // Genome: require 1m trigger when set
+  if (getBrainGenome().require_1m_trigger) {
+    if (choice === 'SELL' && m1 !== 'DOWN') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · genome require_1m_trigger — gaidu DOWN 1m.`;
+      why = 'Self-improve genome: bez 1m triggera neieeju.';
+      confidence = 0.35;
+    }
+    if (choice === 'BUY' && m1 !== 'UP') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · genome require_1m_trigger — gaidu UP 1m.`;
+      why = 'Self-improve genome: bez 1m triggera neieeju.';
       confidence = 0.35;
     }
   }

@@ -1,5 +1,6 @@
 /** Live Capital exit — cut losers fast; let winners run / lock real +R. */
 import { getDeskCalibration } from './deskCalibration.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import {
   regimeExitProfile,
   structureInvalidationReason,
@@ -462,8 +463,13 @@ export function decideBestOutcomeExit(
   );
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
+  const genome = getBrainGenome();
   let peakRet =
     cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
+  // Autonomous brain genome may tighten Keep % (cut sooner) — never loosen below desk
+  if (genome.peak_keep > 0) {
+    peakRet = Math.max(peakRet, genome.peak_keep);
+  }
   // Regime profile may only tighten Keep % (cut sooner) — never undercut desk knob
   if (profile.peak_retention != null && profile.peak_retention > 0) {
     peakRet = Math.max(peakRet, profile.peak_retention);
@@ -512,8 +518,12 @@ export function decideBestOutcomeExit(
         ? Math.max(0, fav / mfe)
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
-  // Soft-sized MFE → trail at Keep %; do not wait for inflated Gold-scaled peak_mfe_abs
-  const trailFloor = peakTrailMfeFloor(mfeFloor, sl, minBank);
+  // Soft-sized MFE → trail at Keep %; do not wait for inflated Gold-scaled peak_mfe_abs.
+  // Genome peak_arm_soft_mult < 1 arms Peak earlier; > 1 waits for more MFE.
+  const trailFloor = Math.max(
+    minBank * 0.5,
+    peakTrailMfeFloor(mfeFloor, sl, minBank) * genome.peak_arm_soft_mult
+  );
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';

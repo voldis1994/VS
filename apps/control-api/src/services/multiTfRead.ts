@@ -4,6 +4,8 @@
  *
  * Higher TF sets the side. Lower TF times the entry. Fight = WAIT.
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
+
 export type TfDir = 'UP' | 'DOWN' | 'FLAT';
 
 export type TfCandle = {
@@ -138,8 +140,9 @@ export function readMultiTfStack(input: {
     bias !== 'FLAT' && tf5 !== 'FLAT' && tf5 !== bias;
   // 1m against the working side = pullback — HOLD the bias in UI, but do NOT
   // fire PRĀTS entry until the trigger agrees (was: SELL into green 1m → Soft spam)
+  const waitFight = getBrainGenome().wait_on_1m_fight;
   const triggerFight =
-    bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
+    waitFight && bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
   const only1m =
     tf1 !== 'FLAT' && tf5 === 'FLAT' && tf15 === 'FLAT' && tf30 === 'FLAT';
 

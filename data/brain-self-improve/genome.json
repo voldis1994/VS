@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-25T00:00:00.000Z",
+  "peak_keep": 0.75,
+  "peak_arm_soft_mult": 1,
+  "soft_plus_giveback": 0.75,
+  "require_1m_trigger": true,
+  "soft_same_side_pause_closes": 4,
+  "soft_same_side_pause_min": 2,
+  "wait_on_1m_fight": true,
+  "mind_bank_on_turn": true,
+  "last_lesson": "factory genome"
+}
