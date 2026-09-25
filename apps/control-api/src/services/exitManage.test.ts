@@ -392,6 +392,35 @@ describe('decideBestOutcomeExit', () => {
     expect(enough.reason).toMatch(/PeakProtection/);
   });
 
+  it('Gold Peak Keep 75% trails after Soft-sized MFE (not inflated peak_mfe_abs floor)', () => {
+    // Live bug: peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 → 8pt SELL never Peak-cut
+    // while UI showed Keep 75% and MFE ~8 / UPL ~4 (retention ~50%).
+    setDeskCalibration({
+      ...defaultDeskCalibration(),
+      peak_retention: 0.75,
+      peak_mfe_abs: 4.45,
+      peak_min_giveback_abs: 1.1,
+      hardinv_abs: 2.2,
+    });
+    const entry = 4300.21;
+    const mfe = 8.375; // best ~4291.835
+    const nowMid = 4296.07; // fav ≈ 4.14 → retention ≈ 49%
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        mfe,
+        peak_retention: 4.14 / mfe,
+      }),
+      nowMid,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/keep≤75%/);
+  });
+
   it('peak_protect_only gate ignores HardInv / Target', () => {
     const hold = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, peak_retention: 0.9 }),

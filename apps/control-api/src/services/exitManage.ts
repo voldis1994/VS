@@ -293,6 +293,19 @@ function peakShouldCut(
 }
 
 /**
+ * Peak trail floor once Soft-sized MFE exists.
+ *
+ * Gold (~4300) scales peak_mfe_abs 4.45 → ~9.5 via scaleDeskAbs — then a real
+ * 8pt winner never Peak-cuts while UI shows "Peak floor 4.45 / Keep 75%".
+ * Soft-sized MFE is enough to trail retention; do not wait for a higher scaled floor.
+ */
+export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: number): number {
+  const softSized = Math.max(softSl, minBank);
+  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return softSized;
+  return Math.min(mfeFloor, softSized);
+}
+
+/**
  * Soft / Peak / Target abs knobs are tuned once at REF mid (~DESK_REF_MID).
  * Candles/regimes look the same on **every** market — only size changes.
  * Scale abs pts by entry/REF so all epics share the same % R:R.
@@ -419,11 +432,11 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   let peakRet =
-    profile.peak_retention != null && profile.peak_retention > 0
-      ? profile.peak_retention
-      : cal.peak_retention > 0
-        ? cal.peak_retention
-        : PEAK_MFE_RETENTION;
+    cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
+  // Regime profile may only tighten Keep % (cut sooner) — never undercut desk knob
+  if (profile.peak_retention != null && profile.peak_retention > 0) {
+    peakRet = Math.max(peakRet, profile.peak_retention);
+  }
   if (
     overrides?.peak_retention_cfg != null &&
     Number.isFinite(overrides.peak_retention_cfg) &&
@@ -468,6 +481,8 @@ export function decideBestOutcomeExit(
         ? Math.max(0, fav / mfe)
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
+  // Soft-sized MFE → trail at Keep %; do not wait for inflated Gold-scaled peak_mfe_abs
+  const trailFloor = peakTrailMfeFloor(mfeFloor, sl, minBank);
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
@@ -536,12 +551,12 @@ export function decideBestOutcomeExit(
   if (wantPeakOnly) {
     if (
       execFav >= minBank &&
-      peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
+      peakShouldCut(fav, mfe, retention, trailFloor, peakRet, minGiveback)
     ) {
       const givePct = ((1 - peakRet) * 100).toFixed(0);
       return {
         exit: true,
-        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · giveback≤${givePct}% · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} · keep≤${(peakRet * 100).toFixed(0)}% · giveback≤${givePct}% · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
     return { exit: false, reason: '' };
@@ -551,11 +566,11 @@ export function decideBestOutcomeExit(
     if (
       gate === 'all' &&
       execFav >= minBank &&
-      peakShouldCut(fav, mfe, retention, mfeFloor, peakRet, minGiveback)
+      peakShouldCut(fav, mfe, retention, trailFloor, peakRet, minGiveback)
     ) {
       return {
         exit: true,
-        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
+        reason: `PeakProtection · ${profile.family} · retention ${(retention! * 100).toFixed(0)}% of MFE ${mfe.toFixed(5)} → lock best · keep≤${(peakRet * 100).toFixed(0)}% · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
 
