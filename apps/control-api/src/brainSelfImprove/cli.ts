@@ -1,6 +1,6 @@
 /**
  * CLI entry — `npm run brain:self-improve` / BRAIN.bat
- * Continuous autonomous cycles with realtime CMD output.
+ * Continuous autonomous cycles — no idle wait between learns (default).
  */
 import { brainBanner, brainLog, brainSection } from './consoleUi.js';
 import { runBrainCycle } from './loop.js';
@@ -13,10 +13,16 @@ function sleep(ms: number): Promise<void> {
 
 async function main(): Promise<void> {
   const once = process.argv.includes('--once');
+  /** 0 = continuous (default). Optional --interval N for throttle. */
   const intervalSec = (() => {
     const i = process.argv.indexOf('--interval');
-    if (i >= 0 && process.argv[i + 1]) return Math.max(30, Number(process.argv[i + 1]) || 180);
-    return Number(process.env.BRAIN_CYCLE_INTERVAL_SEC) || 180;
+    if (i >= 0 && process.argv[i + 1] != null) {
+      return Math.max(0, Number(process.argv[i + 1]) || 0);
+    }
+    if (process.env.BRAIN_CYCLE_INTERVAL_SEC != null && process.env.BRAIN_CYCLE_INTERVAL_SEC !== '') {
+      return Math.max(0, Number(process.env.BRAIN_CYCLE_INTERVAL_SEC) || 0);
+    }
+    return 0;
   })();
 
   brainBanner();
@@ -26,8 +32,16 @@ async function main(): Promise<void> {
   brainLog(
     `Pieredze: cycles=${exp.cycles.length} rejected=${exp.rejected_signatures.length} accepted=${exp.accepted_signatures.length}`
   );
-  brainLog(`Guards: lot/broker/security/auth — BLOĶĒTI · trading decision files — ATĻAUTI`);
-  brainLog(once ? 'Mode: --once' : `Mode: loop every ${intervalSec}s`);
+  brainLog(
+    `Guards: LOT + broker/security/auth/core — BLOĶĒTI · visa trading loģika (režīmi/likumi/entry/exit/manage) — ATĻAUTA`
+  );
+  brainLog(
+    once
+      ? 'Mode: --once'
+      : intervalSec > 0
+        ? `Mode: loop every ${intervalSec}s`
+        : 'Mode: CONTINUOUS — mācās uzreiz, bez pauzes starp cikliem'
+  );
 
   let n = 0;
   for (;;) {
@@ -38,10 +52,17 @@ async function main(): Promise<void> {
       brainLog(`REZULTĀTS: ${result.decision} · ${result.reason}`);
     } catch (err) {
       brainLog(`CIKLA KĻŪDA: ${err instanceof Error ? err.message : String(err)}`);
+      // Brief backoff only on hard errors so we don't spin a tight crash loop
+      if (!once) await sleep(1000);
     }
     if (once) break;
-    brainLog(`Gaidu ${intervalSec}s līdz nākamajam ciklam...`);
-    await sleep(intervalSec * 1000);
+    if (intervalSec > 0) {
+      brainLog(`Gaidu ${intervalSec}s līdz nākamajam ciklam...`);
+      await sleep(intervalSec * 1000);
+    } else {
+      // Tiny yield so CMD stays responsive; next cycle starts immediately
+      await sleep(50);
+    }
   }
 }
 

@@ -25,10 +25,20 @@ import {
 import { runBrainCycle } from './loop.js';
 
 describe('brainSelfImprove guards', () => {
-  it('allows trading decision paths and blocks lot/broker/security', () => {
+  it('allows all trading decision paths and blocks lot/broker/security/core', () => {
     expect(isPathAllowed('apps/control-api/src/services/exitManage.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/regimes.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/regimeBands.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/entryFromRegime.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/entryWatch.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/robotDesk.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/flipFilter.ts').ok).toBe(true);
+    expect(isPathAllowed('apps/control-api/src/services/tradeOpenPolicy.ts').ok).toBe(true);
+    expect(isPathAllowed('data/brain-self-improve/genome.json').ok).toBe(true);
     expect(isPathAllowed('apps/control-api/src/services/capitalCom.ts').ok).toBe(false);
     expect(isPathAllowed('apps/control-api/src/security/encryption.ts').ok).toBe(false);
+    expect(isPathAllowed('apps/control-api/src/brainSelfImprove/guards.ts').ok).toBe(false);
+    expect(isPathAllowed('apps/control-api/src/services/intentFanout.ts').ok).toBe(false);
     expect(isPatchContentAllowed('a', 'lot_size: 0.5').ok).toBe(false);
     expect(() =>
       assertPatchesAllowed([

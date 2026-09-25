@@ -16,6 +16,8 @@ echo.
 echo   [INFO] Galveno sistemu (API + dashboard + robot) palaiž VS.bat
 echo          VS.bat pats atver ari so BRAIN logu (MR-BrainSelfImprove).
 echo          BRAIN.bat vienu pats = tikai masanas cikls, bez tirdzniecibas UI.
+echo          Atļauts: visa trading loģika. Bloķēts: LOT + broker/security/core.
+echo          Cikli: CONTINUOUS (bez 180s pauzes) — masas uzreiz.
 echo.
 
 if not exist "%ROOT%\apps\control-api\package.json" (
@@ -54,7 +56,7 @@ echo [OK] Startēju autonomo smadzeņu ciklu...
 echo     Ctrl+C aptur. Rezultati: data\brain-self-improve\
 echo.
 
-set "BRAIN_CYCLE_INTERVAL_SEC=180"
+set "BRAIN_CYCLE_INTERVAL_SEC=0"
 call npx --yes tsx src/brainSelfImprove/cli.ts %*
 set "EC=%ERRORLEVEL%"
 echo.
