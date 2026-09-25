@@ -93,7 +93,7 @@ export type AutoCalibrateStatus = {
   last_cycle_at: string | null;
   last_summary: string | null;
   last_changes: string[];
-  /** True while post-change cooldown blocks new entries */
+  /** True while post-change settle spaces the next auto-cal cycle (entries stay open) */
   cooling_down: boolean;
   cooldown_until: string | null;
   cooldown_left_s: number;
@@ -447,8 +447,9 @@ export function getAutoCalibrateStatus(
 
 /**
  * Record one closed trade. Every AUTO_CALIBRATE_EVERY_N closes since START,
- * softly retunes desk calibration. Applied change starts entry cooldown.
- * Never throws. Open positions still managed during cooldown.
+ * softly retunes desk calibration. Applied change starts a short settle
+ * before the next auto-cal cycle — entries stay open (PRĀTS still trades).
+ * Never throws. Open positions still managed during settle.
  */
 export function noteClosedTradeForAutoCalibrate(
   trade: SessionTrade,
@@ -529,7 +530,7 @@ export function noteClosedTradeForAutoCalibrate(
   state.cooldown_until_ms = Date.now() + AUTO_CALIBRATE_COOLDOWN_MS;
   state.cycles_run += 1;
   state.last_cycle_at = at;
-  state.last_summary = `${proposed.summary} · COOLDOWN ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m`;
+  state.last_summary = `${proposed.summary} · cal settle ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m (entries OK)`;
   state.last_changes = proposed.changes;
   pushHistory(true, AUTO_CALIBRATE_COOLDOWN_MS / 1000);
   persistSession(id);

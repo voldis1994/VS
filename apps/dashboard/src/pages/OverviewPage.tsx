@@ -299,7 +299,7 @@ export function OverviewPage() {
                   {!auto.enabled
                     ? 'PAUSED'
                     : auto.cooling_down
-                      ? `CD ${auto.cooldown_left_s}s`
+                      ? `cal ${auto.cooldown_left_s}s`
                       : 'ON'}
                 </div>
               </div>

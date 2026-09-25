@@ -372,7 +372,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 {auto.enabled ? 'ON' : 'OFF'}
                 {clientIdForCal ? ` · client #${clientIdForCal}` : ''}
                 {auto.cooling_down
-                  ? ` · COOLDOWN ${auto.cooldown_left_s ?? 0}s`
+                  ? ` · cal settle ${auto.cooldown_left_s ?? 0}s (entries OK)`
                   : ` · closes ${auto.closes_in_session} · next ${auto.closes_until_next}`}
                 {' · '}cycles {auto.cycles_run}
               </div>
