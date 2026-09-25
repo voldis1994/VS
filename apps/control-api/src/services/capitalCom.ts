@@ -978,6 +978,8 @@ export type CapitalOpenPosition = {
   open_level: number | null;
   upl: number | null;
   stop_level: number | null;
+  /** Broker take-profit level (absolute) — null when none attached */
+  profit_level: number | null;
   /** Broker open time (ISO) from createdDateUTC / createdDate — TimeDecay must use this */
   created_at: string | null;
 };
@@ -1039,6 +1041,9 @@ export async function listCapitalOpenPositions(
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
+      profit_level: numOrNull(
+        pos.profitLevel ?? pos.profit_level ?? pos.limitLevel ?? pos.limit_level
+      ),
       created_at: parseCapitalCreatedAt(
         pos.createdDateUTC ?? pos.createdDateUtc ?? pos.createdDate ?? pos.created_at
       ),

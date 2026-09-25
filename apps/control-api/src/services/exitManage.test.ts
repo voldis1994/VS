@@ -573,6 +573,57 @@ describe('decideBestOutcomeExit', () => {
     expect(cut.reason).toMatch(/StructureInvalidation|back under/);
   });
 
+  it('structure does NOT scratch micro-green below Soft (same-minute £0.xx bug)', () => {
+    const now = Date.now();
+    const entry = 4330;
+    // Narrow zone — through_mid fires at tiny green past mid
+    const zone = { hi: 4332, lo: 4328, mid: 4330, width: 4 };
+    const soft = hardInvStopDistance(entry, 'RANGE');
+    // RANGE fade BUY through mid at +0.3 — below Soft — must HOLD
+    const tinyMid = entry + 0.3;
+    expect(tinyMid).toBeGreaterThan(zone.mid + zone.width * 0.05);
+    expect(0.3).toBeLessThan(soft);
+    const tiny = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        regime: 'RANGE',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: now - 4_000,
+        mfe: 0.35,
+      }),
+      tinyMid,
+      'live_loss',
+      now,
+      { bid: tinyMid - 0.05, ask: tinyMid + 0.05 }
+    );
+    expect(tiny.exit).toBe(false);
+    expect(tiny.structure_breaching).toBeFalsy();
+
+    // Soft-sized green through mid → structure may bank
+    const bankMid = entry + soft + 0.3;
+    const bank = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        regime: 'RANGE',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: now - 4_000,
+        mfe: soft + 0.5,
+      }),
+      bankMid,
+      'live_loss',
+      now,
+      { bid: bankMid - 0.05, ask: bankMid + 0.05 }
+    );
+    expect(bank.exit).toBe(true);
+    expect(bank.reason).toMatch(/StructureInvalidation/);
+  });
+
   it('entry_regime freeze — live COMPRESSION does not rewrite TREND Soft thesis', () => {
     const trendSl = hardInvStopDistance(2000, 'TREND_UP');
     const liveFlip = decideBestOutcomeExit(

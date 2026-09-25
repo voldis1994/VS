@@ -477,7 +477,9 @@ export function decideBestOutcomeExit(
     let breaching = false;
     let structureBreaching = false;
 
-    // 1) Structure invalidation — regime thesis dead at the zone (faster confirm)
+    // 1) Structure invalidation — regime thesis dead at the zone (faster confirm).
+    // Never bank micro-green (< Soft): that was same-minute +£0.01…+£0.13 scratch
+    // while Peak/Target still require ≥ Soft. Cut losers/flat; bank only ≥ Soft.
     const structReason = structureInvalidationReason(
       s.open_side,
       mid,
@@ -485,15 +487,18 @@ export function decideBestOutcomeExit(
       s.entry_zone
     );
     if (structReason && heldMs >= STRUCTURE_GRACE_MS) {
-      structureBreaching = true;
-      const since = s.structure_breach_since_ms;
-      if (since != null && Number.isFinite(since) && since > 0) {
-        if (nowMs - since >= STRUCTURE_CONFIRM_MS) {
-          return {
-            exit: true,
-            reason: `${structReason} · held ${Math.round(heldMs / 1000)}s · family=${profile.family}`,
-            hardinv_breaching: false,
-          };
+      const microGreen = execFav > 0 && execFav < minBank;
+      if (!microGreen) {
+        structureBreaching = true;
+        const since = s.structure_breach_since_ms;
+        if (since != null && Number.isFinite(since) && since > 0) {
+          if (nowMs - since >= STRUCTURE_CONFIRM_MS) {
+            return {
+              exit: true,
+              reason: `${structReason} · held ${Math.round(heldMs / 1000)}s · family=${profile.family} · exec ${execFav.toFixed(5)}`,
+              hardinv_breaching: false,
+            };
+          }
         }
       }
     }
