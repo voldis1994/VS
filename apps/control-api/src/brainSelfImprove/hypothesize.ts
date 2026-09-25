@@ -12,7 +12,6 @@ import type { BrainPatch } from './guards.js';
 import type { AnalysisResult } from './analyze.js';
 import {
   codePatchesBankGreen,
-  codePatchesExplore,
   codePatchesMicroScratch,
   codePatchesSoftSpam,
 } from './codePatches.js';
@@ -396,7 +395,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
       patches: [
         genomePatch('peak_keep', keep, `explore Keep ${keep}`),
         genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
-        ...codePatchesExplore(rejectedN),
+        // Genome-only — no flipFilter write (avoids desk reload blink)
       ],
     },
     {
@@ -413,7 +412,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
         genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
         genomePatch('mind_bank_on_turn', true, 'mind bank on'),
-        ...codePatchesBankGreen(),
+        // Genome-only — Mind .ts rides via soft_loss / green_not_banked patterns
       ],
     },
     {
@@ -461,13 +460,13 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
         genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
         genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
-        ...codePatchesExplore(rejectedN + 1),
+        // Genome-only gates — no flipFilter lock tick
       ],
     },
     {
       title: `Explore structure extremes (step #${nextStep + 5})`,
       rationale: 'Nudge structureEntry extremes when genome knobs exhausted.',
-      task: `structureEntry EXTREME/START + Soft lock tick`,
+      task: `structureEntry EXTREME/START`,
       genome_delta: {
         explore_step: nextStep + 5,
         require_1m_trigger: true,
@@ -477,7 +476,6 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
         genomePatch('require_1m_trigger', true, '1m trigger'),
         ...codePatchesMicroScratch(rejectedN % 2),
-        ...codePatchesExplore(rejectedN + 2),
       ],
     },
   ];
@@ -506,7 +504,7 @@ function forceExploreHypothesis(
       genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
       genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
-      ...codePatchesExplore(nextStep),
+      // Genome-only force explore — never rewrite flipFilter on unstick
     ]);
     const signature = hypothesisSignature({
       pattern_id: 'explore',

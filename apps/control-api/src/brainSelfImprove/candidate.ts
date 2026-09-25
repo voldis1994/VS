@@ -122,6 +122,35 @@ export function restoreSnapshot(session: CandidateSession): void {
   }
 }
 
+/**
+ * Keep genome ACCEPTed, roll back only listed .ts sources (or all .ts if omit).
+ * Used when "safe genome evolve" rode along with filter code patches —
+ * otherwise every Explore Keep would rewrite flipFilter and blink the desk.
+ */
+export function restoreCodeSourcesFromSnapshot(
+  session: CandidateSession,
+  onlyRels?: string[]
+): string[] {
+  const want =
+    onlyRels && onlyRels.length
+      ? new Set(onlyRels.map((r) => r.replace(/\\/g, '/')))
+      : null;
+  const restored: string[] = [];
+  for (const rel of session.touched) {
+    const norm = rel.replace(/\\/g, '/');
+    if (!norm.endsWith('.ts')) continue;
+    if (norm.includes('genome.json')) continue;
+    if (want && !want.has(norm)) continue;
+    const src = path.join(session.snapshotDir, rel);
+    const dest = path.join(repoRoot(), rel);
+    if (!fs.existsSync(src)) continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    restored.push(norm);
+  }
+  return restored;
+}
+
 export function promoteAcceptedVersion(cycleId: string, session: CandidateSession): string {
   const versionDir = path.join(
     repoRoot(),
