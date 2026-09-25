@@ -364,8 +364,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            START = OPEN TRADE-ALL. Soft tikai zaudētājiem. BRAIN katru tick sver
-            expectancy + MFE/MAE + 1m + thesis → HOLD / TRAIL / CUT / BANK.
+            MEGA BRAIN: 30m zona + buyer/seller proxy (G/R) + story + multi-feed +
+            velocity. Pēc 5 closes vērtē outcome (MFE/MAE/story) un maina īsto knobs.
           </p>
           {auto ? (
             <>

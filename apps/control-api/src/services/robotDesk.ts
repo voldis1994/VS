@@ -44,6 +44,11 @@ import {
   applyManageBrainToExit,
   scoreManageAction,
 } from './manageBrain.js';
+import {
+  buildMarketContext,
+  compactMarketContext,
+  type MarketContextSnapshot,
+} from './marketContext.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
@@ -225,6 +230,8 @@ type Internal = RobotSession & {
   entry_zone: ExitZoneSnap | null;
   /** Last manage-brain action string — throttle MANAGE ticks */
   last_brain_action: string;
+  /** Mega market context frozen at fill */
+  entry_market: MarketContextSnapshot | null;
   /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
@@ -633,6 +640,9 @@ async function persistClosedTradeLedger(
           ? Number(s.mfe)
           : 0;
   try {
+    const exitCtx = compactMarketContext(
+      buildMarketContext(s.closedBars, s.entry_regime || s.regime, s.multiFeed)
+    );
     const cycle = noteClosedTradeForAutoCalibrate(
       {
         pnl_pts: ptsForCal,
@@ -644,6 +654,8 @@ async function persistClosedTradeLedger(
         at: new Date().toISOString(),
         robot_id: s.id,
         epic: s.epic,
+        entry_ctx: compactMarketContext(s.entry_market),
+        exit_ctx: exitCtx,
       },
       s.client_id
     );
@@ -703,6 +715,7 @@ function clearTradeState(s: Internal) {
   s.entry_setup = null;
   s.entry_zone = null;
   s.last_brain_action = '';
+  s.entry_market = null;
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -1490,6 +1503,7 @@ async function enterTradeLocked(
   s.entry_zone = z
     ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
     : null;
+  s.entry_market = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   s.structure_breach_since_ms = 0;
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
@@ -1791,7 +1805,7 @@ function decideOpenManageExit(
     }
   }
 
-  // ★ Adaptive brain — weigh expectancy + MFE/MAE + 1m + thesis → HOLD/TRAIL/CUT/BANK
+  // ★ Mega brain — 30m zone/story/pressure/feed + expectancy → HOLD/TRAIL/CUT/BANK
   const cal = getDeskCalibration(s.client_id);
   const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
   const peakFloorNow = Math.max(
@@ -1801,6 +1815,7 @@ function decideOpenManageExit(
   const targetNow = targetTakeProfitDistance(s.entry_price, s.entry_regime || s.regime);
   const autoSt = getAutoCalibrateStatus(undefined, s.client_id);
   const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
+  const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   const brain = scoreManageAction({
     open_side: s.open_side,
     entry_price: s.entry_price,
@@ -1825,6 +1840,8 @@ function decideOpenManageExit(
     last_window_expectancy: autoSt.last_window_expectancy,
     closes_in_session: autoSt.closes_in_session,
     held_ms: s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0,
+    market: liveMarket,
+    entry_market: s.entry_market,
   });
   const gated = applyManageBrainToExit({
     brain,
@@ -3117,6 +3134,7 @@ export async function startRobotSession(input: {
     entry_setup: null,
     entry_zone: null,
     last_brain_action: '',
+    entry_market: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -3219,6 +3237,11 @@ export async function attachManageOnlyRobot(input: {
       existing.entry_zone = z
         ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
         : existing.entry_zone;
+      existing.entry_market = buildMarketContext(
+        existing.closedBars,
+        existing.entry_regime,
+        existing.multiFeed
+      );
     }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
@@ -3256,6 +3279,11 @@ export async function attachManageOnlyRobot(input: {
     {
       const z = zoneGeometry(internal.closedBars);
       internal.entry_zone = z ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width } : null;
+      internal.entry_market = buildMarketContext(
+        internal.closedBars,
+        internal.entry_regime,
+        internal.multiFeed
+      );
     }
     pushTick(internal, {
       phase: 'ORDER',

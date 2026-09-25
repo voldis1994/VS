@@ -6,6 +6,11 @@
  * Brain only modulates Peak trail + Target softGate.
  */
 import { thesisFailureReason, type ExitSide } from './exitManage.js';
+import {
+  pressureFightsSide,
+  storyFightsSide,
+  type MarketContextSnapshot,
+} from './marketContext.js';
 
 export type ManageBrainAction = 'HOLD' | 'TRAIL' | 'CUT' | 'BANK';
 
@@ -33,6 +38,10 @@ export type ManageBrainInput = {
   last_window_expectancy: number | null;
   closes_in_session: number;
   held_ms: number;
+  /** Live mega market context (30m zone/story/pressure/feed/velocity) */
+  market?: MarketContextSnapshot | null;
+  /** Frozen at fill — compare drift */
+  entry_market?: MarketContextSnapshot | null;
 };
 
 export type ManageBrainResult = {
@@ -163,6 +172,58 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   if (input.soft_gate_allow) {
     score += 0.2;
     bits.push('softGate open');
+  }
+
+  // --- Mega market context (30m story / pressure / velocity / feed) ---
+  const mkt = input.market;
+  if (mkt) {
+    bits.push(mkt.summary);
+    if (storyFightsSide(mkt.story?.allow, input.open_side)) {
+      score += 0.85;
+      bits.push(`story fights (${mkt.story?.chapter})`);
+    } else if (
+      mkt.story?.allow === input.open_side ||
+      mkt.story?.allow === 'BOTH'
+    ) {
+      score -= 0.35;
+      bits.push('story with us');
+    }
+    if (pressureFightsSide(mkt.pressure.green_share, input.open_side)) {
+      score += 0.55;
+      bits.push(
+        `pressure G${mkt.pressure.green_1m}/R${mkt.pressure.red_1m} against`
+      );
+    } else if (
+      (input.open_side === 'BUY' && mkt.pressure.green_share >= 0.58) ||
+      (input.open_side === 'SELL' && mkt.pressure.green_share <= 0.42)
+    ) {
+      score -= 0.4;
+      bits.push('pressure with us');
+    }
+    if (mkt.velocity.expanding && mkt.velocity.moving) {
+      if (input.minute_policy === 'continue') {
+        score -= 0.35;
+        bits.push('EXPAND continue');
+      } else if (input.minute_policy === 'reverse') {
+        score += 0.45;
+        bits.push('EXPAND reverse → protect');
+      }
+    }
+    if (mkt.feed?.agreement === 'DIVERGENT') {
+      score += 0.5;
+      bits.push('feed DIVERGENT');
+    } else if (mkt.feed?.agreement === 'STRONG') {
+      score -= 0.15;
+    }
+    const entryM = input.entry_market;
+    if (
+      entryM?.story?.chapter &&
+      mkt.story?.chapter &&
+      entryM.story.chapter !== mkt.story.chapter
+    ) {
+      score += 0.35;
+      bits.push(`chapter ${entryM.story.chapter}→${mkt.story.chapter}`);
+    }
   }
 
   // Near Target → lean BANK when market already changed

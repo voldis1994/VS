@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          «SĀKT NO JAUNA» · Soft zaudētājiem · Peak trail · BRAIN (HOLD/TRAIL/CUT/BANK)
-          sver E + MFE/MAE + 1m + thesis katram manage tick. Soft HardInv nekad neaiztiek.
+          «SĀKT NO JAUNA» · MEGA BRAIN: 30m zona · G/R pressure · story · feed ·
+          velocity. Pēc 5 closes — outcome mācība (ne tikai Peak raise).
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (
