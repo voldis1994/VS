@@ -375,6 +375,13 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('safety_tp');
     expect(src).toContain('updateCapitalPosition');
     expect(src).toContain('safety_tp_rr');
+    // Smoking gun fix: open trades use short-lease cycle — strip MUST run there
+    const shortLease = src.slice(
+      src.indexOf('async function robotManageShortLeaseCycle'),
+      src.indexOf('async function syncOpenRobotBrokerTp')
+    );
+    expect(shortLease).toContain('stripBrokerTpIfPresent');
+    expect(shortLease).toMatch(/Open-trade path never hit the FLAT strip/);
   });
 
   it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {

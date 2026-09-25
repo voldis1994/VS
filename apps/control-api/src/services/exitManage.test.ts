@@ -602,31 +602,16 @@ describe('decideBestOutcomeExit', () => {
     expect(trendTp.exit).toBe(false);
   });
 
-  it('BREAKOUT structure kill when price back under hi (entry_zone frozen)', () => {
+  it('BREAKOUT structure kill when price back under hi Soft-sized (entry_zone frozen)', () => {
     const now = Date.now();
+    const entry = 4341;
+    const soft = hardInvStopDistance(entry, 'BREAKOUT_UP');
     const zone = { hi: 4340, lo: 4320, mid: 4330, width: 20 };
-    const pending = decideBestOutcomeExit(
+    // Shallow −1pt under hi — Soft owns this, structure must NOT scratch
+    const shallow = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 4341,
-        entry_regime: 'BREAKOUT_UP',
-        regime: 'BREAKOUT_UP',
-        entry_zone: zone,
-        entry_at: new Date(now - 60_000).toISOString(),
-        structure_breach_since_ms: 0,
-        mfe: 1,
-      }),
-      4338,
-      'live_loss',
-      now
-    );
-    expect(pending.exit).toBe(false);
-    expect(pending.structure_breaching).toBe(true);
-
-    const cut = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4341,
+        entry_price: entry,
         entry_regime: 'BREAKOUT_UP',
         regime: 'BREAKOUT_UP',
         entry_zone: zone,
@@ -634,9 +619,51 @@ describe('decideBestOutcomeExit', () => {
         structure_breach_since_ms: now - 4_000,
         mfe: 1,
       }),
-      4338,
+      entry - 1,
       'live_loss',
-      now
+      now,
+      { bid: entry - 1.05, ask: entry - 0.95 }
+    );
+    expect(1).toBeLessThan(soft);
+    expect(shallow.exit).toBe(false);
+    expect(shallow.structure_breaching).toBeFalsy();
+
+    // Soft-sized adverse through zone → structure may cut
+    const lossMid = entry - soft - 0.5;
+    const pending = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        entry_regime: 'BREAKOUT_UP',
+        regime: 'BREAKOUT_UP',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: 0,
+        mfe: 1,
+      }),
+      lossMid,
+      'live_loss',
+      now,
+      { bid: lossMid - 0.05, ask: lossMid + 0.05 }
+    );
+    expect(pending.exit).toBe(false);
+    expect(pending.structure_breaching).toBe(true);
+
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        entry_regime: 'BREAKOUT_UP',
+        regime: 'BREAKOUT_UP',
+        entry_zone: zone,
+        entry_at: new Date(now - 60_000).toISOString(),
+        structure_breach_since_ms: now - 4_000,
+        mfe: 1,
+      }),
+      lossMid,
+      'live_loss',
+      now,
+      { bid: lossMid - 0.05, ask: lossMid + 0.05 }
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/StructureInvalidation|back under/);
@@ -691,6 +718,36 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(bank.exit).toBe(true);
     expect(bank.reason).toMatch(/StructureInvalidation/);
+  });
+
+  it('structure does NOT scratch micro-red SELL (~1pt same-minute −£0.10 bug)', () => {
+    // Live Funds: SELL 4274.82→4275.83 (−1.01pt / −£0.10) same minute —
+    // Soft on Gold ~3.4; structure must HOLD and leave Soft HardInv the loser.
+    const now = Date.now();
+    const entry = 4274.82;
+    const soft = hardInvStopDistance(entry, 'RANGE');
+    const zone = { hi: 4280, lo: 4270, mid: 4275, width: 10 };
+    const against = 4275.83; // +1.01 against SELL
+    expect(entry - against).toBeGreaterThan(-soft); // not Soft-sized yet
+    expect(Math.abs(entry - against)).toBeLessThan(soft);
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        regime: 'RANGE',
+        entry_zone: zone,
+        entry_at: new Date(now - 20_000).toISOString(),
+        structure_breach_since_ms: now - 5_000,
+        mfe: 0.2,
+      }),
+      against,
+      'live_loss',
+      now,
+      { bid: against - 0.25, ask: against + 0.25 }
+    );
+    expect(d.exit).toBe(false);
+    expect(d.structure_breaching).toBeFalsy();
   });
 
   it('entry_regime freeze — live COMPRESSION does not rewrite TREND Soft thesis', () => {
