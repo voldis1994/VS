@@ -8,7 +8,9 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx src/db/migrate.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "brain:self-improve": "tsx src/brainSelfImprove/cli.ts",
+    "brain:once": "tsx src/brainSelfImprove/cli.ts --once"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
