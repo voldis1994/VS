@@ -7,7 +7,6 @@ import {
   fetchCapitalMarketQuote,
   computeSafetyCushionStopLevel,
 } from './capitalCom.js';
-import { safetyTakeProfitLevel } from './exitManage.js';
 import { emitToClient } from './clientEvents.js';
 import {
   listActiveSubscriptionsForEpic,
@@ -519,31 +518,14 @@ async function executeForSubscription(
         spread: q.spread,
         minStopDistance: q.min_stop_distance,
       });
-      const slDist = Math.abs(mid - stopLevel);
-      const profitLevel = safetyTakeProfitLevel(
-        direction,
-        mid,
-        regime ?? null,
-        q.min_stop_distance,
-        slDist
-      );
 
+      // SL-only — no broker TP (Soft Peak/Target own banks; Limit TP = penny scratches)
       let result = await createCapitalPosition(session, {
         epic: sub.epic,
         direction,
         size: sub.lot_size,
         stopLevel,
-        profitLevel,
       });
-      if (!result.ok && /profit|limit|validation|reject/i.test(result.detail)) {
-        // TP rejected — still open with SAFETY SL (soft Target remains)
-        result = await createCapitalPosition(session, {
-          epic: sub.epic,
-          direction,
-          size: sub.lot_size,
-          stopLevel,
-        });
-      }
 
       if (!result.ok) {
         noteBrokerError(sub.client_id, result.detail);

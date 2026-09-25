@@ -1110,8 +1110,10 @@ export async function updateCapitalPosition(
   session: CapitalSession,
   dealId: string,
   input: {
-    profitLevel?: number;
-    profitDistance?: number;
+    profitLevel?: number | null;
+    profitDistance?: number | null;
+    /** Explicitly clear broker take-profit (Soft manage owns banks) */
+    clearProfit?: boolean;
     stopLevel?: number;
     stopDistance?: number;
   }
@@ -1121,7 +1123,10 @@ export async function updateCapitalPosition(
     return { ok: false, status: 400, json: null, detail: 'updateCapitalPosition: empty dealId' };
   }
   const body: Record<string, unknown> = {};
-  if (
+  if (input.clearProfit) {
+    // Capital accepts null to detach take-profit
+    body.profitLevel = null;
+  } else if (
     input.profitDistance != null &&
     Number.isFinite(input.profitDistance) &&
     input.profitDistance > 0

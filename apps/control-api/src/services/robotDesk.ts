@@ -32,11 +32,9 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   hardInvStopDistance,
-  safetyTakeProfitLevel,
   scaleDeskAbs,
   shouldArmPeakProtect,
   targetTakeProfitDistance,
-  SAFETY_TP_MIN_RR,
   type ExitDecideOverrides,
   type ExitZoneSnap,
 } from './exitManage.js';
@@ -1304,6 +1302,71 @@ function syncFromBrokerOpen(
   s.entry_at = preferBrokerEntryAt(s.entry_at, broker.created_at);
 }
 
+/**
+ * Capital may re-attach Limit TP while we manage. Strip it every cycle —
+ * Soft Peak/Target own green banks (no penny Limit scratches).
+ */
+async function stripBrokerTpIfPresent(
+  session: CapitalSession,
+  s: Internal,
+  broker: CapitalOpenPosition | null,
+  quote: { bid: number | null; ask: number | null; mid: number | null }
+): Promise<void> {
+  if (!broker?.deal_id) return;
+  if (broker.profit_level == null || !Number.isFinite(broker.profit_level)) return;
+  const amend = await updateCapitalPosition(session, broker.deal_id, {
+    clearProfit: true,
+  });
+  if (amend.ok) {
+    s.safety_tp = null;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `MANAGE · broker TP stripped (was ${broker.profit_level}) · Soft owns banks`,
+    });
+    return;
+  }
+  const entry = s.entry_price ?? quote.mid;
+  if (entry == null || !Number.isFinite(entry) || !s.open_side) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `MANAGE · broker TP ${broker.profit_level} still on · clear failed · ${amend.detail}`,
+    });
+    return;
+  }
+  const far =
+    s.open_side === 'BUY'
+      ? entry + Math.max(Math.abs(entry) * 0.05, 80)
+      : entry - Math.max(Math.abs(entry) * 0.05, 80);
+  const push = await updateCapitalPosition(session, broker.deal_id, {
+    profitLevel: far,
+  });
+  if (push.ok) {
+    s.safety_tp = far;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `MANAGE · TP clear failed · pushed to ${far.toFixed(2)} · Soft owns banks`,
+    });
+  } else {
+    s.safety_tp = broker.profit_level;
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `MANAGE · broker TP ${broker.profit_level} stuck · ${push.detail}`,
+    });
+  }
+}
+
 async function resolveDealId(
   session: CapitalSession,
   s: Internal,
@@ -1751,31 +1814,39 @@ async function enterTradeLocked(
         s.safety_sl = pos.stop_level;
       }
       if (pos?.profit_level != null && Number.isFinite(pos.profit_level)) {
-        // Capital sometimes attaches a min TP we did not request — push it far
-        // past Soft so Soft Peak/Target own banking (no same-minute scratch).
-        const entry = s.entry_price ?? mid;
-        const soft = hardInvStopDistance(entry, s.entry_regime || s.regime);
-        const tpDist = Math.abs(pos.profit_level - entry);
-        const minNeed = soft * SAFETY_TP_MIN_RR;
-        if (tpDist < minNeed) {
-          const far = safetyTakeProfitLevel(
-            direction,
-            entry,
-            s.entry_regime || s.regime,
-            null,
-            s.safety_sl != null ? Math.abs(entry - s.safety_sl) : soft
-          );
-          const amend = await updateCapitalPosition(session, dealId, {
+        // Capital sometimes attaches a TP we did not request. Pushing it "far"
+        // still Limit-closes for pennies (Soft×R:R). Strip TP entirely —
+        // Soft Peak/Target own green banks.
+        const amend = await updateCapitalPosition(session, dealId, {
+          clearProfit: true,
+        });
+        if (amend.ok) {
+          s.safety_tp = null;
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker TP stripped (was ${pos.profit_level}) · Soft manage owns banks · no Limit scratch`,
+          });
+        } else {
+          // Fallback: shove TP absurdly far so Limit cannot scratch this minute
+          const entry = s.entry_price ?? mid;
+          const far =
+            direction === 'BUY'
+              ? entry + Math.max(Math.abs(entry) * 0.05, 80)
+              : entry - Math.max(Math.abs(entry) * 0.05, 80);
+          const push = await updateCapitalPosition(session, dealId, {
             profitLevel: far,
           });
-          if (amend.ok) {
+          if (push.ok) {
             s.safety_tp = far;
             pushTick(s, {
               phase: 'INFO',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `Broker TP was tight (${tpDist.toFixed(2)} < Soft×${SAFETY_TP_MIN_RR}) · pushed to ${far} · Soft manage owns banks`,
+              detail: `Broker TP clear failed (${amend.detail}) · pushed to ${far.toFixed(2)} · Soft manage owns banks`,
             });
           } else {
             s.safety_tp = pos.profit_level;
@@ -1784,11 +1855,9 @@ async function enterTradeLocked(
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `Broker TP tight (${tpDist.toFixed(2)}) — amend failed · ${amend.detail}`,
+              detail: `Broker TP still on (${pos.profit_level}) — clear+push failed · ${push.detail}`,
             });
           }
-        } else {
-          s.safety_tp = pos.profit_level;
         }
       }
       if (pos) s.entry_at = preferBrokerEntryAt(s.entry_at, pos.created_at);
@@ -2746,6 +2815,12 @@ async function robotCycleLocked(s: Internal) {
         await refreshCapitalMultiTf(session, s);
       } catch {
         /* keep previous candles */
+      }
+
+      try {
+        await stripBrokerTpIfPresent(session, s, brokerOpen, quote);
+      } catch {
+        /* best effort */
       }
 
       const manageExit = decideOpenManageExit(s, quote);
