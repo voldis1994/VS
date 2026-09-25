@@ -22,6 +22,8 @@ export type MultiTfStack = {
   bias: TfDir;
   /** True when higher TFs agree and 1m does not fight them */
   aligned: boolean;
+  /** 30m and 15m point opposite ways */
+  higher_fight: boolean;
   /** Human one-liner for LIVE LOG */
   summary: string;
   /** Latvian thesis fragment */
@@ -129,6 +131,9 @@ export function readMultiTfStack(input: {
 
   const higherFight =
     (tf30 === 'UP' && tf15 === 'DOWN') || (tf30 === 'DOWN' && tf15 === 'UP');
+  // 30m vs 15m fight → no working side until the big TFs agree
+  if (higherFight) bias = 'FLAT';
+
   const midFight =
     bias !== 'FLAT' && tf5 !== 'FLAT' && tf5 !== bias;
   const triggerFight =
@@ -175,11 +180,13 @@ export function readMultiTfStack(input: {
     aligned: aligned && !higherFight,
     summary,
     thesis_lv,
+    higher_fight: higherFight,
   };
 }
 
 /** Resolve side from stack for entry mind — WAIT when not aligned. */
 export function sideFromMultiTf(stack: MultiTfStack): 'BUY' | 'SELL' | 'WAIT' {
+  if (stack.higher_fight) return 'WAIT';
   if (stack.bias === 'FLAT') return 'WAIT';
   if (!stack.aligned) {
     // Pullback case: higher bias clear, 1m against = still hold the side (wait for trigger)
