@@ -9,6 +9,7 @@ import {
   createCandidateSession,
   ensureGenomeFile,
   promoteAcceptedVersion,
+  restoreCodeSourcesFromSnapshot,
   restoreSnapshot,
 } from './candidate.js';
 import { evaluateCandidate, measureBaseline } from './evaluate.js';
@@ -268,19 +269,42 @@ export async function runBrainCycle(opts?: {
   }
 
   brainSection('6) ACCEPT → JAUNĀ BRAIN VERSIJA');
+  // Safe/defensive genome ACCEPT must NOT keep ride-along .ts filter edits —
+  // those caused API reload / clients blink every Explore Keep cycle.
+  // Explore "safe genome" must NOT keep ride-along .ts (desk reload blink).
+  // Soft/bank/scratch patterns keep intentional filter code even on defensive ACCEPT.
+  const genomeOnlyAccept =
+    (defensiveMemory || safeGenomeEvolve) &&
+    !report.improved &&
+    hypo.pattern_id === 'explore';
+  let keptCodeFiles: string[] = [];
+  const codePatchRels = [
+    ...new Set(
+      hypo.patches
+        .map((p) => p.path.replace(/\\/g, '/'))
+        .filter((p) => p.endsWith('.ts') && !p.includes('genome.json'))
+    ),
+  ];
+  if (genomeOnlyAccept) {
+    const rolled = restoreCodeSourcesFromSnapshot(session, codePatchRels);
+    if (rolled.length) {
+      brainLog(
+        `Explore genome-only ACCEPT — rolled back .ts ride-along (${rolled.length}): ${rolled.map((p) => p.split('/').pop()).join(', ')}`
+      );
+    }
+  } else {
+    keptCodeFiles = codePatchRels;
+  }
   const versionDir = promoteAcceptedVersion(cycleId, session);
   brainLog(`Version saved: ${versionDir}`);
-  const codeFiles = hypo.patches
-    .map((p) => p.path.replace(/\\/g, '/'))
-    .filter((p) => p.endsWith('.ts') && !p.includes('genome.json'));
-  if (codeFiles.length) {
+  if (keptCodeFiles.length) {
     requestBrainCodeReload({
       cycle_id: cycleId,
       reason: hypo.title,
-      files: [...new Set(codeFiles)],
+      files: [...new Set(keptCodeFiles)],
     });
     brainLog(
-      `Code patches on disk — API soft-reload when all robots FLAT (${codeFiles.length} file(s))`
+      `Code patches on disk — API soft-reload when all robots FLAT (${keptCodeFiles.length} file(s))`
     );
   }
   const acc: CycleResult = {
