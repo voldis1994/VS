@@ -362,10 +362,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         </section>
 
         <section className="panel control-panel">
-          <div className="section-title">AUTO-CAL · ULTIMATE</div>
+          <div className="section-title">LEARNER · AUTO-CAL</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            LEARNER: online politika no Taviem closes (spēcīgāka par LLM tradingā).
-            Soft = drošība. Pēc close — LEARNER UPDATE · reward …
+            Online politika · Soft drošība · Sākt no jauna = OPEN TRADE-ALL
           </p>
           {auto ? (
             <>

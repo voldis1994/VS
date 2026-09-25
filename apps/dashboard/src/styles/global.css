@@ -2439,3 +2439,97 @@ button.regime-chip { cursor: pointer; }
     max-height: min(70dvh, 720px);
   }
 }
+
+/* —— Command dashboard (clean main page) —— */
+.command-dash {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.cmd-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(90deg, rgba(8, 14, 8, 0.95), rgba(4, 8, 4, 0.88));
+  clip-path: var(--clip-panel);
+}
+.cmd-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cmd-hero-left .page-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+}
+.cmd-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cmd-modes {
+  margin: 0;
+}
+.cmd-brain {
+  border-color: rgba(180, 255, 0, 0.4);
+}
+.cmd-brain-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.cmd-metrics .metric-box .value {
+  font-size: 18px;
+}
+.cmd-muted {
+  opacity: 0.55;
+  font-size: 13px;
+}
+.cmd-knobs {
+  margin-top: 8px;
+}
+.cmd-last {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cmd-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+  margin-right: 6px;
+  text-transform: uppercase;
+}
+.cmd-kpis {
+  margin: 0;
+}
+.cmd-tables {
+  margin: 0;
+}
+.cmd-events {
+  margin: 0;
+}
+.cmd-events .log-list {
+  max-height: 140px;
+  overflow: auto;
+}
+@media (max-width: 900px) {
+  .cmd-hero {
+    align-items: flex-start;
+  }
+  .cmd-hero-actions {
+    width: 100%;
+  }
+}

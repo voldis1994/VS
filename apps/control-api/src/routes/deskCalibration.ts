@@ -13,6 +13,7 @@ import {
   setAutoCalibrateEnabled,
 } from '../services/autoCalibrate.js';
 import { runWithDeskClientAsync } from '../services/deskClientScope.js';
+import { getLearnerStatus } from '../services/deskLearner.js';
 
 function parseClientId(raw: unknown): number {
   const n = Number(raw);
@@ -28,6 +29,7 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
       calibration: getDeskCalibration(clientId),
       catalog: deskCalibrationCatalog(),
       auto: getAutoCalibrateStatus(undefined, clientId),
+      learner: getLearnerStatus(clientId),
     }));
   });
 
@@ -49,6 +51,7 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
         client_id: clientId,
         calibration,
         auto: getAutoCalibrateStatus(undefined, clientId),
+        learner: getLearnerStatus(clientId),
       };
     });
   });
@@ -59,6 +62,12 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
     return runWithDeskClientAsync(clientId, async () =>
       getAutoCalibrateStatus(undefined, clientId)
     );
+  });
+
+  app.get('/api/desk/learner', async (request) => {
+    const q = (request.query || {}) as { client_id?: string | number };
+    const clientId = parseClientId(q.client_id);
+    return runWithDeskClientAsync(clientId, async () => getLearnerStatus(clientId));
   });
 
   app.post('/api/desk/auto-calibrate', async (request) => {
@@ -87,6 +96,7 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
         client_id: clientId,
         calibration: getDeskCalibration(clientId),
         auto: getAutoCalibrateStatus(undefined, clientId),
+        learner: getLearnerStatus(clientId),
       };
     });
   });

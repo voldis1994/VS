@@ -13,14 +13,14 @@ import {
 
 const NAV = [
   { to: '/', label: 'COMMAND', end: true },
-  { to: '/robot', label: 'ROBOT BOARD' },
+  { to: '/robot', label: 'ROBOT' },
+  { to: '/trades', label: 'TRADES' },
+  { to: '/positions', label: 'POSITIONS' },
   { to: '/market', label: 'REGIMES' },
-  { to: '/orbit', label: 'ORBIT GRID' },
+  { to: '/orbit', label: 'ORBIT' },
   { to: '/trading', label: 'TRADING' },
   { to: '/brokers', label: 'BROKERS' },
   { to: '/clients', label: 'CLIENTS' },
-  { to: '/positions', label: 'POSITIONS' },
-  { to: '/trades', label: 'TRADES' },
   { to: '/feeds', label: 'FEEDS' },
   { to: '/system', label: 'SYSTEM' },
   { to: '/settings', label: 'SETTINGS' },
