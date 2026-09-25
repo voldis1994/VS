@@ -365,10 +365,11 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('softExitMarketGate');
     expect(src).toMatch(/softGate\.allow/);
     expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
-    // SAFETY SL at open; Soft manage owns banks (no broker TP scratch)
-    expect(src).toContain('safetyTakeProfitLevel');
+    // SAFETY SL at open; Soft manage owns banks (strip broker TP — no Limit scratch)
+    expect(src).toContain('clearProfit');
     expect(src).toContain('no broker TP');
     expect(src).toContain('SAFETY SL-only');
+    expect(src).toContain('stripBrokerTpIfPresent');
     expect(src).toContain('safety_tp');
     expect(src).toContain('updateCapitalPosition');
     expect(src).toContain('safety_tp_rr');
