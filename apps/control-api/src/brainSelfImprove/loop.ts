@@ -79,7 +79,7 @@ export async function runBrainCycle(opts?: {
   saveExperience(exp);
 
   brainSection('2) HIPOTĒZE → UZDEVUMS');
-  const hypo = buildHypothesis(analysis, exp);
+  let hypo = buildHypothesis(analysis, exp);
   if (!hypo) {
     const skip: CycleResult = {
       id: cycleId,
@@ -107,25 +107,44 @@ export async function runBrainCycle(opts?: {
   brainLog(`Uzdevums: ${hypo.task}`);
   brainLog(`Signature: ${hypo.signature}`);
 
+  // buildHypothesis already skips tried signatures — if collision slipped through,
+  // mark it and force a fresh explore instead of idle SKIPPED spinning.
   if (wasAlreadyTried(exp, hypo.signature)) {
-    const skip: CycleResult = {
-      id: cycleId,
-      at: new Date().toISOString(),
-      pattern_id: hypo.pattern_id,
-      hypothesis_id: hypo.id,
-      signature: hypo.signature,
-      decision: 'SKIPPED',
-      reason: 'Šī hipotēze jau izmēģināta (pieredze) — neatkārtoju',
-      baseline_expectancy: 0,
-      candidate_expectancy: 0,
-      tests_ok: true,
-      changes_summary: [],
-    };
-    brainLog(skip.reason);
-    brainDecision('SKIPPED', skip.reason);
-    exp = recordCycle(exp, skip);
+    brainLog(`Signature jau pieredzē — ģenerēju jaunu Force explore (bez SKIPPED idle)`);
+    if (!exp.rejected_signatures.includes(hypo.signature)) {
+      exp.rejected_signatures.push(hypo.signature);
+    }
     saveExperience(exp);
-    return skip;
+    const retry = buildHypothesis(analysis, exp);
+    if (!retry || wasAlreadyTried(exp, retry.signature)) {
+      // Bump explore_step on disk so next cycle cannot repeat the same force
+      const gNow = getBrainGenome();
+      setBrainGenome({
+        explore_step: (gNow.explore_step || 0) + 1,
+        last_lesson: 'unstick signature collision',
+      });
+      reloadBrainGenome();
+      const skip: CycleResult = {
+        id: cycleId,
+        at: new Date().toISOString(),
+        pattern_id: hypo.pattern_id,
+        hypothesis_id: hypo.id,
+        signature: hypo.signature,
+        decision: 'REJECTED',
+        reason: 'Signature collision — bumped explore_step, retry next cycle',
+        baseline_expectancy: 0,
+        candidate_expectancy: 0,
+        tests_ok: true,
+        changes_summary: ['explore_step bump'],
+      };
+      brainDecision('REJECTED', skip.reason);
+      exp = recordCycle(exp, skip);
+      saveExperience(exp);
+      return skip;
+    }
+    hypo = retry;
+    brainLog(`Hipotēze (retry): ${hypo.title}`);
+    brainLog(`Signature: ${hypo.signature}`);
   }
 
   brainSection('3) BASELINE REPLAY');
