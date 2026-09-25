@@ -137,41 +137,46 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     ? risks.join('; ')
     : 'īpaša sarkana karoga nav — Soft joprojām sargā';
 
-  // 4) Decision — what a careful human would do now
+  // 4) Decision — plus first, Soft second.
+  // Bug: 1m continue always HOLD → Soft-sized green never banked → Soft ate the loser.
+  // Soft knows "minus". Mind must know "plus": Soft+ green at risk → BANK/CUT now.
   let decision: ManageBrainAction = 'TRAIL';
   let why: string;
   let confidence = 0.55;
 
   const greenSoft = upl >= soft * 0.95 && mfe >= soft;
+  const keep = 0.75;
+  const givingBack = retention < keep && mfe >= soft && upl > 0;
   const marketChanged =
     input.minute_policy === 'reverse' ||
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     (mkt != null && storyFightsSide(mkt.story?.allow, input.open_side));
 
-  if (input.minute_policy === 'continue' && !againstUs) {
-    decision = 'HOLD';
-    why =
-      'Cilvēks teiktu: neaiztiec — svece vēl iet manā virzienā. Peak trail gatavs, Target pagaida.';
-    confidence = 0.8;
-  } else if (greenSoft && marketChanged) {
+  if (greenSoft && (marketChanged || againstUs || givingBack)) {
     decision = 'BANK';
-    why =
-      'Man ir Soft izmēra peļņa un tirgus jau pagriežas. Bankoju kā cilvēks, kas neļauj plusam kļūt par nulli.';
-    confidence = 0.85;
-  } else if (mfe >= soft * 0.75 && (againstUs || retention < 0.55)) {
+    why = givingBack
+      ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'
+      : 'Man ir Soft izmēra peļņa un tirgus jau pagriežas. Bankoju plusu — Soft ir tikai mīnusiem.';
+    confidence = 0.88;
+  } else if (mfe >= soft * 0.75 && upl > 0 && (againstUs || retention < 0.55)) {
     decision = 'CUT';
     why =
-      'Biju plusā, tagad atdodu — ciešākais Peak trail, lai neaizietu atpakaļ uz Soft zaudējumu.';
-    confidence = 0.75;
+      'Biju plusā, tagad atdodu — ciešākais cut, lai plus nepaliek mīnusā.';
+    confidence = 0.78;
+  } else if (input.minute_policy === 'continue' && !againstUs) {
+    decision = 'HOLD';
+    why =
+      'Svece vēl iet manā virzienā un peļņa nav atdota — turu; Peak trail gatavs.';
+    confidence = 0.8;
   } else if (againstUs && mfe < soft * 0.5) {
     decision = 'HOLD';
     why =
-      'Attēls slikts, bet vēl nav ko bankot. Soft nogriezīs, ja kļūs īsts zaudētājs — es negriežu panikā.';
+      'Attēls slikts, bet vēl nav Soft+ ko bankot. Soft nogriezīs īsto mīnusu — es negriežu panikā.';
     confidence = 0.6;
   } else {
     decision = 'TRAIL';
     why =
-      'Nav skaidra «ņem» vai «turi bezgalīgi» — sekoju Peak trail kā disciplīnēts traders.';
+      'Nav skaidra «ņem plusu» vai «turi» — Peak trail; Soft sargā mīnusu.';
     confidence = 0.65;
   }
 

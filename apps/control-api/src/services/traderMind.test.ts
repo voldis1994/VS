@@ -72,6 +72,22 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/^PRĀTS HOLD/);
   });
 
+  it('BANKs Soft+ giveback even on 1m continue — plus before Soft eats it', () => {
+    // Was: continue → HOLD forever → Soft later closed the winner as a minus
+    const t = thinkLikeTrader(
+      base({
+        minute_policy: 'continue',
+        unrealized: 4,
+        mfe: 6,
+        soft_sl: 3.5,
+        peak_retention: 0.55, // giving back under Keep 75%
+        next_entry_side: 'BUY',
+      })
+    );
+    expect(t.decision).toBe('BANK');
+    expect(t.why).toMatch(/plus|bankoju|Soft\+/i);
+  });
+
   it('BANKs like a human when green Soft and market turns', () => {
     const t = thinkLikeTrader(
       base({
