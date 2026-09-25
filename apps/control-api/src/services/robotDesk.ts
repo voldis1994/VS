@@ -32,6 +32,9 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   hardInvStopDistance,
+  minProfitBank,
+  peakMfeFromCandles,
+  peakTrailMfeFloor,
   scaleDeskAbs,
   shouldArmPeakProtect,
   targetTakeProfitDistance,
@@ -641,7 +644,9 @@ async function refreshCapitalMultiTf(
   if (need1m) {
     s.last_manage_minute_fetch_ms = now;
     try {
-      const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
+      // Open trade → deeper 1m history so Peak MFE survives restart / attach lag
+      const max1m = s.open_side ? 40 : 8;
+      const mins = await fetchCapitalMinutePrices(session, s.epic, max1m);
       if (mins.ok && mins.candles.length) {
         s.last_minute_candles = mins.candles;
       }
@@ -1968,6 +1973,21 @@ function decideOpenManageExit(
   // If we attached without freeze (legacy), freeze now from live state
   if (!s.entry_regime && s.regime) s.entry_regime = s.regime;
   updateExcursion(s, quote.mid);
+  // Seed Peak MFE from Capital 1m highs/lows — live mid alone forgets the bounce peak
+  if (s.entry_price != null && s.last_minute_candles.length) {
+    const entryMs = s.entry_at ? Date.parse(s.entry_at) : null;
+    const candleMfe = peakMfeFromCandles(
+      s.open_side,
+      s.entry_price,
+      s.last_minute_candles,
+      Number.isFinite(entryMs) ? entryMs : null
+    );
+    if (candleMfe > s.mfe) {
+      s.mfe = candleMfe;
+      const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
+      s.peak_retention = candleMfe > 0 ? Math.max(0, favNow / candleMfe) : null;
+    }
+  }
 
   const lossDec = decideBestOutcomeExit(s, quote.mid, 'live_loss', Date.now(), quote);
   if (lossDec.structure_breaching) {
@@ -2141,9 +2161,14 @@ function decideOpenManageExit(
   // ★ Mega brain — 30m zone/story/pressure/feed + expectancy → HOLD/TRAIL/CUT/BANK
   const cal = getDeskCalibration(s.client_id);
   const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
-  const peakFloorNow = Math.max(
-    Math.abs(s.entry_price) * cal.peak_mfe_pct,
-    scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
+  // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak
+  const peakFloorNow = peakTrailMfeFloor(
+    Math.max(
+      Math.abs(s.entry_price) * cal.peak_mfe_pct,
+      scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
+    ),
+    softSlNow,
+    minProfitBank(softSlNow)
   );
   const targetNow = targetTakeProfitDistance(s.entry_price, s.entry_regime || s.regime);
   const autoSt = getAutoCalibrateStatus(undefined, s.client_id);

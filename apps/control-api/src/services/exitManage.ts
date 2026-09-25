@@ -306,6 +306,37 @@ export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: num
 }
 
 /**
+ * Best favorable excursion from Capital OHLC since entry.
+ * Restarts / attach lag otherwise forget the live MFE peak → Peak Keep never fires.
+ */
+export function peakMfeFromCandles(
+  side: ExitSide,
+  entry: number,
+  candles: Array<{ high: number; low: number; snapshot_time_ms?: number | null }>,
+  entryAtMs?: number | null
+): number {
+  if (!(entry > 0) || !Number.isFinite(entry) || !candles?.length) return 0;
+  let best = 0;
+  for (const c of candles) {
+    if (
+      entryAtMs != null &&
+      Number.isFinite(entryAtMs) &&
+      c.snapshot_time_ms != null &&
+      Number.isFinite(c.snapshot_time_ms) &&
+      c.snapshot_time_ms + 60_000 < entryAtMs
+    ) {
+      continue; // candle fully before fill
+    }
+    if (side === 'SELL') {
+      if (Number.isFinite(c.low)) best = Math.max(best, entry - c.low);
+    } else if (Number.isFinite(c.high)) {
+      best = Math.max(best, c.high - entry);
+    }
+  }
+  return best > 0 ? best : 0;
+}
+
+/**
  * Soft / Peak / Target abs knobs are tuned once at REF mid (~DESK_REF_MID).
  * Candles/regimes look the same on **every** market — only size changes.
  * Scale abs pts by entry/REF so all epics share the same % R:R.
