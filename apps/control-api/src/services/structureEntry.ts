@@ -20,6 +20,7 @@ import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
 import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
+import { thinkEntryLikeTrader } from './traderMind.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -50,6 +51,11 @@ export type StructureDecideInput = {
   last_closed_side?: 'BUY' | 'SELL' | null;
   last_close_was_loss?: boolean;
   client_id?: number | null;
+  /**
+   * Live Capital.com closed 1m direction when available — preferred over
+   * 10s-book aggregate (same chart the human watches).
+   */
+  capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 export type StructuredEntry = RegimeEntry & {
@@ -509,11 +515,42 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
 
-  // Online entry brain — chooses BUY/SELL/WAIT from features (+ learns on close)
-  const md = minuteDir(m1);
+  // Prefer Capital 1m (what the human sees) over 10s-book aggregate
+  const bookMd = minuteDir(m1);
+  const md =
+    input.capital_m1_dir === 'UP' ||
+    input.capital_m1_dir === 'DOWN' ||
+    input.capital_m1_dir === 'FLAT'
+      ? input.capital_m1_dir
+      : bookMd;
   const m1Strong =
-    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5;
-  const mind = entryLearnerChoose(
+    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5
+      ? true
+      : md !== 'FLAT' && md === bias;
+
+  const body = bodyPct(input.bar);
+  const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
+
+  // ★ Mind first — chooses BUY/SELL/WAIT from the live picture (1m + story)
+  const thought = thinkEntryLikeTrader({
+    regime,
+    chapter: story.chapter,
+    allow: story.allow,
+    story_conf: story.confidence,
+    story_summary: story.summary_lv,
+    red_1m: story.red_1m,
+    green_1m: story.green_1m,
+    zone_pos: zone?.pos ?? story.zone_pos,
+    bar_body_sign: barSign,
+    last_closed_side: input.last_closed_side ?? null,
+    last_close_was_loss: Boolean(input.last_close_was_loss),
+    m1_dir: md,
+    m1_strong: m1Strong,
+    bias,
+  });
+
+  // Learner advises once it has enough closes (same pattern as manage brain)
+  const learned = entryLearnerChoose(
     {
       regime,
       story,
@@ -528,65 +565,53 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     },
     input.client_id
   );
+  const learnerReady =
+    learned.updates >= 20 &&
+    learned.confidence >= thought.confidence + 0.08 &&
+    !learned.explored;
+  let side = learnerReady ? learned.action : thought.choice;
 
-  if (mind.action === 'WAIT') {
+  // Tape veto — mind that sees 1m UP never lets learner knife-SELL the rally
+  if (side === 'SELL' && (md === 'UP' || bias === 'UP')) {
+    side = thought.choice === 'BUY' ? 'BUY' : 'WAIT';
+  }
+  if (side === 'BUY' && (md === 'DOWN' || bias === 'DOWN')) {
+    side = thought.choice === 'SELL' ? 'SELL' : 'WAIT';
+  }
+
+  const mindDetail = learnerReady
+    ? `${thought.spoken} · LEARNER ${learned.action} n=${learned.updates}`
+    : thought.spoken;
+
+  if (side === 'WAIT') {
     return null;
   }
 
+  // Setup is only a trigger for the side the mind already chose
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const candidate = raw ?? started;
   if (!candidate) return null;
+  if (candidate.direction !== side) return null;
 
-  // Brain chose a side — only take setups that match (wait for the right trigger)
-  if (candidate.direction !== mind.action) {
-    return null;
-  }
-
-  // Hard tape knife — even if learner explore / FAILED_BREAKOUT fade wants the wrong side
-  if (candidate.direction === 'SELL' && (md === 'UP' || bias === 'UP')) {
-    if (!allowsAgainstBias(regime, 'SELL', md)) return null;
-  }
-  if (candidate.direction === 'BUY' && (md === 'DOWN' || bias === 'DOWN')) {
-    if (!allowsAgainstBias(regime, 'BUY', md)) return null;
-  }
-
-  // Always use live 1m bias — raw 10s setups used to pass FLAT and knife-SELL
-  // every green bar in a rally (RANGE fade) while Capital 1m was clearly UP.
-  const gate = structureGate(
-    candidate,
-    regime,
-    input.bar,
-    zone,
-    m1,
-    bias
-  );
+  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
   const withMind = (reason: string): StructuredEntry => ({
     ...candidate,
-    reason: `${mind.detail} · ${reason}`,
-    entry_features: mind.features,
-    entry_mind: mind.detail,
+    reason: `${mindDetail} · ${reason}`,
+    entry_features: learned.features,
+    entry_mind: mindDetail,
   });
 
-  // Soft structure ladder off: still use mind choice + matching trigger
   if (!entryStructureEnabled()) {
     return withMind(`${gate.tag} · OPEN · ${story.summary_lv}`);
   }
 
-  // Raw 10s regime setup = TRADE NOW when mind agrees. Only hard knives left.
   if (raw) {
-    if (candidate.direction === 'BUY' && story.chapter === 'BOUNCE_IN_SELL') {
-      return null;
-    }
-    if (candidate.direction === 'SELL' && story.chapter === 'DIP_IN_RALLY') {
-      return null;
-    }
     return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
   }
 
-  // Weaker structure-start path still needs story scalp confirm
   if (story.chapter === 'SEEDING') return null;
 
   const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);

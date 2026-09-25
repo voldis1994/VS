@@ -2685,7 +2685,16 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        // 10s recipe + 30m zone + 1m (from same 10s book) — chase vs structure
+        // Mind reads Capital 1m + 30m story first; setup is only the trigger
+        const closed1mForMind = lastClosedCapitalMinute(s.last_minute_candles);
+        const capitalMd =
+          closed1mForMind != null
+            ? closed1mForMind.close > closed1mForMind.open
+              ? ('UP' as const)
+              : closed1mForMind.close < closed1mForMind.open
+                ? ('DOWN' as const)
+                : ('FLAT' as const)
+            : null;
         const sig = decideEntryWithStructure({
           bar: entryBar,
           regime: s.regime,
@@ -2693,6 +2702,7 @@ async function robotCycleLocked(s: Internal) {
           last_closed_side: s.last_closed_side,
           last_close_was_loss: s.last_close_was_loss,
           client_id: s.client_id,
+          capital_m1_dir: capitalMd,
         });
         if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;

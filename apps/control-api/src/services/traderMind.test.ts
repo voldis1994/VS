@@ -134,10 +134,31 @@ describe('traderMind', () => {
       bar_body_sign: 1,
       last_closed_side: 'BUY',
       last_close_was_loss: true,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
     });
     expect(t.choice).toBe('SELL');
     expect(t.spoken).toMatch(/PRĀTS ENTRY SELL/);
-    expect(t.thesis).toMatch(/selloff|pārdevēj/i);
+    expect(t.thesis).toMatch(/selloff|pārdevēj|leju|DOWN/i);
+  });
+
+  it('ENTRY mind chooses BUY on live 1m UP rally — never SELL fade', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'RANGE_CHOP',
+      allow: 'BOTH',
+      story_conf: 0.5,
+      red_1m: 10,
+      green_1m: 12,
+      zone_pos: 0.7,
+      bar_body_sign: 1,
+      m1_dir: 'UP',
+      m1_strong: true,
+      bias: 'UP',
+    });
+    expect(t.choice).toBe('BUY');
+    expect(t.thesis).toMatch(/augšu|pircēj|zaļ/i);
+    expect(t.choice).not.toBe('SELL');
   });
 
   it('ENTRY mind WAITs on chop instead of forcing a side', () => {
@@ -150,6 +171,8 @@ describe('traderMind', () => {
       green_1m: 10,
       zone_pos: 0.5,
       bar_body_sign: 0,
+      m1_dir: 'FLAT',
+      bias: 'FLAT',
     });
     expect(t.choice).toBe('WAIT');
   });
