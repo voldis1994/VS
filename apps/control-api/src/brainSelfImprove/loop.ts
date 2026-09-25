@@ -21,6 +21,7 @@ import {
   type BrainCycleRecord,
 } from './experience.js';
 import { getBrainGenome, reloadBrainGenome, setBrainGenome } from './brainGenome.js';
+import { requestBrainCodeReload } from './brainReload.js';
 import { brainDecision, brainLog, brainSection } from './consoleUi.js';
 
 export type CycleResult = BrainCycleRecord;
@@ -269,6 +270,19 @@ export async function runBrainCycle(opts?: {
   brainSection('6) ACCEPT → JAUNĀ BRAIN VERSIJA');
   const versionDir = promoteAcceptedVersion(cycleId, session);
   brainLog(`Version saved: ${versionDir}`);
+  const codeFiles = hypo.patches
+    .map((p) => p.path.replace(/\\/g, '/'))
+    .filter((p) => p.endsWith('.ts') && !p.includes('genome.json'));
+  if (codeFiles.length) {
+    requestBrainCodeReload({
+      cycle_id: cycleId,
+      reason: hypo.title,
+      files: [...new Set(codeFiles)],
+    });
+    brainLog(
+      `Code patches on disk — API soft-reload when all robots FLAT (${codeFiles.length} file(s))`
+    );
+  }
   const acc: CycleResult = {
     id: cycleId,
     at: new Date().toISOString(),

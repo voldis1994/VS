@@ -7,6 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "dev:live": "tsx src/index.ts",
+    "dev:live:loop": "node ../../tools/control-api-live-loop.mjs",
     "migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
     "brain:self-improve": "tsx src/brainSelfImprove/cli.ts",

@@ -96,20 +96,28 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
 }
 
 let cache: BrainGenome | null = null;
+/** Disk mtime of last successful genome load — BRAIN process writes, API hot-reloads. */
+let cacheMtimeMs = Number.NaN;
 
 export function getBrainGenome(): BrainGenome {
-  if (cache) return cache;
   const p = genomePath();
   try {
     if (fs.existsSync(p)) {
+      const mtimeMs = fs.statSync(p).mtimeMs;
+      if (cache && Number.isFinite(cacheMtimeMs) && mtimeMs === cacheMtimeMs) {
+        return cache;
+      }
       const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<BrainGenome>;
       cache = sanitizeGenome(raw);
+      cacheMtimeMs = mtimeMs;
       return cache;
     }
   } catch {
     /* factory */
   }
+  if (cache) return cache;
   cache = { ...DEFAULT_GENOME, updated_at: new Date().toISOString() };
+  cacheMtimeMs = Number.NaN;
   return cache;
 }
 
@@ -119,11 +127,17 @@ export function setBrainGenome(next: Partial<BrainGenome>): BrainGenome {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(merged, null, 2) + '\n', 'utf8');
   cache = merged;
+  try {
+    cacheMtimeMs = fs.statSync(p).mtimeMs;
+  } catch {
+    cacheMtimeMs = Number.NaN;
+  }
   return merged;
 }
 
 export function reloadBrainGenome(): BrainGenome {
   cache = null;
+  cacheMtimeMs = Number.NaN;
   return getBrainGenome();
 }
 
@@ -134,4 +148,5 @@ export function defaultBrainGenome(): BrainGenome {
 /** Test helper */
 export function _resetBrainGenomeForTests(g?: Partial<BrainGenome>): void {
   cache = sanitizeGenome({ ...DEFAULT_GENOME, ...g, updated_at: new Date().toISOString() });
+  cacheMtimeMs = Number.NaN;
 }

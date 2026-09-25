@@ -24,6 +24,7 @@ import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
+import { checkBrainCodeReload } from './services/robotDesk.js';
 import { authMiddleware, isAdminTokenConfigured } from './middleware/auth.js';
 import { isEncryptionKeyConfigured } from './security/encryption.js';
 import { isPipelineSecretConfigured } from './services/pipelineBridge.js';
@@ -203,6 +204,8 @@ async function main() {
       timestamp: new Date().toISOString(),
       db: healthCheck(),
     });
+    // BRAIN ACCEPTed .ts while FLAT (or no robots) → soft restart via live-loop
+    checkBrainCodeReload();
   }, 5000);
 }
 

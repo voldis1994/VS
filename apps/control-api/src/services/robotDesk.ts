@@ -100,6 +100,7 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
+import { maybeExitForBrainCodeReload } from '../brainSelfImprove/brainReload.js';
 
 export type RobotTick = {
   at: string;
@@ -1192,6 +1193,14 @@ export function listRobotSessions(): RobotSession[] {
   return [...sessions.values()]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .map(publicSession);
+}
+
+/** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
+export function checkBrainCodeReload(): void {
+  const anyOpen = [...sessions.values()].some(
+    (x) => x.running && Boolean(x.open_side || x.deal_id)
+  );
+  maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
 }
 
 /** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
@@ -2583,6 +2592,11 @@ async function robotCycle(s: Internal) {
   } finally {
     s.cycle_busy = false;
     s.cycle_busy_since = 0;
+    // ACCEPTed BRAIN .ts → soft restart only when every robot is FLAT
+    const anyOpen = [...sessions.values()].some(
+      (x) => x.running && Boolean(x.open_side || x.deal_id)
+    );
+    maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
   }
 }
 
