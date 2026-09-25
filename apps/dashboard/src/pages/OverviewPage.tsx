@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          «SĀKT NO JAUNA» · MEGA BRAIN: 30m zona · G/R pressure · story · feed ·
-          velocity. Pēc 5 closes — outcome mācība (ne tikai Peak raise).
+          Cilvēka PRĀTS: situācija → tēze → risks → lēmums. Filtrus neaiztiec.
+          Pēc 5 closes — MĀCĪBA (Peak/Target), ne filter ladder.
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (

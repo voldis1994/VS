@@ -126,8 +126,8 @@ describe('manageBrain + market context', () => {
   });
 });
 
-describe('autoCalibrate outcome patterns', () => {
-  it('tightens entry filters on Soft losses with adverse story — does not only raise Peak', () => {
+describe('autoCalibrate human outcome review', () => {
+  it('writes PRĀTS/MĀCĪBA and keeps filters OPEN — Peak protect-sooner on knife Soft', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
       {
@@ -216,8 +216,9 @@ describe('autoCalibrate outcome patterns', () => {
         },
       },
     ]);
-    expect(r.changes.some((c) => c.includes('adverse story') || c.includes('DIVERGENT'))).toBe(
-      true
-    );
+    expect(r.next.entry_filter_level).toBe(0);
+    expect(r.changes.some((c) => c.includes('PRĀTS'))).toBe(true);
+    expect(r.changes.some((c) => c.includes('MĀCĪBA'))).toBe(true);
+    expect(r.changes.some((c) => /adverse story|DIVERGENT losses/.test(c))).toBe(false);
   });
 });
