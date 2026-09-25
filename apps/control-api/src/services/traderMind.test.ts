@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { thinkLikeTrader, reviewSessionLikeHuman } from './traderMind.js';
+import { thinkLikeTrader, thinkEntryLikeTrader, reviewSessionLikeHuman } from './traderMind.js';
 import type { ManageBrainInput } from './manageBrain.js';
 
 function base(partial: Partial<ManageBrainInput> = {}): ManageBrainInput {
@@ -119,5 +119,38 @@ describe('traderMind', () => {
     expect(['ease_peak_target', 'protect_sooner', 'hold_course', 'let_winners_run']).toContain(
       lesson.intent
     );
+  });
+
+  it('ENTRY mind chooses SELL on selloff — not blind BUY fade', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.75,
+      story_summary: 'STĀSTS · 30m selloff · tikai SELL · nepirkt',
+      red_1m: 18,
+      green_1m: 6,
+      zone_pos: 0.4,
+      bar_body_sign: 1,
+      last_closed_side: 'BUY',
+      last_close_was_loss: true,
+    });
+    expect(t.choice).toBe('SELL');
+    expect(t.spoken).toMatch(/PRĀTS ENTRY SELL/);
+    expect(t.thesis).toMatch(/selloff|pārdevēj/i);
+  });
+
+  it('ENTRY mind WAITs on chop instead of forcing a side', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'RANGE_CHOP',
+      allow: 'NONE',
+      story_conf: 0.35,
+      red_1m: 10,
+      green_1m: 10,
+      zone_pos: 0.5,
+      bar_body_sign: 0,
+    });
+    expect(t.choice).toBe('WAIT');
   });
 });

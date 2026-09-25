@@ -240,7 +240,7 @@ describe('executable gates (not impossible AND-stacks)', () => {
     });
     expect(trendUp).not.toBeNull();
     expect(trendUp!.direction).toBe('BUY');
-    expect(trendUp!.reason).toMatch(/SETUP NOW/);
+    expect(trendUp!.reason).toMatch(/PRĀTS ENTRY BUY|SETUP NOW/);
   });
 
   it('every tradable regime has an explicit gate branch (no silent default-only)', () => {

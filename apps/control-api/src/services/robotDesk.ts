@@ -2748,6 +2748,8 @@ async function robotCycleLocked(s: Internal) {
           bar: entryBar,
           regime: s.regime,
           closedBars: s.closedBars,
+          last_closed_side: s.last_closed_side,
+          last_close_was_loss: s.last_close_was_loss,
         });
         if (sig) {
           const flipOpts = { wasLoss: s.last_close_was_loss };

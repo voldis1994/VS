@@ -240,10 +240,11 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
 
   score = clamp(score, -2.5, 2.5);
 
-  // --- Online LEARNER decides (beats LLM: learns from YOUR pnl) ---
+  // --- PRĀTS decides; LEARNER advises once it has enough closes ---
   const learned = learnerChooseAction(input, input.client_id);
-  const thought = thinkLikeTrader(input); // human narration only
-  const action = learned.action;
+  const thought = thinkLikeTrader(input);
+  const learnerReady = learned.updates >= 20 && learned.confidence >= thought.confidence + 0.08;
+  const action = learnerReady && !learned.explored ? learned.action : thought.decision;
 
   let soft_gate_override: boolean | null = null;
   let peak_retention_override: number | null = null;
@@ -271,7 +272,8 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 
-  const reason = `${learned.detail} · ${thought.thesis.slice(0, 90)}${
+  const who = learnerReady ? learned.detail : thought.spoken;
+  const reason = `${who} · ${thought.thesis.slice(0, 90)}${
     thought.thesis.length > 90 ? '…' : ''
   } · E ${score.toFixed(2)}`;
 

@@ -19,6 +19,7 @@ import {
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
+import { thinkEntryLikeTrader } from './traderMind.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -45,6 +46,9 @@ export type StructureDecideInput = {
   bar: TenSecBar;
   regime: string | null | undefined;
   closedBars: TenSecBar[];
+  /** Optional — entry mind uses last Soft/manual to choose next side */
+  last_closed_side?: 'BUY' | 'SELL' | null;
+  last_close_was_loss?: boolean;
 };
 
 /** Lower / upper half — realistic for Gold 30m zones */
@@ -465,10 +469,37 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
+  const body = bodyPct(input.bar);
+  const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
+
+  // PRĀTS ENTRY — choose side from info (story/pressure/last close), not blind recipe
+  const mind = thinkEntryLikeTrader({
+    regime,
+    chapter: story.chapter,
+    allow: story.allow,
+    story_conf: story.confidence,
+    story_summary: story.summary_lv,
+    red_1m: story.red_1m,
+    green_1m: story.green_1m,
+    zone_pos: zone?.pos ?? story.zone_pos,
+    bar_body_sign: barSign,
+    last_closed_side: input.last_closed_side ?? null,
+    last_close_was_loss: Boolean(input.last_close_was_loss),
+  });
+
+  if (mind.choice === 'WAIT') {
+    return null;
+  }
+
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const candidate = raw ?? started;
   if (!candidate) return null;
+
+  // Mind chose a side — only take setups that match (wait for the right trigger)
+  if (candidate.direction !== mind.choice) {
+    return null;
+  }
 
   // Raw 10s regime setup already chose direction — do not re-block with lagging
   // 1m bias (that forced 10× GAIDI hunts). Structure-start still uses live bias.
@@ -482,16 +513,17 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   );
   if (!gate.ok) return null;
 
-  // Structure off: skip story knives / scalp GAIDI — trade the setup now
+  const withMind = (reason: string): RegimeEntry => ({
+    ...candidate,
+    reason: `${mind.spoken} · ${reason}`,
+  });
+
+  // Soft structure ladder off: still use mind choice + matching trigger
   if (!entryStructureEnabled()) {
-    return {
-      ...candidate,
-      reason: `${candidate.reason} · ${gate.tag} · OPEN START · ${story.summary_lv}`,
-    };
+    return withMind(`${gate.tag} · OPEN · ${story.summary_lv}`);
   }
 
-  // Raw 10s regime setup = TRADE NOW. Do not re-hunt with 1m scalp GAIDI /
-  // SEEDING waits (Funds: setup shown, entry searched 10×). Only hard knives.
+  // Raw 10s regime setup = TRADE NOW when mind agrees. Only hard knives left.
   if (raw) {
     if (candidate.direction === 'BUY' && story.chapter === 'BOUNCE_IN_SELL') {
       return null;
@@ -499,10 +531,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
     if (candidate.direction === 'SELL' && story.chapter === 'DIP_IN_RALLY') {
       return null;
     }
-    return {
-      ...candidate,
-      reason: `${candidate.reason} · ${gate.tag} · SETUP NOW · ${story.summary_lv}`,
-    };
+    return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
   }
 
   // Weaker structure-start path still needs story scalp confirm
@@ -510,10 +539,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
 
   const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
   if (!scalp.ok) return null;
-  return {
-    ...candidate,
-    reason: `${candidate.reason} · ${gate.tag} · ${story.summary_lv} · ${scalp.tag}`,
-  };
+  return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
 }
 
 /** Test helper — MOVE kept for callers that want strong 1m body */

@@ -179,6 +179,181 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   return { situation, thesis, risk, decision, why, spoken, confidence };
 }
 
+export type EntryChoice = 'BUY' | 'SELL' | 'WAIT';
+
+export type EntryThought = {
+  choice: EntryChoice;
+  situation: string;
+  thesis: string;
+  why: string;
+  spoken: string;
+  confidence: number;
+};
+
+export type EntryMindInput = {
+  regime?: string | null;
+  chapter: string;
+  allow: string;
+  story_conf: number;
+  story_summary?: string | null;
+  red_1m?: number;
+  green_1m?: number;
+  zone_pos?: number | null;
+  /** Last closed 10s body sign: -1 sell pressure, +1 buy */
+  bar_body_sign?: -1 | 0 | 1;
+  last_closed_side?: 'BUY' | 'SELL' | null;
+  last_close_was_loss?: boolean;
+};
+
+/**
+ * Entry mind — chooses BUY / SELL / WAIT from live info.
+ * Not a block list: picks the side the picture supports, or waits.
+ */
+export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
+  const chapter = String(input.chapter || 'NEZINĀMS').toUpperCase();
+  const allow = String(input.allow || 'NONE').toUpperCase();
+  const regime = String(input.regime || 'UNKNOWN').toUpperCase();
+  const g = input.green_1m ?? 0;
+  const r = input.red_1m ?? 0;
+  const conf = Number.isFinite(input.story_conf) ? input.story_conf : 0;
+  const pos = input.zone_pos;
+  const body = input.bar_body_sign ?? 0;
+  const storyLine = input.story_summary || `STĀSTS · ${chapter}`;
+
+  const situation = `Flat · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
+    pos != null && Number.isFinite(pos) ? pos.toFixed(2) : '—'
+  } · 10s ${body > 0 ? 'zaļš' : body < 0 ? 'sarkans' : 'kluss'}${
+    input.last_closed_side
+      ? ` · pēdējais ${input.last_closed_side}${input.last_close_was_loss ? ' Soft' : ''}`
+      : ''
+  }`;
+
+  // Structured exceptions — human would fade a failed break
+  if (regime === 'FAILED_BREAKOUT_DOWN' || regime === 'REVERSAL_CANDIDATE') {
+    if (allow !== 'SELL' || chapter === 'BOUNCE_IN_SELL') {
+      /* keep reading below for SELL bias */
+    }
+  }
+
+  let choice: EntryChoice = 'WAIT';
+  let thesis: string;
+  let why: string;
+  let confidence = 0.55;
+
+  const sellPressure = r > g + 1 || allow === 'SELL' || chapter.includes('SELL');
+  const buyPressure = g > r + 1 || allow === 'BUY' || chapter.includes('RALLY');
+
+  // Live regime is fresher than lagging 30m story — choose with the classifier
+  // (still refuse knife bounce / dip-in-rally against the live side).
+  if (
+    (regime === 'TREND_UP' ||
+      regime === 'BREAKOUT_UP' ||
+      regime === 'PULLBACK_UPTREND') &&
+    chapter !== 'BOUNCE_IN_SELL'
+  ) {
+    choice = 'BUY';
+    thesis = `Regime ${regime} — strādāju ar garo pusi (live classifer, ne tikai vecais 30m).`;
+    why = 'Izvēle no live regime + stāsta; gaidu BUY setup.';
+    confidence = 0.72;
+  } else if (
+    (regime === 'TREND_DOWN' ||
+      regime === 'BREAKOUT_DOWN' ||
+      regime === 'PULLBACK_DOWNTREND') &&
+    chapter !== 'DIP_IN_RALLY'
+  ) {
+    choice = 'SELL';
+    thesis = `Regime ${regime} — strādāju ar īso pusi.`;
+    why = 'Izvēle no live regime + stāsta; gaidu SELL setup.';
+    confidence = 0.72;
+  } else if (regime === 'FAILED_BREAKOUT_UP') {
+    choice = 'SELL';
+    thesis = 'FAILED_BREAKOUT_UP — izvēlos SELL fade.';
+    why = 'Struktūra saka: neveiksmīgs break uz augšu → short.';
+    confidence = 0.7;
+  } else if (regime === 'FAILED_BREAKOUT_DOWN') {
+    choice = 'BUY';
+    thesis = 'FAILED_BREAKOUT_DOWN — izvēlos BUY fade.';
+    why = 'Struktūra saka: neveiksmīgs break uz leju → long.';
+    confidence = 0.7;
+  } else if (chapter === 'BOUNCE_IN_SELL' || (allow === 'SELL' && chapter === 'SELLOFF')) {
+    choice = 'SELL';
+    thesis = `30m ir selloff (${chapter}) — esmu pārdevēja pusē, ne medīju bounce long.`;
+    why =
+      body < 0
+        ? 'Sarkans 10s apstiprina — ņemu SELL kad setup sakrīt.'
+        : 'Gaidu SELL trigger (rally fade / turpinājums), nevis BUY pret stāstu.';
+    confidence = Math.max(0.7, conf);
+  } else if (chapter === 'DIP_IN_RALLY' || (allow === 'BUY' && chapter === 'RALLY')) {
+    choice = 'BUY';
+    thesis = `30m ir rally (${chapter}) — pircēja puse, ne shortoju dip.`;
+    why =
+      body > 0
+        ? 'Zaļš 10s apstiprina — ņemu BUY kad setup sakrīt.'
+        : 'Gaidu BUY trigger (dip pullback), nevis SELL pret stāstu.';
+    confidence = Math.max(0.7, conf);
+  } else if (allow === 'SELL' && conf >= 0.55) {
+    choice = 'SELL';
+    thesis = `Stāsts atļauj SELL (${chapter}) — izvēlos īso pusi.`;
+    why = 'Strādāju ar stāstu: meklēju SELL setup, ne aklu RANGE dip BUY.';
+    confidence = conf;
+  } else if (allow === 'BUY' && conf >= 0.55) {
+    choice = 'BUY';
+    thesis = `Stāsts atļauj BUY (${chapter}) — izvēlos garo pusi.`;
+    why = 'Strādāju ar stāstu: meklēju BUY setup.';
+    confidence = conf;
+  } else if (allow === 'BOTH' || chapter === 'BREAK_UP' || chapter === 'BREAK_DOWN') {
+    if (chapter === 'BREAK_DOWN' || (sellPressure && !buyPressure)) {
+      choice = 'SELL';
+      thesis = `Break/abpusējs attēls, bet spiediens uz leju — izvēlos SELL.`;
+    } else if (chapter === 'BREAK_UP' || (buyPressure && !sellPressure)) {
+      choice = 'BUY';
+      thesis = `Break/abpusējs attēls, bet spiediens uz augšu — izvēlos BUY.`;
+    } else {
+      choice = 'WAIT';
+      thesis = `Abas puses iespējamas (${chapter}) — nav skaidras izvēles.`;
+    }
+    why =
+      choice === 'WAIT'
+        ? 'Gaidu skaidrāku 10s/1m apstiprinājumu pirms entry.'
+        : `Izvēle ${choice} no pressure G${g}/R${r} + nodaļas.`;
+    confidence = choice === 'WAIT' ? 0.45 : Math.max(0.6, conf);
+  } else if (
+    input.last_close_was_loss &&
+    input.last_closed_side === 'BUY' &&
+    sellPressure
+  ) {
+    choice = 'SELL';
+    thesis = `Tikko Soft/manual BUY zaudējums un tirgus joprojām uz leju — izvēlos SELL, ne atkal to pašu BUY.`;
+    why = 'Mācos no pēdējā close + live stāsta: otra puse, ne same-dir spam.';
+    confidence = 0.75;
+  } else if (
+    input.last_close_was_loss &&
+    input.last_closed_side === 'SELL' &&
+    buyPressure
+  ) {
+    choice = 'BUY';
+    thesis = `Tikko Soft/manual SELL zaudējums un tirgus uz augšu — izvēlos BUY.`;
+    why = 'Mācos no pēdējā close + live stāsta.';
+    confidence = 0.75;
+  } else if (chapter === 'RANGE_CHOP' || allow === 'NONE' || conf < 0.5) {
+    choice = 'WAIT';
+    thesis = `Chop / vājš stāsts (${chapter}, conf=${conf.toFixed(2)}) — nav ko uzspiest.`;
+    why = 'Cilvēks teiktu: sēžu malā, kamēr parādās skaidra puse.';
+    confidence = 0.4;
+  } else {
+    choice = 'WAIT';
+    thesis = 'Nav pietiekami skaidra attēla entryi.';
+    why = 'Gaidu — labāk nekā akls fade.';
+    confidence = 0.35;
+  }
+
+  const spoken = `PRĀTS ENTRY ${choice} · ${thesis.slice(0, 100)}${
+    thesis.length > 100 ? '…' : ''
+  } · ${why.slice(0, 80)}${why.length > 80 ? '…' : ''}`;
+
+  return { choice, situation, thesis, why, spoken, confidence };
+}
+
 /**
  * After 5 closes — think like a human reviewing the day.
  * Changes Peak/Target/TP intent only — never entry filters.

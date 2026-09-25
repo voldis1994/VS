@@ -101,7 +101,7 @@ describe('manageBrain', () => {
       })
     );
     expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
-    expect(r.reason).toMatch(/LEARNER/);
+    expect(r.reason).toMatch(/PRĀTS|LEARNER/);
     expect(r.learner_features?.length).toBeGreaterThan(10);
   });
 

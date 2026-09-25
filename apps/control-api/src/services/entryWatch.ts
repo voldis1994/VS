@@ -332,6 +332,8 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
             : bar
               ? [bar]
               : [],
+          last_closed_side: lastClosedSide,
+          last_close_was_loss: wasLoss,
         })
       : null;
   const flipBlocked = Boolean(
