@@ -326,22 +326,19 @@ export const STRUCTURE_GRACE_MS = 8_000;
 export const STRUCTURE_CONFIRM_MS = 3_000;
 
 /**
- * After a real favorable excursion (≥ Soft HardInv), Soft line moves to
- * true flat so greens cannot reverse into a full Soft loss.
+ * Soft HardInv is LOSES-ONLY. After a Soft-sized MFE we do NOT move the line
+ * to flat (old BE-lock) — that turned Funds greens into −£0.01…−£0.23 scratches
+ * while Peak was still waiting for reverse-1m / softGate.
  *
- * Lock is NOT a profit harvest — old 0.45 / even 0.05 Soft still banked
- * Funds +£0.01…+£0.03 while Soft losers took −£0.06. Real winners =
- * Peak/Target with exec ≥ Soft (1:1 min vs Soft loss).
+ * Soft always cuts at −Soft. Peak/Target own banking (≥ Soft). Broker SAFETY SL
+ * is the hard cushion if Soft never fires.
  */
 export const BE_LOCK_FRAC = 0;
-/** Executable edge as fraction of Soft SL — only while mid still green (magic-minus). */
+/** @deprecated Soft no longer BE-locks; kept for callers/tests. */
 export const BE_LOCK_EXEC_FRAC = 0.25;
 
-export function softLossLine(sl: number, mfe: number): number {
-  if (mfe >= sl) {
-    // True BE — never harvest a slice of Soft as a "win"
-    return 0;
-  }
+export function softLossLine(sl: number, _mfe?: number): number {
+  void _mfe;
   return -sl;
 }
 
@@ -426,7 +423,6 @@ export function decideBestOutcomeExit(
     ) * profile.peak_giveback_mult;
   const tp = targetTakeProfitDistance(entry, thesisRegime);
   const sl = hardInvStopDistance(entry, thesisRegime);
-  const minExec = beLockMinExec(sl);
   /** Peak/Target/TimeDecay — never bank below Soft loss size */
   const minBank = minProfitBank(sl);
   const mfeFloor =
@@ -473,35 +469,19 @@ export function decideBestOutcomeExit(
       }
     }
 
-    // 2) Soft HardInv / BE-lock
+    // 2) Soft HardInv — true Soft-sized losers only (never flat BE after green MFE)
     const lossLine = softLossLine(sl, mfe);
-    const beMode = mfe >= sl;
     if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
-      // Magic-minus guard ONLY while mid still green: bid/ask cash-red through
-      // spread must not Soft-cut. Once mid ≤ lock (~flat), cut — do not gift
-      // a free ride back to full Soft loss (Funds −£0.10 after tiny BE wins).
-      if (beMode && fav > 0 && execFav < minExec) {
-        if (gate === 'live_loss') {
+      breaching = true;
+      const since = s.hardinv_breach_since_ms;
+      if (since != null && Number.isFinite(since) && since > 0) {
+        const breachedFor = nowMs - since;
+        if (breachedFor >= HARDINV_CONFIRM_MS) {
           return {
-            exit: false,
-            reason: '',
-            hardinv_breaching: false,
-            // structure stamp still needed by desk
+            exit: true,
+            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)}) · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+            hardinv_breaching: true,
           };
-        }
-      } else {
-        breaching = true;
-        const since = s.hardinv_breach_since_ms;
-        if (since != null && Number.isFinite(since) && since > 0) {
-          const breachedFor = nowMs - since;
-          if (breachedFor >= HARDINV_CONFIRM_MS) {
-            const beTag = beMode ? ' · BE-lock' : '';
-            return {
-              exit: true,
-              reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)})${beTag} · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
-              hardinv_breaching: true,
-            };
-          }
         }
       }
     }

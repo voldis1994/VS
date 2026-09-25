@@ -106,14 +106,15 @@ describe('positive R:R Soft HardInv', () => {
     expect(cheap).toBeLessThan(0.05);
   });
 
-  it('softLossLine BE-lock is true flat — not a Soft-slice harvest', () => {
+  it('softLossLine is always −Soft — never flat BE after Soft MFE (Funds scratch bug)', () => {
     const sl = 2.0;
     expect(softLossLine(sl, 0.5)).toBe(-sl);
-    expect(softLossLine(sl, 2.0)).toBe(0);
+    expect(softLossLine(sl, 2.0)).toBe(-sl);
+    expect(softLossLine(sl, 10)).toBe(-sl);
     expect(BE_LOCK_FRAC).toBe(0);
     expect(minProfitBank(sl)).toBe(sl);
     const oilSl = hardInvStopDistance(2.15, 'TREND_UP');
-    expect(softLossLine(oilSl, oilSl + 0.001)).toBe(0);
+    expect(softLossLine(oilSl, oilSl + 0.001)).toBe(-oilSl);
   });
 
   it('Peak MFE floor ≥ Soft HardInv so winners are not micro-scalped', () => {
@@ -230,10 +231,10 @@ describe('decideBestOutcomeExit', () => {
     expect(d.hardinv_breaching).toBe(false);
   });
 
-  it('BE-lock cuts when MFE reached Soft SL then price returns to flat (true BE)', () => {
+  it('Soft does NOT cut at flat after Soft MFE — Peak owns winners (no Funds scratch)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
-    // Mid flat / slightly red after Soft-sized MFE — Soft BE cut (not tiny +win)
+    // Mid flat / slightly red after Soft-sized MFE — Soft holds (lossLine = −Soft)
     const mid = 1999.98;
     const d = decideBestOutcomeExit(
       snap({
@@ -249,11 +250,10 @@ describe('decideBestOutcomeExit', () => {
       now,
       { bid: 1999.9, ask: mid + 0.3 }
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/BE-lock/);
+    expect(d.exit).toBe(false);
   });
 
-  it('BE-lock cuts at ~flat after Soft MFE — does not gift ride to full Soft loss', () => {
+  it('Soft still cuts true Soft-sized losers after Soft MFE (full −Soft)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(4330, 'TREND_UP');
     const d = decideBestOutcomeExit(
@@ -265,13 +265,14 @@ describe('decideBestOutcomeExit', () => {
         entry_at: new Date(now - 60_000).toISOString(),
         hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 500),
       }),
-      4330 - 0.01,
+      4330 - sl - 0.2,
       'live_loss',
       now,
-      { bid: 4329.9, ask: 4330.2 }
+      { bid: 4330 - sl - 0.3, ask: 4330 - sl }
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/BE-lock/);
+    expect(d.reason).toMatch(/HardInvalidation/);
+    expect(d.reason).not.toMatch(/BE-lock/);
   });
 
   it('PeakProtect does NOT bank below Soft HardInv (Funds +£0.01 vs −£0.06)', () => {
@@ -314,10 +315,9 @@ describe('decideBestOutcomeExit', () => {
     expect(ok.exit).toBe(true);
   });
 
-  it('BE-lock does NOT scratch mid-green when bid/ask would be cash-red (Funds magic-minus)', () => {
+  it('Soft does NOT scratch mid-green after Soft MFE (Peak owns banking)', () => {
     const now = Date.now();
     const sl = hardInvStopDistance(2000, 'TREND_UP');
-    // Mid still green (above flat BE) — Soft not yet at lossLine; would need fav≤0
     const mid = 2000.15;
     const d = decideBestOutcomeExit(
       snap({
@@ -333,7 +333,6 @@ describe('decideBestOutcomeExit', () => {
       now,
       { bid: 1999.7, ask: mid + 0.3 }
     );
-    // fav > 0 → not at BE lossLine yet → no Soft cut
     expect(d.exit).toBe(false);
   });
 

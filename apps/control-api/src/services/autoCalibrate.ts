@@ -321,7 +321,7 @@ export function beginAutoCalibrateSession(
   st.cycles_run = 0;
   st.last_cycle_at = null;
   st.last_summary = `OPEN TRADE-ALL · client ${id} · ${reason} · filters L0 · all regimes`;
-  st.last_changes = ['factory open · Soft 2.2 · Peak 3 · Target 5 · TP RR 1.5 · filters 0'];
+  st.last_changes = ['factory open · Soft 2.2 · Peak 3 keep72% · Target 5 · TP RR 1.5 · filters 0 · Soft loses-only'];
   st.demoted.clear();
   st.cooldown_until_ms = null;
   st.last_window_expectancy = null;
@@ -593,7 +593,7 @@ export function proposeAutoCalibration(
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     next.peak_mfe_abs = Math.max(next.hardinv_abs + 1.5, next.peak_mfe_abs - 0.5);
-    next.peak_retention = Math.max(0.65, next.peak_retention - 0.04);
+    next.peak_retention = Math.max(0.72, next.peak_retention - 0.04);
     next.peak_min_giveback_abs = Math.max(0.85, next.peak_min_giveback_abs - 0.15);
     next.target_abs = Math.max(next.hardinv_abs + 3, next.target_abs - 1.25);
     next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
