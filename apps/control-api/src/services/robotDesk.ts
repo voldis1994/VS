@@ -49,6 +49,7 @@ import {
   compactMarketContext,
   type MarketContextSnapshot,
 } from './marketContext.js';
+import { learnerLearnFromClose, type LearnerFeatures } from './deskLearner.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
@@ -230,6 +231,8 @@ type Internal = RobotSession & {
   entry_zone: ExitZoneSnap | null;
   /** Last manage-brain action string — throttle MANAGE ticks */
   last_brain_action: string;
+  /** Last learner feature vector — reward at close */
+  last_learner_features: LearnerFeatures | null;
   /** Mega market context frozen at fill */
   entry_market: MarketContextSnapshot | null;
   /**
@@ -643,6 +646,23 @@ async function persistClosedTradeLedger(
     const exitCtx = compactMarketContext(
       buildMarketContext(s.closedBars, s.entry_regime || s.regime, s.multiFeed)
     );
+    // Online learner — reward last manage action with realized pnl (beats LLM prose)
+    const learned = learnerLearnFromClose({
+      clientId: s.client_id,
+      features: s.last_learner_features,
+      action: s.last_brain_action,
+      pnl_pts: ptsForCal,
+      soft_scale: hardInvStopDistance(s.entry_price, s.entry_regime || s.regime),
+    });
+    if (learned) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `LEARNER UPDATE · reward ${learned.reward.toFixed(2)} · n=${learned.updates} · action ${s.last_brain_action || '—'}`,
+      });
+    }
     const cycle = noteClosedTradeForAutoCalibrate(
       {
         pnl_pts: ptsForCal,
@@ -715,6 +735,7 @@ function clearTradeState(s: Internal) {
   s.entry_setup = null;
   s.entry_zone = null;
   s.last_brain_action = '';
+  s.last_learner_features = null;
   s.entry_market = null;
 }
 
@@ -1842,6 +1863,7 @@ function decideOpenManageExit(
     held_ms: s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0,
     market: liveMarket,
     entry_market: s.entry_market,
+    client_id: s.client_id,
   });
   const gated = applyManageBrainToExit({
     brain,
@@ -1850,6 +1872,9 @@ function decideOpenManageExit(
     peakRetentionCfg: cal.peak_retention,
     peakMfeFloor: peakFloorNow,
   });
+  if (brain.learner_features) {
+    s.last_learner_features = brain.learner_features;
+  }
   if (gated.peakArmed && !s.peak_protect_armed) {
     s.peak_protect_armed = true;
     s.last_brain_action = brain.action;
@@ -3134,6 +3159,7 @@ export async function startRobotSession(input: {
     entry_setup: null,
     entry_zone: null,
     last_brain_action: '',
+    last_learner_features: null,
     entry_market: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

@@ -1,1 +1,5 @@
 data/
+
+# online learner weights (per client)
+data/desk-learner/
+data/desk-learner-session.json
