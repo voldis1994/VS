@@ -1,9 +1,9 @@
 /**
  * Adaptive manage brain — the "last click" that weighs live context and
- * decides HOLD / TRAIL / CUT / BANK instead of only rigid Soft/Peak/Target.
+ * decides HOLD / TRAIL / CUT / BANK.
  *
- * Soft HardInv + structure remain sacred (never delayed / widened here).
- * Brain only modulates Peak trail + Target softGate.
+ * Soft HardInv + Soft-sized structure remain sacred (never delayed / widened).
+ * Brain owns Soft-sized green banks: BANK/CUT execute closes — not only Peak nudge.
  */
 import { thesisFailureReason, type ExitSide } from './exitManage.js';
 import {
@@ -15,6 +15,24 @@ import { thinkLikeTrader } from './traderMind.js';
 import { learnerChooseAction, type LearnerFeatures } from './deskLearner.js';
 
 export type ManageBrainAction = 'HOLD' | 'TRAIL' | 'CUT' | 'BANK';
+
+/**
+ * When mind says BANK/CUT on Soft-sized executable green — close now.
+ * Soft HardInv still owns losers; mind never market-closes red.
+ */
+export function mindOwnsGreenExit(opts: {
+  action: ManageBrainAction | string | null | undefined;
+  execFav: number;
+  softSl: number;
+}): { exit: true; tag: 'MindBank' | 'MindCut' } | { exit: false } {
+  const soft = Math.max(opts.softSl, 1e-9);
+  const exec = opts.execFav;
+  if (!(exec >= soft)) return { exit: false };
+  const a = String(opts.action || '').toUpperCase();
+  if (a === 'BANK') return { exit: true, tag: 'MindBank' };
+  if (a === 'CUT') return { exit: true, tag: 'MindCut' };
+  return { exit: false };
+}
 
 export type ManageBrainInput = {
   open_side: ExitSide;

@@ -170,6 +170,8 @@ export function summarizeExitReason(reason: string | null | undefined): string {
   const r = String(reason || 'UNKNOWN');
   if (/HardInvalidation|HardInv/i.test(r)) return 'HardInvalidation';
   if (/StructureInvalidation|Structure/i.test(r)) return 'StructureInvalidation';
+  if (/MindBank/i.test(r)) return 'MindBank';
+  if (/MindCut/i.test(r)) return 'MindCut';
   if (/PeakProtect|PeakProtection/i.test(r)) return 'PeakProtection';
   if (/TimeDecay/i.test(r)) return 'TimeDecay';
   if (/Target/i.test(r)) return 'Target';

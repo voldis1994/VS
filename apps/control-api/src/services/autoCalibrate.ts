@@ -573,7 +573,7 @@ export function proposeAutoCalibration(
 
   // --- Human review of the 5-close window (Peak/Target only — NEVER filters) ---
   const peakExits = windowTrades.filter((t) =>
-    /PeakProtection|TimeDecay|Target/i.test(String(t.exit_reason || ''))
+    /PeakProtection|MindBank|MindCut|TimeDecay|Target/i.test(String(t.exit_reason || ''))
   );
   const highMfeTinyPnl = windowTrades.filter(
     (t) => t.mfe > 0 && t.pnl_pts > 0 && t.pnl_pts < t.mfe * 0.35 && t.mfe >= avgLossAbs * 0.8
