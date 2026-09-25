@@ -10,6 +10,12 @@ import {
 } from './experience.js';
 import type { BrainPatch } from './guards.js';
 import type { AnalysisResult } from './analyze.js';
+import {
+  codePatchesBankGreen,
+  codePatchesExplore,
+  codePatchesMicroScratch,
+  codePatchesSoftSpam,
+} from './codePatches.js';
 
 function genomePatch(
   findKey: keyof BrainGenome,
@@ -68,7 +74,7 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
     title: 'Pause SELL spam after Soft chain + require 1m trigger',
     rationale: `Soft SELL×${softSell} in window — bias-only shorts hitting Soft.`,
     task:
-      'Tighten genome: wait_on_1m_fight=true, require_1m_trigger=true, raise soft pause.',
+      'Tighten genome + lengthen Soft same-dir lock in flipFilter; require 1m trigger.',
     genome_delta: {
       wait_on_1m_fight: true,
       require_1m_trigger: true,
@@ -80,12 +86,13 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('wait_on_1m_fight', true, 'force WAIT on 1m fight'),
       genomePatch('require_1m_trigger', true, 'require 1m trigger'),
       genomePatch('soft_same_side_pause_closes', pause1, 'longer Soft same-side pause'),
+      ...codePatchesSoftSpam(0),
     ],
   };
   const pauseHarder: Variant = {
-    title: 'Harder Soft same-side pause (SELL)',
+    title: 'Harder Soft same-side pause (SELL) + filter lock',
     rationale: `Prior pause insufficient — Soft SELL×${softSell}`,
-    task: 'Raise soft_same_side_pause_closes and pause_min.',
+    task: 'Raise soft pause genome + bump flipFilter Soft lock further.',
     genome_delta: {
       soft_same_side_pause_closes: pause2,
       soft_same_side_pause_min: pauseMin,
@@ -96,6 +103,7 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('soft_same_side_pause_closes', pause2, 'pause +2 closes'),
       genomePatch('soft_same_side_pause_min', pauseMin, 'arm pause sooner'),
       genomePatch('require_1m_trigger', true, '1m trigger'),
+      ...codePatchesSoftSpam(1),
     ],
   };
   const measurable: Variant = {
@@ -137,12 +145,13 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
       patches: [
         genomePatch('soft_same_side_pause_closes', pause1, 'BUY Soft pause longer'),
         genomePatch('require_1m_trigger', true, '1m trigger'),
+        ...codePatchesSoftSpam(0),
       ],
     },
     {
       title: 'Harder BUY Soft pause',
       rationale: `Soft BUY×${softBuy} continues`,
-      task: 'Raise pause closes further.',
+      task: 'Raise pause closes further + flipFilter Soft lock.',
       genome_delta: {
         soft_same_side_pause_closes: pause2,
         require_1m_trigger: true,
@@ -152,6 +161,7 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
       patches: [
         genomePatch('soft_same_side_pause_closes', pause2, 'BUY pause +2'),
         genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
+        ...codePatchesSoftSpam(1),
       ],
     },
   ];
@@ -166,7 +176,7 @@ function bankGreenVariants(g: BrainGenome, left: number, e: number): Variant[] {
     {
       title: 'Bank Soft+ sooner — raise Keep / giveback bank',
       rationale: `Left winners on table×${left} · E=${e.toFixed(2)}`,
-      task: 'Raise peak_keep and soft_plus_giveback so MindBank takes plus before Soft eats it.',
+      task: 'Genome Keep/giveback + Mind code CUT Soft+ earlier.',
       genome_delta: {
         peak_keep: nextKeep,
         soft_plus_giveback: nextGb,
@@ -177,12 +187,13 @@ function bankGreenVariants(g: BrainGenome, left: number, e: number): Variant[] {
         genomePatch('peak_keep', nextKeep, 'tighter Peak Keep'),
         genomePatch('soft_plus_giveback', nextGb, 'earlier Soft+ giveback bank'),
         genomePatch('mind_bank_on_turn', true, 'mind banks on turn'),
+        ...codePatchesBankGreen(),
       ],
     },
     {
       title: 'Aggressive Peak arm + Keep for left-on-table',
       rationale: `Still leaving MFE on table×${left}`,
-      task: 'Lower peak_arm_soft_mult and push Keep higher.',
+      task: 'Lower peak_arm_soft_mult and push Keep higher + Mind bank earlier.',
       genome_delta: {
         peak_arm_soft_mult: arm,
         peak_keep: nextKeep2,
@@ -193,6 +204,7 @@ function bankGreenVariants(g: BrainGenome, left: number, e: number): Variant[] {
         genomePatch('peak_arm_soft_mult', arm, 'much earlier Peak arm'),
         genomePatch('peak_keep', nextKeep2, 'Keep push'),
         genomePatch('mind_bank_on_turn', true, 'mind bank on'),
+        ...codePatchesBankGreen(),
       ],
     },
   ];
@@ -203,7 +215,7 @@ function microScratchVariants(g: BrainGenome): Variant[] {
     {
       title: 'Reduce micro-scratch sensitivity',
       rationale: 'Micro scratches — structure/Limit noise.',
-      task: 'Keep Soft-sized-only structure; genome reinforces require_1m_trigger.',
+      task: 'Tighten structureEntry extremes + genome 1m trigger.',
       genome_delta: {
         require_1m_trigger: true,
         wait_on_1m_fight: true,
@@ -212,12 +224,13 @@ function microScratchVariants(g: BrainGenome): Variant[] {
       patches: [
         genomePatch('require_1m_trigger', true, 'avoid knife entries'),
         genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
+        ...codePatchesMicroScratch(0),
       ],
     },
     {
       title: 'Slight Keep tighten after scratch noise',
       rationale: 'Entry noise; survivors should bank cleanly.',
-      task: 'Nudge peak_keep up while holding 1m trigger.',
+      task: 'Nudge peak_keep + structure start bands.',
       genome_delta: {
         peak_keep: Math.min(0.82, g.peak_keep + 0.02),
         require_1m_trigger: true,
@@ -226,6 +239,7 @@ function microScratchVariants(g: BrainGenome): Variant[] {
       patches: [
         genomePatch('peak_keep', Math.min(0.82, g.peak_keep + 0.02), 'Keep nudge'),
         genomePatch('require_1m_trigger', true, '1m trigger'),
+        ...codePatchesMicroScratch(1),
       ],
     },
   ];
@@ -252,12 +266,13 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
         genomePatch('require_1m_trigger', true, '1m trigger'),
         genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
         genomePatch('soft_same_side_pause_closes', pause1, 'Soft pause longer'),
+        ...codePatchesSoftSpam(0),
       ],
     },
     {
       title: 'Bank survivors earlier after Soft losses',
       rationale: `Soft×${softL} — survivors must Keep sooner.`,
-      task: 'Raise peak_keep + soft_plus_giveback; lower peak_arm_soft_mult.',
+      task: 'Raise peak_keep + soft_plus_giveback; Mind code bank Soft+.',
       genome_delta: {
         peak_keep: keep,
         soft_plus_giveback: gb,
@@ -269,12 +284,13 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
         genomePatch('peak_keep', keep, 'tighter Keep'),
         genomePatch('soft_plus_giveback', gb, 'earlier Soft+ bank'),
         genomePatch('peak_arm_soft_mult', arm, 'earlier Peak arm'),
+        ...codePatchesBankGreen(),
       ],
     },
     {
       title: 'Harder Soft pause min after Soft chain',
       rationale: `Soft×${softL}`,
-      task: 'Raise soft_same_side_pause_min.',
+      task: 'Raise soft_same_side_pause_min + flipFilter Soft lock.',
       genome_delta: {
         soft_same_side_pause_min: Math.min(6, g.soft_same_side_pause_min + 1),
         soft_same_side_pause_closes: Math.min(8, g.soft_same_side_pause_closes + 2),
@@ -291,6 +307,7 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
           Math.min(8, g.soft_same_side_pause_closes + 2),
           'pause lasts longer'
         ),
+        ...codePatchesSoftSpam(1),
       ],
     },
   ];
@@ -379,6 +396,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
       patches: [
         genomePatch('peak_keep', keep, `explore Keep ${keep}`),
         genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
+        ...codePatchesExplore(rejectedN),
       ],
     },
     {
@@ -395,6 +413,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
         genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
         genomePatch('mind_bank_on_turn', true, 'mind bank on'),
+        ...codePatchesBankGreen(),
       ],
     },
     {
@@ -413,7 +432,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     },
     {
       title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
-      rationale: 'Bounce Soft same-side pause knobs.',
+      rationale: 'Bounce Soft same-side pause knobs + flipFilter lock.',
       task: `pause_closes=${pause} pause_min=${pauseMin}`,
       genome_delta: {
         soft_same_side_pause_closes: pause,
@@ -425,6 +444,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
         genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
         genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
+        ...codePatchesSoftSpam(rejectedN % 2),
       ],
     },
     {
@@ -441,6 +461,23 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
         genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
         genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
+        ...codePatchesExplore(rejectedN + 1),
+      ],
+    },
+    {
+      title: `Explore structure extremes (step #${nextStep + 5})`,
+      rationale: 'Nudge structureEntry extremes when genome knobs exhausted.',
+      task: `structureEntry EXTREME/START + Soft lock tick`,
+      genome_delta: {
+        explore_step: nextStep + 5,
+        require_1m_trigger: true,
+        last_lesson: `Explore structure #${nextStep + 5}`,
+      },
+      patches: [
+        genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
+        genomePatch('require_1m_trigger', true, '1m trigger'),
+        ...codePatchesMicroScratch(rejectedN % 2),
+        ...codePatchesExplore(rejectedN + 2),
       ],
     },
   ];
@@ -469,6 +506,7 @@ function forceExploreHypothesis(
       genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
       genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
+      ...codePatchesExplore(nextStep),
     ]);
     const signature = hypothesisSignature({
       pattern_id: 'explore',

@@ -36,7 +36,9 @@ describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
       sameDirectionBlocked('SELL', 'BUY', t0, t0 + 30_000, { wasLoss: false })
     ).toBe(false);
     expect(requiredFlipSide('BUY', t0, t0 + 30_000, { wasLoss: false })).toBe('SELL');
-    expect(sameDirLockLeftSec(t0, t0 + 30_000, sameDirLockMs(false))).toBe(60);
+    expect(sameDirLockLeftSec(t0, t0 + 30_000, sameDirLockMs(false))).toBe(
+      Math.ceil((SAME_DIR_LOCK_MS - 30_000) / 1000)
+    );
   });
 
   it('after Soft loss keeps same-dir blocked for lock window — no forced opposite', () => {
@@ -73,7 +75,9 @@ describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
   it('explains same-dir Soft lock vs normal flip lock', () => {
     expect(flipFilterReason('SELL', 'SELL', 400, true)).toMatch(/SAME-DIR LOCK after Soft/);
     expect(flipFilterReason('SELL', 'SELL', 400, true)).toMatch(/ne auto-flip/);
-    expect(flipFilterReason('BUY', 'BUY', 40, false)).toMatch(/FLIP LOCK 90s/);
+    expect(flipFilterReason('BUY', 'BUY', 40, false)).toMatch(
+      new RegExp(`FLIP LOCK ${Math.ceil(SAME_DIR_LOCK_MS / 1000)}s`)
+    );
   });
 
   it('exitReasonWasLoss detects Soft/structure, not Peak/Target/BE scratch', () => {
