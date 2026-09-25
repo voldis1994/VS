@@ -363,6 +363,8 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toMatch(/1m \$\{policy\} · PeakProtect ARMED/);
     expect(src).toContain('trail after real MFE');
     expect(src).toContain('softExitMarketGate');
+    expect(src).toContain('mindOwnsGreenExit');
+    expect(src).toMatch(/Mind owns Soft-sized green banks/);
     expect(src).toMatch(/softGate\.allow/);
     expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
     // SAFETY SL at open; Soft manage owns banks (strip broker TP — no Limit scratch)

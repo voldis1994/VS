@@ -107,6 +107,6 @@ export function exitReasonWasLoss(reason: string | null | undefined): boolean {
   const r = String(reason || '');
   if (/StructureInvalidation|ThesisFailure/i.test(r)) return true;
   if (/HardInvalidation/i.test(r) && !/BE-lock/i.test(r)) return true;
-  if (/PeakProtection|Target\s*\/|TimeDecay|BE-lock/i.test(r)) return false;
+  if (/PeakProtection|MindBank|MindCut|Target\s*\/|TimeDecay|BE-lock/i.test(r)) return false;
   return false;
 }

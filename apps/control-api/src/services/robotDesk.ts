@@ -28,8 +28,14 @@ import {
   type RegimeName,
 } from './regimes.js';
 import {
+  applyManageBrainToExit,
+  mindOwnsGreenExit,
+  scoreManageAction,
+} from './manageBrain.js';
+import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
+  executableFavorable,
   favorableMove,
   hardInvStopDistance,
   minProfitBank,
@@ -42,10 +48,6 @@ import {
   type ExitZoneSnap,
 } from './exitManage.js';
 import { softExitMarketGate } from './softExitMarketGate.js';
-import {
-  applyManageBrainToExit,
-  scoreManageAction,
-} from './manageBrain.js';
 import {
   buildMarketContext,
   compactMarketContext,
@@ -762,12 +764,28 @@ async function persistClosedTradeLedger(
       buildMarketContext(s.closedBars, s.entry_regime || s.regime, s.multiFeed)
     );
     // Online learner — reward last manage action with realized pnl (beats LLM prose)
+    // MindBank/MindCut closes attribute to BANK/CUT so wins reinforce the mind
+    let learnAction = s.last_brain_action;
+    if (/MindBank/i.test(exitReason)) learnAction = 'BANK';
+    else if (/MindCut/i.test(exitReason)) learnAction = 'CUT';
+    else if (/PeakProtection/i.test(exitReason) && ptsForCal > 0) {
+      // Peak banked a winner while mind was HOLD/TRAIL — reinforce BANK for this picture
+      if (learnAction === 'HOLD' || learnAction === 'TRAIL' || !learnAction) {
+        learnAction = 'BANK';
+      }
+    } else if (/HardInvalidation|StructureInvalidation/i.test(exitReason) && ptsForCal < 0) {
+      // Soft-sized loser — reinforce that HOLD was wrong only if we had green MFE we gave back
+      if (s.mfe >= soft * 0.75 && (learnAction === 'HOLD' || learnAction === 'TRAIL')) {
+        learnAction = 'CUT';
+      }
+    }
     const learned = learnerLearnFromClose({
       clientId: s.client_id,
       features: s.last_learner_features,
-      action: s.last_brain_action,
+      action: learnAction,
       pnl_pts: ptsForCal,
-      soft_scale: hardInvStopDistance(s.entry_price, s.entry_regime || s.regime),
+      soft_scale: soft,
+      exit_reason: exitReason,
     });
     if (learned) {
       pushTick(s, {
@@ -775,7 +793,9 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `LEARNER UPDATE · reward ${learned.reward.toFixed(2)} · n=${learned.updates} · action ${s.last_brain_action || '—'}`,
+        detail: `LEARNER UPDATE · reward ${learned.reward.toFixed(2)} · n=${learned.updates} · action ${learnAction || '—'} · ${
+          /MindBank|MindCut/i.test(exitReason) ? 'mind-owned' : 'rule'
+        }`,
       });
     }
     const entryLearned = entryLearnerLearnFromClose({
@@ -2231,6 +2251,26 @@ function decideOpenManageExit(
       mid: quote.mid,
       detail: brain.reason,
     });
+  } else {
+    s.last_brain_action = brain.action;
+  }
+
+  // ★ Mind owns Soft-sized green banks — BANK/CUT close now (not Peak nudge only)
+  const execNow = executableFavorable(
+    s.open_side,
+    s.entry_price,
+    quote.bid,
+    quote.ask,
+    quote.mid
+  );
+  const mindExit = mindOwnsGreenExit({
+    action: brain.action,
+    execFav: execNow,
+    softSl: softSlNow,
+  });
+  if (mindExit.exit) {
+    s.last_brain_action = brain.action;
+    return `${mindExit.tag} · ${brain.reason} · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)}`;
   }
 
   const peakOverrides: ExitDecideOverrides | null =

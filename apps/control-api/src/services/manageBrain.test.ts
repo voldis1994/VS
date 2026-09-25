@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   applyManageBrainToExit,
+  mindOwnsGreenExit,
   scoreManageAction,
   type ManageBrainInput,
 } from './manageBrain.js';
@@ -144,5 +145,23 @@ describe('manageBrain', () => {
       })
     );
     expect(r.action).toBe('HOLD');
+  });
+
+  it('mindOwnsGreenExit — BANK/CUT close Soft-sized green; never red', () => {
+    expect(
+      mindOwnsGreenExit({ action: 'BANK', execFav: 3.5, softSl: 3.4 }).exit
+    ).toBe(true);
+    expect(
+      mindOwnsGreenExit({ action: 'CUT', execFav: 4.0, softSl: 3.4 })
+    ).toMatchObject({ exit: true, tag: 'MindCut' });
+    expect(
+      mindOwnsGreenExit({ action: 'HOLD', execFav: 5, softSl: 3.4 }).exit
+    ).toBe(false);
+    expect(
+      mindOwnsGreenExit({ action: 'BANK', execFav: 1.0, softSl: 3.4 }).exit
+    ).toBe(false);
+    expect(
+      mindOwnsGreenExit({ action: 'BANK', execFav: -1.0, softSl: 3.4 }).exit
+    ).toBe(false);
   });
 });

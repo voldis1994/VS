@@ -322,6 +322,7 @@ export function learnerChooseAction(
 /**
  * Online update after a closed trade.
  * reward ≈ tanh(pnl / softScale) in [-1,1].
+ * Wins reinforce harder than losses demote — mind climbs win rate from remembered banks.
  */
 export function learnerLearnFromClose(opts: {
   clientId?: number | null;
@@ -329,6 +330,7 @@ export function learnerLearnFromClose(opts: {
   action: ManageBrainAction | string | null | undefined;
   pnl_pts: number;
   soft_scale?: number;
+  exit_reason?: string | null;
 }): { updates: number; reward: number } | null {
   const action = String(opts.action || '').toUpperCase() as ManageBrainAction;
   if (!LEARNER_ACTIONS.includes(action)) return null;
@@ -338,7 +340,15 @@ export function learnerLearnFromClose(opts: {
   const id = resolveDeskClientId(opts.clientId);
   const st = hydrate(id);
   const scale = Math.max(opts.soft_scale || 2.2, 0.5);
-  const reward = Math.tanh(opts.pnl_pts / scale);
+  let reward = Math.tanh(opts.pnl_pts / scale);
+  // Soft-sized green banks (mind or Peak) — remember wins more strongly
+  if (reward > 0 && opts.pnl_pts >= scale * 0.9) {
+    reward = Math.min(1, reward * 1.35);
+  }
+  // Mind-owned close — attribute stays on BANK/CUT path with full weight
+  if (/MindBank|MindCut/i.test(String(opts.exit_reason || ''))) {
+    reward = reward > 0 ? Math.min(1, reward * 1.15) : reward;
+  }
 
   // Softmax policy-gradient style: reinforce chosen, slight demote others
   const probs = softmaxScores(st.weights, x);
