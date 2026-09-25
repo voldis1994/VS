@@ -109,6 +109,8 @@ const TEST_GLOBS = [
   'src/services/multiTfRead.test.ts',
   'src/services/manageBrain.test.ts',
   'src/services/strategyReplay.test.ts',
+  'src/services/flipFilter.test.ts',
+  'src/services/structureEntry.test.ts',
 ];
 
 /** Resolve vitest entry without `npx` — on Windows spawnSync('npx') often returns status null. */
