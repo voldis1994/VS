@@ -335,17 +335,17 @@ function coherencyWith1m(
     ENTRY_FEATURE_NAMES.indexOf(name);
   const m1Up = features[ix('m1_up')]! >= 1;
   const m1Down = features[ix('m1_down')]! >= 1;
-  const strong = features[ix('m1_strong')]! >= 0.5;
   const biasUp = features[ix('bias_up')]! >= 1;
   const biasDown = features[ix('bias_down')]! >= 1;
 
-  if (action === 'SELL' && (m1Up || biasUp) && (strong || biasUp)) {
+  // Any green 1m or UP bias — never SELL into the rally (Gold knife)
+  if (action === 'SELL' && (m1Up || biasUp)) {
     if (probs.BUY! > probs.WAIT! && features[ix('story_allow_buy')]!) {
       return { action: 'BUY', note: '1m UP · pārslēdzu SELL→BUY (ar stāstu)' };
     }
     return { action: 'WAIT', note: '1m UP · SELL pret sveci — WAIT' };
   }
-  if (action === 'BUY' && (m1Down || biasDown) && (strong || biasDown)) {
+  if (action === 'BUY' && (m1Down || biasDown)) {
     if (probs.SELL! > probs.WAIT! && features[ix('story_allow_sell')]!) {
       return { action: 'SELL', note: '1m DOWN · pārslēdzu BUY→SELL (ar stāstu)' };
     }
@@ -377,12 +377,10 @@ export function entryLearnerChoose(
     explored = true;
   }
 
-  let note = '';
-  if (!explored) {
-    const coh = coherencyWith1m(action, features, probs);
-    action = coh.action;
-    note = coh.note;
-  }
+  // Coherency always — explore must not knife-SELL into a 1m rally
+  const coh = coherencyWith1m(action, features, probs);
+  action = coh.action;
+  const note = coh.note;
 
   const confidence = probs[action] ?? 0.33;
   const top = ENTRY_LEARNER_ACTIONS.map(
