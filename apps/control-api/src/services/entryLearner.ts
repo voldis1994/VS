@@ -323,37 +323,9 @@ export type EntryLearnerDecision = {
 };
 
 /**
- * Live 1m coherence — if softmax fights a clear 1m impulse, wait (or flip
- * with story). This is reading the tape, not a random block list.
+ * Softmax pick — no 1m knife list. Side coherency lives in the entry mind
+ * (multi-TF stack). Learner only reinforces; structureEntry refuses opposite.
  */
-function coherencyWith1m(
-  action: EntryLearnerAction,
-  features: EntryFeatures,
-  probs: Record<EntryLearnerAction, number>
-): { action: EntryLearnerAction; note: string } {
-  const ix = (name: (typeof ENTRY_FEATURE_NAMES)[number]) =>
-    ENTRY_FEATURE_NAMES.indexOf(name);
-  const m1Up = features[ix('m1_up')]! >= 1;
-  const m1Down = features[ix('m1_down')]! >= 1;
-  const biasUp = features[ix('bias_up')]! >= 1;
-  const biasDown = features[ix('bias_down')]! >= 1;
-
-  // Any green 1m or UP bias — never SELL into the rally (Gold knife)
-  if (action === 'SELL' && (m1Up || biasUp)) {
-    if (probs.BUY! > probs.WAIT! && features[ix('story_allow_buy')]!) {
-      return { action: 'BUY', note: '1m UP · pārslēdzu SELL→BUY (ar stāstu)' };
-    }
-    return { action: 'WAIT', note: '1m UP · SELL pret sveci — WAIT' };
-  }
-  if (action === 'BUY' && (m1Down || biasDown)) {
-    if (probs.SELL! > probs.WAIT! && features[ix('story_allow_sell')]!) {
-      return { action: 'SELL', note: '1m DOWN · pārslēdzu BUY→SELL (ar stāstu)' };
-    }
-    return { action: 'WAIT', note: '1m DOWN · BUY pret sveci — WAIT' };
-  }
-  return { action, note: '' };
-}
-
 export function entryLearnerChoose(
   input: EntryFeatureInput,
   clientId?: number | null,
@@ -377,18 +349,13 @@ export function entryLearnerChoose(
     explored = true;
   }
 
-  // Coherency always — explore must not knife-SELL into a 1m rally
-  const coh = coherencyWith1m(action, features, probs);
-  action = coh.action;
-  const note = coh.note;
-
   const confidence = probs[action] ?? 0.33;
   const top = ENTRY_LEARNER_ACTIONS.map(
     (a) => `${a}:${(probs[a]! * 100).toFixed(0)}%`
   ).join(' ');
   const detail = `PRĀTS ENTRY ${action} · conf ${(confidence * 100).toFixed(0)}% · n=${st.updates} · ${top}${
     explored ? ' · explore' : ''
-  }${note ? ` · ${note}` : ''}`;
+  }`;
 
   return {
     action,
