@@ -6,9 +6,11 @@ import {
   type ManageBrainInput,
 } from './manageBrain.js';
 import { _resetLearnerForTests } from './deskLearner.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 
 beforeEach(() => {
   _resetLearnerForTests(0);
+  _resetBrainGenomeForTests();
 });
 
 function base(partial: Partial<ManageBrainInput> = {}): ManageBrainInput {
