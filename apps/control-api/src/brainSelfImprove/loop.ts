@@ -207,17 +207,40 @@ export async function runBrainCycle(opts?: {
     'mind_bank_on_turn',
     'last_lesson',
   ]);
+  const evolveKeys = new Set([
+    ...memoryKeys,
+    'peak_keep',
+    'soft_plus_giveback',
+    'peak_arm_soft_mult',
+    'explore_step',
+    'version',
+  ]);
   const deltaKeys = Object.keys(hypo.genome_delta || {}).filter((k) => k !== 'last_lesson');
+  const eFlatOk =
+    report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
+    report.candidate.trades >= Math.max(0, report.baseline.trades - 3);
   const defensiveMemory =
     report.tests_ok &&
-    report.candidate.trades >= Math.max(0, report.baseline.trades - 3) &&
-    report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
+    eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k));
+  // Genome explore / Keep nudge with tests OK and E not worse — keep learning (don't thrash rollback)
+  const safeGenomeEvolve =
+    report.tests_ok &&
+    eFlatOk &&
+    deltaKeys.length > 0 &&
+    deltaKeys.every((k) => evolveKeys.has(k)) &&
+    (hypo.pattern_id === 'explore' ||
+      deltaKeys.some((k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'));
 
-  const accept = (report.improved && report.tests_ok) || defensiveMemory;
-  if (defensiveMemory && !report.improved) {
-    brainLog('Defensive memory knobs — tests OK, E not worse → ACCEPT');
+  const accept =
+    (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
+  if ((defensiveMemory || safeGenomeEvolve) && !report.improved) {
+    brainLog(
+      safeGenomeEvolve
+        ? 'Safe genome evolve — tests OK, E not worse → ACCEPT'
+        : 'Defensive memory knobs — tests OK, E not worse → ACCEPT'
+    );
   }
 
   if (!accept) {
@@ -253,9 +276,12 @@ export async function runBrainCycle(opts?: {
     hypothesis_id: hypo.id,
     signature: hypo.signature,
     decision: 'ACCEPTED',
-    reason: defensiveMemory && !report.improved
-      ? `ACCEPTED — defensive Soft-memory genome (E flat, tests OK)`
-      : report.reason,
+    reason:
+      (defensiveMemory || safeGenomeEvolve) && !report.improved
+        ? safeGenomeEvolve
+          ? `ACCEPTED — safe genome evolve (E flat, tests OK)`
+          : `ACCEPTED — defensive Soft-memory genome (E flat, tests OK)`
+        : report.reason,
     baseline_expectancy: report.baseline.expectancy_pts,
     candidate_expectancy: report.candidate.expectancy_pts,
     tests_ok: true,

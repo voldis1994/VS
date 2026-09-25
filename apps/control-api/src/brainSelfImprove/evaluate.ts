@@ -4,11 +4,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { replayStrategy, syntheticTrendBars } from '../services/strategyReplay.js';
 import { readMultiTfStack, sideFromMultiTf } from '../services/multiTfRead.js';
-import { reloadBrainGenome, getBrainGenome } from './brainGenome.js';
+import { defaultBrainGenome, reloadBrainGenome, getBrainGenome } from './brainGenome.js';
 
 export type EvalScore = {
   expectancy_pts: number;
@@ -135,13 +136,36 @@ export function runBrainTests(): { ok: boolean; detail: string } {
       detail: `vitest FAIL — nav node_modules/vitest (cwd=${cwd}). Palaid npm install apps\\control-api`,
     };
   }
+  // Candidate genome (peak_keep etc.) must NOT break unit tests that assert factory Keep 75%.
+  // Tests run against a temp factory genome; replay scoring still uses the live candidate.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-vitest-genome-'));
+  const factoryGenomePath = path.join(tmpDir, 'genome.json');
+  fs.writeFileSync(
+    factoryGenomePath,
+    JSON.stringify(
+      { ...defaultBrainGenome(), updated_at: new Date().toISOString() },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
   const r = spawnSync(process.execPath, [vitestCli, 'run', ...TEST_GLOBS], {
     cwd,
     encoding: 'utf8',
     timeout: 180_000,
     windowsHide: true,
-    env: { ...process.env, FORCE_COLOR: '0', BRAIN_SKIP_NESTED_TESTS: '1' },
+    env: {
+      ...process.env,
+      FORCE_COLOR: '0',
+      BRAIN_SKIP_NESTED_TESTS: '1',
+      BRAIN_GENOME_PATH: factoryGenomePath,
+    },
   });
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
   const spawnErr = r.error ? `spawn: ${r.error.message}` : '';
   const out = `${r.stdout || ''}\n${r.stderr || ''}\n${spawnErr}`.trim();
   const ok = r.status === 0;
@@ -149,7 +173,7 @@ export function runBrainTests(): { ok: boolean; detail: string } {
   return {
     ok,
     detail: ok
-      ? `vitest OK\n${tail}`
+      ? `vitest OK (factory genome)\n${tail}`
       : `vitest FAIL (code ${r.status}${r.signal ? ` signal=${r.signal}` : ''})\n${tail}`,
   };
 }

@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   dirFromCandles,
   readMultiTfStack,
   sideFromMultiTf,
   trekBiasFromCandles,
 } from './multiTfRead.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
+
+beforeEach(() => {
+  _resetBrainGenomeForTests();
+});
 
 describe('multiTfRead', () => {
   it('reads last closed candle direction (drops forming tip)', () => {
