@@ -42,6 +42,13 @@ export type MinuteDir = 'UP' | 'DOWN' | 'FLAT';
  */
 export type ExitDecideGate = 'all' | 'live_loss' | 'peak_protect_only' | 'target_time';
 
+/** Adaptive brain may tighten Peak trail without rewriting desk knobs. */
+export type ExitDecideOverrides = {
+  peak_retention_cfg?: number | null;
+  peak_mfe_floor?: number | null;
+  min_giveback?: number | null;
+};
+
 export type ExitDecision = {
   exit: boolean;
   reason: string;
@@ -393,7 +400,8 @@ export function decideBestOutcomeExit(
   mid: number,
   gate: ExitDecideGate = 'all',
   nowMs = Date.now(),
-  quote?: ExitQuoteLegs | null
+  quote?: ExitQuoteLegs | null,
+  overrides?: ExitDecideOverrides | null
 ): ExitDecision {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
@@ -410,27 +418,48 @@ export function decideBestOutcomeExit(
   );
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
-  const peakRet =
+  let peakRet =
     profile.peak_retention != null && profile.peak_retention > 0
       ? profile.peak_retention
       : cal.peak_retention > 0
         ? cal.peak_retention
         : PEAK_MFE_RETENTION;
-  const minGiveback =
+  if (
+    overrides?.peak_retention_cfg != null &&
+    Number.isFinite(overrides.peak_retention_cfg) &&
+    overrides.peak_retention_cfg > 0
+  ) {
+    peakRet = Math.max(peakRet, overrides.peak_retention_cfg);
+  }
+  let minGiveback =
     scaleDeskAbs(
       cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
       absEntry
     ) * profile.peak_giveback_mult;
+  if (
+    overrides?.min_giveback != null &&
+    Number.isFinite(overrides.min_giveback) &&
+    overrides.min_giveback > 0
+  ) {
+    minGiveback = Math.min(minGiveback, overrides.min_giveback);
+  }
   const tp = targetTakeProfitDistance(entry, thesisRegime);
   const sl = hardInvStopDistance(entry, thesisRegime);
   /** Peak/Target/TimeDecay — never bank below Soft loss size */
   const minBank = minProfitBank(sl);
-  const mfeFloor =
+  let mfeFloor =
     Math.max(
       absEntry * cal.peak_mfe_pct,
       scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
       scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
     ) * profile.peak_mfe_mult;
+  if (
+    overrides?.peak_mfe_floor != null &&
+    Number.isFinite(overrides.peak_mfe_floor) &&
+    overrides.peak_mfe_floor > 0
+  ) {
+    mfeFloor = Math.min(mfeFloor, Math.max(overrides.peak_mfe_floor, sl));
+  }
   const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
