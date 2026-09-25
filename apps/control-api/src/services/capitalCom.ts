@@ -1124,8 +1124,9 @@ export async function updateCapitalPosition(
   }
   const body: Record<string, unknown> = {};
   if (input.clearProfit) {
-    // Capital accepts null to detach take-profit
+    // Capital accepts null to detach take-profit (both absolute + distance forms)
     body.profitLevel = null;
+    body.profitDistance = null;
   } else if (
     input.profitDistance != null &&
     Number.isFinite(input.profitDistance) &&

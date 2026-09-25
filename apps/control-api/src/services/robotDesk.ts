@@ -1325,8 +1325,9 @@ function syncFromBrokerOpen(
 }
 
 /**
- * Capital may re-attach Limit TP while we manage. Strip it every cycle —
+ * Capital may re-attach Limit TP while we manage. Strip it every open-trade cycle —
  * Soft Peak/Target own green banks (no penny Limit scratches).
+ * HTTP 200 alone is not enough — re-list and verify profit_level is gone.
  */
 async function stripBrokerTpIfPresent(
   session: CapitalSession,
@@ -1336,20 +1337,36 @@ async function stripBrokerTpIfPresent(
 ): Promise<void> {
   if (!broker?.deal_id) return;
   if (broker.profit_level == null || !Number.isFinite(broker.profit_level)) return;
+  const wasTp = broker.profit_level;
   const amend = await updateCapitalPosition(session, broker.deal_id, {
     clearProfit: true,
   });
+
+  let stillOn = true;
   if (amend.ok) {
-    s.safety_tp = null;
-    pushTick(s, {
-      phase: 'INFO',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `MANAGE · broker TP stripped (was ${broker.profit_level}) · Soft owns banks`,
-    });
-    return;
+    try {
+      const again = await listCapitalOpenPositions(session);
+      const pos = again.ok
+        ? again.positions.find((p) => p.deal_id === broker.deal_id) ||
+          matchOpenOnEpic(again.positions, s.epic)
+        : null;
+      stillOn = pos?.profit_level != null && Number.isFinite(pos.profit_level);
+      if (!stillOn) {
+        s.safety_tp = null;
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `MANAGE · broker TP stripped (was ${wasTp}) · Soft/Peak own banks · no Limit scratch`,
+        });
+        return;
+      }
+    } catch {
+      /* fall through to far push */
+    }
   }
+
   const entry = s.entry_price ?? quote.mid;
   if (entry == null || !Number.isFinite(entry) || !s.open_side) {
     pushTick(s, {
@@ -1357,7 +1374,7 @@ async function stripBrokerTpIfPresent(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `MANAGE · broker TP ${broker.profit_level} still on · clear failed · ${amend.detail}`,
+      detail: `MANAGE · broker TP ${wasTp} still on · clear ${amend.ok ? 'ignored by Capital' : 'failed'} · ${amend.detail}`,
     });
     return;
   }
@@ -1375,16 +1392,16 @@ async function stripBrokerTpIfPresent(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `MANAGE · TP clear failed · pushed to ${far.toFixed(2)} · Soft owns banks`,
+      detail: `MANAGE · TP still on after clear · pushed to ${far.toFixed(2)} · Soft/Peak own banks`,
     });
   } else {
-    s.safety_tp = broker.profit_level;
+    s.safety_tp = wasTp;
     pushTick(s, {
       phase: 'WAIT',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `MANAGE · broker TP ${broker.profit_level} stuck · ${push.detail}`,
+      detail: `MANAGE · broker TP ${wasTp} stuck · ${push.detail}`,
     });
   }
 }
@@ -2338,6 +2355,19 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+    }
+    // Open-trade path never hit the FLAT strip — kill Limit TP every manage lease
+    if (brokerOpen) {
+      try {
+        await stripBrokerTpIfPresent(session, s, brokerOpen, quote);
+        // Refresh broker snap after strip so decide sees current TP/SL state
+        const again = await listCapitalOpenPositions(session);
+        if (again.ok) {
+          brokerOpen = matchOpenOnEpic(again.positions, s.epic) || brokerOpen;
+        }
+      } catch {
+        /* best effort — Peak/Soft still decide */
+      }
     }
     const assumeOpen = Boolean(brokerOpen || (!listed.ok && (s.open_side || s.deal_id)));
     if (assumeOpen) {
