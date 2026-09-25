@@ -157,7 +157,7 @@ describe('traderMind', () => {
       bias: 'UP',
     });
     expect(t.choice).toBe('BUY');
-    expect(t.thesis).toMatch(/augšu|pircēj|zaļ/i);
+    expect(t.thesis).toMatch(/augšu|pircēj|zaļ|UP|Steks/i);
     expect(t.choice).not.toBe('SELL');
   });
 
@@ -175,5 +175,67 @@ describe('traderMind', () => {
       bias: 'FLAT',
     });
     expect(t.choice).toBe('WAIT');
+  });
+
+  it('ENTRY mind follows aligned Capital 30/15/5/1m UP stack', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'RANGE_CHOP',
+      allow: 'BOTH',
+      story_conf: 0.5,
+      red_1m: 8,
+      green_1m: 14,
+      zone_pos: 0.55,
+      bar_body_sign: 1,
+      m1_dir: 'UP',
+      bias: 'UP',
+      tf5_dir: 'UP',
+      tf15_dir: 'UP',
+      tf30_dir: 'UP',
+    });
+    expect(t.choice).toBe('BUY');
+    expect(t.spoken).toMatch(/30m↑ 15m↑ 5m↑ 1m↑/);
+    expect(t.choice).not.toBe('SELL');
+  });
+
+  it('ENTRY mind never SELLs into aligned UP multi-TF (rally knife)', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.8,
+      red_1m: 16,
+      green_1m: 8,
+      zone_pos: 0.4,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
+      tf5_dir: 'UP',
+      tf15_dir: 'UP',
+      tf30_dir: 'UP',
+    });
+    // 30/15 UP with 5m UP bias → stack UP; 1m DOWN is pullback — not a SELL
+    expect(t.choice).not.toBe('SELL');
+    expect(t.spoken).toMatch(/30m↑/);
+  });
+
+  it('ENTRY mind SELLs when full stack is DOWN', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.8,
+      red_1m: 18,
+      green_1m: 5,
+      zone_pos: 0.35,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('SELL');
+    expect(t.spoken).toMatch(/30m↓ 15m↓ 5m↓ 1m↓/);
   });
 });

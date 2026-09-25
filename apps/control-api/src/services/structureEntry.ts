@@ -56,6 +56,10 @@ export type StructureDecideInput = {
    * 10s-book aggregate (same chart the human watches).
    */
   capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** Capital closed 5m / 15m / 30m — preferred over 10s-book buckets */
+  capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 export type StructuredEntry = RegimeEntry & {
@@ -549,12 +553,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
-  const tf5 = higherTfDir(input.closedBars, 5);
-  const tf15 = higherTfDir(input.closedBars, 15);
-  const tf30 = higherTfDir(input.closedBars, 30);
   const story = readMarketStory(input.closedBars, input.bar);
 
-  // Prefer Capital 1m (what the human sees) over 10s-book aggregate
+  // Prefer Capital candles (what the human sees) over 10s-book aggregates
   const bookMd = minuteDir(m1);
   const md =
     input.capital_m1_dir === 'UP' ||
@@ -562,6 +563,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     input.capital_m1_dir === 'FLAT'
       ? input.capital_m1_dir
       : bookMd;
+  const pickTf = (
+    capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
+    book: 'UP' | 'DOWN' | 'FLAT'
+  ): 'UP' | 'DOWN' | 'FLAT' =>
+    capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
+  const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
+  const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
   const m1Strong =
     m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5
       ? true
@@ -570,7 +579,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const body = bodyPct(input.bar);
   const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
-  // ★ Mind first — chooses BUY/SELL/WAIT from the live picture (1m + story)
+  // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
   const thought = thinkEntryLikeTrader({
     regime,
     chapter: story.chapter,

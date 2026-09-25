@@ -1365,15 +1365,29 @@ export type CapitalPriceCandle = {
   snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+/** Capital OHLC — SECOND / MINUTE / MINUTE_5 / MINUTE_15 / MINUTE_30. */
+export type CapitalPriceResolution =
+  | 'SECOND'
+  | 'MINUTE'
+  | 'MINUTE_5'
+  | 'MINUTE_15'
+  | 'MINUTE_30';
+
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
+  resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 50 : 60;
+  const cap =
+    resolution === 'SECOND'
+      ? 50
+      : resolution === 'MINUTE'
+        ? 60
+        : resolution === 'MINUTE_5'
+          ? 40
+          : 30;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),

@@ -208,7 +208,13 @@ type Internal = RobotSession & {
   multiFeed: MultiFeedPrice | null;
   /** Capital MINUTE candles while managing (for 1m continue/reverse) */
   last_minute_candles: CapitalPriceCandle[];
+  /** Capital higher-TF OHLC — mind reads 30m→15m→5m→1m like the chart */
+  last_tf5_candles: CapitalPriceCandle[];
+  last_tf15_candles: CapitalPriceCandle[];
+  last_tf30_candles: CapitalPriceCandle[];
   last_manage_minute_fetch_ms: number;
+  /** Throttle multi-TF Capital fetch (5/15/30 change slowly) */
+  last_multi_tf_fetch_ms: number;
   /** After reverse Capital 1m: PeakProtect 25% giveback trails live */
   peak_protect_armed: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
@@ -393,7 +399,11 @@ function publicSession(s: Internal): RobotSession {
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     last_minute_candles: _mins,
+    last_tf5_candles: _tf5,
+    last_tf15_candles: _tf15,
+    last_tf30_candles: _tf30,
     last_manage_minute_fetch_ms: _mmf,
+    last_multi_tf_fetch_ms: _mtf,
     peak_protect_armed: _ppa,
     last_1m_profit_exit_key: _1m,
     exit_deal_fails: _edf,
@@ -596,6 +606,66 @@ function prevClosedCapitalMinute(
 ): CapitalPriceCandle | null {
   if (candles.length >= 3) return candles[candles.length - 3]!;
   return null;
+}
+
+function capitalCandleDir(
+  candles: CapitalPriceCandle[]
+): 'UP' | 'DOWN' | 'FLAT' | null {
+  const c = lastClosedCapitalMinute(candles);
+  if (!c) return null;
+  if (c.close > c.open) return 'UP';
+  if (c.close < c.open) return 'DOWN';
+  return 'FLAT';
+}
+
+/**
+ * Refresh Capital 1m + 5m + 15m + 30m for the entry mind.
+ * 1m every ~2s when managing; higher TF every ~20s (they move slowly).
+ */
+async function refreshCapitalMultiTf(
+  session: CapitalSession,
+  s: Internal,
+  opts?: { force1m?: boolean; forceHigher?: boolean }
+): Promise<void> {
+  const now = Date.now();
+  const need1m =
+    Boolean(opts?.force1m) || now - s.last_manage_minute_fetch_ms >= 2_000;
+  const needHigher =
+    Boolean(opts?.forceHigher) ||
+    now - s.last_multi_tf_fetch_ms >= 20_000 ||
+    !s.last_tf5_candles.length ||
+    !s.last_tf15_candles.length ||
+    !s.last_tf30_candles.length;
+
+  if (!need1m && !needHigher) return;
+
+  if (need1m) {
+    s.last_manage_minute_fetch_ms = now;
+    try {
+      const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
+      if (mins.ok && mins.candles.length) {
+        s.last_minute_candles = mins.candles;
+      }
+    } catch {
+      /* keep previous minutes */
+    }
+  }
+
+  if (needHigher) {
+    s.last_multi_tf_fetch_ms = now;
+    try {
+      const [tf5, tf15, tf30] = await Promise.all([
+        fetchCapitalPrices(session, s.epic, 'MINUTE_5', 12),
+        fetchCapitalPrices(session, s.epic, 'MINUTE_15', 8),
+        fetchCapitalPrices(session, s.epic, 'MINUTE_30', 6),
+      ]);
+      if (tf5.ok && tf5.candles.length) s.last_tf5_candles = tf5.candles;
+      if (tf15.ok && tf15.candles.length) s.last_tf15_candles = tf15.candles;
+      if (tf30.ok && tf30.candles.length) s.last_tf30_candles = tf30.candles;
+    } catch {
+      /* keep previous higher TF */
+    }
+  }
 }
 
 function capitalMinuteCandleKey(c: CapitalPriceCandle, prev: CapitalPriceCandle | null = null): string {
@@ -2135,15 +2205,11 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
     }
     const assumeOpen = Boolean(brokerOpen || (!listed.ok && (s.open_side || s.deal_id)));
-    if (assumeOpen && Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
-      s.last_manage_minute_fetch_ms = Date.now();
+    if (assumeOpen) {
       try {
-        const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
-        if (mins.ok && mins.candles.length) {
-          s.last_minute_candles = mins.candles;
-        }
+        await refreshCapitalMultiTf(session, s);
       } catch {
-        /* keep previous minutes */
+        /* keep previous candles */
       }
     }
     return {
@@ -2672,16 +2738,10 @@ async function robotCycleLocked(s: Internal) {
         return null;
       }
 
-      if (Date.now() - s.last_manage_minute_fetch_ms >= 2_000) {
-        s.last_manage_minute_fetch_ms = Date.now();
-        try {
-          const mins = await fetchCapitalMinutePrices(session, s.epic, 8);
-          if (mins.ok && mins.candles.length) {
-            s.last_minute_candles = mins.candles;
-          }
-        } catch {
-          /* keep previous minutes */
-        }
+      try {
+        await refreshCapitalMultiTf(session, s);
+      } catch {
+        /* keep previous candles */
       }
 
       const manageExit = decideOpenManageExit(s, quote);
@@ -2861,16 +2921,16 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        // Mind reads Capital 1m + 30m story first; setup is only the trigger
-        const closed1mForMind = lastClosedCapitalMinute(s.last_minute_candles);
-        const capitalMd =
-          closed1mForMind != null
-            ? closed1mForMind.close > closed1mForMind.open
-              ? ('UP' as const)
-              : closed1mForMind.close < closed1mForMind.open
-                ? ('DOWN' as const)
-                : ('FLAT' as const)
-            : null;
+        // Mind reads Capital 30m→15m→5m→1m first; setup is only the trigger
+        try {
+          await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
+        } catch {
+          /* keep previous */
+        }
+        const capitalMd = capitalCandleDir(s.last_minute_candles);
+        const capitalTf5 = capitalCandleDir(s.last_tf5_candles);
+        const capitalTf15 = capitalCandleDir(s.last_tf15_candles);
+        const capitalTf30 = capitalCandleDir(s.last_tf30_candles);
         const sig = decideEntryWithStructure({
           bar: entryBar,
           regime: s.regime,
@@ -2879,6 +2939,9 @@ async function robotCycleLocked(s: Internal) {
           last_close_was_loss: s.last_close_was_loss,
           client_id: s.client_id,
           capital_m1_dir: capitalMd,
+          capital_tf5_dir: capitalTf5,
+          capital_tf15_dir: capitalTf15,
+          capital_tf30_dir: capitalTf30,
         });
         if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;
@@ -3276,7 +3339,11 @@ export async function startRobotSession(input: {
     feed_agreement: null,
     regime: 'UNKNOWN',
     last_minute_candles: [],
+    last_tf5_candles: [],
+    last_tf15_candles: [],
+    last_tf30_candles: [],
     last_manage_minute_fetch_ms: 0,
+    last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
     last_1m_profit_exit_key: '',
     entry_watch: null,
