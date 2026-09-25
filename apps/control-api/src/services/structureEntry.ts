@@ -20,6 +20,7 @@ import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
 import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
+import { thinkEntryLikeTrader } from './traderMind.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -50,6 +51,15 @@ export type StructureDecideInput = {
   last_closed_side?: 'BUY' | 'SELL' | null;
   last_close_was_loss?: boolean;
   client_id?: number | null;
+  /**
+   * Live Capital.com closed 1m direction when available — preferred over
+   * 10s-book aggregate (same chart the human watches).
+   */
+  capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** Capital closed 5m / 15m / 30m — preferred over 10s-book buckets */
+  capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 export type StructuredEntry = RegimeEntry & {
@@ -200,8 +210,52 @@ export function minuteTrendBias(
   return 'FLAT';
 }
 
+/**
+ * Higher-TF direction from the same 10s book (5m / 15m / 30m).
+ * Close vs open of the last completed bucket — easy chart read for the mind.
+ */
+export function higherTfDir(
+  bars: TenSecBar[],
+  minutes: 5 | 15 | 30
+): 'UP' | 'DOWN' | 'FLAT' {
+  if (!bars.length) return 'FLAT';
+  const bucketMs = minutes * 60_000;
+  const map = new Map<number, TenSecBar[]>();
+  for (const b of bars) {
+    if (!Number.isFinite(b.open_time_ms)) continue;
+    const k = Math.floor(b.open_time_ms / bucketMs) * bucketMs;
+    let list = map.get(k);
+    if (!list) {
+      list = [];
+      map.set(k, list);
+    }
+    list.push(b);
+  }
+  const keys = [...map.keys()].sort((a, b) => a - b);
+  const lastBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const closedKeys = keys.filter((k) => k < lastBucket);
+  if (!closedKeys.length) return 'FLAT';
+  const k = closedKeys[closedKeys.length - 1]!;
+  const list = map.get(k)!;
+  if (list.length < Math.max(2, Math.floor((minutes * 6) / 3))) return 'FLAT';
+  list.sort((a, b) => a.open_time_ms - b.open_time_ms);
+  const open = list[0]!.open;
+  const close = list[list.length - 1]!.close;
+  if (close > open) return 'UP';
+  if (close < open) return 'DOWN';
+  return 'FLAT';
+}
+
 /** Counter-trend entries that may ignore 1m bias (structured fade / reversal). */
-function allowsAgainstBias(regime: RegimeName, direction: 'BUY' | 'SELL'): boolean {
+function allowsAgainstBias(
+  regime: RegimeName,
+  direction: 'BUY' | 'SELL',
+  /** Last closed 1m color — fade only if tape agrees or is quiet */
+  m1Dir: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
+): boolean {
+  // Never fade a live 1m impulse the other way (Gold rally → endless SELL)
+  if (direction === 'SELL' && m1Dir === 'UP') return false;
+  if (direction === 'BUY' && m1Dir === 'DOWN') return false;
   if (direction === 'BUY' && regime === 'FAILED_BREAKOUT_DOWN') return true;
   if (direction === 'SELL' && regime === 'FAILED_BREAKOUT_UP') return true;
   if (regime === 'REVERSAL_CANDIDATE') return true;
@@ -212,15 +266,34 @@ function against1mBias(
   direction: 'BUY' | 'SELL',
   bias: 'UP' | 'DOWN' | 'FLAT',
   regime: RegimeName,
-  _zone: ZoneGeometry | null
+  _zone: ZoneGeometry | null,
+  m1Dir: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
 ): string | null {
-  if (bias === 'FLAT' || allowsAgainstBias(regime, direction)) return null;
-  // Never open against the 1m tape — LO/HI "turn" exceptions caused knife SL hits
+  if (allowsAgainstBias(regime, direction, m1Dir)) return null;
+
+  // Multi-bar 1m bias — never fade/bounce against the trek
   if (direction === 'BUY' && bias === 'DOWN') {
     return `BUY vs 1m bias DOWN (${regime}) · bounce into selloff`;
   }
   if (direction === 'SELL' && bias === 'UP') {
     return `SELL vs 1m bias UP (${regime}) · fade into rally`;
+  }
+
+  // Last closed 1m color — knife only on fade/chop regimes (RANGE fade green→SELL).
+  // BREAKOUT_UP may pierce after a red 1m; TREND pullback may buy a dip 1m.
+  const fadeLike =
+    regime === 'RANGE' ||
+    regime === 'COMPRESSION' ||
+    regime === 'TRANSITION' ||
+    regime === 'FAILED_BREAKOUT_UP' ||
+    regime === 'FAILED_BREAKOUT_DOWN';
+  if (fadeLike) {
+    if (direction === 'BUY' && m1Dir === 'DOWN') {
+      return `BUY vs 1m DOWN (${regime}) · bounce into selloff`;
+    }
+    if (direction === 'SELL' && m1Dir === 'UP') {
+      return `SELL vs 1m UP (${regime}) · fade into rally`;
+    }
   }
   return null;
 }
@@ -265,7 +338,7 @@ export function structureStartEntry(
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
       // Never start long into a multi-1m selloff (bounce knife)
-      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY')) break;
+      if (bias === 'DOWN' && !allowsAgainstBias(regime, 'BUY', md)) break;
       // 10s rally can start the leg before last closed 1m flips — bias must already agree
       if (zone.pos <= START_LO && rally(bar)) {
         return {
@@ -287,7 +360,7 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL')) break;
+      if (bias === 'UP' && !allowsAgainstBias(regime, 'SELL', md)) break;
       if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',
@@ -320,20 +393,26 @@ export function structureGate(
   bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
 ): StructureGateResult {
   if (!zone) {
+    // Even without zone: never SELL into live 1m UP / BUY into 1m DOWN
+    const mdThin = minuteDir(m1);
+    const againstThin = against1mBias(sig.direction, bias, regime, null, mdThin);
+    if (againstThin) return { ok: false, reason: againstThin };
     return { ok: true, tag: 'zona thin · raw 10s' };
   }
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
 
-  // Level <2: no structure soft-blocks — auto-cal raises later
+  // 1m knife guard is ALWAYS on — even when structure soft-blocks are L0 OPEN.
+  // Old path skipped against1mBias when filters=0 → endless RANGE fade SELL into rally.
+  const against = against1mBias(sig.direction, bias, regime, zone, md);
+  if (against) {
+    return { ok: false, reason: against };
+  }
+
+  // Level <2: no further structure soft-blocks — auto-cal raises later
   if (!entryStructureEnabled()) {
     if (regime === 'UNKNOWN') return { ok: false, reason: 'UNKNOWN · no entry' };
     return { ok: true, tag: `open · ${posTag}` };
-  }
-
-  const against = against1mBias(sig.direction, bias, regime, zone);
-  if (against) {
-    return { ok: false, reason: against };
   }
 
   switch (regime) {
@@ -476,11 +555,53 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
 
-  // Online entry brain — chooses BUY/SELL/WAIT from features (+ learns on close)
-  const md = minuteDir(m1);
+  // Prefer Capital candles (what the human sees) over 10s-book aggregates
+  const bookMd = minuteDir(m1);
+  const md =
+    input.capital_m1_dir === 'UP' ||
+    input.capital_m1_dir === 'DOWN' ||
+    input.capital_m1_dir === 'FLAT'
+      ? input.capital_m1_dir
+      : bookMd;
+  const pickTf = (
+    capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
+    book: 'UP' | 'DOWN' | 'FLAT'
+  ): 'UP' | 'DOWN' | 'FLAT' =>
+    capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
+  const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
+  const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
   const m1Strong =
-    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5;
-  const mind = entryLearnerChoose(
+    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5
+      ? true
+      : md !== 'FLAT' && md === bias;
+
+  const body = bodyPct(input.bar);
+  const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
+
+  // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
+  const thought = thinkEntryLikeTrader({
+    regime,
+    chapter: story.chapter,
+    allow: story.allow,
+    story_conf: story.confidence,
+    story_summary: story.summary_lv,
+    red_1m: story.red_1m,
+    green_1m: story.green_1m,
+    zone_pos: zone?.pos ?? story.zone_pos,
+    bar_body_sign: barSign,
+    last_closed_side: input.last_closed_side ?? null,
+    last_close_was_loss: Boolean(input.last_close_was_loss),
+    m1_dir: md,
+    m1_strong: m1Strong,
+    bias,
+    tf5_dir: tf5,
+    tf15_dir: tf15,
+    tf30_dir: tf30,
+  });
+
+  // Learner advises once it has enough closes (same pattern as manage brain)
+  const learned = entryLearnerChoose(
     {
       regime,
       story,
@@ -495,57 +616,53 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     },
     input.client_id
   );
+  const learnerReady =
+    learned.updates >= 20 &&
+    learned.confidence >= thought.confidence + 0.08 &&
+    !learned.explored;
+  let side = learnerReady ? learned.action : thought.choice;
 
-  if (mind.action === 'WAIT') {
+  // Tape veto — mind that sees 1m UP never lets learner knife-SELL the rally
+  if (side === 'SELL' && (md === 'UP' || bias === 'UP')) {
+    side = thought.choice === 'BUY' ? 'BUY' : 'WAIT';
+  }
+  if (side === 'BUY' && (md === 'DOWN' || bias === 'DOWN')) {
+    side = thought.choice === 'SELL' ? 'SELL' : 'WAIT';
+  }
+
+  const mindDetail = learnerReady
+    ? `${thought.spoken} · LEARNER ${learned.action} n=${learned.updates}`
+    : thought.spoken;
+
+  if (side === 'WAIT') {
     return null;
   }
 
+  // Setup is only a trigger for the side the mind already chose
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const candidate = raw ?? started;
   if (!candidate) return null;
+  if (candidate.direction !== side) return null;
 
-  // Brain chose a side — only take setups that match (wait for the right trigger)
-  if (candidate.direction !== mind.action) {
-    return null;
-  }
-
-  // Raw 10s regime setup already chose direction — do not re-block with lagging
-  // 1m bias (that forced 10× GAIDI hunts). Structure-start still uses live bias.
-  const gate = structureGate(
-    candidate,
-    regime,
-    input.bar,
-    zone,
-    m1,
-    raw ? 'FLAT' : bias
-  );
+  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
   const withMind = (reason: string): StructuredEntry => ({
     ...candidate,
-    reason: `${mind.detail} · ${reason}`,
-    entry_features: mind.features,
-    entry_mind: mind.detail,
+    reason: `${mindDetail} · ${reason}`,
+    entry_features: learned.features,
+    entry_mind: mindDetail,
   });
 
-  // Soft structure ladder off: still use mind choice + matching trigger
   if (!entryStructureEnabled()) {
     return withMind(`${gate.tag} · OPEN · ${story.summary_lv}`);
   }
 
-  // Raw 10s regime setup = TRADE NOW when mind agrees. Only hard knives left.
   if (raw) {
-    if (candidate.direction === 'BUY' && story.chapter === 'BOUNCE_IN_SELL') {
-      return null;
-    }
-    if (candidate.direction === 'SELL' && story.chapter === 'DIP_IN_RALLY') {
-      return null;
-    }
     return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
   }
 
-  // Weaker structure-start path still needs story scalp confirm
   if (story.chapter === 'SEEDING') return null;
 
   const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);

@@ -344,13 +344,25 @@ export function beginAutoCalibrateSession(
 }
 
 /**
- * Robot START — fresh OPEN TRADE-ALL (operator: sākam no jauna).
+ * Robot START — keep the close watch (do NOT wipe counted trades).
+ * Factory wipe only via SĀKT NO JAUNA / resetClientToOpenTradeAll.
+ * If session never started, open a fresh watch without resetting knobs mid-day.
  */
 export function ensureAutoCalibrateSession(
   reason = 'robot_start',
   clientId?: number | null
 ): AutoCalibrateStatus {
-  return resetClientToOpenTradeAll(clientId, reason);
+  const id = resolveDeskClientId(clientId);
+  hydrateSession(id);
+  const st = bucket(id).state;
+  if (!st.started_at) {
+    st.started_at = new Date().toISOString();
+    st.last_summary = `session · client ${id} · ${reason}`;
+    st.last_changes = [`session start · ${reason} · closes preserved`];
+    ensureCoreRegimesOn(id);
+    persistSession(id);
+  }
+  return getAutoCalibrateStatus(undefined, id);
 }
 
 

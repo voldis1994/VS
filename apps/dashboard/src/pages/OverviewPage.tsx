@@ -90,14 +90,16 @@ export function OverviewPage() {
         setEvents(ev.slice(0, 8));
         if (autoRes) setAuto(autoRes);
         if (learnRes) setLearner(learnRes);
+        // Keep Desk Snapshot "Today fills" in sync with closed trades
+        refreshDesk();
       } catch {
         /* keep last */
       }
     };
     void load();
-    const t = setInterval(() => void load(), 3000);
+    const t = setInterval(() => void load(), 2500);
     return () => clearInterval(t);
-  }, [qs]);
+  }, [qs, refreshDesk]);
 
   useEffect(() => {
     setRunnerOn(Boolean(status?.live_enabled) && (status?.mode || '').toUpperCase() === 'LIVE');

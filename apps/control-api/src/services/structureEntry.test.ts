@@ -435,6 +435,30 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     ).toBe(false);
   });
 
+  it('RANGE fade SELL blocked when 1m UP (Gold rally knife — always SELL bug)', () => {
+    const hiBook = zoneBook({ lo: 4300, hi: 4312, lastClose: 4311, lastOpen: 4309.5 });
+    const hi = hiBook[hiBook.length - 1]!;
+    const sell = { direction: 'SELL' as const, setup: 'FADE' as const, reason: 'RANGE fade rally' };
+    const m1Up = {
+      open_time_ms: 0,
+      open: 4303,
+      high: 4312,
+      low: 4302,
+      close: 4311,
+      bars: 6,
+    };
+    // Live 1m green — even FAILED_BREAKOUT_UP must not knife-SELL
+    expect(
+      structureGate(sell, 'RANGE', hi, zoneGeometry(hiBook, hi), m1Up, 'UP').ok
+    ).toBe(false);
+    expect(
+      structureGate(sell, 'FAILED_BREAKOUT_UP', hi, zoneGeometry(hiBook, hi), m1Up, 'UP').ok
+    ).toBe(false);
+    expect(
+      structureGate(sell, 'COMPRESSION', hi, zoneGeometry(hiBook, hi), m1Up, 'FLAT').ok
+    ).toBe(false);
+  });
+
   it('structure start does not fire BUY into DOWN bias', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4325, lastOpen: 4322 });
     const trigger = book[book.length - 1]!;

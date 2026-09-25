@@ -72,7 +72,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 8000);
+    const t = setInterval(() => void load(), 4000);
     return () => clearInterval(t);
   }, [load]);
 

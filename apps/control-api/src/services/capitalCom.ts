@@ -1253,6 +1253,69 @@ export async function createCapitalPosition(
   };
 }
 
+export type CapitalActivityItem = {
+  deal_id: string | null;
+  epic: string | null;
+  direction: 'BUY' | 'SELL' | null;
+  size: number | null;
+  level: number | null;
+  /** Realized cash when present */
+  profit_loss: number | null;
+  activity: string;
+  date: string | null;
+};
+
+/**
+ * Recent Capital account activity (Limit TP/SL closes show up here even when
+ * the desk missed the EXTERNAL flat edge). lastPeriod in seconds, max ~86400.
+ */
+export async function fetchCapitalActivity(
+  session: CapitalSession,
+  lastPeriodSec = 3600
+): Promise<{ ok: boolean; items: CapitalActivityItem[]; detail: string }> {
+  const period = Math.max(60, Math.min(Math.floor(lastPeriodSec), 86_400));
+  const res = await session.get(
+    `/api/v1/history/activity?lastPeriod=${period}&detailed=true`
+  );
+  if (!res.ok) {
+    return {
+      ok: false,
+      items: [],
+      detail: `Capital activity HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+  const raw = Array.isArray(res.json?.activities)
+    ? res.json.activities
+    : Array.isArray(res.json?.activity)
+      ? res.json.activity
+      : Array.isArray(res.json)
+        ? res.json
+        : [];
+  const items: CapitalActivityItem[] = [];
+  for (const row of raw) {
+    const a = (row || {}) as Record<string, unknown>;
+    const details = (a.details || a.dealDetails || {}) as Record<string, unknown>;
+    const dirRaw = String(a.direction || details.direction || '').toUpperCase();
+    const direction: 'BUY' | 'SELL' | null =
+      dirRaw === 'BUY' ? 'BUY' : dirRaw === 'SELL' ? 'SELL' : null;
+    items.push({
+      deal_id: strOrNull(a.dealId || details.dealId || a.deal_id),
+      epic: strOrNull(a.epic || details.epic || a.marketName),
+      direction,
+      size: numOrNull(a.size ?? details.size),
+      level: numOrNull(a.level ?? details.level ?? a.price),
+      profit_loss: numOrNull(
+        a.profitAndLoss ?? a.profit ?? details.profitAndLoss ?? details.pnl
+      ),
+      activity: String(a.type || a.activity || a.status || 'UNKNOWN'),
+      date: strOrNull(a.date || a.timestamp || a.time),
+    });
+  }
+  return { ok: true, items, detail: `${items.length} activities` };
+}
+
 /** ~0.20% cushion stopLevel (≥2.5× broker min) — safety pillow, not min legal SL. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1302,15 +1365,29 @@ export type CapitalPriceCandle = {
   snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+/** Capital OHLC — SECOND / MINUTE / MINUTE_5 / MINUTE_15 / MINUTE_30. */
+export type CapitalPriceResolution =
+  | 'SECOND'
+  | 'MINUTE'
+  | 'MINUTE_5'
+  | 'MINUTE_15'
+  | 'MINUTE_30';
+
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
+  resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 50 : 60;
+  const cap =
+    resolution === 'SECOND'
+      ? 50
+      : resolution === 'MINUTE'
+        ? 60
+        : resolution === 'MINUTE_5'
+          ? 40
+          : 30;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),

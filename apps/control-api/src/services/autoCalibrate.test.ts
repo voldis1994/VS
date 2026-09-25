@@ -248,7 +248,7 @@ describe('autoCalibrate', () => {
     expect(getAutoCalibrateStatus(undefined, 2).closes_in_session).toBe(1);
   });
 
-  it('ensureAutoCalibrateSession factory-opens on robot START — wipe + trade-all defaults', () => {
+  it('ensureAutoCalibrateSession on robot START keeps counted closes (no wipe)', () => {
     beginAutoCalibrateSession('first');
     setDeskCalibration({
       ...defaultDeskCalibration(),
@@ -261,15 +261,19 @@ describe('autoCalibrate', () => {
     noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -1 }));
     noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -0.5 }));
     const st = ensureAutoCalibrateSession('robot restart');
+    expect(st.closes_in_session).toBe(2);
+    expect(st.session_started_at).toBeTruthy();
+    // Knobs NOT factory-reset on ordinary START — only SĀKT NO JAUNA wipes
+    const cal = getDeskCalibration();
+    expect(cal.hardinv_abs).toBe(4.5);
+    expect(cal.entry_filter_level).toBe(3);
+  });
+
+  it('ensureAutoCalibrateSession starts watch once when empty', () => {
+    _resetAutoCalibrateForTests(0);
+    const st = ensureAutoCalibrateSession('cold start');
     expect(st.closes_in_session).toBe(0);
     expect(st.session_started_at).toBeTruthy();
-    expect(st.last_summary).toMatch(/OPEN TRADE-ALL/);
-    const cal = getDeskCalibration();
-    expect(cal.hardinv_abs).toBe(2.2);
-    expect(cal.peak_mfe_abs).toBe(3);
-    expect(cal.target_abs).toBe(5);
-    expect(cal.safety_tp_rr).toBe(1.5);
-    expect(cal.entry_filter_level).toBe(0);
   });
 
   it('resetClientToOpenTradeAll restores defaults and clears watch', () => {
