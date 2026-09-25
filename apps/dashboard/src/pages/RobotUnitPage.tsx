@@ -108,6 +108,9 @@ type RobotSession = {
   open_side: string | null;
   safety_sl: number | null;
   error: string | null;
+  cycle_busy?: boolean;
+  cycle_busy_age_ms?: number;
+  last_tick_at?: string | null;
 };
 
 function fmt(n: number | null | undefined, d = 5) {
@@ -217,8 +220,17 @@ export function RobotUnitPage() {
 
   useEffect(() => {
     if (!routeId) return;
+    let inFlight = false;
     const t = setInterval(() => {
-      void load(routeId).catch(() => undefined);
+      if (inFlight) return;
+      inFlight = true;
+      void load(routeId)
+        .catch((e) =>
+          setError(e instanceof Error ? e.message : 'Poll failed — dati neatjaunojas')
+        )
+        .finally(() => {
+          inFlight = false;
+        });
     }, 2000);
     return () => clearInterval(t);
   }, [routeId, load]);
@@ -348,6 +360,20 @@ export function RobotUnitPage() {
         </header>
 
         {error && <div className="error-state">{error}</div>}
+        {session?.cycle_busy && (session.cycle_busy_age_ms || 0) > 8_000 && (
+          <div className="error-state">
+            CYCLE STUCK {Math.round((session.cycle_busy_age_ms || 0) / 1000)}s — Capital/feed hang ·
+            gaida UNSTUCK
+          </div>
+        )}
+        {session?.last_tick_at &&
+          Date.now() - new Date(session.last_tick_at).getTime() > 15_000 &&
+          session.running && (
+            <div className="error-state">
+              LIVE LOG stale — pēdējais tick{' '}
+              {Math.round((Date.now() - new Date(session.last_tick_at).getTime()) / 1000)}s atpakaļ
+            </div>
+          )}
 
         <div className="robot-unit-grid">
           <section className="robot-unit-panel robot-unit-status">

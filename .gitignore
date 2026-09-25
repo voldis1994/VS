@@ -63,3 +63,4 @@ credentials.json
 # Online desk learner weights
 data/desk-learner/
 data/desk-learner-session.json
+data/desk-entry-learner/

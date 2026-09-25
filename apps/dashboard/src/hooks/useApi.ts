@@ -35,24 +35,41 @@ export function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     }
   }
 
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  const parentSignal = options?.signal;
+  if (parentSignal) {
+    if (parentSignal.aborted) ctrl.abort();
+    else parentSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+
   return fetch(`${API_URL}${path}`, {
     ...options,
+    signal: ctrl.signal,
     headers,
-  }).then(async (res) => {
-    const text = await res.text();
-    let body: unknown = null;
-    if (text) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = text;
+  })
+    .then(async (res) => {
+      const text = await res.text();
+      let body: unknown = null;
+      if (text) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = text;
+        }
       }
-    }
-    if (!res.ok) {
-      throw new Error(extractErrorMessage(body, res.status, res.statusText));
-    }
-    return body as T;
-  });
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(body, res.status, res.statusText));
+      }
+      return body as T;
+    })
+    .catch((e) => {
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw new Error('API timeout — dati neatjaunojas');
+      }
+      throw e;
+    })
+    .finally(() => clearTimeout(timer));
 }
 
 export function useApi<T>(path: string, intervalMs = 0) {

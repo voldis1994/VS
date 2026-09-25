@@ -19,7 +19,7 @@ import {
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
-import { thinkEntryLikeTrader } from './traderMind.js';
+import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -49,6 +49,12 @@ export type StructureDecideInput = {
   /** Optional — entry mind uses last Soft/manual to choose next side */
   last_closed_side?: 'BUY' | 'SELL' | null;
   last_close_was_loss?: boolean;
+  client_id?: number | null;
+};
+
+export type StructuredEntry = RegimeEntry & {
+  entry_features?: EntryFeatures;
+  entry_mind?: string;
 };
 
 /** Lower / upper half — realistic for Gold 30m zones */
@@ -461,7 +467,7 @@ export function structureGate(
   }
 }
 
-export function decideEntryWithStructure(input: StructureDecideInput): RegimeEntry | null {
+export function decideEntryWithStructure(input: StructureDecideInput): StructuredEntry | null {
   const regime = normalizeRegime(input.regime);
   if (regime === 'UNKNOWN') return null;
 
@@ -469,25 +475,22 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
-  const body = bodyPct(input.bar);
-  const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
-  // PRĀTS ENTRY — choose side from info (story/pressure/last close), not blind recipe
-  const mind = thinkEntryLikeTrader({
-    regime,
-    chapter: story.chapter,
-    allow: story.allow,
-    story_conf: story.confidence,
-    story_summary: story.summary_lv,
-    red_1m: story.red_1m,
-    green_1m: story.green_1m,
-    zone_pos: zone?.pos ?? story.zone_pos,
-    bar_body_sign: barSign,
-    last_closed_side: input.last_closed_side ?? null,
-    last_close_was_loss: Boolean(input.last_close_was_loss),
-  });
+  // Online entry brain — chooses BUY/SELL/WAIT from features (+ learns on close)
+  const mind = entryLearnerChoose(
+    {
+      regime,
+      story,
+      bar: input.bar,
+      zone_pos: zone?.pos ?? story.zone_pos,
+      last_closed_side: input.last_closed_side ?? null,
+      last_close_was_loss: Boolean(input.last_close_was_loss),
+      moving: isMoving10s(input.bar),
+    },
+    input.client_id
+  );
 
-  if (mind.choice === 'WAIT') {
+  if (mind.action === 'WAIT') {
     return null;
   }
 
@@ -496,8 +499,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   const candidate = raw ?? started;
   if (!candidate) return null;
 
-  // Mind chose a side — only take setups that match (wait for the right trigger)
-  if (candidate.direction !== mind.choice) {
+  // Brain chose a side — only take setups that match (wait for the right trigger)
+  if (candidate.direction !== mind.action) {
     return null;
   }
 
@@ -513,9 +516,11 @@ export function decideEntryWithStructure(input: StructureDecideInput): RegimeEnt
   );
   if (!gate.ok) return null;
 
-  const withMind = (reason: string): RegimeEntry => ({
+  const withMind = (reason: string): StructuredEntry => ({
     ...candidate,
-    reason: `${mind.spoken} · ${reason}`,
+    reason: `${mind.detail} · ${reason}`,
+    entry_features: mind.features,
+    entry_mind: mind.detail,
   });
 
   // Soft structure ladder off: still use mind choice + matching trigger

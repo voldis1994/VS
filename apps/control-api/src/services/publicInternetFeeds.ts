@@ -165,16 +165,23 @@ function putCache(key: string, read: PublicFeedRead) {
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; json: unknown }> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'VS-MarketReader/1.0 (+public-feed)',
-      ...(init?.headers || {}),
-    },
-  });
-  const json = await res.json().catch(() => null);
-  return { ok: res.ok, status: res.status, json };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8_000);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: ctrl.signal,
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'VS-MarketReader/1.0 (+public-feed)',
+        ...(init?.headers || {}),
+      },
+    });
+    const json = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, json };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function readYahooFinance(epic: string): Promise<PublicFeedRead> {

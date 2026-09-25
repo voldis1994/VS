@@ -50,6 +50,10 @@ import {
   type MarketContextSnapshot,
 } from './marketContext.js';
 import { learnerLearnFromClose, type LearnerFeatures } from './deskLearner.js';
+import {
+  entryLearnerLearnFromClose,
+  type EntryFeatures,
+} from './entryLearner.js';
 import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
@@ -177,6 +181,12 @@ export type RobotSession = {
   };
   /** Live: what robot reads / waits for before entry (all regimes) */
   entry_watch?: EntryWatch | null;
+  /** True while a desk cycle await is in flight */
+  cycle_busy?: boolean;
+  /** How long the current cycle has been busy (ms) */
+  cycle_busy_age_ms?: number;
+  /** ISO time of newest LIVE LOG tick */
+  last_tick_at?: string | null;
 };
 
 type Internal = RobotSession & {
@@ -233,6 +243,8 @@ type Internal = RobotSession & {
   last_brain_action: string;
   /** Last learner feature vector — reward at close */
   last_learner_features: LearnerFeatures | null;
+  /** Entry-brain features frozen at arm — reward entry side at close */
+  last_entry_features: EntryFeatures | null;
   /** Mega market context frozen at fill */
   entry_market: MarketContextSnapshot | null;
   /**
@@ -387,6 +399,11 @@ function publicSession(s: Internal): RobotSession {
     ...rest
   } = s;
   if (!rest.entry_watch) refreshEntryWatch(s);
+  const lastTickAt = s.ticks[0]?.at ?? null;
+  const busyAge =
+    s.cycle_busy && s.cycle_busy_since > 0
+      ? Math.max(0, Date.now() - s.cycle_busy_since)
+      : 0;
   return {
     ...rest,
     closed_at_ms: s.closed_at_ms,
@@ -398,6 +415,10 @@ function publicSession(s: Internal): RobotSession {
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
     decision_chain: buildDecisionChain(s),
+    /** Desk health — UI can show STUCK when cycle hangs */
+    cycle_busy: s.cycle_busy,
+    cycle_busy_age_ms: busyAge,
+    last_tick_at: lastTickAt,
   };
 }
 
@@ -663,6 +684,22 @@ async function persistClosedTradeLedger(
         detail: `LEARNER UPDATE · reward ${learned.reward.toFixed(2)} · n=${learned.updates} · action ${s.last_brain_action || '—'}`,
       });
     }
+    const entryLearned = entryLearnerLearnFromClose({
+      clientId: s.client_id,
+      features: s.last_entry_features,
+      action: s.open_side,
+      pnl_pts: ptsForCal,
+      soft_scale: hardInvStopDistance(s.entry_price, s.entry_regime || s.regime),
+    });
+    if (entryLearned) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ENTRY LEARNER · reward ${entryLearned.reward.toFixed(2)} · n=${entryLearned.updates} · side ${s.open_side}`,
+      });
+    }
     const cycle = noteClosedTradeForAutoCalibrate(
       {
         pnl_pts: ptsForCal,
@@ -736,6 +773,7 @@ function clearTradeState(s: Internal) {
   s.entry_zone = null;
   s.last_brain_action = '';
   s.last_learner_features = null;
+  s.last_entry_features = null;
   s.entry_market = null;
 }
 
@@ -2341,12 +2379,15 @@ async function robotCycleLocked(s: Internal) {
   s.last_bid = quote0.bid;
   s.last_ask = quote0.ask;
 
-  // Public multi-feed — NEVER under Capital connection mutex
+  // Public multi-feed — NEVER under Capital connection mutex; never hang the desk cycle
   const flatNow = isFlatTenBar(s.ohlcState.last_closed);
   if (!flatNow && Date.now() - s.last_multi_feed_ms >= 4_000) {
     s.last_multi_feed_ms = Date.now();
     try {
-      s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote0.mid });
+      s.multiFeed = await Promise.race([
+        readMultiFeedPrice(s.epic, { anchorMid: quote0.mid }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000)),
+      ]).then((v) => (v == null ? s.multiFeed : v));
     } catch {
       /* keep previous multiFeed snapshot */
     }
@@ -2750,8 +2791,10 @@ async function robotCycleLocked(s: Internal) {
           closedBars: s.closedBars,
           last_closed_side: s.last_closed_side,
           last_close_was_loss: s.last_close_was_loss,
+          client_id: s.client_id,
         });
         if (sig) {
+          if (sig.entry_features) s.last_entry_features = sig.entry_features;
           const flipOpts = { wasLoss: s.last_close_was_loss };
           const lockMs = sameDirLockMs(s.last_close_was_loss);
           if (
@@ -3162,6 +3205,7 @@ export async function startRobotSession(input: {
     entry_zone: null,
     last_brain_action: '',
     last_learner_features: null,
+    last_entry_features: null,
     entry_market: null,
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
