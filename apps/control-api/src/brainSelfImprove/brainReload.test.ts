@@ -1,17 +1,28 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import {
   BRAIN_RELOAD_EXIT_CODE,
+  LIVE_LOOP_ENV,
   brainReloadFlagPath,
   clearBrainReloadRequest,
+  clearStaleBrainReloadOnBoot,
   hasBrainReloadRequest,
   maybeExitForBrainCodeReload,
   requestBrainCodeReload,
 } from './brainReload.js';
 
 describe('brainReload — soft restart when FLAT', () => {
+  const prev = process.env[LIVE_LOOP_ENV];
+
+  beforeEach(() => {
+    delete process.env[LIVE_LOOP_ENV];
+    clearBrainReloadRequest();
+  });
+
   afterEach(() => {
     clearBrainReloadRequest();
+    if (prev === undefined) delete process.env[LIVE_LOOP_ENV];
+    else process.env[LIVE_LOOP_ENV] = prev;
   });
 
   it('writes and clears reload flag', () => {
@@ -30,7 +41,8 @@ describe('brainReload — soft restart when FLAT', () => {
     expect(hasBrainReloadRequest()).toBe(false);
   });
 
-  it('does not exit while any trade is open', () => {
+  it('does not exit while any trade is open (even in live-loop)', () => {
+    process.env[LIVE_LOOP_ENV] = '1';
     requestBrainCodeReload({ cycle_id: 'open', reason: 'unit' });
     const exitSpy = viExit();
     maybeExitForBrainCodeReload({ anyOpenTrade: true });
@@ -39,7 +51,24 @@ describe('brainReload — soft restart when FLAT', () => {
     exitSpy.restore();
   });
 
-  it('schedules exit 75 when FLAT', async () => {
+  it('does NOT exit without live-loop — keeps API alive (Failed to fetch fix)', () => {
+    delete process.env[LIVE_LOOP_ENV];
+    requestBrainCodeReload({ cycle_id: 'bare', reason: 'unit' });
+    const exitSpy = viExit();
+    maybeExitForBrainCodeReload({ anyOpenTrade: false });
+    expect(exitSpy.called).toBe(false);
+    expect(hasBrainReloadRequest()).toBe(true);
+    exitSpy.restore();
+  });
+
+  it('clears stale reload flag on boot when not in live-loop', () => {
+    requestBrainCodeReload({ cycle_id: 'stale', reason: 'unit' });
+    clearStaleBrainReloadOnBoot();
+    expect(hasBrainReloadRequest()).toBe(false);
+  });
+
+  it('schedules exit 75 when FLAT under live-loop', async () => {
+    process.env[LIVE_LOOP_ENV] = '1';
     requestBrainCodeReload({ cycle_id: 'flat', reason: 'unit' });
     const exitSpy = viExit();
     maybeExitForBrainCodeReload({ anyOpenTrade: false });

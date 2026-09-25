@@ -25,6 +25,7 @@ import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
 import { checkBrainCodeReload } from './services/robotDesk.js';
+import { clearStaleBrainReloadOnBoot } from './brainSelfImprove/brainReload.js';
 import { authMiddleware, isAdminTokenConfigured } from './middleware/auth.js';
 import { isEncryptionKeyConfigured } from './security/encryption.js';
 import { isPipelineSecretConfigured } from './services/pipelineBridge.js';
@@ -197,6 +198,7 @@ async function main() {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
+  clearStaleBrainReloadOnBoot();
 
   setInterval(() => {
     telemetry.broadcast({

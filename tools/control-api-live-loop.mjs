@@ -18,7 +18,7 @@ function runOnce() {
     const child = spawn(npmCmd, ['run', 'dev:live'], {
       cwd: apiDir,
       stdio: 'inherit',
-      env: { ...process.env },
+      env: { ...process.env, CONTROL_API_LIVE_LOOP: '1' },
       shell: process.platform === 'win32',
     });
     child.on('exit', (code, signal) => {
