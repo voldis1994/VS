@@ -31,11 +31,11 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   hardInvStopDistance,
-  safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
   scaleDeskAbs,
   shouldArmPeakProtect,
   targetTakeProfitDistance,
+  SAFETY_TP_MIN_RR,
   type ExitDecideOverrides,
   type ExitZoneSnap,
 } from './exitManage.js';
@@ -627,6 +627,21 @@ async function persistClosedTradeLedger(
   const pnlCash =
     s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : null;
   const pnlPts = computePnlPts(s.open_side, s.entry_price, exitMid);
+  const soft = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+  let exitReason = reason;
+  // Same-minute micro close while Soft still larger — label so LIVE LOG shows scratch
+  if (
+    source === 'external' &&
+    holdMs != null &&
+    holdMs < 90_000 &&
+    pnlPts != null &&
+    Number.isFinite(pnlPts) &&
+    Math.abs(pnlPts) < soft * 0.5
+  ) {
+    exitReason = `EXTERNAL · SCRATCH ${Math.round(holdMs / 1000)}s · |UPL| ${pnlPts.toFixed(
+      2
+    )} < Soft ${soft.toFixed(2)} · ${reason}`;
+  }
   try {
     await recordClosedTrade({
       broker_account_id: s.account_id,
@@ -639,7 +654,7 @@ async function persistClosedTradeLedger(
       quantity: s.lot_size,
       pnl: pnlCash,
       pnl_pts: pnlPts,
-      exit_reason: reason,
+      exit_reason: exitReason,
       regime: s.entry_regime || s.regime,
       setup_type: s.entry_setup,
       mfe: s.mfe,
@@ -705,7 +720,7 @@ async function persistClosedTradeLedger(
         pnl_pts: ptsForCal,
         regime: s.entry_regime || s.regime,
         setup_type: s.entry_setup,
-        exit_reason: reason,
+        exit_reason: exitReason,
         mfe: s.mfe,
         mae: s.mae,
         at: new Date().toISOString(),
@@ -1323,7 +1338,10 @@ async function enterTradeLocked(
     return;
   }
 
-  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
+  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum.
+  // NO broker SAFETY TP at open — Capital profitDistance/profitLevel caused
+  // same-minute +£0.xx scratches while Soft/Peak still require ≥ Soft.
+  // Soft Peak/Target/TimeDecay own all green banks; broker SL is the hard floor.
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
@@ -1353,49 +1371,28 @@ async function enterTradeLocked(
         stopDistance,
         quote.point_size ?? null
       );
-      // TP always ≥ 1.5× THIS stopDistance — never TP < SL
-      const tpPts = safetyTakeProfitDistancePts(
-        mid,
-        s.regime,
-        minPts,
-        quote.point_size ?? null,
-        stopDistance
-      );
-      const expectTp =
-        quote.point_size != null && quote.point_size > 0
-          ? direction === 'BUY'
-            ? mid + tpPts * quote.point_size
-            : mid - tpPts * quote.point_size
-          : safetyTakeProfitLevel(
-              direction,
-              mid,
-              s.regime,
-              minPrice,
-              expect != null ? Math.abs(mid - expect) : null
-            );
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP stopDistance=${stopDistance} pts · profitDistance=${tpPts} (~TP ${
-          expectTp ?? 'n/a'
-        } · RR≥1.5 · x${loosen})`,
+        detail: `Capital SAFETY SL-only stopDistance=${stopDistance} pts (~SL ${
+          expect ?? 'n/a'
+        } · no broker TP · Soft manage banks · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopDistance,
-        profitDistance: tpPts,
       });
       if (result.ok) {
         usedStopDistance = stopDistance;
         stopLevel = expect;
-        if (expectTp != null && Number.isFinite(expectTp)) profitLevel = expectTp;
+        profitLevel = null;
         break;
       }
-      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) {
         break;
       }
       pushTick(s, {
@@ -1403,7 +1400,7 @@ async function enterTradeLocked(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL/TP distance rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
       });
     }
   }
@@ -1423,38 +1420,28 @@ async function enterTradeLocked(
         minPrice,
         loosen
       );
-      const slDist = Math.abs(mid - level);
-      const tp = safetyTakeProfitLevel(
-        direction,
-        mid,
-        s.regime,
-        minPrice != null ? minPrice * loosen : minPrice,
-        slDist
-      );
       const dist = direction === 'BUY' ? mid - level : level - mid;
-      const tpDist = direction === 'BUY' ? tp - mid : mid - tp;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL+TP stopLevel=${level} · profitLevel=${tp} (SL≈${dist.toFixed(
+        detail: `Capital SAFETY SL-only stopLevel=${level} (SL≈${dist.toFixed(
           5
-        )} · TP≈${tpDist.toFixed(5)} · RR=${(tpDist / Math.max(dist, 1e-9)).toFixed(2)} · x${loosen})`,
+        )} · no broker TP · Soft manage banks · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
         stopLevel: level,
-        profitLevel: tp,
       });
       if (result.ok) {
         stopLevel = level;
-        profitLevel = tp;
+        profitLevel = null;
         break;
       }
-      if (!/stop|profit|distance|validation|reject|attached|level/i.test(result.detail)) {
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) {
         break;
       }
       pushTick(s, {
@@ -1462,67 +1449,8 @@ async function enterTradeLocked(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL/TP level rejected — loosen x${loosen}: ${result.detail}`,
+        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
       });
-    }
-  }
-
-  // Last resort: SAFETY SL only (never naked) — TP soft manage still runs
-  if (!result?.ok && useDistance) {
-    const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-    const stopDistance =
-      basePts >= 10 ? Math.ceil(basePts) : Math.round(basePts * 100) / 100;
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `SAFETY TP not accepted — fallback SL-only stopDistance=${stopDistance}`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-      stopDistance,
-    });
-    if (result.ok) {
-      usedStopDistance = stopDistance;
-      stopLevel = expectedStopFromDistance(
-        direction,
-        mid,
-        quote.bid,
-        quote.ask,
-        stopDistance,
-        quote.point_size ?? null
-      );
-      profitLevel = null;
-    }
-  } else if (!result?.ok) {
-    const level = safetyStopLevel(
-      direction,
-      mid,
-      quote.bid,
-      quote.ask,
-      quote.spread ?? null,
-      minPrice,
-      1
-    );
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `SAFETY TP not accepted — fallback SL-only stopLevel=${level}`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-      stopLevel: level,
-    });
-    if (result.ok) {
-      stopLevel = level;
-      profitLevel = null;
     }
   }
 
@@ -1582,6 +1510,47 @@ async function enterTradeLocked(
       }
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
+      }
+      if (pos?.profit_level != null && Number.isFinite(pos.profit_level)) {
+        // Capital sometimes attaches a min TP we did not request — push it far
+        // past Soft so Soft Peak/Target own banking (no same-minute scratch).
+        const entry = s.entry_price ?? mid;
+        const soft = hardInvStopDistance(entry, s.entry_regime || s.regime);
+        const tpDist = Math.abs(pos.profit_level - entry);
+        const minNeed = soft * SAFETY_TP_MIN_RR;
+        if (tpDist < minNeed) {
+          const far = safetyTakeProfitLevel(
+            direction,
+            entry,
+            s.entry_regime || s.regime,
+            null,
+            s.safety_sl != null ? Math.abs(entry - s.safety_sl) : soft
+          );
+          const amend = await updateCapitalPosition(session, dealId, {
+            profitLevel: far,
+          });
+          if (amend.ok) {
+            s.safety_tp = far;
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `Broker TP was tight (${tpDist.toFixed(2)} < Soft×${SAFETY_TP_MIN_RR}) · pushed to ${far} · Soft manage owns banks`,
+            });
+          } else {
+            s.safety_tp = pos.profit_level;
+            pushTick(s, {
+              phase: 'WAIT',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `Broker TP tight (${tpDist.toFixed(2)}) — amend failed · ${amend.detail}`,
+            });
+          }
+        } else {
+          s.safety_tp = pos.profit_level;
+        }
       }
       if (pos) s.entry_at = preferBrokerEntryAt(s.entry_at, pos.created_at);
     } catch {
@@ -2162,78 +2131,10 @@ function cycleTouchesBrokerTp(changes: string[]): boolean {
 
 /** Raise Capital profitLevel to match new safety_tp_rr — stopLevel untouched. */
 async function syncOpenRobotBrokerTp(s: Internal): Promise<void> {
-  if (!s.open_side || s.entry_price == null || !Number.isFinite(s.entry_price)) return;
-  if (!s.deal_id) return;
-  const entry = s.entry_price;
-  const stopDist =
-    s.safety_sl != null && Number.isFinite(s.safety_sl)
-      ? Math.abs(entry - s.safety_sl)
-      : null;
-  const tp = safetyTakeProfitLevel(
-    s.open_side,
-    entry,
-    s.entry_regime || s.regime,
-    null,
-    stopDist
-  );
-  if (s.safety_tp != null && Math.abs(s.safety_tp - tp) < 0.05) return;
-
-  const { rows } = await pool.query(
-    `SELECT bc.environment, bc.identifier, bc.broker_name
-     FROM broker_connections bc WHERE bc.id = $1`,
-    [s.connection_id]
-  );
-  if (!rows.length || rows[0].broker_name !== 'capital_com') return;
-  const creds = await loadCreds(s.connection_id);
-  const accRow = await pool.query(
-    `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
-    [s.account_id]
-  );
-  const capitalAccountId =
-    (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
-  const leaseInput: CapitalLeaseInput = {
-    environment: rows[0].environment as string,
-    apiKey: creds.api_key || '',
-    identifier: String(rows[0].identifier || '').trim(),
-    password: creds.password || '',
-    connectionId: s.connection_id,
-    capitalAccountId,
-    requireAccountId: true,
-  };
-
-  const leased = await withCapitalAccountSession(leaseInput, async (session) => {
-    return updateCapitalPosition(session, s.deal_id!, { profitLevel: tp });
-  });
-  if (!leased.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: null,
-      ask: null,
-      mid: entry,
-      detail: `AUTO-CAL broker TP amend deferred · ${leased.result.detail}`,
-    });
-    return;
-  }
-  const res = leased.value;
-  if (res.ok) {
-    const prev = s.safety_tp;
-    s.safety_tp = tp;
-    pushTick(s, {
-      phase: 'INFO',
-      bid: null,
-      ask: null,
-      mid: entry,
-      detail: `AUTO-CAL broker TP ${prev ?? '—'}→${tp} · SL stays ${s.safety_sl ?? '—'} · ${res.detail}`,
-    });
-  } else {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: null,
-      ask: null,
-      mid: entry,
-      detail: `AUTO-CAL broker TP amend failed · ${res.detail}`,
-    });
-  }
+  // Soft Peak/Target own green banks — do NOT attach/raise broker TP.
+  // Prior safety_tp_rr amends re-introduced same-minute +£0.xx scratches.
+  void s;
+  return;
 }
 
 async function syncAllOpenRobotsBrokerTp(): Promise<void> {

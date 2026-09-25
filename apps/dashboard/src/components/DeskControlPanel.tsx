@@ -532,7 +532,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 onBlur={() => void saveCalibration({ safety_tp_rr: cal.safety_tp_rr })}
               />
               <p className="hint-line" style={{ marginTop: 2 }}>
-                Auto-cal maina šo — Capital SAFETY TP. SL paliek kā atvērts.
+                Soft Peak/Target banko peļņu — brokeram tikai SAFETY SL (bez TP scratch).
               </p>
               <label className="field-label">Entry filter level (0–3)</label>
               <input

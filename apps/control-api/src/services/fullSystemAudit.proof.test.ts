@@ -358,17 +358,17 @@ describe('PROOF: source wiring — not comment-only', () => {
     expect(src).toContain('decideOpenManageExit');
     expect(src).toMatch(/Already in a trade: short Capital leases only/);
     expect(src).toMatch(/Decide outside Capital lock/);
-    // #565 policy: Soft first, Peak armed by reverse 1m — NOT MFE-arm / Peak-first (#566)
-    expect(src).not.toContain('peakMfeFloor');
+    // Soft first; Peak armed by reverse 1m / Soft-MFE / brain — not old Peak-first (#566)
     expect(src).not.toContain('PeakProtect ARMED by MFE');
     expect(src).toMatch(/1m \$\{policy\} · PeakProtect ARMED/);
     expect(src).toContain('trail after real MFE');
     expect(src).toContain('softExitMarketGate');
     expect(src).toMatch(/softGate\.allow/);
     expect(src).toMatch(/SOFT HOLD · next entry still|soft=nextEntry\+1mChange/);
-    // Broker SAFETY TP attached at open (opposite of SAFETY SL)
+    // SAFETY SL at open; Soft manage owns banks (no broker TP scratch)
     expect(src).toContain('safetyTakeProfitLevel');
-    expect(src).toContain('profitDistance');
+    expect(src).toContain('no broker TP');
+    expect(src).toContain('SAFETY SL-only');
     expect(src).toContain('safety_tp');
     expect(src).toContain('updateCapitalPosition');
     expect(src).toContain('safety_tp_rr');
