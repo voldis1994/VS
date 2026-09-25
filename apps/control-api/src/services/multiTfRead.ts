@@ -136,19 +136,20 @@ export function readMultiTfStack(input: {
 
   const midFight =
     bias !== 'FLAT' && tf5 !== 'FLAT' && tf5 !== bias;
+  // 1m against the working side = pullback — HOLD the bias in UI, but do NOT
+  // fire PRĀTS entry until the trigger agrees (was: SELL into green 1m → Soft spam)
   const triggerFight =
-    bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias && tf5 === bias;
+    bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
   const only1m =
     tf1 !== 'FLAT' && tf5 === 'FLAT' && tf15 === 'FLAT' && tf30 === 'FLAT';
 
-  // Aligned = higher clear, 5m not fighting, 1m not fighting hard against
-  // (or only 1m available — still a usable read)
+  // Aligned = higher clear, 5m not fighting, 1m not fighting (trigger ready)
   const aligned =
     bias !== 'FLAT' &&
     !higherFight &&
     !midFight &&
-    (only1m ||
-      !(bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias && tf5 !== 'FLAT' && tf5 !== bias));
+    !triggerFight &&
+    (only1m || tf5 === bias || tf5 === 'FLAT' || tf15 === bias || tf30 === bias);
 
   const summary = `30m${arrow(tf30)} 15m${arrow(tf15)} 5m${arrow(tf5)} 1m${arrow(tf1)}`;
 
@@ -188,16 +189,8 @@ export function readMultiTfStack(input: {
 export function sideFromMultiTf(stack: MultiTfStack): 'BUY' | 'SELL' | 'WAIT' {
   if (stack.higher_fight) return 'WAIT';
   if (stack.bias === 'FLAT') return 'WAIT';
-  if (!stack.aligned) {
-    // Pullback case: higher bias clear, 1m against = still hold the side (wait for trigger)
-    // but don't flip. Mid fight (5m against) = WAIT.
-    if (
-      (stack.tf30 === stack.bias || stack.tf15 === stack.bias) &&
-      stack.tf5 === stack.bias
-    ) {
-      return stack.bias === 'UP' ? 'BUY' : 'SELL';
-    }
-    return 'WAIT';
-  }
+  // Pullback / mid fight: keep bias for UI thesis, but never execute PRĀTS
+  // into a fighting 1m (that was Soft SELL spam on every bounce).
+  if (!stack.aligned) return 'WAIT';
   return stack.bias === 'UP' ? 'BUY' : 'SELL';
 }

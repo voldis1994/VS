@@ -70,7 +70,20 @@ describe('multiTfRead', () => {
     expect(sideFromMultiTf(stack)).toBe('WAIT');
   });
 
-  it('1m pullback against aligned 5m still holds side', () => {
+  it('1m pullback against higher bias → WAIT (no PRĀTS knife into Soft)', () => {
+    const stack = readMultiTfStack({
+      tf30: 'DOWN',
+      tf15: 'DOWN',
+      tf5: 'DOWN',
+      tf1: 'UP',
+    });
+    expect(stack.bias).toBe('DOWN');
+    expect(stack.aligned).toBe(false);
+    // Bias still DOWN for thesis — but side WAIT until 1m red (was SELL→Soft spam)
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
+  });
+
+  it('1m pullback against aligned 5m still holds bias, not opposite', () => {
     const stack = readMultiTfStack({
       tf30: 'UP',
       tf15: 'UP',
@@ -78,10 +91,8 @@ describe('multiTfRead', () => {
       tf1: 'DOWN',
     });
     expect(stack.bias).toBe('UP');
-    // mid not fighting — sideFrom may still BUY (wait for trigger) or WAIT
-    const side = sideFromMultiTf(stack);
-    expect(side).not.toBe('SELL');
-    expect(['BUY', 'WAIT']).toContain(side);
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
+    expect(sideFromMultiTf(stack)).not.toBe('SELL');
   });
 
   it('only 1m available → follow the tape', () => {

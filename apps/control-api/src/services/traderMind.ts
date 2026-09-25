@@ -441,6 +441,37 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     confidence = 0.35;
   }
 
+  // Never fire PRĀTS into a fighting 1m (SELL on green 1m / BUY on red 1m → Soft)
+  if (choice === 'SELL' && m1 === 'UP') {
+    choice = 'WAIT';
+    thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
+    why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
+    confidence = 0.4;
+  }
+  if (choice === 'BUY' && m1 === 'DOWN') {
+    choice = 'WAIT';
+    thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
+    why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
+    confidence = 0.4;
+  }
+
+  // After Soft same-side loss — no immediate re-spam (L0 flip lock is OFF by design)
+  if (
+    choice !== 'WAIT' &&
+    input.last_close_was_loss &&
+    input.last_closed_side === choice
+  ) {
+    const confirmed =
+      (choice === 'SELL' && m1 === 'DOWN' && (strong || stack.aligned)) ||
+      (choice === 'BUY' && m1 === 'UP' && (strong || stack.aligned));
+    if (!confirmed) {
+      choice = 'WAIT';
+      thesis = `Pēc Soft ${input.last_closed_side} — negāžu to pašu pusi bez svaiga 1m apstiprinājuma.`;
+      why = 'Same-dir Soft spam → Soft SL ķēde. Gaidu triggeri vai otru pusi.';
+      confidence = 0.35;
+    }
+  }
+
   const spoken = `PRĀTS ENTRY ${choice} · ${stack.summary} · ${thesis.slice(0, 90)}${
     thesis.length > 90 ? '…' : ''
   } · ${why.slice(0, 70)}${why.length > 70 ? '…' : ''}`;

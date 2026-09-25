@@ -254,4 +254,47 @@ describe('traderMind', () => {
     expect(t.choice).toBe('SELL');
     expect(t.spoken).toMatch(/30m↓ 15m↓ 5m↓ 1m↓/);
   });
+
+  it('ENTRY WAITs SELL into green 1m bounce — no Soft spam on bias DOWN', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'BOUNCE_IN_SELL',
+      allow: 'SELL',
+      story_conf: 0.7,
+      red_1m: 12,
+      green_1m: 10,
+      zone_pos: 0.4,
+      bar_body_sign: 1,
+      m1_dir: 'UP',
+      m1_strong: true,
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.why).toMatch(/1m|bounce|Soft|trigger/i);
+  });
+
+  it('ENTRY WAITs same-side after Soft SELL without fresh 1m DOWN', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.7,
+      red_1m: 14,
+      green_1m: 8,
+      zone_pos: 0.4,
+      bar_body_sign: 0,
+      last_closed_side: 'SELL',
+      last_close_was_loss: true,
+      m1_dir: 'FLAT',
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.thesis).toMatch(/Soft|pašu pusi|spam/i);
+  });
 });
