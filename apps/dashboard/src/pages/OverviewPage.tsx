@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
@@ -23,17 +22,13 @@ type SystemEvent = {
   event_type?: string;
   message?: string;
   created_at?: string;
-  payload?: unknown;
 };
 
 type AutoCalStatus = {
-  client_id?: number;
   enabled: boolean;
-  session_started_at: string | null;
   closes_in_session: number;
   closes_until_next: number;
   cycles_run: number;
-  last_cycle_at: string | null;
   last_summary: string | null;
   last_changes: string[];
   cooling_down: boolean;
@@ -42,17 +37,6 @@ type AutoCalStatus = {
   session_expectancy_pts: number;
   session_wins: number;
   session_losses: number;
-  last_window_expectancy: number | null;
-  history: Array<{
-    at: string;
-    summary: string;
-    changes: string[];
-    applied: boolean;
-    window_expectancy: number;
-    window_sum_pts: number;
-    closes_at_cycle: number;
-    cooldown_sec: number;
-  }>;
   knobs_now: {
     hardinv_abs: number;
     peak_mfe_abs: number;
@@ -64,26 +48,13 @@ type AutoCalStatus = {
   };
 };
 
-function seedSeries(seed: number, len: number, base = 10000): number[] {
-  const out: number[] = [];
-  let v = base + (seed % 500);
-  for (let i = 0; i < len; i++) {
-    v += Math.sin(i / 2.4 + seed) * 40 + ((seed * (i + 3)) % 17) - 8;
-    out.push(Math.max(100, v));
-  }
-  return out;
-}
-
-function seedBars(seed: number, len: number): number[] {
-  return Array.from({ length: len }, (_, i) => {
-    const n = Math.sin(i * 0.9 + seed) * 180 + ((seed * (i + 1)) % 90) - 40;
-    return Math.round(n);
-  });
-}
+type LearnerStatus = {
+  client_id: number;
+  updates: number;
+  updated_at: string;
+};
 
 const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
-
-
 
 export function OverviewPage() {
   const {
@@ -101,59 +72,45 @@ export function OverviewPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [runnerOn, setRunnerOn] = useState(false);
-  const [showExtraPanels, setShowExtraPanels] = useState(false);
   const [auto, setAuto] = useState<AutoCalStatus | null>(null);
+  const [learner, setLearner] = useState<LearnerStatus | null>(null);
+
+  const qs = selectedClientId ? `?client_id=${selectedClientId}` : '';
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [pos, ev, autoRes] = await Promise.all([
+        const [pos, ev, autoRes, learnRes] = await Promise.all([
           apiFetch<Position[]>('/api/positions').catch(() => [] as Position[]),
           apiFetch<SystemEvent[]>('/api/system/events').catch(() => [] as SystemEvent[]),
-          apiFetch<AutoCalStatus>(
-            selectedClientId
-              ? `/api/desk/auto-calibrate?client_id=${selectedClientId}`
-              : '/api/desk/auto-calibrate'
-          ).catch(() => null),
+          apiFetch<AutoCalStatus>(`/api/desk/auto-calibrate${qs}`).catch(() => null),
+          apiFetch<LearnerStatus>(`/api/desk/learner${qs}`).catch(() => null),
         ]);
         setPositions(pos);
-        setEvents(ev.slice(0, 12));
+        setEvents(ev.slice(0, 8));
         if (autoRes) setAuto(autoRes);
+        if (learnRes) setLearner(learnRes);
       } catch {
-        /* ignore */
+        /* keep last */
       }
     };
     void load();
     const t = setInterval(() => void load(), 3000);
     return () => clearInterval(t);
-  }, [selectedClientId]);
+  }, [qs]);
 
   useEffect(() => {
     setRunnerOn(Boolean(status?.live_enabled) && (status?.mode || '').toUpperCase() === 'LIVE');
   }, [status?.live_enabled, status?.mode]);
 
-  const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) || null;
-  const deskAccounts = useMemo(() => {
-    if (!selectedClientId) return accounts;
-    const filtered = accounts.filter((a) => a.client_id === selectedClientId);
-    return filtered.length ? filtered : accounts;
-  }, [accounts, selectedClientId]);
-
-  const equitySeries = useMemo(
-    () => seedSeries((selectedAccountId || 1) * 17 + accounts.length, 28, 11000),
-    [selectedAccountId, accounts.length],
+  const liveAccounts = useMemo(
+    () => accounts.filter((a) => a.environment === 'live').length,
+    [accounts]
   );
-  const dailySeries = useMemo(
-    () => seedBars((selectedAccountId || 3) * 11 + (status?.today_executions || 0), 14),
-    [selectedAccountId, status?.today_executions],
+  const totalMarkets = useMemo(
+    () => accounts.reduce((s, a) => s + (a.capital_market_count || 0), 0),
+    [accounts]
   );
-
-  const totalMarkets = accounts.reduce((s, a) => s + (a.capital_market_count || 0), 0);
-  const liveAccounts = accounts.filter((a) => a.environment === 'live').length;
-  const floatingHint = dailySeries.reduce((s, v) => s + v, 0);
-  const profitFactor =
-    dailySeries.filter((v) => v > 0).reduce((s, v) => s + v, 0) /
-      Math.max(1, Math.abs(dailySeries.filter((v) => v < 0).reduce((s, v) => s + v, 0))) || 0;
 
   const applyOperatingMode = async (mode: string) => {
     setBusy(true);
@@ -164,7 +121,7 @@ export function OverviewPage() {
         body: JSON.stringify({ mode }),
       });
       setRunnerOn(mode === 'LIVE');
-      setMsg(`Operating mode → ${mode}`);
+      setMsg(`Mode → ${mode}`);
       refreshDesk();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Mode change failed');
@@ -186,10 +143,10 @@ export function OverviewPage() {
         body: JSON.stringify({ mode: 'LIVE' }),
       });
       setRunnerOn(true);
-      setMsg('AI runner armed → LIVE gate ON + mode LIVE');
+      setMsg('LIVE armed');
       refreshDesk();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Failed to start runner');
+      setMsg(e instanceof Error ? e.message : 'Start failed');
     } finally {
       setBusy(false);
     }
@@ -204,80 +161,149 @@ export function OverviewPage() {
         body: JSON.stringify({ mode: 'PAPER' }),
       });
       setRunnerOn(false);
-      setMsg('Runner stopped → mode PAPER');
+      setMsg('Stopped → PAPER');
       refreshDesk();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Failed to stop runner');
+      setMsg(e instanceof Error ? e.message : 'Stop failed');
     } finally {
       setBusy(false);
     }
   };
 
+  const factoryOpen = () => {
+    void apiFetch<{ auto: AutoCalStatus; learner?: LearnerStatus }>(
+      '/api/desk/auto-calibrate',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          factory_open: true,
+          reset: true,
+          client_id: selectedClientId ?? undefined,
+        }),
+      }
+    )
+      .then((r) => {
+        setAuto(r.auto);
+        if (r.learner) setLearner(r.learner);
+        setMsg('OPEN TRADE-ALL · Soft 2.2 · Peak 3 · Target 5');
+      })
+      .catch((e) => setMsg(e instanceof Error ? e.message : 'Reset failed'));
+  };
+
+  const modeNow = (status?.mode || 'LIVE').toUpperCase();
+  const ePts = auto?.session_expectancy_pts ?? 0;
+  const sumPts = auto?.session_sum_pts ?? 0;
+
   return (
-    <div className="main-dash">
-      <div className="dash-head">
-        <div className="dash-brand-hero">
-          <Logo size={96} wordmark />
+    <div className="main-dash command-dash">
+      <header className="cmd-hero">
+        <div className="cmd-hero-left">
+          <Logo size={56} wordmark />
           <div>
-            <div className="orbit-kicker">VS SYSTEM // COMMAND</div>
-            <h1 className="page-title">MAIN DASHBOARD</h1>
-            <p className="page-subtitle">
-              Tactical desk · accounts · risk · Capital.com live combat feed
-            </p>
+            <div className="orbit-kicker">VS SYSTEM</div>
+            <h1 className="page-title">COMMAND</h1>
           </div>
         </div>
-        {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
-      </div>
-
-
-      <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>
-        <div className="section-title">
-          AUTO-CAL · LIVE BRAIN
-          {selectedClientId ? ` · client #${selectedClientId}` : ''}
+        <div className="cmd-hero-actions">
+          <div className="regime-catalog cmd-modes">
+            {OPERATING_MODES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`regime-chip ${modeNow === m ? 'on up' : 'flat'}`}
+                disabled={busy}
+                onClick={() => void applyOperatingMode(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <div className="actions" style={{ margin: 0 }}>
+            <button
+              className="btn btn-go"
+              disabled={busy || runnerOn}
+              onClick={() => void startRunner()}
+            >
+              START
+            </button>
+            <button
+              className="btn btn-stop"
+              disabled={busy || !runnerOn}
+              onClick={() => void stopRunner()}
+            >
+              STOP
+            </button>
+            <Link className="btn btn-go" to="/robot">
+              ROBOT BOARD
+            </Link>
+          </div>
         </div>
-        <p className="hint-line" style={{ marginTop: 0 }}>
-          LEARNER (online) māsās no Tava pnl — ne LLM. Katrs close = update.
-          Soft HardInv paliek cieta drošība; Peak/Target modulē LEARNER.
-        </p>
-        {!auto && <div className="empty-state">Loading auto-cal…</div>}
+      </header>
+
+      {msg && (
+        <div className={msg.toLowerCase().includes('fail') ? 'error-state' : 'ok-state'}>
+          {msg}
+        </div>
+      )}
+
+      <section className="panel cmd-brain">
+        <div className="cmd-brain-head">
+          <div>
+            <div className="section-title" style={{ margin: 0 }}>
+              LEARNER · AUTO-CAL
+              {selectedClientId ? ` · #${selectedClientId}` : ''}
+            </div>
+            <p className="hint-line" style={{ margin: '4px 0 0' }}>
+              Online politika no closes · Soft = drošība · ik 5 closes Peak/Target mācība
+            </p>
+          </div>
+          <div className="actions" style={{ margin: 0 }}>
+            <button type="button" className="btn" onClick={factoryOpen}>
+              SĀKT NO JAUNA
+            </button>
+            <Link className="btn" to="/trades">
+              TRADES
+            </Link>
+          </div>
+        </div>
+
+        {!auto && <div className="empty-state">Loading…</div>}
         {auto && (
           <>
-            <div className="metric-row" style={{ marginTop: 8 }}>
+            <div className="metric-row cmd-metrics">
               <div className="metric-box">
                 <div className="label">Status</div>
-                <div className="value" style={{ fontSize: 16 }}>
+                <div className="value" style={{ fontSize: 15 }}>
                   {!auto.enabled
                     ? 'PAUSED'
                     : auto.cooling_down
-                      ? `COOLDOWN ${auto.cooldown_left_s}s`
-                      : 'WATCHING'}
+                      ? `CD ${auto.cooldown_left_s}s`
+                      : 'ON'}
                 </div>
               </div>
               <div className="metric-box">
-                <div className="label">Closes / next</div>
+                <div className="label">Closes</div>
                 <div className="value">
                   {auto.closes_in_session}
-                  <span style={{ opacity: 0.6, fontSize: 14 }}> / {auto.closes_until_next}</span>
+                  <span className="cmd-muted">/{auto.closes_until_next}</span>
                 </div>
               </div>
               <div className="metric-box">
-                <div className="label">Cycles</div>
-                <div className="value">{auto.cycles_run}</div>
+                <div className="label">Learner n</div>
+                <div className="value">{learner?.updates ?? 0}</div>
               </div>
               <div className="metric-box">
-                <div className="label">Session E (pts)</div>
-                <div
-                  className={`value ${auto.session_expectancy_pts >= 0 ? 'pos' : 'neg'}`}
-                >
-                  {auto.session_expectancy_pts >= 0 ? '+' : ''}
-                  {auto.session_expectancy_pts.toFixed(2)}
+                <div className="label">Session E</div>
+                <div className={`value ${ePts >= 0 ? 'pos' : 'neg'}`}>
+                  {ePts >= 0 ? '+' : ''}
+                  {ePts.toFixed(2)}
                 </div>
               </div>
               <div className="metric-box">
-                <div className="label">Session sum</div>
-                <div className={`value ${auto.session_sum_pts >= 0 ? 'pos' : 'neg'}`}>
-                  {auto.session_sum_pts >= 0 ? '+' : ''}
-                  {auto.session_sum_pts.toFixed(2)}
+                <div className="label">Sum</div>
+                <div className={`value ${sumPts >= 0 ? 'pos' : 'neg'}`}>
+                  {sumPts >= 0 ? '+' : ''}
+                  {sumPts.toFixed(2)}
                 </div>
               </div>
               <div className="metric-box">
@@ -286,244 +312,73 @@ export function OverviewPage() {
                   {auto.session_wins}/{auto.session_losses}
                 </div>
               </div>
+              <div className="metric-box">
+                <div className="label">Cycles</div>
+                <div className="value">{auto.cycles_run}</div>
+              </div>
             </div>
             {auto.knobs_now && (
-              <div className="hint-line mono" style={{ marginTop: 8 }}>
-                NOW Soft {auto.knobs_now.hardinv_abs} · Peak MFE {auto.knobs_now.peak_mfe_abs} ·
-                keep {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
+              <div className="hint-line mono cmd-knobs">
+                Soft {auto.knobs_now.hardinv_abs} · Peak {auto.knobs_now.peak_mfe_abs}/
+                {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
                 {auto.knobs_now.target_abs} · TP RR {auto.knobs_now.safety_tp_rr ?? 1.5} ·
-                filters L{auto.knobs_now.entry_filter_level ?? 0} · regimes{' '}
-                {auto.knobs_now.enabled_regimes}
+                regimes {auto.knobs_now.enabled_regimes}
               </div>
             )}
-            {auto.last_summary && (
-              <div className="hint-line" style={{ marginTop: 6 }}>
-                <strong>Last cycle:</strong> {auto.last_summary}
+            {(auto.last_summary || auto.last_changes?.length > 0) && (
+              <div className="cmd-last">
+                {auto.last_summary && (
+                  <div className="hint-line">
+                    <span className="cmd-label">Last</span> {auto.last_summary}
+                  </div>
+                )}
+                {auto.last_changes?.length > 0 && (
+                  <div className="hint-line" style={{ color: 'var(--accent)' }}>
+                    <span className="cmd-label">Δ</span> {auto.last_changes.slice(0, 4).join(' · ')}
+                  </div>
+                )}
               </div>
             )}
-            {auto.last_changes?.length > 0 && (
-              <div className="hint-line" style={{ marginTop: 4, color: 'var(--accent)' }}>
-                <strong>Changed:</strong> {auto.last_changes.join(' · ')}
-              </div>
-            )}
-            {auto.history?.length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                <div className="label" style={{ marginBottom: 4 }}>
-                  Recent calibrate history
-                </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>When</th>
-                      <th>E</th>
-                      <th>Sum</th>
-                      <th>Result</th>
-                      <th>Changes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auto.history.slice(0, 5).map((h, i) => (
-                      <tr key={`${h.at}-${i}`}>
-                        <td className="mono">{new Date(h.at).toLocaleTimeString()}</td>
-                        <td
-                          className="mono"
-                          style={{
-                            color:
-                              h.window_expectancy >= 0 ? 'var(--success)' : 'var(--danger)',
-                          }}
-                        >
-                          {h.window_expectancy.toFixed(2)}
-                        </td>
-                        <td className="mono">{h.window_sum_pts.toFixed(2)}</td>
-                        <td>{h.applied ? 'APPLIED' : 'hold'}</td>
-                        <td style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {h.changes.length ? h.changes.join(', ') : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="actions" style={{ marginTop: 10, gap: 8 }}>
-              <button
-                type="button"
-                className="btn btn-go"
-                onClick={() => {
-                  void apiFetch<{ auto: AutoCalStatus }>(
-                    '/api/desk/auto-calibrate',
-                    {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        factory_open: true,
-                        reset: true,
-                        client_id: selectedClientId ?? undefined,
-                      }),
-                    }
-                  )
-                    .then((r) => {
-                      setAuto(r.auto);
-                      setMsg('OPEN TRADE-ALL · Soft 2.2 · Peak 3 · Target 5 · filters L0 · sākam no jauna');
-                    })
-                    .catch((e) =>
-                      setMsg(e instanceof Error ? e.message : 'Factory open failed')
-                    );
-                }}
-              >
-                SĀKT NO JAUNA · TRADE ALL
-              </button>
-              <Link className="btn" to="/robot">
-                OPEN ROBOT
-              </Link>
-              <Link className="btn" to="/trades">
-                TRADES / EXPECTANCY
-              </Link>
-            </div>
           </>
         )}
-      </div>
+      </section>
 
-      <div className="panel desk-control-jump" style={{ marginBottom: 12 }}>
-        <div className="control-fit-bar" style={{ marginBottom: 0 }}>
-          <div>
-            <div className="section-title" style={{ margin: 0 }}>CONTROL → ROBOT BOARD</div>
-            <p className="hint-line" style={{ margin: '4px 0 0' }}>
-              Start Robot · Exit Calibration · Trade Regimes — visas sadaļas pilnībā redzamas Robot Board.
-            </p>
-          </div>
-          <div className="actions" style={{ margin: 0 }}>
-            <Link className="btn btn-go" to="/robot">
-              OPEN ROBOT BOARD
-            </Link>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setShowExtraPanels((v) => !v)}
-            >
-              {showExtraPanels ? 'Hide info' : 'Info / more'}
-            </button>
+      <div className="metric-row cmd-kpis">
+        <div className="metric-box">
+          <div className="label">Accounts</div>
+          <div className="value">{accounts.length}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Clients</div>
+          <div className="value">{clients.length}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Open</div>
+          <div className="value">{status?.open_positions ?? positions.length}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Today fills</div>
+          <div className="value pos">{status?.today_executions ?? 0}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Live</div>
+          <div className="value">{liveAccounts}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Markets</div>
+          <div className="value">{totalMarkets.toLocaleString()}</div>
+        </div>
+        <div className="metric-box">
+          <div className="label">Runner</div>
+          <div className="value" style={{ fontSize: 14 }}>
+            {runnerOn ? 'LIVE' : 'IDLE'}
           </div>
         </div>
       </div>
 
-      <div className="dash-grid dash-top" style={{ marginTop: 12 }}>
+      <div className="dash-grid dash-mid cmd-tables">
         <section className="panel">
-          <div className="section-title">OVERVIEW</div>
-          <div className="metric-row">
-            <div className="metric-box">
-              <div className="label">Accounts</div>
-              <div className="value">{accounts.length}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Clients</div>
-              <div className="value">{clients.length}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Open trades</div>
-              <div className="value">{status?.open_positions ?? 0}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Today fills</div>
-              <div className="value pos">{status?.today_executions ?? 0}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Live accounts</div>
-              <div className="value">{liveAccounts}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Markets cached</div>
-              <div className="value">{totalMarkets.toLocaleString()}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Profit factor*</div>
-              <div className="value">{profitFactor.toFixed(2)}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Floating hint*</div>
-              <div className={`value ${floatingHint >= 0 ? 'pos' : 'neg'}`}>
-                {floatingHint >= 0 ? '+' : ''}
-                {floatingHint.toLocaleString()}
-              </div>
-            </div>
-          </div>
-          <div className="hint-line">* Curve / bars are desk visuals until equity history feed is wired.</div>
-        </section>
-
-        <section className="panel">
-          <div className="section-title">EQUITY CURVE</div>
-          <EquityCurve values={equitySeries} />
-          <div className="section-title" style={{ marginTop: 12 }}>
-            DAILY PROFIT
-          </div>
-          <DailyBars values={dailySeries} />
-        </section>
-
-        <section className="panel runner-panel">
-          <div className="section-title">AI RUNNER &amp; BRAIN</div>
-          <div className="runner-brain">
-            <div className="runner-brain-icon">◈</div>
-            <div className="badge badge-mode">{runnerOn ? 'RUNNING' : 'IDLE'}</div>
-          </div>
-          <div className="metric-row" style={{ marginTop: 8 }}>
-            <div className="metric-box">
-              <div className="label">Operating mode</div>
-              <div className="value" style={{ fontSize: 12 }}>
-                {(status?.mode || 'LIVE').toUpperCase()}
-              </div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Risk level</div>
-              <div className="value" style={{ fontSize: 12 }}>MEDIUM</div>
-            </div>
-          </div>
-          <div className="regime-catalog" style={{ marginTop: 10 }}>
-            {OPERATING_MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`regime-chip ${
-                  (status?.mode || 'LIVE').toUpperCase() === m ? 'on up' : 'flat'
-                }`}
-                disabled={busy}
-                onClick={() => void applyOperatingMode(m)}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="actions" style={{ marginTop: 12, justifyContent: 'center' }}>
-            <button className="btn btn-go" disabled={busy || runnerOn} onClick={() => void startRunner()}>
-              START
-            </button>
-            <button className="btn btn-stop" disabled={busy || !runnerOn} onClick={() => void stopRunner()}>
-              STOP
-            </button>
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() => void (runnerOn ? stopRunner().then(startRunner) : startRunner())}
-            >
-              RESTART
-            </button>
-          </div>
-          <div className="section-title" style={{ marginTop: 14 }}>
-            LATEST AI ACTIONS
-          </div>
-          <div className="log-list">
-            {events.length === 0 && <div>Waiting for system events…</div>}
-            {events.map((e, i) => (
-              <div key={e.id ?? i}>
-                {(e.created_at ? new Date(e.created_at).toLocaleTimeString() : '--')} ·{' '}
-                {e.event_type || e.message || 'event'}
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <div className="dash-grid dash-mid" style={{ marginTop: 12 }}>
-        <section className="panel">
-          <div className="section-title">ACCOUNTS STATUS</div>
+          <div className="section-title">ACCOUNTS</div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -533,14 +388,13 @@ export function OverviewPage() {
                   <th>Env</th>
                   <th>Broker</th>
                   <th>Markets</th>
-                  <th>AI Mode</th>
                 </tr>
               </thead>
               <tbody>
                 {accounts.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="mono">
-                      No trading accounts — Brokers → Test, then Trading → Sync
+                    <td colSpan={5} className="mono">
+                      No accounts — Brokers → Test
                     </td>
                   </tr>
                 )}
@@ -554,13 +408,16 @@ export function OverviewPage() {
                     <td>{a.display_name}</td>
                     <td>{a.client_name}</td>
                     <td>
-                      <span className={`badge ${a.environment === 'live' ? 'badge-unhealthy' : 'badge-healthy'}`}>
+                      <span
+                        className={`badge ${
+                          a.environment === 'live' ? 'badge-unhealthy' : 'badge-healthy'
+                        }`}
+                      >
                         {a.environment.toUpperCase()}
                       </span>
                     </td>
                     <td className="mono">{a.broker_name}</td>
                     <td className="mono">{(a.capital_market_count || 0).toLocaleString()}</td>
-                    <td className="mono">Balanced</td>
                   </tr>
                 ))}
               </tbody>
@@ -569,7 +426,7 @@ export function OverviewPage() {
         </section>
 
         <section className="panel">
-          <div className="section-title">ACTIVE TRADES (ALL ACCOUNTS)</div>
+          <div className="section-title">OPEN POSITIONS</div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -577,9 +434,9 @@ export function OverviewPage() {
                   <th>Ticket</th>
                   <th>Account</th>
                   <th>Symbol</th>
-                  <th>Type</th>
+                  <th>Side</th>
                   <th>Lot</th>
-                  <th>Open</th>
+                  <th>Entry</th>
                   <th>P/L</th>
                 </tr>
               </thead>
@@ -587,7 +444,7 @@ export function OverviewPage() {
                 {positions.length === 0 && (
                   <tr>
                     <td colSpan={7} className="mono">
-                      Flat — no open positions
+                      Flat
                     </td>
                   </tr>
                 )}
@@ -596,7 +453,11 @@ export function OverviewPage() {
                     <td className="mono">{p.id}</td>
                     <td>{p.account_name || '—'}</td>
                     <td>{p.symbol || p.instrument_id || '—'}</td>
-                    <td className={(p.direction || '').toLowerCase().includes('sell') ? 'neg' : 'pos'}>
+                    <td
+                      className={
+                        (p.direction || '').toLowerCase().includes('sell') ? 'neg' : 'pos'
+                      }
+                    >
                       {(p.direction || '—').toUpperCase()}
                     </td>
                     <td className="mono">{p.quantity ?? '—'}</td>
@@ -607,82 +468,21 @@ export function OverviewPage() {
               </tbody>
             </table>
           </div>
-          <div className="sys-mini" style={{ marginTop: 12 }}>
-            <div className="metric-box">
-              <div className="label">CSV / Core</div>
-              <div className="value" style={{ fontSize: 12 }}>{status?.market_core || '—'}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Execution</div>
-              <div className="value" style={{ fontSize: 12 }}>{status?.execution || '—'}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Database</div>
-              <div className="value" style={{ fontSize: 12 }}>{status?.database || '—'}</div>
-            </div>
-            <div className="metric-box">
-              <div className="label">Feeds</div>
-              <div className="value" style={{ fontSize: 12 }}>
-                {status?.feeds?.active ?? 0} up / {status?.feeds?.unhealthy ?? 0} bad
-              </div>
-            </div>
-          </div>
         </section>
       </div>
 
-      {showExtraPanels && (
-        <div className="dash-grid dash-bottom control-fit-scroll" style={{ marginTop: 12 }}>
-          <section className="panel control-panel">
-            <div className="section-title">ORBIT READER</div>
-            <p className="hint-line" style={{ marginTop: 0 }}>
-              Multi-sender quotes (read-only).
-            </p>
-            <div className="actions" style={{ marginTop: 10 }}>
-              <Link className="btn btn-primary" to="/orbit">
-                Open Orbit
-              </Link>
-              <Link className="btn" to="/robot">
-                Robot Desk
-              </Link>
+      <section className="panel cmd-events">
+        <div className="section-title">RECENT EVENTS</div>
+        <div className="log-list">
+          {events.length === 0 && <div className="mono">Waiting…</div>}
+          {events.map((e, i) => (
+            <div key={e.id ?? i}>
+              {(e.created_at ? new Date(e.created_at).toLocaleTimeString() : '--')} ·{' '}
+              {e.event_type || e.message || 'event'}
             </div>
-          </section>
-
-          <section className="panel control-panel">
-            <div className="section-title">AI RUNNER CONTROL</div>
-            <div className="gauge-wrap">
-              <div className={`gauge ${runnerOn ? 'on' : ''}`}>
-                <strong>{runnerOn ? '72%' : '0%'}</strong>
-                <span>PROFIT</span>
-              </div>
-            </div>
-            <div className="actions" style={{ justifyContent: 'center', marginTop: 8 }}>
-              <button className="btn btn-go" disabled={busy} onClick={() => void startRunner()}>START</button>
-              <button className="btn btn-stop" disabled={busy} onClick={() => void stopRunner()}>STOP</button>
-            </div>
-            <div className="metric-box" style={{ marginTop: 10 }}>
-              <div className="label">Desk focus</div>
-              <div className="value" style={{ fontSize: 12 }}>
-                {deskAccounts[0]?.client_name || '—'} / {selectedAccount?.environment || '—'}
-              </div>
-            </div>
-          </section>
-
-          <section className="panel control-panel">
-            <div className="section-title">AI INFO LOG</div>
-            <div className="log-list tall">
-              <div>Conf 72% · desk sync {(status?.server_time && new Date(status.server_time).toLocaleTimeString()) || '—'}</div>
-              <div>Mode {(status?.mode || 'LIVE').toUpperCase()} · live {status?.live_enabled === false ? 'OFF' : 'ON'}</div>
-              <div>Capital live brokers: {status?.brokers_live ?? 0}</div>
-              <div>Markets cached: {(status?.capital_markets ?? totalMarkets).toLocaleString()}</div>
-              {events.slice(0, 6).map((e, i) => (
-                <div key={`log-${e.id ?? i}`}>
-                  {e.event_type || 'sys'} · {e.message || 'ok'}
-                </div>
-              ))}
-            </div>
-          </section>
+          ))}
         </div>
-      )}
+      </section>
     </div>
   );
 }
