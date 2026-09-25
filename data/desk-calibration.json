@@ -1,7 +1,7 @@
 {
   "hardinv_abs": 2.2,
   "peak_mfe_abs": 3,
-  "peak_retention": 0.65,
+  "peak_retention": 0.72,
   "peak_min_giveback_abs": 0.85,
   "target_abs": 5,
   "safety_tp_rr": 1.5,

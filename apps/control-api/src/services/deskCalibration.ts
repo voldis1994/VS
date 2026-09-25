@@ -57,7 +57,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     // (old scalp profile banked +0.5 Peak vs −4 Soft HardInv → 80% wins, net minus)
     hardinv_abs: 2.2,
     peak_mfe_abs: 3.0,
-    peak_retention: 0.65,
+    peak_retention: 0.72,
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
     safety_tp_rr: 1.5,

@@ -30,6 +30,7 @@ import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
   favorableMove,
+  hardInvStopDistance,
   safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
   shouldArmPeakProtect,
@@ -1715,16 +1716,15 @@ function decideOpenManageExit(
           mid: quote.mid,
           detail: `1m ${policy} · PeakProtect ARMED · ${s.entry_regime || s.regime} · trail after real MFE`,
         });
-        if (softGate.allow) {
-          const peakAtClose = decideBestOutcomeExit(
-            s,
-            closed1m.close,
-            'peak_protect_only',
-            Date.now(),
-            quote
-          );
-          if (peakAtClose.exit) return peakAtClose.reason;
-        } else {
+        const peakAtClose = decideBestOutcomeExit(
+          s,
+          closed1m.close,
+          'peak_protect_only',
+          Date.now(),
+          quote
+        );
+        if (peakAtClose.exit) return peakAtClose.reason;
+        if (!softGate.allow) {
           pushTick(s, {
             phase: 'MANAGE',
             bid: quote.bid,
@@ -1761,18 +1761,36 @@ function decideOpenManageExit(
     });
   }
 
-  if (s.peak_protect_armed && s.open_side) {
-    if (softGate.allow) {
-      const peakDec = decideBestOutcomeExit(
-        s,
-        quote.mid,
-        'peak_protect_only',
-        Date.now(),
-        quote
-      );
-      if (peakDec.exit) return peakDec.reason;
+  // Soft-sized MFE → arm Peak trail early (Soft no longer BE-locks winners)
+  if (
+    !s.peak_protect_armed &&
+    s.open_side &&
+    s.entry_price != null &&
+    quote.mid != null
+  ) {
+    const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+    if (s.mfe >= softSl) {
+      s.peak_protect_armed = true;
+      pushTick(s, {
+        phase: 'MANAGE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `PeakProtect ARMED · Soft MFE reached (${s.mfe.toFixed(2)} ≥ Soft ${softSl.toFixed(2)}) · trail owns winners`,
+      });
     }
-    // !allow → same thesis still alive; no Peak cut (tick already emitted on 1m key)
+  }
+
+  if (s.peak_protect_armed && s.open_side) {
+    // Peak trail once armed — never blocked by softGate (Soft is loses-only now)
+    const peakDec = decideBestOutcomeExit(
+      s,
+      quote.mid,
+      'peak_protect_only',
+      Date.now(),
+      quote
+    );
+    if (peakDec.exit) return peakDec.reason;
   }
 
   if (opts?.includeTargetTime === false) return null;
