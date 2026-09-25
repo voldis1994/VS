@@ -11,6 +11,7 @@ export function brainBanner(): void {
   console.log('============================================================');
   console.log('  VS BRAIN SELF-IMPROVE  —  autonomas trading smadzenes');
   console.log('  NEAIZVER SO LOGU  ·  ACCEPTED/REJECTED katra cikla beigas');
+  console.log('  Galvena sistema = VS.bat (API/UI/robot); sis logs = masanas');
   console.log('============================================================');
   console.log('');
 }

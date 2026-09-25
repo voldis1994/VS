@@ -7,11 +7,15 @@ set "ROOT=%CD%"
 
 echo.
 echo ============================================================
-echo   VS BRAIN SELF-IMPROVE  (atsevisks CMD process)
+echo   VS BRAIN SELF-IMPROVE  (tikai smadzenes — NAV galvena sistema)
 echo   trades -^> analize -^> hipoteze -^> patch -^> test/replay
 echo   -^> ACCEPT/REJECT -^> pieredze -^> nakamais cikls
 echo ============================================================
 echo   Mape: %ROOT%
+echo.
+echo   [INFO] Galveno sistemu (API + dashboard + robot) palaiž VS.bat
+echo          VS.bat pats atver ari so BRAIN logu (MR-BrainSelfImprove).
+echo          BRAIN.bat vienu pats = tikai masanas cikls, bez tirdzniecibas UI.
 echo.
 
 if not exist "%ROOT%\apps\control-api\package.json" (
