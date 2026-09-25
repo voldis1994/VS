@@ -1,6 +1,6 @@
 /**
  * Pattern → hypothesis → concrete allowlisted patches / genome delta.
- * Builds alternate variants so rejected signatures do not stall learning.
+ * Tries ranked patterns + alternate variants so SKIPPED does not stall forever.
  */
 import { getBrainGenome, type BrainGenome } from './brainGenome.js';
 import {
@@ -114,7 +114,6 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
     ],
   };
-  // Prefer Soft-pause memory first (defensive accept when replay flat); Peak/Keep when pause maxed
   if (g.soft_same_side_pause_closes >= 8) {
     return [measurable, pauseHarder];
   }
@@ -123,6 +122,7 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
 
 function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
   const pause1 = Math.min(8, g.soft_same_side_pause_closes + 1);
+  const pause2 = Math.min(8, g.soft_same_side_pause_closes + 2);
   return [
     {
       title: 'Pause BUY spam after Soft chain',
@@ -137,6 +137,21 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
       patches: [
         genomePatch('soft_same_side_pause_closes', pause1, 'BUY Soft pause longer'),
         genomePatch('require_1m_trigger', true, '1m trigger'),
+      ],
+    },
+    {
+      title: 'Harder BUY Soft pause',
+      rationale: `Soft BUY×${softBuy} continues`,
+      task: 'Raise pause closes further.',
+      genome_delta: {
+        soft_same_side_pause_closes: pause2,
+        require_1m_trigger: true,
+        wait_on_1m_fight: true,
+        last_lesson: 'Harder BUY Soft pause',
+      },
+      patches: [
+        genomePatch('soft_same_side_pause_closes', pause2, 'BUY pause +2'),
+        genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
       ],
     },
   ];
@@ -216,9 +231,76 @@ function microScratchVariants(g: BrainGenome): Variant[] {
   ];
 }
 
+function softLossVariants(g: BrainGenome, softL: number): Variant[] {
+  const pause1 = Math.min(8, g.soft_same_side_pause_closes + 1);
+  const keep = Math.min(0.85, g.peak_keep + 0.03);
+  const gb = Math.min(0.82, g.soft_plus_giveback + 0.03);
+  const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.05).toFixed(2)));
+  return [
+    {
+      title: 'Cut Soft HardInv chain — pause + 1m trigger',
+      rationale: `Soft HardInv×${softL} — tighten entry gates.`,
+      task: 'require_1m_trigger + wait_on_1m_fight + Soft same-side pause.',
+      genome_delta: {
+        require_1m_trigger: true,
+        wait_on_1m_fight: true,
+        soft_same_side_pause_closes: pause1,
+        soft_same_side_pause_min: Math.max(2, g.soft_same_side_pause_min),
+        last_lesson: 'Soft HardInv pause',
+      },
+      patches: [
+        genomePatch('require_1m_trigger', true, '1m trigger'),
+        genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
+        genomePatch('soft_same_side_pause_closes', pause1, 'Soft pause longer'),
+      ],
+    },
+    {
+      title: 'Bank survivors earlier after Soft losses',
+      rationale: `Soft×${softL} — survivors must Keep sooner.`,
+      task: 'Raise peak_keep + soft_plus_giveback; lower peak_arm_soft_mult.',
+      genome_delta: {
+        peak_keep: keep,
+        soft_plus_giveback: gb,
+        peak_arm_soft_mult: arm,
+        mind_bank_on_turn: true,
+        last_lesson: 'Bank after Soft losses',
+      },
+      patches: [
+        genomePatch('peak_keep', keep, 'tighter Keep'),
+        genomePatch('soft_plus_giveback', gb, 'earlier Soft+ bank'),
+        genomePatch('peak_arm_soft_mult', arm, 'earlier Peak arm'),
+      ],
+    },
+    {
+      title: 'Harder Soft pause min after Soft chain',
+      rationale: `Soft×${softL}`,
+      task: 'Raise soft_same_side_pause_min.',
+      genome_delta: {
+        soft_same_side_pause_min: Math.min(6, g.soft_same_side_pause_min + 1),
+        soft_same_side_pause_closes: Math.min(8, g.soft_same_side_pause_closes + 2),
+        last_lesson: 'Harder Soft pause min',
+      },
+      patches: [
+        genomePatch(
+          'soft_same_side_pause_min',
+          Math.min(6, g.soft_same_side_pause_min + 1),
+          'pause arms sooner'
+        ),
+        genomePatch(
+          'soft_same_side_pause_closes',
+          Math.min(8, g.soft_same_side_pause_closes + 2),
+          'pause lasts longer'
+        ),
+      ],
+    },
+  ];
+}
+
 function genericVariants(g: BrainGenome, label: string): Variant[] {
   const nextKeep = Math.min(0.82, g.peak_keep + 0.02);
   const nextGb = Math.min(0.8, g.soft_plus_giveback + 0.02);
+  const nextKeep2 = Math.min(0.85, g.peak_keep + 0.04);
+  const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.05).toFixed(2)));
   return [
     {
       title: `Generic improve: ${label}`,
@@ -230,67 +312,177 @@ function genericVariants(g: BrainGenome, label: string): Variant[] {
         genomePatch('soft_plus_giveback', nextGb, 'default giveback nudge'),
       ],
     },
+    {
+      title: `Generic Peak arm: ${label}`,
+      rationale: label,
+      task: 'Lower peak_arm_soft_mult + Keep push.',
+      genome_delta: {
+        peak_arm_soft_mult: arm,
+        peak_keep: nextKeep2,
+        last_lesson: `Peak arm · ${label}`,
+      },
+      patches: [
+        genomePatch('peak_arm_soft_mult', arm, 'arm Peak earlier'),
+        genomePatch('peak_keep', nextKeep2, 'Keep push'),
+      ],
+    },
   ];
 }
 
-function variantsFor(analysis: AnalysisResult, g: BrainGenome): Variant[] {
-  const top = analysis.top_pattern;
-  if (!top) return [];
-  if (top.id === 'soft_sell_spam' || (analysis.soft_sell_losses >= 2 && top.id === 'soft_loss')) {
-    return softSellVariants(g, analysis.soft_sell_losses);
+/** Explore steps when all pattern variants exhausted — still learns, never permanent SKIPPED. */
+function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
+  const step = 0.02 + (rejectedN % 3) * 0.01;
+  const keep = Math.min(0.88, Number((g.peak_keep + step).toFixed(2)));
+  const gb = Math.min(0.85, Number((g.soft_plus_giveback + step).toFixed(2)));
+  const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - step).toFixed(2)));
+  const pause = Math.min(8, g.soft_same_side_pause_closes + 1 + (rejectedN % 2));
+  return [
+    {
+      title: `Explore Keep+${step} (rejected=${rejectedN})`,
+      rationale: 'All pattern hypotheses tried — explore Peak Keep.',
+      task: `Raise peak_keep to ${keep}.`,
+      genome_delta: { peak_keep: keep, last_lesson: `Explore keep ${keep}` },
+      patches: [genomePatch('peak_keep', keep, `explore Keep ${keep}`)],
+    },
+    {
+      title: `Explore giveback+${step}`,
+      rationale: 'Explore Soft+ giveback bank.',
+      task: `Raise soft_plus_giveback to ${gb}.`,
+      genome_delta: {
+        soft_plus_giveback: gb,
+        mind_bank_on_turn: true,
+        last_lesson: `Explore giveback ${gb}`,
+      },
+      patches: [
+        genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
+        genomePatch('mind_bank_on_turn', true, 'mind bank on'),
+      ],
+    },
+    {
+      title: `Explore Peak arm −${step}`,
+      rationale: 'Explore earlier Peak arm.',
+      task: `Lower peak_arm_soft_mult to ${arm}.`,
+      genome_delta: { peak_arm_soft_mult: arm, last_lesson: `Explore arm ${arm}` },
+      patches: [genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`)],
+    },
+    {
+      title: `Explore Soft pause → ${pause}`,
+      rationale: 'Explore longer Soft same-side pause.',
+      task: `soft_same_side_pause_closes=${pause}.`,
+      genome_delta: {
+        soft_same_side_pause_closes: pause,
+        require_1m_trigger: true,
+        last_lesson: `Explore pause ${pause}`,
+      },
+      patches: [
+        genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
+        genomePatch('require_1m_trigger', true, '1m trigger'),
+      ],
+    },
+  ];
+}
+
+function variantsForPatternId(
+  patternId: string,
+  analysis: AnalysisResult,
+  g: BrainGenome
+): Variant[] {
+  if (patternId === 'soft_sell_spam') {
+    return softSellVariants(g, analysis.soft_sell_losses || analysis.soft_losses);
   }
-  if (top.id === 'green_not_banked' || top.id === 'rr_inverted') {
+  if (patternId === 'soft_buy_spam') {
+    return softBuyVariants(g, analysis.soft_buy_losses || analysis.soft_losses);
+  }
+  if (patternId === 'soft_loss') {
+    // Prefer side-specific if window shows it
+    if (analysis.soft_sell_losses >= 2) return softSellVariants(g, analysis.soft_sell_losses);
+    if (analysis.soft_buy_losses >= 2) return softBuyVariants(g, analysis.soft_buy_losses);
+    return softLossVariants(g, analysis.soft_losses);
+  }
+  if (patternId === 'green_not_banked' || patternId === 'rr_inverted') {
     return bankGreenVariants(g, analysis.green_not_banked, analysis.session_e);
   }
-  if (top.id === 'micro_scratch') {
+  if (patternId === 'micro_scratch') {
     return microScratchVariants(g);
   }
-  if (top.id === 'soft_buy_spam') {
-    return softBuyVariants(g, analysis.soft_buy_losses);
-  }
-  return genericVariants(g, top.label);
+  return genericVariants(g, patternId);
+}
+
+function rankedPatternIds(analysis: AnalysisResult): string[] {
+  const ids: string[] = [];
+  const push = (id: string) => {
+    if (!ids.includes(id)) ids.push(id);
+  };
+  if (analysis.top_pattern) push(analysis.top_pattern.id);
+  if (analysis.soft_sell_losses >= 2) push('soft_sell_spam');
+  if (analysis.soft_buy_losses >= 2) push('soft_buy_spam');
+  if (analysis.soft_losses >= 2) push('soft_loss');
+  if (analysis.green_not_banked >= 1) push('green_not_banked');
+  if (analysis.micro_scratches >= 2) push('micro_scratch');
+  for (const p of analysis.patterns) push(p.id);
+  return ids;
+}
+
+function tryVariant(
+  patternId: string,
+  v: Variant,
+  g: BrainGenome,
+  tried: Set<string>
+): BrainHypothesis | null {
+  const patches = compactPatches(v.patches);
+  const deltaKeys = Object.keys(v.genome_delta).filter((k) => k !== 'last_lesson');
+  const meaningfulDelta = deltaKeys.some((k) => {
+    const key = k as keyof BrainGenome;
+    return g[key] !== v.genome_delta[k];
+  });
+  if (!patches.length && !meaningfulDelta) return null;
+
+  const hypoCore = {
+    pattern_id: patternId,
+    patches,
+    genome_delta: v.genome_delta,
+  };
+  const signature = hypothesisSignature(hypoCore);
+  if (tried.has(signature)) return null;
+
+  return {
+    id: `hyp_${patternId}_${signature.slice(0, 8)}`,
+    pattern_id: patternId,
+    title: v.title,
+    rationale: v.rationale,
+    task: v.task,
+    patches,
+    genome_delta: v.genome_delta,
+    signature,
+    created_at: new Date().toISOString(),
+  };
 }
 
 export function buildHypothesis(
   analysis: AnalysisResult,
   exp?: BrainExperience | null
 ): BrainHypothesis | null {
-  const top = analysis.top_pattern;
-  if (!top) return null;
+  if (!analysis.top_pattern && !analysis.soft_losses && !analysis.patterns.length) {
+    return null;
+  }
   const g = getBrainGenome();
   const tried = new Set([
     ...(exp?.rejected_signatures || []),
     ...(exp?.accepted_signatures || []),
   ]);
 
-  for (const v of variantsFor(analysis, g)) {
-    const patches = compactPatches(v.patches);
-    const deltaKeys = Object.keys(v.genome_delta).filter((k) => k !== 'last_lesson');
-    const meaningfulDelta = deltaKeys.some((k) => {
-      const key = k as keyof BrainGenome;
-      return g[key] !== v.genome_delta[k];
-    });
-    if (!patches.length && !meaningfulDelta) continue;
+  for (const patternId of rankedPatternIds(analysis)) {
+    for (const v of variantsForPatternId(patternId, analysis, g)) {
+      const hypo = tryVariant(patternId, v, g, tried);
+      if (hypo) return hypo;
+    }
+  }
 
-    const hypoCore = {
-      pattern_id: top.id,
-      patches,
-      genome_delta: v.genome_delta,
-    };
-    const signature = hypothesisSignature(hypoCore);
-    if (tried.has(signature)) continue;
-
-    return {
-      id: `hyp_${top.id}_${signature.slice(0, 8)}`,
-      pattern_id: top.id,
-      title: v.title,
-      rationale: v.rationale,
-      task: v.task,
-      patches,
-      genome_delta: v.genome_delta,
-      signature,
-      created_at: new Date().toISOString(),
-    };
+  // Never stall forever — explore knobs stepped by rejected count
+  const rejectedN = exp?.rejected_signatures?.length || 0;
+  for (const v of exploreVariants(g, rejectedN)) {
+    const hypo = tryVariant('explore', v, g, tried);
+    if (hypo) return hypo;
   }
   return null;
 }

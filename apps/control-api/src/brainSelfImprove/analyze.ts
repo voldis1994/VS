@@ -1,11 +1,16 @@
 /**
  * Trade → error/pattern analysis for the self-improve loop.
+ * Window patterns are counted fresh each cycle (no lifetime += inflation).
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { summarizeExitReason } from '../services/tradeLedger.js';
-import { loadExperience, notePattern, type BrainErrorPattern, type BrainExperience } from './experience.js';
+import {
+  loadExperience,
+  type BrainErrorPattern,
+  type BrainExperience,
+} from './experience.js';
 
 export type AnalyzedTrade = {
   pnl_pts: number;
@@ -126,11 +131,50 @@ export function syntheticLessonTrades(): AnalyzedTrade[] {
   ];
 }
 
+type Acc = { id: string; label: string; count: number; evidence: string[] };
+
+const PATTERN_PRIORITY: Record<string, number> = {
+  soft_sell_spam: 100,
+  soft_buy_spam: 95,
+  rr_inverted: 90,
+  green_not_banked: 85,
+  soft_loss: 70,
+  micro_scratch: 40,
+};
+
+function bump(map: Map<string, Acc>, id: string, label: string, evidence: string): void {
+  const cur = map.get(id);
+  if (cur) {
+    cur.count += 1;
+    cur.evidence = [...cur.evidence.slice(-8), evidence].slice(-10);
+  } else {
+    map.set(id, { id, label, count: 1, evidence: [evidence] });
+  }
+}
+
+/** Prefer specific Soft-side spam over generic soft_loss when the window shows it. */
+export function pickTopPattern(
+  patterns: BrainErrorPattern[],
+  softSell: number,
+  softBuy: number
+): BrainErrorPattern | null {
+  if (!patterns.length) return null;
+  const byId = new Map(patterns.map((p) => [p.id, p]));
+  if (softSell >= 2 && byId.has('soft_sell_spam')) return byId.get('soft_sell_spam')!;
+  if (softBuy >= 2 && byId.has('soft_buy_spam')) return byId.get('soft_buy_spam')!;
+  const ranked = [...patterns].sort((a, b) => {
+    const pa = PATTERN_PRIORITY[a.id] ?? 10;
+    const pb = PATTERN_PRIORITY[b.id] ?? 10;
+    return pb - pa || b.count - a.count || b.last_seen.localeCompare(a.last_seen);
+  });
+  return ranked[0] || null;
+}
+
 export function analyzeTrades(
   inputTrades?: AnalyzedTrade[] | null,
-  expIn?: BrainExperience
+  _expIn?: BrainExperience
 ): AnalysisResult {
-  let exp = expIn || loadExperience();
+  void _expIn;
   let trades = inputTrades && inputTrades.length ? [...inputTrades] : readAutoCalTrades();
   if (!trades.length) trades = syntheticLessonTrades();
 
@@ -143,6 +187,8 @@ export function analyzeTrades(
   let soft_buy_losses = 0;
   let micro_scratches = 0;
   let green_not_banked = 0;
+  const acc = new Map<string, Acc>();
+  const now = new Date().toISOString();
 
   for (const t of window) {
     const reason = summarizeExitReason(t.exit_reason);
@@ -151,30 +197,34 @@ export function analyzeTrades(
       Math.abs(t.pnl_pts) < 0.5 ||
       /SCRATCH|EXTERNAL/i.test(String(t.exit_reason || ''));
     const leftOnTable =
-      t.mfe != null &&
-      t.mfe >= 4 &&
-      t.pnl_pts > 0 &&
-      t.pnl_pts < t.mfe * 0.4;
+      t.mfe != null && t.mfe >= 4 && t.pnl_pts > 0 && t.pnl_pts < t.mfe * 0.4;
 
     if (soft && t.pnl_pts < 0) {
       soft_losses += 1;
-      if (t.direction === 'SELL') soft_sell_losses += 1;
-      if (t.direction === 'BUY') soft_buy_losses += 1;
-      exp = notePattern(
-        exp,
-        t.direction === 'SELL' ? 'soft_sell_spam' : t.direction === 'BUY' ? 'soft_buy_spam' : 'soft_loss',
-        t.direction === 'SELL'
-          ? 'Soft SELL loss chain'
-          : t.direction === 'BUY'
-            ? 'Soft BUY loss chain'
-            : 'Soft HardInv losses',
-        `${t.direction || '?'} ${t.pnl_pts.toFixed(2)} · ${reason}`
-      );
+      if (t.direction === 'SELL') {
+        soft_sell_losses += 1;
+        bump(
+          acc,
+          'soft_sell_spam',
+          'Soft SELL loss chain',
+          `${t.direction} ${t.pnl_pts.toFixed(2)} · ${reason}`
+        );
+      } else if (t.direction === 'BUY') {
+        soft_buy_losses += 1;
+        bump(
+          acc,
+          'soft_buy_spam',
+          'Soft BUY loss chain',
+          `${t.direction} ${t.pnl_pts.toFixed(2)} · ${reason}`
+        );
+      } else {
+        bump(acc, 'soft_loss', 'Soft HardInv losses', `? ${t.pnl_pts.toFixed(2)} · ${reason}`);
+      }
     }
     if (scratch && t.pnl_pts <= 0) {
       micro_scratches += 1;
-      exp = notePattern(
-        exp,
+      bump(
+        acc,
         'micro_scratch',
         'Micro scratch closes (Limit/structure)',
         `${t.pnl_pts.toFixed(2)} · ${String(t.exit_reason || '').slice(0, 60)}`
@@ -182,8 +232,8 @@ export function analyzeTrades(
     }
     if (leftOnTable) {
       green_not_banked += 1;
-      exp = notePattern(
-        exp,
+      bump(
+        acc,
         'green_not_banked',
         'Soft+ green not banked (plus → Soft minus risk)',
         `MFE ${t.mfe} → banked ${t.pnl_pts.toFixed(2)}`
@@ -192,24 +242,50 @@ export function analyzeTrades(
   }
 
   if (soft_sell_losses >= 2) {
-    exp = notePattern(
-      exp,
+    bump(
+      acc,
       'soft_sell_spam',
       'Repeated Soft SELL — bias spam',
       `${soft_sell_losses} Soft SELL in window · E=${session_e.toFixed(2)}`
     );
   }
   if (session_e < 0 && soft_losses >= 2 && green_not_banked >= 1) {
-    exp = notePattern(
-      exp,
+    bump(
+      acc,
       'rr_inverted',
       'R:R inverted — Soft eats more than Peak banks',
       `E=${session_e.toFixed(2)} softL=${soft_losses} leftOnTable=${green_not_banked}`
     );
   }
+  // Undirected Soft pile — still register soft_loss once from total, not per-cycle inflate
+  if (soft_losses >= 2 && soft_sell_losses + soft_buy_losses === 0) {
+    bump(acc, 'soft_loss', 'Soft HardInv losses', `softL=${soft_losses} · E=${session_e.toFixed(2)}`);
+  }
 
-  const patterns = [...exp.patterns].sort((a, b) => b.count - a.count || b.last_seen.localeCompare(a.last_seen));
-  const top_pattern = patterns[0] || null;
+  const patterns: BrainErrorPattern[] = [...acc.values()].map((a) => ({
+    id: a.id,
+    label: a.label,
+    count: a.count,
+    evidence: a.evidence,
+    first_seen: now,
+    last_seen: now,
+  }));
+
+  // Merge prior experience labels/first_seen without += inflating count
+  try {
+    const prior = loadExperience();
+    for (const p of patterns) {
+      const old = prior.patterns.find((x) => x.id === p.id);
+      if (old) {
+        p.first_seen = old.first_seen || p.first_seen;
+        p.evidence = [...new Set([...(old.evidence || []).slice(-4), ...p.evidence])].slice(-10);
+      }
+    }
+  } catch {
+    /* fresh */
+  }
+
+  const top_pattern = pickTopPattern(patterns, soft_sell_losses, soft_buy_losses);
   const summary = top_pattern
     ? `E=${session_e.toFixed(2)} · top=${top_pattern.id}×${top_pattern.count} · softL=${soft_losses} · scratch=${micro_scratches} · leftTable=${green_not_banked}`
     : `E=${session_e.toFixed(2)} · no dominant pattern · softL=${soft_losses}`;
