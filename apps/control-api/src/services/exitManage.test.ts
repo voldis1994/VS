@@ -6,6 +6,7 @@ import {
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  peakMfeFromCandles,
   safetyTakeProfitDistance,
   safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
@@ -390,6 +391,74 @@ describe('decideBestOutcomeExit', () => {
     expect(tinyGiveback.exit).toBe(false);
     expect(enough.exit).toBe(true);
     expect(enough.reason).toMatch(/PeakProtection/);
+  });
+
+  it('Gold Peak Keep 75% trails after Soft-sized MFE (not inflated peak_mfe_abs floor)', () => {
+    // Live bug: peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 → 8pt SELL never Peak-cut
+    // while UI showed Keep 75% and MFE ~8 / UPL ~4 (retention ~50%).
+    setDeskCalibration({
+      ...defaultDeskCalibration(),
+      peak_retention: 0.75,
+      peak_mfe_abs: 4.45,
+      peak_min_giveback_abs: 1.1,
+      hardinv_abs: 2.2,
+    });
+    const entry = 4300.21;
+    const mfe = 8.375; // best ~4291.835
+    const nowMid = 4296.07; // fav ≈ 4.14 → retention ≈ 49%
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        mfe,
+        peak_retention: 4.14 / mfe,
+      }),
+      nowMid,
+      'peak_protect_only'
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/keep≤75%/);
+  });
+
+  it('Gold Peak Keep 75% cuts ~60% retention bounce (still-open live shot)', () => {
+    setDeskCalibration({
+      ...defaultDeskCalibration(),
+      peak_retention: 0.75,
+      peak_mfe_abs: 4.45,
+      peak_min_giveback_abs: 1.1,
+      hardinv_abs: 2.2,
+    });
+    const entry = 4300.21;
+    const mfe = 8.21; // low ~4292
+    const nowMid = 4295.29; // fav ≈ 4.92 → retention ≈ 60%
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        entry_regime: 'RANGE',
+        mfe,
+        peak_retention: (entry - nowMid) / mfe,
+      }),
+      nowMid,
+      'peak_protect_only',
+      Date.now(),
+      { bid: 4295.29, ask: 4295.79, mid: nowMid }
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/keep≤75%/);
+  });
+
+  it('peakMfeFromCandles recovers SELL low after restart', () => {
+    const entry = 4300.21;
+    const mfe = peakMfeFromCandles('SELL', entry, [
+      { high: 4301, low: 4298, snapshot_time_ms: 1 },
+      { high: 4299, low: 4292, snapshot_time_ms: 2 },
+      { high: 4297, low: 4295, snapshot_time_ms: 3 },
+    ]);
+    expect(mfe).toBeCloseTo(entry - 4292, 5);
   });
 
   it('peak_protect_only gate ignores HardInv / Target', () => {
