@@ -52,7 +52,7 @@ export type ExitDecision = {
 };
 
 /** Keep ~65% of MFE → give back at most ~35% once a real leg exists. */
-export const PEAK_MFE_RETENTION = 0.65;
+export const PEAK_MFE_RETENTION = 0.72;
 export const MAX_MFE_GIVEBACK = 0.35;
 
 /**

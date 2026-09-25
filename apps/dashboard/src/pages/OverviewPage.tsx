@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          «SĀKT NO JAUNA» atjauno Soft 2.2 · Peak 3 · Target 5 · TP RR 1.5 · filters L0 ·
-          visi regimes. Robot START dara to pašu. Pēc tam ik 5 closes auto-cal (+ pullback).
+          «SĀKT NO JAUNA» atjauno Soft 2.2 · Peak 3 keep72% · Target 5 · TP RR 1.5 ·
+          filters L0 · Soft tikai zaudētājiem (nav BE-scratch). Robot START dara to pašu.
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (
