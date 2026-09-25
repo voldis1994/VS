@@ -364,8 +364,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         <section className="panel control-panel">
           <div className="section-title">AUTO-CAL · ULTIMATE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            START / «Sākt no jauna» = OPEN TRADE-ALL. Soft tikai −Soft zaudētājiem
-            (vairs negriež plusus uz nulli). Peak trail pēc Soft MFE. Lot nemaina.
+            START = OPEN TRADE-ALL. Soft tikai zaudētājiem. BRAIN katru tick sver
+            expectancy + MFE/MAE + 1m + thesis → HOLD / TRAIL / CUT / BANK.
           </p>
           {auto ? (
             <>

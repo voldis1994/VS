@@ -236,8 +236,8 @@ export function OverviewPage() {
           {selectedClientId ? ` · client #${selectedClientId}` : ''}
         </div>
         <p className="hint-line" style={{ marginTop: 0 }}>
-          «SĀKT NO JAUNA» atjauno Soft 2.2 · Peak 3 keep72% · Target 5 · TP RR 1.5 ·
-          filters L0 · Soft tikai zaudētājiem (nav BE-scratch). Robot START dara to pašu.
+          «SĀKT NO JAUNA» · Soft zaudētājiem · Peak trail · BRAIN (HOLD/TRAIL/CUT/BANK)
+          sver E + MFE/MAE + 1m + thesis katram manage tick. Soft HardInv nekad neaiztiek.
         </p>
         {!auto && <div className="empty-state">Loading auto-cal…</div>}
         {auto && (

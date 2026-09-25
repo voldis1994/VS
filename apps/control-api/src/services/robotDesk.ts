@@ -33,11 +33,18 @@ import {
   hardInvStopDistance,
   safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
+  scaleDeskAbs,
   shouldArmPeakProtect,
+  targetTakeProfitDistance,
+  type ExitDecideOverrides,
   type ExitZoneSnap,
 } from './exitManage.js';
 import { softExitMarketGate } from './softExitMarketGate.js';
-import { regimeAllowedForEntry } from './deskCalibration.js';
+import {
+  applyManageBrainToExit,
+  scoreManageAction,
+} from './manageBrain.js';
+import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
   recordClosedTrade,
@@ -216,6 +223,8 @@ type Internal = RobotSession & {
   entry_setup: string | null;
   /** Zone frozen at fill — structure invalidation */
   entry_zone: ExitZoneSnap | null;
+  /** Last manage-brain action string — throttle MANAGE ticks */
+  last_brain_action: string;
   /**
    * Live 10s close waiting for entry decide.
    * Survives zone-seed / position-list races that clear just_closed before ORDER.
@@ -693,6 +702,7 @@ function clearTradeState(s: Internal) {
   s.entry_regime = null;
   s.entry_setup = null;
   s.entry_zone = null;
+  s.last_brain_action = '';
 }
 
 function closedBarKey(bar: TenSecBar): string {
@@ -1781,6 +1791,77 @@ function decideOpenManageExit(
     }
   }
 
+  // ★ Adaptive brain — weigh expectancy + MFE/MAE + 1m + thesis → HOLD/TRAIL/CUT/BANK
+  const cal = getDeskCalibration(s.client_id);
+  const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+  const peakFloorNow = Math.max(
+    Math.abs(s.entry_price) * cal.peak_mfe_pct,
+    scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
+  );
+  const targetNow = targetTakeProfitDistance(s.entry_price, s.entry_regime || s.regime);
+  const autoSt = getAutoCalibrateStatus(undefined, s.client_id);
+  const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
+  const brain = scoreManageAction({
+    open_side: s.open_side,
+    entry_price: s.entry_price,
+    mid: quote.mid,
+    mfe: s.mfe,
+    mae: s.mae,
+    unrealized: favNowBrain,
+    peak_retention: s.peak_retention,
+    peak_protect_armed: s.peak_protect_armed,
+    entry_regime: s.entry_regime,
+    live_regime: s.regime,
+    entry_setup: s.entry_setup,
+    soft_sl: softSlNow,
+    peak_mfe_floor: peakFloorNow,
+    peak_retention_cfg: cal.peak_retention,
+    target_dist: targetNow,
+    minute_policy: softGate.minute_policy,
+    soft_gate_allow: softGate.allow,
+    soft_gate_hold_reason: softGate.hold_reason,
+    next_entry_side: softGate.next_entry_side,
+    session_expectancy_pts: autoSt.session_expectancy_pts,
+    last_window_expectancy: autoSt.last_window_expectancy,
+    closes_in_session: autoSt.closes_in_session,
+    held_ms: s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0,
+  });
+  const gated = applyManageBrainToExit({
+    brain,
+    softGateAllow: softGate.allow,
+    peakArmed: s.peak_protect_armed,
+    peakRetentionCfg: cal.peak_retention,
+    peakMfeFloor: peakFloorNow,
+  });
+  if (gated.peakArmed && !s.peak_protect_armed) {
+    s.peak_protect_armed = true;
+    s.last_brain_action = brain.action;
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `PeakProtect ARMED · ${brain.reason}`,
+    });
+  } else if (brain.action !== s.last_brain_action) {
+    s.last_brain_action = brain.action;
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: brain.reason,
+    });
+  }
+
+  const peakOverrides: ExitDecideOverrides | null =
+    gated.peakRetentionCfg != null || gated.peakMfeFloor != null
+      ? {
+          peak_retention_cfg: gated.peakRetentionCfg,
+          peak_mfe_floor: gated.peakMfeFloor,
+        }
+      : null;
+
   if (s.peak_protect_armed && s.open_side) {
     // Peak trail once armed — never blocked by softGate (Soft is loses-only now)
     const peakDec = decideBestOutcomeExit(
@@ -1788,9 +1869,10 @@ function decideOpenManageExit(
       quote.mid,
       'peak_protect_only',
       Date.now(),
-      quote
+      quote,
+      peakOverrides
     );
-    if (peakDec.exit) return peakDec.reason;
+    if (peakDec.exit) return `${peakDec.reason} · ${brain.action}`;
   }
 
   if (opts?.includeTargetTime === false) return null;
@@ -1798,12 +1880,12 @@ function decideOpenManageExit(
   if (s.open_side && s.entry_price != null && quote.mid != null) {
     const favNow = favorableMove(s.open_side, s.entry_price, quote.mid);
     if (favNow > 0) {
-      if (!softGate.allow) {
-        // Target/TimeDecay also wait for market change on full candle
+      if (!gated.softGateAllow) {
+        // Target/TimeDecay wait — brain HOLD or softGate continue
         return null;
       }
       const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
-      if (tpDec.exit) return tpDec.reason;
+      if (tpDec.exit) return `${tpDec.reason} · ${brain.action}`;
     }
   }
   return null;
@@ -3034,6 +3116,7 @@ export async function startRobotSession(input: {
     entry_regime: null,
     entry_setup: null,
     entry_zone: null,
+    last_brain_action: '',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
