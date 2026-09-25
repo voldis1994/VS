@@ -3,6 +3,7 @@
  * Entry-gate score covers genome knobs that structure-replay alone cannot see.
  */
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { replayStrategy, syntheticTrendBars } from '../services/strategyReplay.js';
@@ -109,25 +110,48 @@ const TEST_GLOBS = [
   'src/services/strategyReplay.test.ts',
 ];
 
+/** Resolve vitest entry without `npx` — on Windows spawnSync('npx') often returns status null. */
+function resolveVitestCli(cwd: string): string | null {
+  const candidates = [
+    path.join(cwd, 'node_modules', 'vitest', 'vitest.mjs'),
+    path.join(cwd, 'node_modules', 'vitest', 'dist', 'cli.js'),
+    path.join(cwd, 'node_modules', 'vitest', 'vitest.js'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
 export function runBrainTests(): { ok: boolean; detail: string } {
   if (process.env.BRAIN_SKIP_NESTED_TESTS === '1') {
     return { ok: true, detail: 'vitest skipped (BRAIN_SKIP_NESTED_TESTS)' };
   }
   const cwd = controlApiRoot();
-  const r = spawnSync(
-    'npx',
-    ['vitest', 'run', ...TEST_GLOBS],
-    {
-      cwd,
-      encoding: 'utf8',
-      timeout: 180_000,
-      env: { ...process.env, FORCE_COLOR: '0', BRAIN_SKIP_NESTED_TESTS: '1' },
-    }
-  );
-  const out = `${r.stdout || ''}\n${r.stderr || ''}`.trim();
+  const vitestCli = resolveVitestCli(cwd);
+  if (!vitestCli) {
+    return {
+      ok: false,
+      detail: `vitest FAIL — nav node_modules/vitest (cwd=${cwd}). Palaid npm install apps\\control-api`,
+    };
+  }
+  const r = spawnSync(process.execPath, [vitestCli, 'run', ...TEST_GLOBS], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 180_000,
+    windowsHide: true,
+    env: { ...process.env, FORCE_COLOR: '0', BRAIN_SKIP_NESTED_TESTS: '1' },
+  });
+  const spawnErr = r.error ? `spawn: ${r.error.message}` : '';
+  const out = `${r.stdout || ''}\n${r.stderr || ''}\n${spawnErr}`.trim();
   const ok = r.status === 0;
-  const tail = out.split('\n').slice(-20).join('\n');
-  return { ok, detail: ok ? `vitest OK\n${tail}` : `vitest FAIL (code ${r.status})\n${tail}` };
+  const tail = out.split('\n').slice(-24).join('\n');
+  return {
+    ok,
+    detail: ok
+      ? `vitest OK\n${tail}`
+      : `vitest FAIL (code ${r.status}${r.signal ? ` signal=${r.signal}` : ''})\n${tail}`,
+  };
 }
 
 export function evaluateCandidate(baseline: EvalScore): EvalReport {
