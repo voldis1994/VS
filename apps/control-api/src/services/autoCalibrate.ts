@@ -56,6 +56,27 @@ export function isCoreAlwaysOnRegime(regime: string): boolean {
   return CORE_ALWAYS_ON_REGIMES.includes(String(regime || '').toUpperCase());
 }
 
+/** True when a calibration knob or regime allowlist actually differs (ignores updated_at). */
+function deskCalibrationMateriallyChanged(a: DeskCalibration, b: DeskCalibration): boolean {
+  if (a.hardinv_abs !== b.hardinv_abs) return true;
+  if (a.peak_mfe_abs !== b.peak_mfe_abs) return true;
+  if (a.peak_retention !== b.peak_retention) return true;
+  if (a.peak_min_giveback_abs !== b.peak_min_giveback_abs) return true;
+  if (a.target_abs !== b.target_abs) return true;
+  if (a.safety_tp_rr !== b.safety_tp_rr) return true;
+  if (a.hardinv_pct !== b.hardinv_pct) return true;
+  if (a.target_pct !== b.target_pct) return true;
+  if (a.peak_mfe_pct !== b.peak_mfe_pct) return true;
+  if (a.entry_filter_level !== b.entry_filter_level) return true;
+  const ra = [...a.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+  const rb = [...b.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+  if (ra.length !== rb.length) return true;
+  for (let i = 0; i < ra.length; i++) {
+    if (ra[i] !== rb[i]) return true;
+  }
+  return false;
+}
+
 export type SessionTrade = {
   pnl_pts: number;
   regime: string | null;
@@ -636,7 +657,8 @@ export function proposeAutoCalibration(
   const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
 
   if (needPullBack) {
-    // Targets unreachable — ease back toward Soft so winners can bank before Soft chops
+    // Targets unreachable — ease back toward Soft so winners can bank before Soft chops.
+    // Pullback must NEVER raise Peak/Target/TP. If Soft floor would force an increase, keep old.
     const rrBefore = next.safety_tp_rr || 1.5;
     next.safety_tp_rr = Math.max(1.5, rrBefore - 0.25);
     if (next.safety_tp_rr !== rrBefore) {
@@ -645,10 +667,14 @@ export function proposeAutoCalibration(
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    next.peak_mfe_abs = Math.max(next.hardinv_abs + 1.5, next.peak_mfe_abs - 0.5);
+    const easedPeak = next.peak_mfe_abs - 0.5;
+    const peakFloor = next.hardinv_abs + 1.5;
+    next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
     next.peak_retention = Math.max(0.72, next.peak_retention - 0.04);
     next.peak_min_giveback_abs = Math.max(0.85, next.peak_min_giveback_abs - 0.15);
-    next.target_abs = Math.max(next.hardinv_abs + 3, next.target_abs - 1.25);
+    const easedTgt = next.target_abs - 1.25;
+    const tgtFloor = next.hardinv_abs + 3;
+    next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
     next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`);
@@ -712,14 +738,17 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Ensure Peak stays above Soft CAP (but never above hard max)
-  if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
-    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.hardinv_abs + 1.5);
-    changes.push(`peak_mfe_abs floor vs Soft →${next.peak_mfe_abs.toFixed(1)}`);
-  }
-  if (next.target_abs <= next.hardinv_abs + 1) {
-    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.hardinv_abs + 3);
-    changes.push(`target_abs floor vs Soft →${next.target_abs.toFixed(1)}`);
+  // Ensure Peak stays above Soft CAP (but never above hard max).
+  // During pullback/ease never raise Peak/Target — floor conflict keeps prior values.
+  if (!needPullBack) {
+    if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
+      next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.hardinv_abs + 1.5);
+      changes.push(`peak_mfe_abs floor vs Soft →${next.peak_mfe_abs.toFixed(1)}`);
+    }
+    if (next.target_abs <= next.hardinv_abs + 1) {
+      next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.hardinv_abs + 3);
+      changes.push(`target_abs floor vs Soft →${next.target_abs.toFixed(1)}`);
+    }
   }
   // Clamp any overshoot from older sessions
   if (next.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) {
@@ -826,13 +855,15 @@ export function proposeAutoCalibration(
 
   // No forced raise — hold is OK when already capped / balanced
 
+  const paramOrRegimeChanged = deskCalibrationMateriallyChanged(current, next);
   const summary =
     `n=${windowTrades.length} E=${expectancy.toFixed(2)} ` +
     `W/L=${wins.length}/${losses.length} avgW=${avgWin.toFixed(2)} avgL=${avgLossAbs.toFixed(2)}` +
-    (changes.length ? ` · ${changes.length} tweaks` : ' · hold');
+    (paramOrRegimeChanged ? ` · ${changes.length} tweaks` : ' · hold');
 
   return {
-    applied: changes.length > 0,
+    // PRĀTS/MĀCĪBA stay in changes for diagnostics, but applied only on real knob/regime change
+    applied: paramOrRegimeChanged,
     summary,
     changes,
     next,
