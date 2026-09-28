@@ -383,6 +383,12 @@ describe('PROOF: source wiring — not comment-only', () => {
     );
     expect(shortLease).toContain('stripBrokerTpIfPresent');
     expect(shortLease).toMatch(/Open-trade path never hit the FLAT strip/);
+    // PROFIT exit waits next opposite closed Capital 1m between decide and exitTrade
+    expect(shortLease).toContain('resolveProfitExitConfirm');
+    expect(shortLease).toContain('decideOpenManageExit');
+    expect(shortLease).toMatch(
+      /decideOpenManageExit[\s\S]*resolveProfitExitConfirm[\s\S]*await exitTrade/
+    );
   });
 
   it('FLAT multi-feed runs outside Capital mutex (multi-account must not starve)', () => {
