@@ -210,6 +210,17 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
   });
 
+  it('REVERSAL_CANDIDATE on two-bar V-flip from RANGE (wick reverse playbook)', () => {
+    // Wide quiet zone so the V-tip close stays in-range (not BREAKOUT_*)
+    const quiet: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE - 2; i++) {
+      quiet.push(bar(100, 101.5, 98.5, 100, i));
+    }
+    const prior = bar(100.0, 100.2, 99.9, 100.08, quiet.length); // +0.08% > TREND_ENTER
+    const flip = bar(100.08, 100.1, 99.7, 99.88, quiet.length + 1); // −0.20% > REVERSAL
+    expect(classifyRegime([...quiet, prior, flip], 'RANGE')).toBe('REVERSAL_CANDIDATE');
+  });
+
   it('sticks prior regime instead of dead TRANSITION when leaving without a clean next state', () => {
     const bars = padBars([
       bar(100.0, 100.1, 99.95, 100.02, 0),
