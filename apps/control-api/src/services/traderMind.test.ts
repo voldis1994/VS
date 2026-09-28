@@ -303,7 +303,7 @@ describe('traderMind', () => {
     expect(t.thesis).toMatch(/Soft|pašu pusi|spam/i);
   });
 
-  it('ENTRY waits on REVERSAL SELL while 30m still UP without 1m flip', () => {
+  it('ENTRY auto-follows REVERSAL bias SELL even when 30m still UP', () => {
     const t = thinkEntryLikeTrader({
       regime: 'REVERSAL_CANDIDATE',
       chapter: 'RALLY',
@@ -320,71 +320,29 @@ describe('traderMind', () => {
       tf30_dir: 'UP',
       reversal_bias: 'SELL',
     });
-    expect(t.choice).toBe('WAIT');
-    expect(t.thesis).toMatch(/REVERSAL|1m|confirm/i);
-  });
-
-  it('ENTRY takes REVERSAL SELL against 30m UP only after 1m DOWN confirm', () => {
-    const t = thinkEntryLikeTrader({
-      regime: 'REVERSAL_CANDIDATE',
-      chapter: 'RALLY',
-      allow: 'BUY',
-      story_conf: 0.7,
-      red_1m: 14,
-      green_1m: 8,
-      zone_pos: 0.6,
-      bar_body_sign: -1,
-      m1_dir: 'DOWN',
-      bias: 'UP',
-      tf5_dir: 'FLAT',
-      tf15_dir: 'UP',
-      tf30_dir: 'UP',
-      reversal_bias: 'SELL',
-    });
     expect(t.choice).toBe('SELL');
     expect(t.thesis).toMatch(/REVERSAL/);
-    expect(t.why).toMatch(/1m confirm|playbook|reverse/i);
+    expect(t.why).toMatch(/playbook|automātiski|REVERSAL/i);
   });
 
-  it('ENTRY takes REVERSAL BUY against 30m DOWN only after 1m UP confirm', () => {
+  it('ENTRY auto-follows REVERSAL bias BUY even when 30m still DOWN', () => {
     const t = thinkEntryLikeTrader({
       regime: 'REVERSAL_CANDIDATE',
       chapter: 'SELLOFF',
       allow: 'SELL',
       story_conf: 0.7,
-      red_1m: 8,
-      green_1m: 14,
+      red_1m: 16,
+      green_1m: 6,
       zone_pos: 0.35,
       bar_body_sign: 1,
-      m1_dir: 'UP',
+      m1_dir: 'FLAT',
       bias: 'DOWN',
-      tf5_dir: 'FLAT',
+      tf5_dir: 'DOWN',
       tf15_dir: 'DOWN',
       tf30_dir: 'DOWN',
       reversal_bias: 'BUY',
     });
     expect(t.choice).toBe('BUY');
     expect(t.spoken).toMatch(/PRĀTS ENTRY BUY/);
-  });
-
-  it('ENTRY follows REVERSAL bias when stack is flat and confirm 10s is ready', () => {
-    const t = thinkEntryLikeTrader({
-      regime: 'REVERSAL_CANDIDATE',
-      chapter: 'RANGE_CHOP',
-      allow: 'NONE',
-      story_conf: 0.4,
-      red_1m: 10,
-      green_1m: 10,
-      zone_pos: 0.55,
-      bar_body_sign: -1,
-      m1_dir: 'FLAT',
-      bias: 'FLAT',
-      tf5_dir: 'FLAT',
-      tf15_dir: 'FLAT',
-      tf30_dir: 'FLAT',
-      reversal_bias: 'SELL',
-    });
-    expect(t.choice).toBe('SELL');
-    expect(t.thesis).toMatch(/REVERSAL/);
   });
 });
