@@ -6,6 +6,12 @@
  * 2) Never chase the spike impulse itself — wait for a quieter confirm 10s
  * 3) Prefer correct zone half (SELL upper / BUY lower)
  * 4) Structure dies if price reclaims mid against the reverse
+ *
+ * Hooks into the rest of the desk (same as FAILED_BREAKOUT / BREAKOUT):
+ * - Starts ON in tradableDefaultRegimes; robotDesk freezes entry_regime
+ * - Soft/Peak/Target knobs: shared autoCalibrate path after every close
+ * - Satellite: auto-cal may regime OFF after repeated Soft losses, then ON again
+ * - entryLearner feature `regime_reversal`; deskLearner + flipFilter unchanged
  */
 import { ENTRY_DIP, ENTRY_RALLY, REVERSAL, TREND_ENTER } from './regimeBands.js';
 import {
