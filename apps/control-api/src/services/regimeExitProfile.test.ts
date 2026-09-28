@@ -41,15 +41,13 @@ describe('regimeExitProfile — all 14 regimes', () => {
     }
   });
 
-  it('BREAKOUT Soft tighter than TREND; REVERSAL Soft not wider than TREND', () => {
+  it('BREAKOUT Soft tighter than TREND; REVERSAL Soft tightest', () => {
     expect(regimeExitProfile('BREAKOUT_UP').hardinv_mult).toBeLessThan(
       regimeExitProfile('TREND_UP').hardinv_mult
     );
-    expect(regimeExitProfile('REVERSAL_CANDIDATE').hardinv_mult).toBeLessThanOrEqual(
-      regimeExitProfile('TREND_UP').hardinv_mult
+    expect(regimeExitProfile('REVERSAL_CANDIDATE').hardinv_mult).toBeLessThan(
+      regimeExitProfile('BREAKOUT_UP').hardinv_mult
     );
-    expect(regimeExitProfile('REVERSAL_CANDIDATE').structure).toBe('reverse_fail');
-    expect(regimeExitProfile('REVERSAL_CANDIDATE').peak_arm).toBe('fast');
   });
 
   it('families group as expected', () => {
@@ -155,17 +153,5 @@ describe('shouldArmPeakProtect', () => {
         mfe: 0,
       })
     ).toBe(false);
-  });
-
-  it('REVERSAL structure dies on mid reclaim against flip', () => {
-    expect(
-      structureInvalidationReason('SELL', 4335, 'REVERSAL_CANDIDATE', zone)
-    ).toMatch(/REVERSAL SELL reclaim mid/);
-    expect(
-      structureInvalidationReason('BUY', 4325, 'REVERSAL_CANDIDATE', zone)
-    ).toMatch(/REVERSAL BUY reclaim mid/);
-    expect(
-      structureInvalidationReason('SELL', 4328, 'REVERSAL_CANDIDATE', zone)
-    ).toBeNull();
   });
 });

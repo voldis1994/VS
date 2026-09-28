@@ -209,8 +209,7 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'REVERSAL',
-        looking_for:
-          'REVERSAL · V-flip playbook · viena puse no violent bar · spike WAIT · confirm 10s (ne abās)',
+        looking_for: 'REVERSAL · DIP → SELL · RALLY → BUY (MOVING 10s)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'EXPANSION':

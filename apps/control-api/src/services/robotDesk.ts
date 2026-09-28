@@ -49,11 +49,6 @@ import {
 } from './exitManage.js';
 import { softExitMarketGate } from './softExitMarketGate.js';
 import {
-  capitalClosed1mKey,
-  resolveProfitExitConfirm,
-  type ProfitExitConfirmState,
-} from './profitExitConfirm.js';
-import {
   buildMarketContext,
   compactMarketContext,
   type MarketContextSnapshot,
@@ -225,11 +220,6 @@ type Internal = RobotSession & {
   peak_protect_armed: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
   last_1m_profit_exit_key: string;
-  /**
-   * Soft profit exit armed — wait for next opposite closed Capital 1m
-   * before exitTrade (HardInv/loss bypasses this).
-   */
-  pending_profit_exit: ProfitExitConfirmState | null;
   /** Cached live entry watch for board UI */
   entry_watch: EntryWatch | null;
   /** Consecutive EXIT blocked (no dealId) — clear ghost after broker flat */
@@ -421,7 +411,6 @@ function publicSession(s: Internal): RobotSession {
     last_multi_tf_fetch_ms: _mtf,
     peak_protect_armed: _ppa,
     last_1m_profit_exit_key: _1m,
-    pending_profit_exit: _ppe,
     exit_deal_fails: _edf,
     cycle_busy: _busy,
     cycle_busy_since: _busySince,
@@ -909,7 +898,6 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
-  s.pending_profit_exit = null;
   s.exit_deal_fails = 0;
   s.hardinv_breach_since_ms = 0;
   s.structure_breach_since_ms = 0;
@@ -2536,58 +2524,13 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
   const exitReason = decideOpenManageExit(s, quote, {
     includeTargetTime: marketOpen,
   });
-
-  // Extra PROFIT confirm: wait next opposite closed Capital 1m before exitTrade.
-  // HardInv / loss / safety close immediately (decideOpenManageExit unchanged).
-  const closed1mNow = lastClosedCapitalMinute(s.last_minute_candles);
-  const lastClosed1mSnap = closed1mNow
-    ? {
-        open: closed1mNow.open,
-        close: closed1mNow.close,
-        key: capitalClosed1mKey(closed1mNow),
-      }
-    : null;
-  const profitGate = resolveProfitExitConfirm({
-    exitReason,
-    openSide: s.open_side,
-    pending: s.pending_profit_exit,
-    lastClosed1m: lastClosed1mSnap,
-  });
-
-  if (profitGate.action === 'exit_immediate' || profitGate.action === 'exit_profit') {
-    s.pending_profit_exit = null;
+  if (exitReason) {
     const closed = await withCapitalAccountSession(leaseInput, async (session) => {
-      await exitTrade(session, s, quote, profitGate.reason);
+      await exitTrade(session, s, quote, exitReason);
     });
     if (!closed.ok) reportCapitalLeaseFail(s, closed.result);
     return;
   }
-
-  if (profitGate.action === 'arm_and_wait' || profitGate.action === 'keep_waiting') {
-    s.pending_profit_exit = profitGate.state;
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: profitGate.detail,
-    });
-    return;
-  }
-
-  if (profitGate.action === 'reject_continue_manage') {
-    s.pending_profit_exit = null;
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: profitGate.detail,
-    });
-    return;
-  }
-
-  s.pending_profit_exit = null;
 
   if (!marketOpen) {
     pushTick(s, {
@@ -3606,7 +3549,6 @@ export async function startRobotSession(input: {
     last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
     last_1m_profit_exit_key: '',
-    pending_profit_exit: null,
     entry_watch: null,
     exit_deal_fails: 0,
     cycle_busy: false,
