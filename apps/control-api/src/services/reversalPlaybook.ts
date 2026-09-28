@@ -48,9 +48,9 @@ export function reversalBiasFromBars(
 }
 
 /**
- * Two-bar V-flip: prior strong one way, current violent opposite.
- * Catches wick reversals even when prior regime was RANGE/EXPANSION.
- * `avgRange` ≤ 0 skips the range expansion check (body thresholds alone).
+ * Two-bar V-flip: prior strong one way, current violent opposite + range expand.
+ * Catches wick reversals from RANGE/EXPANSION only when the tip is real (not quiet chop).
+ * Pass avgRange from momentum priors; `avgRange` ≤ 0 skips the expand check (tests only).
  */
 export function isViolentVFlip(
   prev: Pick<TenSecBar, 'open' | 'high' | 'low' | 'close'> | null | undefined,

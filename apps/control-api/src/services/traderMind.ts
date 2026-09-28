@@ -446,18 +446,51 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
-  // REVERSAL playbook owns the side — classifier saw V-flip; brain follows automatically
+  // REVERSAL — only when needed, still scoped with Soft / Peak / multi-TF:
+  // - Never knife opposite of playbook bias
+  // - Take bias only with confirm 10s; against clear 30/15 need 1m flip first
+  // - Do NOT force-hijack PRĀTS on every V-print while HTF still owns the tape
+  const revBodyOk =
+    revBias === 'SELL' ? body < 0 : revBias === 'BUY' ? body > 0 : false;
+  const revM1Ok =
+    revBias === 'SELL' ? m1 !== 'UP' : revBias === 'BUY' ? m1 !== 'DOWN' : false;
+  const revM1Flip =
+    (revBias === 'SELL' && m1 === 'DOWN') || (revBias === 'BUY' && m1 === 'UP');
+  const revHtfFighting =
+    (revBias === 'SELL' &&
+      stack.bias === 'UP' &&
+      (stack.tf30 === 'UP' || stack.tf15 === 'UP')) ||
+    (revBias === 'BUY' &&
+      stack.bias === 'DOWN' &&
+      (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN'));
   if (revBias) {
-    choice = revBias;
-    thesis = `REVERSAL playbook · bias ${revBias} no violent flip · ${stack.summary} — sekoju reverse, ne vecajam TF.`;
-    why =
-      'Smadzenes redz REVERSAL_CANDIDATE: ņemu playbook pusi automātiski (ne abās, ne WAIT uz vecā 30m).';
-    confidence = 0.82;
+    if (revBodyOk && revM1Ok && (!revHtfFighting || revM1Flip)) {
+      choice = revBias;
+      thesis = revHtfFighting
+        ? `REVERSAL ${revBias} · 1m jau ${m1} pret veco TF · ${stack.summary} — reverse kad nepieciešams.`
+        : `REVERSAL playbook · bias ${revBias} · confirm 10s · ${stack.summary}.`;
+      why = revHtfFighting
+        ? 'V-flip + 1m confirm: ņemu reverse pret veco 30/15, Soft/Peak joprojām grīdā.'
+        : 'Classifier REVERSAL_CANDIDATE + confirm — playbook puse, ne vecais steks.';
+      confidence = revM1Flip ? 0.84 : 0.78;
+    } else if (choice !== 'WAIT' && choice !== revBias) {
+      choice = 'WAIT';
+      thesis = `REVERSAL bias ${revBias} · neeju pretēji playbook (${stack.summary}).`;
+      why = 'Satellite REVERSAL: viena puse no violent flip — ne abās.';
+      confidence = 0.4;
+    } else if (choice === revBias) {
+      choice = 'WAIT';
+      thesis = revHtfFighting
+        ? `REVERSAL ${revBias} pret ${stack.summary} — gaidu 1m ${revBias === 'SELL' ? 'DOWN' : 'UP'} confirm.`
+        : `REVERSAL ${revBias} · gaidu confirm 10s (ne spike chase).`;
+      why = 'Tikai kad nepieciešams: bez confirm neieeju reverse.';
+      confidence = 0.42;
+    }
   }
 
-  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker
-  // Skip when REVERSAL owns the side — flipping against old 30/15 is the thesis
-  if (!revBias) {
+  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker.
+  // REVERSAL may skip only after 1m has already flipped with the bias.
+  if (!revM1Flip) {
     if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
       choice = 'WAIT';
       thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
@@ -472,17 +505,17 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
-  // Never fire PRĀTS into a fighting 1m — REVERSAL: only if body also fights the bias
+  // Never fire PRĀTS into a fighting 1m — REVERSAL still needs body not fighting bias
   if (revBias) {
-    if (revBias === 'SELL' && m1 === 'UP' && body > 0) {
+    if (revBias === 'SELL' && m1 === 'UP') {
       choice = 'WAIT';
-      thesis = `REVERSAL SELL · 1m UP + zaļš 10s — gaidu confirm, ne shortoju bounce.`;
+      thesis = `REVERSAL SELL · 1m UP — gaidu confirm, ne shortoju bounce.`;
       why = 'Reverse playbook: spike/bounce vēl nav apstiprināts.';
       confidence = 0.45;
     }
-    if (revBias === 'BUY' && m1 === 'DOWN' && body < 0) {
+    if (revBias === 'BUY' && m1 === 'DOWN') {
       choice = 'WAIT';
-      thesis = `REVERSAL BUY · 1m DOWN + sarkans 10s — gaidu confirm.`;
+      thesis = `REVERSAL BUY · 1m DOWN — gaidu confirm.`;
       why = 'Reverse playbook: dump vēl nav apstiprināts.';
       confidence = 0.45;
     }

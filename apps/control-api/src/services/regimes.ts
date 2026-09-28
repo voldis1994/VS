@@ -290,7 +290,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     previous === 'COMPRESSION' ||
     previous === 'TRANSITION' ||
     previous === 'EXPANSION';
-  const vFlip = fromChopForV && isViolentVFlip(prevBar, last, 0) && inRange;
+  // avgRange required — body-only V (pass 0) fires on quiet RANGE noise
+  const vFlip = fromChopForV && isViolentVFlip(prevBar, last, avgRange) && inRange;
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < -MOVE) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > MOVE) return 'FAILED_BREAKOUT_DOWN';
