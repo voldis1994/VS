@@ -10,7 +10,6 @@ import {
   beginAutoCalibrateSession,
   getAutoCalibrateStatus,
   isAutoCalibrateCooldownActive,
-  isCoreAlwaysOnRegime,
   ensureAutoCalibrateSession,
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
@@ -20,11 +19,8 @@ import {
   defaultDeskCalibration,
   getDeskCalibration,
   setDeskCalibration,
-  regimeAllowedForEntry,
   _resetDeskCalibrationCacheForTests,
 } from './deskCalibration.js';
-import { styleFromClassification } from './regimes.js';
-import { regimeExitProfile } from './regimeExitProfile.js';
 
 function trade(partial: {
   pnl_pts: number;
@@ -97,106 +93,6 @@ describe('autoCalibrate', () => {
     expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
     expect(result.next.enabled_regimes.includes('TREND_UP' as never)).toBe(true);
     expect(result.changes.some((c) => c.includes('regime OFF BREAKOUT_UP'))).toBe(true);
-  });
-
-  it('REVERSAL_CANDIDATE is satellite — Soft losses demote it like BREAKOUT', () => {
-    const current = defaultDeskCalibration();
-    expect(current.enabled_regimes.includes('REVERSAL_CANDIDATE' as never)).toBe(true);
-    expect(isCoreAlwaysOnRegime('REVERSAL_CANDIDATE')).toBe(false);
-    const window = [
-      trade({ pnl_pts: -2.0, regime: 'REVERSAL_CANDIDATE', exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: -1.8, regime: 'REVERSAL_CANDIDATE', exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: 1.5, regime: 'TREND_UP', exit_reason: 'PeakProtection' }),
-      trade({ pnl_pts: 1.2, regime: 'TREND_UP', exit_reason: 'Target' }),
-      trade({ pnl_pts: 0.8, regime: 'RANGE', exit_reason: 'PeakProtection' }),
-    ];
-    const demoted = new Set<string>();
-    const result = proposeAutoCalibration(current, window, demoted);
-    expect(result.changes.some((c) => c.includes('regime OFF REVERSAL_CANDIDATE'))).toBe(true);
-    expect(result.next.enabled_regimes.includes('REVERSAL_CANDIDATE' as never)).toBe(false);
-    expect(demoted.has('REVERSAL_CANDIDATE')).toBe(true);
-    // Core stays on
-    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
-  });
-
-  it('REVERSAL Soft losses still retune shared Peak/Target knobs (same auto-cal path)', () => {
-    const tall = {
-      ...defaultDeskCalibration(),
-      safety_tp_rr: 2.0,
-      peak_mfe_abs: 4.5,
-      target_abs: 7.0,
-      peak_retention: 0.75,
-    };
-    const r = proposeAutoCalibration(
-      tall,
-      [
-        trade({
-          pnl_pts: 0.3,
-          regime: 'REVERSAL_CANDIDATE',
-          exit_reason: 'PeakProtection',
-          mfe: 2.5,
-        }),
-        trade({
-          pnl_pts: -2.2,
-          regime: 'REVERSAL_CANDIDATE',
-          exit_reason: 'HardInvalidation',
-        }),
-        trade({
-          pnl_pts: 0.2,
-          regime: 'REVERSAL_CANDIDATE',
-          exit_reason: 'PeakProtection',
-          mfe: 2.0,
-        }),
-        trade({
-          pnl_pts: -1.8,
-          regime: 'REVERSAL_CANDIDATE',
-          exit_reason: 'HardInvalidation',
-        }),
-        trade({ pnl_pts: -0.9, regime: 'REVERSAL_CANDIDATE' }),
-      ],
-      new Set(),
-      { raise_streak: 3 }
-    );
-    // Same Soft/Peak path as other regimes — pullback/ease or hold, not a dead end
-    expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('MĀCĪBA'))).toBe(true);
-    expect(r.next.safety_tp_rr).toBeLessThanOrEqual(tall.safety_tp_rr);
-    expect(r.next.target_abs).toBeLessThanOrEqual(tall.target_abs);
-  });
-
-  it('re-promotes demoted REVERSAL after a positive auto-cal window', () => {
-    const current = {
-      ...defaultDeskCalibration(),
-      enabled_regimes: defaultDeskCalibration().enabled_regimes.filter(
-        (r) => r !== 'REVERSAL_CANDIDATE'
-      ) as never,
-    };
-    const demoted = new Set(['REVERSAL_CANDIDATE']);
-    const r = proposeAutoCalibration(
-      current,
-      [
-        trade({ pnl_pts: 2.5, regime: 'TREND_UP' }),
-        trade({ pnl_pts: 1.8, regime: 'TREND_UP' }),
-        trade({ pnl_pts: 3.0, regime: 'RANGE' }),
-        trade({ pnl_pts: 1.2, regime: 'TREND_DOWN' }),
-        trade({ pnl_pts: -0.4, regime: 'RANGE' }),
-      ],
-      demoted
-    );
-    expect(r.next.enabled_regimes.includes('REVERSAL_CANDIDATE' as never)).toBe(true);
-    expect(r.changes.some((c) => c.includes('regime ON REVERSAL_CANDIDATE'))).toBe(true);
-    expect(demoted.has('REVERSAL_CANDIDATE')).toBe(false);
-  });
-
-  it('REVERSAL plugs into desk allowlist + SCALP exit profile like other satellites', () => {
-    const cal = defaultDeskCalibration();
-    expect(cal.enabled_regimes.includes('REVERSAL_CANDIDATE' as never)).toBe(true);
-    setDeskCalibration(cal);
-    expect(regimeAllowedForEntry('REVERSAL_CANDIDATE')).toBe(true);
-    expect(styleFromClassification('REVERSAL_CANDIDATE', 'REVERSAL')).toBe('SCALP');
-    const profile = regimeExitProfile('REVERSAL_CANDIDATE');
-    expect(profile.family).toBe('reversal');
-    expect(profile.structure).toBe('reverse_fail');
-    expect(profile.peak_arm).toBe('fast');
   });
 
   it('refuses to auto-OFF core RANGE even when it is the worst loser', () => {

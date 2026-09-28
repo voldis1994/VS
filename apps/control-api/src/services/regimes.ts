@@ -18,7 +18,6 @@ import {
   TREND_ENTER,
   TREND_STAY,
 } from './regimeBands.js';
-import { isViolentVFlip } from './reversalPlaybook.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -268,30 +267,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (previous === 'TREND_DOWN' &&
       lastVel > REVERSAL &&
       lastRange > avgRange &&
-      !breakoutUp) ||
-    (previous === 'PULLBACK_UPTREND' &&
-      lastVel < -REVERSAL &&
-      lastRange > avgRange &&
-      !breakoutDown) ||
-    (previous === 'PULLBACK_DOWNTREND' &&
-      lastVel > REVERSAL &&
-      lastRange > avgRange &&
-      !breakoutUp) ||
-    (previous === 'EXPANSION' &&
-      Math.abs(lastVel) >= REVERSAL &&
-      lastRange > avgRange &&
-      !breakoutUp &&
-      !breakoutDown);
-  const prevBar = momPrior[momPrior.length - 1]!;
-  // V-flip only from chop/expansion — TREND/PULLBACK already use `reversal` above.
-  // Do not fire from UNKNOWN (seed noise) or it steals plain RANGE classification.
-  const fromChopForV =
-    previous === 'RANGE' ||
-    previous === 'COMPRESSION' ||
-    previous === 'TRANSITION' ||
-    previous === 'EXPANSION';
-  // avgRange required — body-only V (pass 0) fires on quiet RANGE noise
-  const vFlip = fromChopForV && isViolentVFlip(prevBar, last, avgRange) && inRange;
+      !breakoutUp);
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < -MOVE) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > MOVE) return 'FAILED_BREAKOUT_DOWN';
@@ -305,8 +281,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   )
     return 'BREAKOUT_DOWN';
 
-  // Violent in-range flip (≥ REVERSAL) / two-bar V — before soft pullback / bare EXPANSION
-  if (reversal || vFlip) return 'REVERSAL_CANDIDATE';
+  // Violent in-range flip (≥ REVERSAL) before soft pullback / bare EXPANSION
+  if (reversal) return 'REVERSAL_CANDIDATE';
 
   // Pullbacks: against-body ≥ PULLBACK (> TREND_ENTER) so soft noise ≠ pullback
   if (
