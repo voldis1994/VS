@@ -516,6 +516,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
   // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
+  const revBiasEarly =
+    regime === 'REVERSAL_CANDIDATE' ? reversalBiasFromBars(input.closedBars) : null;
   const thought = thinkEntryLikeTrader({
     regime,
     chapter: story.chapter,
@@ -534,6 +536,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     tf5_dir: tf5,
     tf15_dir: tf15,
     tf30_dir: tf30,
+    reversal_bias: revBiasEarly,
   });
 
   // Learner advises once it has enough closes (same pattern as manage brain)
@@ -568,10 +571,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       : thought.spoken;
 
   // REVERSAL playbook: one bias from violent flip — mind cannot knife opposite
-  const revBias =
-    regime === 'REVERSAL_CANDIDATE'
-      ? reversalBiasFromBars(input.closedBars)
-      : null;
+  const revBias = revBiasEarly;
   if (revBias && side !== 'WAIT' && side !== revBias) {
     return null;
   }

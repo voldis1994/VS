@@ -225,6 +225,11 @@ export type EntryMindInput = {
   tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /**
+   * When regime is REVERSAL_CANDIDATE — violent flip bias from the playbook.
+   * Mind must follow this side automatically (not wait on old 30m trend).
+   */
+  reversal_bias?: 'BUY' | 'SELL' | null;
 };
 
 /**
@@ -289,12 +294,19 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     regime === 'TREND_UP' ||
     regime === 'BREAKOUT_UP' ||
     regime === 'PULLBACK_UPTREND' ||
-    regime === 'FAILED_BREAKOUT_DOWN';
+    regime === 'FAILED_BREAKOUT_DOWN' ||
+    (regime === 'REVERSAL_CANDIDATE' && input.reversal_bias === 'BUY');
   const regimeShort =
     regime === 'TREND_DOWN' ||
     regime === 'BREAKOUT_DOWN' ||
     regime === 'PULLBACK_DOWNTREND' ||
-    regime === 'FAILED_BREAKOUT_UP';
+    regime === 'FAILED_BREAKOUT_UP' ||
+    (regime === 'REVERSAL_CANDIDATE' && input.reversal_bias === 'SELL');
+  const revBias =
+    regime === 'REVERSAL_CANDIDATE' &&
+    (input.reversal_bias === 'BUY' || input.reversal_bias === 'SELL')
+      ? input.reversal_bias
+      : null;
 
   // ——— 1) Multi-TF stack first (30m → 15m → 5m → 1m) ———
   if (stackSide === 'WAIT' && stack.bias !== 'FLAT') {
@@ -434,32 +446,59 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
-  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker
-  if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
-    choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
-    why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
-    confidence = 0.35;
-  }
-  if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
-    choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
-    why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
-    confidence = 0.35;
+  // REVERSAL playbook owns the side — classifier saw V-flip; brain follows automatically
+  if (revBias) {
+    choice = revBias;
+    thesis = `REVERSAL playbook · bias ${revBias} no violent flip · ${stack.summary} — sekoju reverse, ne vecajam TF.`;
+    why =
+      'Smadzenes redz REVERSAL_CANDIDATE: ņemu playbook pusi automātiski (ne abās, ne WAIT uz vecā 30m).';
+    confidence = 0.82;
   }
 
-  // Never fire PRĀTS into a fighting 1m (SELL on green 1m / BUY on red 1m → Soft)
-  if (choice === 'SELL' && m1 === 'UP') {
-    choice = 'WAIT';
-    thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
-    why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
-    confidence = 0.4;
+  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker
+  // Skip when REVERSAL owns the side — flipping against old 30/15 is the thesis
+  if (!revBias) {
+    if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
+      choice = 'WAIT';
+      thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
+      why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
+      confidence = 0.35;
+    }
+    if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
+      choice = 'WAIT';
+      thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
+      why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
+      confidence = 0.35;
+    }
   }
-  if (choice === 'BUY' && m1 === 'DOWN') {
-    choice = 'WAIT';
-    thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
-    why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
-    confidence = 0.4;
+
+  // Never fire PRĀTS into a fighting 1m — REVERSAL: only if body also fights the bias
+  if (revBias) {
+    if (revBias === 'SELL' && m1 === 'UP' && body > 0) {
+      choice = 'WAIT';
+      thesis = `REVERSAL SELL · 1m UP + zaļš 10s — gaidu confirm, ne shortoju bounce.`;
+      why = 'Reverse playbook: spike/bounce vēl nav apstiprināts.';
+      confidence = 0.45;
+    }
+    if (revBias === 'BUY' && m1 === 'DOWN' && body < 0) {
+      choice = 'WAIT';
+      thesis = `REVERSAL BUY · 1m DOWN + sarkans 10s — gaidu confirm.`;
+      why = 'Reverse playbook: dump vēl nav apstiprināts.';
+      confidence = 0.45;
+    }
+  } else {
+    if (choice === 'SELL' && m1 === 'UP') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
+      why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
+      confidence = 0.4;
+    }
+    if (choice === 'BUY' && m1 === 'DOWN') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
+      why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
+      confidence = 0.4;
+    }
   }
 
   // After Soft same-side loss — no immediate re-spam (L0 flip lock is OFF by design)
@@ -470,7 +509,10 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   ) {
     const confirmed =
       (choice === 'SELL' && m1 === 'DOWN' && (strong || stack.aligned)) ||
-      (choice === 'BUY' && m1 === 'UP' && (strong || stack.aligned));
+      (choice === 'BUY' && m1 === 'UP' && (strong || stack.aligned)) ||
+      // REVERSAL confirm 10s already is the "next move" vs Soft spam
+      (Boolean(revBias) &&
+        ((choice === 'SELL' && body < 0) || (choice === 'BUY' && body > 0)));
     if (!confirmed) {
       choice = 'WAIT';
       thesis = `Pēc Soft ${input.last_closed_side} — negāžu to pašu pusi bez svaiga 1m apstiprinājuma.`;
@@ -488,19 +530,34 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     confidence = 0.3;
   }
 
-  // Genome: require 1m trigger when set
+  // Genome: require 1m trigger when set — REVERSAL uses confirm 10s body instead
   if (getBrainGenome().require_1m_trigger) {
-    if (choice === 'SELL' && m1 !== 'DOWN') {
-      choice = 'WAIT';
-      thesis = `${stack.summary} · genome require_1m_trigger — gaidu DOWN 1m.`;
-      why = 'Self-improve genome: bez 1m triggera neieeju.';
-      confidence = 0.35;
-    }
-    if (choice === 'BUY' && m1 !== 'UP') {
-      choice = 'WAIT';
-      thesis = `${stack.summary} · genome require_1m_trigger — gaidu UP 1m.`;
-      why = 'Self-improve genome: bez 1m triggera neieeju.';
-      confidence = 0.35;
+    if (revBias) {
+      if (choice === 'SELL' && body > 0) {
+        choice = 'WAIT';
+        thesis = `REVERSAL · genome/playbook — gaidu sarkanu confirm 10s (ne zaļu bounce).`;
+        why = 'Reverse: 10s confirm pietiek; zaļš 10s = vēl WAIT.';
+        confidence = 0.4;
+      }
+      if (choice === 'BUY' && body < 0) {
+        choice = 'WAIT';
+        thesis = `REVERSAL · genome/playbook — gaidu zaļu confirm 10s.`;
+        why = 'Reverse: 10s confirm pietiek; sarkans 10s = vēl WAIT.';
+        confidence = 0.4;
+      }
+    } else {
+      if (choice === 'SELL' && m1 !== 'DOWN') {
+        choice = 'WAIT';
+        thesis = `${stack.summary} · genome require_1m_trigger — gaidu DOWN 1m.`;
+        why = 'Self-improve genome: bez 1m triggera neieeju.';
+        confidence = 0.35;
+      }
+      if (choice === 'BUY' && m1 !== 'UP') {
+        choice = 'WAIT';
+        thesis = `${stack.summary} · genome require_1m_trigger — gaidu UP 1m.`;
+        why = 'Self-improve genome: bez 1m triggera neieeju.';
+        confidence = 0.35;
+      }
     }
   }
 
