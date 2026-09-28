@@ -211,14 +211,29 @@ describe('classifyRegime from 10s OHLC', () => {
   });
 
   it('REVERSAL_CANDIDATE on two-bar V-flip from RANGE (wick reverse playbook)', () => {
-    // Wide quiet zone so the V-tip close stays in-range (not BREAKOUT_*)
+    // Wide early zone so V-tip close stays in-range; quiet recent mom so avgRange is low;
+    // flip bar must expand vs that quiet avg (body-only V no longer classifies).
+    const quiet: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE - 10; i++) {
+      quiet.push(bar(100, 101.5, 98.5, 100, i)); // wide zone floor
+    }
+    for (let i = 0; i < 8; i++) {
+      const c = 100 + ((i % 3) - 1) * 0.01;
+      quiet.push(bar(c, c + 0.03, c - 0.03, c, quiet.length)); // tight mom
+    }
+    const prior = bar(100.0, 100.12, 99.95, 100.08, quiet.length); // +0.08% > TREND_ENTER
+    const flip = bar(100.08, 100.12, 99.65, 99.88, quiet.length + 1); // −0.20% + expanded range
+    expect(classifyRegime([...quiet, prior, flip], 'RANGE')).toBe('REVERSAL_CANDIDATE');
+  });
+
+  it('does not classify quiet body flip as REVERSAL without range expand', () => {
     const quiet: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE - 2; i++) {
-      quiet.push(bar(100, 101.5, 98.5, 100, i));
+      quiet.push(bar(100, 101.5, 98.5, 100, i)); // fat avgRange
     }
-    const prior = bar(100.0, 100.2, 99.9, 100.08, quiet.length); // +0.08% > TREND_ENTER
-    const flip = bar(100.08, 100.1, 99.7, 99.88, quiet.length + 1); // −0.20% > REVERSAL
-    expect(classifyRegime([...quiet, prior, flip], 'RANGE')).toBe('REVERSAL_CANDIDATE');
+    const prior = bar(100.0, 100.2, 99.9, 100.08, quiet.length);
+    const flip = bar(100.08, 100.1, 99.7, 99.88, quiet.length + 1); // body violent, range << avg
+    expect(classifyRegime([...quiet, prior, flip], 'RANGE')).not.toBe('REVERSAL_CANDIDATE');
   });
 
   it('sticks prior regime instead of dead TRANSITION when leaving without a clean next state', () => {

@@ -60,6 +60,8 @@ describe('reversalPlaybook — V-spike bias', () => {
     const priorUp = bar(4100, 4100 + 4100 * (TREND_ENTER + 0.0001));
     const flipDown = violentDown(4100);
     expect(isViolentVFlip(priorUp, flipDown, 0.0001)).toBe(true);
+    // Same bodies but fat avgRange → not a real expand tip
+    expect(isViolentVFlip(priorUp, flipDown, 0.05)).toBe(false);
 
     const priorDown = bar(4100, 4100 - 4100 * (TREND_ENTER + 0.0001));
     const flipUp = violentUp(4100);
