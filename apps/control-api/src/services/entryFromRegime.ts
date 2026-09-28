@@ -10,6 +10,7 @@ import {
   type TenSecBar,
 } from './tenSecondOhlc.js';
 import { entrySpikeBlockEnabled } from './tradeOpenPolicy.js';
+import { decideReversalEntry } from './reversalPlaybook.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -42,10 +43,12 @@ function describe(bar: TenSecBar): string {
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
  * Open-at-start: COMPRESSION / TRANSITION also trade (fade); auto-cal demotes losers later.
  * Anti-chase still preferred on TREND (pullback only).
+ * @param closedBars optional book — required for proper REVERSAL bias/confirm
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
-  regime?: string | null
+  regime?: string | null,
+  closedBars?: TenSecBar[] | null
 ): RegimeEntry | null {
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
@@ -101,10 +104,8 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'REVERSAL_CANDIDATE') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'SELL', setup: 'REVERSAL', reason: `${r} · ${candle}` };
-    if (rally(bar)) return { direction: 'BUY', setup: 'REVERSAL', reason: `${r} · ${candle}` };
-    return null;
+    // One-way bias + no spike chase — V-wick playbook
+    return decideReversalEntry(bar, closedBars ?? null, null);
   }
 
   if (r === 'EXPANSION') {

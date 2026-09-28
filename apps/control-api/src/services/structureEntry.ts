@@ -9,6 +9,11 @@
  * - Explicit rule per regime (all 14).
  */
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
+import {
+  decideReversalEntry,
+  reversalBiasFromBars,
+  reversalStructureAllows,
+} from './reversalPlaybook.js';
 import { ENTRY_DIP, ENTRY_RALLY, MOVE } from './regimeBands.js';
 import {
   MIN_BARS_FOR_ZONE,
@@ -285,7 +290,6 @@ export function structureStartEntry(
     case 'BREAKOUT_UP':
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
-    case 'REVERSAL_CANDIDATE':
       if (zone.pos <= START_LO && rally(bar)) {
         return {
           direction: 'BUY',
@@ -305,7 +309,6 @@ export function structureStartEntry(
     case 'BREAKOUT_DOWN':
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
-    case 'REVERSAL_CANDIDATE':
       if (zone.pos >= START_HI && dip(bar)) {
         return {
           direction: 'SELL',
@@ -336,7 +339,8 @@ export function structureGate(
   bar: TenSecBar,
   zone: ZoneGeometry | null,
   m1: MinuteBar | null,
-  bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT'
+  bias: 'UP' | 'DOWN' | 'FLAT' = 'FLAT',
+  closedBars?: TenSecBar[] | null
 ): StructureGateResult {
   if (!zone) {
     return { ok: true, tag: 'zona thin · raw 10s' };
@@ -466,15 +470,12 @@ export function structureGate(
       }
       return { ok: true, tag: `FAILED_BREAKOUT_DOWN OK · ${posTag}` };
 
-    case 'REVERSAL_CANDIDATE':
-      // Violent bar — allow; only block buying extreme HI / selling extreme LO with-trend
-      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && md === 'UP') {
-        return { ok: false, reason: `REVERSAL BUY chase HI (${posTag})` };
-      }
-      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && md === 'DOWN') {
-        return { ok: false, reason: `REVERSAL SELL chase LO (${posTag})` };
-      }
-      return { ok: true, tag: `REVERSAL OK · ${posTag}` };
+    case 'REVERSAL_CANDIDATE': {
+      const revBias =
+        reversalBiasFromBars(closedBars?.length ? closedBars : [bar]) ??
+        (md === 'UP' ? 'BUY' : md === 'DOWN' ? 'SELL' : null);
+      return reversalStructureAllows(sig.direction, revBias, zone.pos, md);
+    }
 
     default:
       return { ok: true, tag: posTag };
@@ -515,6 +516,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
   // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
+  const revBiasEarly =
+    regime === 'REVERSAL_CANDIDATE' ? reversalBiasFromBars(input.closedBars) : null;
   const thought = thinkEntryLikeTrader({
     regime,
     chapter: story.chapter,
@@ -533,6 +536,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     tf5_dir: tf5,
     tf15_dir: tf15,
     tf30_dir: tf30,
+    reversal_bias: revBiasEarly,
   });
 
   // Learner advises once it has enough closes (same pattern as manage brain)
@@ -566,12 +570,25 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       ? `${thought.spoken} · LEARNER ${learned.action} n=${learned.updates}`
       : thought.spoken;
 
+  // REVERSAL playbook: one bias from violent flip — mind cannot knife opposite
+  const revBias = revBiasEarly;
+  if (revBias && side !== 'WAIT' && side !== revBias) {
+    return null;
+  }
+
   if (side === 'WAIT') {
     return null;
   }
 
   // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
-  const raw = decideEntryFrom10sRegime(input.bar, regime);
+  const zonePos = zone?.pos ?? null;
+  const rawReversal =
+    regime === 'REVERSAL_CANDIDATE'
+      ? decideReversalEntry(input.bar, input.closedBars, zonePos)
+      : null;
+  const raw =
+    rawReversal ??
+    decideEntryFrom10sRegime(input.bar, regime, input.closedBars);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
   const matched =
     raw && raw.direction === side
@@ -579,13 +596,17 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       : started && started.direction === side
         ? started
         : null;
+  // REVERSAL: never PRĀTS opposite / without confirm — wait for playbook setup
+  if (regime === 'REVERSAL_CANDIDATE' && !matched) {
+    return null;
+  }
   const candidate: RegimeEntry = matched ?? {
     direction: side,
     setup: 'PRĀTS',
     reason: `${regime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
   };
 
-  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
+  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias, input.closedBars);
   if (!gate.ok) return null;
 
   const withMind = (reason: string): StructuredEntry => ({

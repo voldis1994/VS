@@ -398,6 +398,10 @@ function isBreakoutRegime(regime?: string | null): boolean {
   return r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN';
 }
 
+function isReversalRegime(regime?: string | null): boolean {
+  return String(regime || '').toUpperCase() === 'REVERSAL_CANDIDATE';
+}
+
 function isTrendPullbackRegime(regime?: string | null): boolean {
   const r = String(regime || '').toUpperCase();
   return (
@@ -431,15 +435,21 @@ export function scalpStoryConfirms(
   if (story.chapter === 'SEEDING') {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  // RANGE_CHOP: starve fades — BREAKOUT / EXPANSION / TREND may still fire on trigger
+  // RANGE_CHOP: starve fades — BREAKOUT / EXPANSION / TREND / REVERSAL may still fire
   const impulseOk =
     isBreakoutRegime(regime) ||
     isTrendPullbackRegime(regime) ||
+    isReversalRegime(regime) ||
     String(regime || '').toUpperCase() === 'RANGE';
-  if (story.chapter === 'RANGE_CHOP' && !isBreakoutRegime(regime) && !isTrendPullbackRegime(regime)) {
+  if (
+    story.chapter === 'RANGE_CHOP' &&
+    !isBreakoutRegime(regime) &&
+    !isTrendPullbackRegime(regime) &&
+    !isReversalRegime(regime)
+  ) {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  if (story.confidence < STORY_CONF_MIN && !isBreakoutRegime(regime)) {
+  if (story.confidence < STORY_CONF_MIN && !isBreakoutRegime(regime) && !isReversalRegime(regime)) {
     return { ok: false, reason: `STĀSTS vājš conf=${story.confidence.toFixed(2)} · GAIDI` };
   }
 
@@ -467,24 +477,42 @@ export function scalpStoryConfirms(
     impulseOk &&
     !chaseBuy &&
     !chaseSell &&
-    (story.allow === direction || story.allow === 'BOTH' || isBreakoutRegime(regime)) &&
+    (story.allow === direction ||
+      story.allow === 'BOTH' ||
+      isBreakoutRegime(regime) ||
+      isReversalRegime(regime)) &&
     story.chapter !== 'BOUNCE_IN_SELL' &&
     story.chapter !== 'DIP_IN_RALLY' &&
     story.chapter !== 'EXHAUST_HI' &&
     story.chapter !== 'EXHAUST_LO'
   ) {
     if (direction === 'BUY' && trigBuy) {
-      return { ok: true, tag: `10s START GREEN · ${story.chapter}` };
+      return {
+        ok: true,
+        tag: isReversalRegime(regime)
+          ? `10s REVERSAL BUY · ${story.chapter}`
+          : `10s START GREEN · ${story.chapter}`,
+      };
     }
     if (direction === 'SELL' && trigSell) {
-      return { ok: true, tag: `10s START RED · ${story.chapter}` };
+      return {
+        ok: true,
+        tag: isReversalRegime(regime)
+          ? `10s REVERSAL SELL · ${story.chapter}`
+          : `10s START RED · ${story.chapter}`,
+      };
     }
   }
 
   if (!m1) {
-    // Trigger-only path already handled; without 1m still allow breakout
-    if (isBreakoutRegime(regime)) {
-      return { ok: true, tag: `1m BREAKOUT OK · no-1m · ${story.chapter}` };
+    // Trigger-only path already handled; without 1m still allow breakout / reverse confirm
+    if (isBreakoutRegime(regime) || isReversalRegime(regime)) {
+      return {
+        ok: true,
+        tag: isReversalRegime(regime)
+          ? `10s REVERSAL OK · no-1m · ${story.chapter}`
+          : `1m BREAKOUT OK · no-1m · ${story.chapter}`,
+      };
     }
     return { ok: false, reason: '1m scalp · nav slēgtas 1m sveces · GAIDI' };
   }
@@ -495,6 +523,16 @@ export function scalpStoryConfirms(
   }
   if (direction === 'BUY' && d1 === 'UP') {
     return { ok: true, tag: `1m CONFIRM GREEN · ${story.chapter}` };
+  }
+
+  // REVERSAL: prior 1m often still old trend color — quieter confirm 10s is enough
+  if (isReversalRegime(regime)) {
+    if (direction === 'SELL' && trigSell) {
+      return { ok: true, tag: `10s REVERSAL SELL · last1m=${d1} · ${story.chapter}` };
+    }
+    if (direction === 'BUY' && trigBuy) {
+      return { ok: true, tag: `10s REVERSAL BUY · last1m=${d1} · ${story.chapter}` };
+    }
   }
 
   // BREAKOUT / BREAK chapter: structure pierce is enough (prior 1m often still opposite)

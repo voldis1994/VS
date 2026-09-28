@@ -31,12 +31,14 @@ export type PeakArmMode =
  * back_in_range: BREAKOUT failed (price back inside zone)
  * through_mid: RANGE fade walked through zone mid
  * failed_edge_reclaim: FAILED_BREAKOUT reclaimed the failed edge
+ * reverse_fail: REVERSAL reclaim mid against the flip bias
  */
 export type StructureInvalidation =
   | 'none'
   | 'back_in_range'
   | 'through_mid'
-  | 'failed_edge_reclaim';
+  | 'failed_edge_reclaim'
+  | 'reverse_fail';
 
 export type RegimeExitProfile = {
   family: RegimeExitFamily;
@@ -140,15 +142,16 @@ const EXPANSION: RegimeExitProfile = {
 
 const REVERSAL: RegimeExitProfile = {
   family: 'reversal',
-  hardinv_mult: 0.8,
+  // Survive the wick a bit — enter after confirm, Soft not ultra-tight knife
+  hardinv_mult: 1.0,
   peak_arm: 'fast',
   peak_mfe_mult: 1.0,
   peak_giveback_mult: 1.0,
-  peak_retention: 0.7,
-  target_mult: 1.05,
+  peak_retention: 0.72,
+  target_mult: 1.0,
   timedecay_hold_ms: 5 * 60_000,
   timedecay_min_fav_mult: 0.85,
-  structure: 'none',
+  structure: 'reverse_fail',
 };
 
 const CHOP: RegimeExitProfile = {
@@ -241,6 +244,16 @@ export function structureInvalidationReason(
       // FAILED_BREAKOUT_DOWN BUY — dead if price breaks back under lo
       if (r === 'FAILED_BREAKOUT_DOWN' && side === 'BUY' && mid < lo) {
         return `StructureInvalidation · FAILED_BREAKOUT_DOWN reclaim below lo ${lo.toFixed(2)}`;
+      }
+      return null;
+    }
+    case 'reverse_fail': {
+      // Violent flip thesis dies if price walks back through mid toward old trend
+      if (side === 'SELL' && mid > zMid + width * 0.08) {
+        return `StructureInvalidation · REVERSAL SELL reclaim mid ${zMid.toFixed(2)}`;
+      }
+      if (side === 'BUY' && mid < zMid - width * 0.08) {
+        return `StructureInvalidation · REVERSAL BUY reclaim mid ${zMid.toFixed(2)}`;
       }
       return null;
     }
