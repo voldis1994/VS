@@ -118,7 +118,7 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     safety_tp_rr:
       Math.round(clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0) * 100) / 100,
     hardinv_pct:
-      Math.round(clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02) * 1e5) / 1e5,
+      Math.round(clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02) * 1e4) / 1e4,
     target_pct:
       Math.round(clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05) * 1e5) / 1e5,
     peak_mfe_pct:

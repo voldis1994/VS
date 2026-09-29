@@ -351,11 +351,8 @@ export function OverviewPage() {
             </div>
             {auto.knobs_now && (
               <div className="hint-line mono cmd-knobs">
-                Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)}
-                {auto.knobs_now.hardinv_pct != null
-                  ? `/${Number(auto.knobs_now.hardinv_pct).toFixed(5)}`
-                  : ''}{' '}
-                · Peak {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
+                Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)} · Peak{' '}
+                {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
                 {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
                 {Number(auto.knobs_now.target_abs).toFixed(1)} · TP RR{' '}
                 {Number(auto.knobs_now.safety_tp_rr ?? 1.5).toFixed(2)} ·

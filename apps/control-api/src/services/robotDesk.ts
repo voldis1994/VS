@@ -869,7 +869,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTOTUNE APPLIED · ${cycle.summary} · ${lines} · Soft ${st.knobs_now.hardinv_abs}/${Number(st.knobs_now.hardinv_pct).toFixed(5)} · Peak ${st.knobs_now.peak_mfe_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · E=${st.session_expectancy_pts.toFixed(2)}`,
+        detail: `AUTOTUNE APPLIED · ${cycle.summary} · ${lines} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · E=${st.session_expectancy_pts.toFixed(2)}`,
       });
       for (const line of whatWhy.slice(0, 12)) {
         pushTick(s, {
@@ -3855,7 +3855,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs}/${Number(st.knobs_now.hardinv_pct).toFixed(5)} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
+      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {

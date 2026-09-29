@@ -14,6 +14,7 @@ import {
   noteClosedTradeForAutoCalibrate,
   proposeAutoCalibration,
   resetClientToOpenTradeAll,
+  softPctFromAbs,
 } from './autoCalibrate.js';
 import {
   defaultDeskCalibration,
@@ -180,7 +181,7 @@ describe('autoCalibrate', () => {
     expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
   });
 
-  it('Soft-heavy pullback tightens hardinv_abs AND hardinv_pct', () => {
+  it('Soft-heavy pullback tightens hardinv_abs and syncs hardinv_pct from abs', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(
       base,
@@ -196,10 +197,40 @@ describe('autoCalibrate', () => {
     );
     expect(r.applied).toBe(true);
     expect(r.next.hardinv_abs).toBeLessThan(base.hardinv_abs);
-    expect(r.next.hardinv_pct).toBeLessThan(base.hardinv_pct);
+    expect(r.next.hardinv_pct).toBe(softPctFromAbs(r.next.hardinv_abs));
     expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
       true
     );
+    // No microscopic hardinv_pct WHAT spam (0.00080→0.00084)
+    expect(r.changes.some((c) => /WHAT · hardinv_pct /.test(c))).toBe(false);
+  });
+
+  it('softPctFromAbs uses clean 0.0001 steps — factory Soft 2.2 → 0.0008', () => {
+    expect(softPctFromAbs(2.2)).toBe(0.0008);
+    expect(softPctFromAbs(2.4)).toBe(0.0009);
+    expect(softPctFromAbs(2.0)).toBe(0.0007);
+    expect(softPctFromAbs(2.4)).not.toBe(0.00084);
+  });
+
+  it('Soft ease never logs hardinv_pct 5-decimal junk', () => {
+    const base = {
+      ...defaultDeskCalibration(),
+      hardinv_abs: 1.4,
+      hardinv_pct: 0.0005,
+      peak_mfe_abs: 4.0,
+      target_abs: 7.0,
+    };
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: -1.0, exit_reason: 'HardInvalidation', mfe: 3.5 }),
+      trade({ pnl_pts: -1.1, exit_reason: 'HardInvalidation', mfe: 3.2 }),
+      trade({ pnl_pts: 0.4, exit_reason: 'PeakProtection', mfe: 3.0 }),
+      trade({ pnl_pts: 0.5, exit_reason: 'PeakProtection', mfe: 2.8 }),
+      trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection', mfe: 2.5 }),
+    ]);
+    expect(r.changes.some((c) => /WHAT · hardinv_pct /.test(c))).toBe(false);
+    expect(r.changes.some((c) => /0\.000\d{2,}→0\.000\d{2,}/.test(c))).toBe(false);
+    expect(r.next.hardinv_pct).toBe(softPctFromAbs(r.next.hardinv_abs));
+    expect(String(r.next.hardinv_pct)).toMatch(/^0\.000\d$/);
   });
 
   it('Soft-heavy without HardInv tag still tightens Soft (MindCut/Structure sized losses)', () => {
@@ -219,12 +250,13 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.applied).toBe(true);
     expect(r.next.hardinv_abs).toBe(2.0);
-    expect(r.next.hardinv_pct).toBeLessThan(base.hardinv_pct);
+    expect(r.next.hardinv_pct).toBe(softPctFromAbs(2.0));
     expect(r.next.peak_mfe_abs).toBeLessThan(base.peak_mfe_abs);
     expect(r.next.target_abs).toBeLessThan(base.target_abs);
     expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
       true
     );
+    expect(r.changes.some((c) => /WHAT · hardinv_pct /.test(c))).toBe(false);
     expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
   });
 

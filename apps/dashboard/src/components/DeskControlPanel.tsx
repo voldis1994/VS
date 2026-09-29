@@ -387,11 +387,8 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
               </div>
               {auto.knobs_now && (
                 <div className="hint-line mono" style={{ marginTop: 2 }}>
-                  Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)}
-                  {auto.knobs_now.hardinv_pct != null
-                    ? `/${Number(auto.knobs_now.hardinv_pct).toFixed(5)}`
-                    : ''}{' '}
-                  · Peak {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
+                  Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)} · Peak{' '}
+                  {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
                   {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
                   {Number(auto.knobs_now.target_abs).toFixed(1)} · regimes{' '}
                   {auto.knobs_now.enabled_regimes}

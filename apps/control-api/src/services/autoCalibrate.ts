@@ -88,9 +88,19 @@ function roundRet(n: number): number {
 function roundRr(n: number): number {
   return Math.round(n * 100) / 100;
 }
-/** Clean pct knobs (5 decimals) — Gold Soft must move visibly. */
+/** Clean pct knobs (5 decimals) — genome trek / target_pct dust. */
 function roundPct(n: number): number {
   return Math.round(n * 1e5) / 1e5;
+}
+
+/**
+ * Soft pct is derived from Soft abs — never independent *1.05 micro-junk (0.00080→0.00084).
+ * Ref mid 2750 matches factory Soft 2.2 / 0.0008. Steps of 0.0001 only.
+ */
+export const SOFT_PCT_REF_MID = 2750;
+export function softPctFromAbs(hardinvAbs: number): number {
+  const raw = Math.max(0, Number(hardinvAbs) || 0) / SOFT_PCT_REF_MID;
+  return Math.round(raw * 1e4) / 1e4;
 }
 
 /** True when a calibration knob or regime allowlist actually differs (ignores updated_at). */
@@ -943,10 +953,9 @@ export function proposeAutoCalibration(
     // Soft-heavy — tighten Soft CAP + pct so Soft chops cost less (live Soft follows both)
     if (softDominates) {
       const softBefore = next.hardinv_abs;
-      const pctBefore = next.hardinv_pct;
       next.hardinv_abs = Math.max(AUTO_CAL_MIN_HARDINV_ABS, roundAbs(softBefore - 0.2));
       next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, next.hardinv_abs);
-      next.hardinv_pct = Math.max(AUTO_CAL_MIN_HARDINV_PCT, roundPct(pctBefore * 0.9));
+      next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
       if (next.hardinv_abs !== softBefore) {
         const mkt = windowTrades
           .map((t) => (t.exit_ctx || t.entry_ctx)?.chapter)
@@ -959,14 +968,6 @@ export function proposeAutoCalibration(
             `Soft-heavy SoftTag×${softLosses} SoftSized×${softSizedLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}${
               mkt ? ` · mkt ${mkt}` : ''
             }`
-          )
-        );
-      }
-      if (next.hardinv_pct !== pctBefore) {
-        changes.push(
-          autotuneLog(
-            `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft tighten`,
-            'pct must move or Gold Soft stays pct-bound'
           )
         );
       }
@@ -1001,7 +1002,6 @@ export function proposeAutoCalibration(
     const easedTgt = roundAbs(next.target_abs - 1.2);
     const tgtFloor = roundAbs(next.hardinv_abs + 1.5);
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
-    const tgtPctBefore = next.target_pct;
     next.target_pct = roundPct(Math.max(AUTO_CAL_MIN_TARGET_PCT, next.target_pct / 1.12));
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(
@@ -1029,14 +1029,7 @@ export function proposeAutoCalibration(
         )
       );
     }
-    if (next.target_pct !== tgtPctBefore) {
-      changes.push(
-        autotuneLog(
-          `target_pct ${tgtPctBefore.toFixed(5)}→${next.target_pct.toFixed(5)} ease`,
-          'pct Target follows abs ease'
-        )
-      );
-    }
+    // target_pct tracks abs silently — no 0.000xx WHAT spam
   } else if (needProtectSooner) {
     const retBefore = next.peak_retention;
     // Protect sooner = keep MORE of MFE (higher Keep), free within 10%…95%
@@ -1055,22 +1048,13 @@ export function proposeAutoCalibration(
     // Soft may ease slightly so winners have room (Soft+HardInv free)
     if (softTooTight || human.intent === 'let_winners_run') {
       const softBefore = next.hardinv_abs;
-      const pctBefore = next.hardinv_pct;
       next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
-      next.hardinv_pct = Math.min(AUTO_CAL_MAX_HARDINV_PCT, roundPct(pctBefore * 1.05));
+      next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
       if (next.hardinv_abs !== softBefore) {
         changes.push(
           autotuneLog(
             `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft ease`,
             'give Soft room so winners are not Soft-chopped'
-          )
-        );
-      }
-      if (next.hardinv_pct !== pctBefore) {
-        changes.push(
-          autotuneLog(
-            `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft ease`,
-            'raise Soft pct with abs'
           )
         );
       }
@@ -1094,8 +1078,6 @@ export function proposeAutoCalibration(
     );
     next.peak_min_giveback_abs = roundAbs(Math.min(2.0, next.peak_min_giveback_abs + 0.1));
     next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, roundAbs(next.target_abs + 0.8));
-    const tgtPctBefore = next.target_pct;
-    const peakPctBefore = next.peak_mfe_pct;
     next.target_pct = roundPct(Math.min(AUTO_CAL_MAX_TARGET_PCT, next.target_pct * 1.06));
     next.peak_mfe_pct = roundPct(Math.min(AUTO_CAL_MAX_PEAK_MFE_PCT, next.peak_mfe_pct * 1.05));
     if (next.peak_mfe_abs !== peakBefore) {
@@ -1122,43 +1104,19 @@ export function proposeAutoCalibration(
         )
       );
     }
-    if (next.target_pct !== tgtPctBefore) {
-      changes.push(
-        autotuneLog(
-          `target_pct ${tgtPctBefore.toFixed(5)}→${next.target_pct.toFixed(5)}`,
-          'pct Target with abs raise'
-        )
-      );
-    }
-    if (next.peak_mfe_pct !== peakPctBefore) {
-      changes.push(
-        autotuneLog(
-          `peak_mfe_pct ${peakPctBefore.toFixed(5)}→${next.peak_mfe_pct.toFixed(5)}`,
-          'pct Peak with abs raise'
-        )
-      );
-    }
+    // target_pct / peak_mfe_pct track abs silently — no 0.000xx WHAT spam
   }
 
   // Soft ease when too tight even without full raise path
   if (!needPullBack && !doRaise && softTooTight) {
     const softBefore = next.hardinv_abs;
-    const pctBefore = next.hardinv_pct;
     next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
-    next.hardinv_pct = Math.min(AUTO_CAL_MAX_HARDINV_PCT, roundPct(pctBefore * 1.06));
+    next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
     if (next.hardinv_abs !== softBefore) {
       changes.push(
         autotuneLog(
           `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft ease`,
           'Soft too tight vs MFE left on table'
-        )
-      );
-    }
-    if (next.hardinv_pct !== pctBefore) {
-      changes.push(
-        autotuneLog(
-          `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft ease`,
-          'Soft too tight — raise pct'
         )
       );
     }
@@ -1264,9 +1222,10 @@ export function proposeAutoCalibration(
     AUTO_CAL_MAX_HARDINV_ABS,
     Math.max(AUTO_CAL_MIN_HARDINV_ABS, next.hardinv_abs)
   );
+  // Soft pct always follows Soft abs (clean 0.0001 steps) — never *1.05 dust
   next.hardinv_pct = Math.min(
     AUTO_CAL_MAX_HARDINV_PCT,
-    Math.max(AUTO_CAL_MIN_HARDINV_PCT, next.hardinv_pct)
+    Math.max(AUTO_CAL_MIN_HARDINV_PCT, softPctFromAbs(next.hardinv_abs))
   );
 
   // Entry filters L0–L3 — full freedom (tighten on knife/chop, ease when winning)
@@ -1375,7 +1334,10 @@ export function proposeAutoCalibration(
   next.peak_min_giveback_abs = roundAbs(next.peak_min_giveback_abs);
   next.peak_retention = roundRet(next.peak_retention);
   next.safety_tp_rr = roundRr(next.safety_tp_rr);
-  next.hardinv_pct = roundPct(next.hardinv_pct);
+  next.hardinv_pct = Math.min(
+    AUTO_CAL_MAX_HARDINV_PCT,
+    Math.max(AUTO_CAL_MIN_HARDINV_PCT, softPctFromAbs(next.hardinv_abs))
+  );
   next.target_pct = roundPct(next.target_pct);
   next.peak_mfe_pct = roundPct(next.peak_mfe_pct);
 
