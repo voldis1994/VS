@@ -163,6 +163,17 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
   if (to === 'REVERSAL_CANDIDATE') return true;
   if (to === 'FAILED_BREAKOUT_UP' || to === 'FAILED_BREAKOUT_DOWN') return true;
   if (to === 'BREAKOUT_UP' || to === 'BREAKOUT_DOWN') return true;
+  // Chop → trend/pullback must flip at the right moment (Gold grind / selloff).
+  // Waiting CONFIRM_BARS left live=RANGE while classify already saw TREND.
+  if (
+    (from === 'RANGE' || from === 'COMPRESSION') &&
+    (to === 'TREND_UP' ||
+      to === 'TREND_DOWN' ||
+      to === 'PULLBACK_UPTREND' ||
+      to === 'PULLBACK_DOWNTREND')
+  ) {
+    return true;
+  }
   const a = regimeFamily(from);
   const b = regimeFamily(to);
   // Opposite trend family

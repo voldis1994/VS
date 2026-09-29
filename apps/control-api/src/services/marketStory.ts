@@ -208,17 +208,19 @@ export function readMarketStory(
   const recentSell = recentNet < 0 && redR >= 3;
   const recentBuy = recentNet > 0 && greenR >= 3;
 
-  // Require real trek for ALL directional calls — tiny noise must not become SELLOFF
+  // Require firm trek for ALL directional calls — ±1.5pt sine / HH_HL noise ≠ RALLY/EXHAUST.
+  // minPath alone (~3pt) still lets thin mid-zone chop look like HH_HL → fake EXHAUST_HI.
+  const trekFirm = trek >= minPath * 1.5;
   const sellStruct =
-    (trek >= minPath && swing === 'LL_LH') ||
-    (trek >= minPath && net < 0 && red >= green + 2) ||
-    (trek >= minPath && recentSell && last.close <= midZone) ||
-    (trek >= minPath && red >= green + 2 && pos <= 0.45);
+    (trekFirm && swing === 'LL_LH') ||
+    (trekFirm && net < 0 && red >= green + 2) ||
+    (trekFirm && recentSell && last.close <= midZone) ||
+    (trekFirm && red >= green + 2 && pos <= 0.45);
   const buyStruct =
-    (trek >= minPath && swing === 'HH_HL') ||
-    (trek >= minPath && net > 0 && green >= red + 2) ||
-    (trek >= minPath && recentBuy && last.close >= midZone) ||
-    (trek >= minPath && green >= red + 2 && pos >= 0.55);
+    (trekFirm && swing === 'HH_HL') ||
+    (trekFirm && net > 0 && green >= red + 2) ||
+    (trekFirm && recentBuy && last.close >= midZone) ||
+    (trekFirm && green >= red + 2 && pos >= 0.55);
 
   const bounceInSell =
     sellStruct && !brokeUp && greenR >= 1 && greenR <= 2 && redR >= 2 && recentNet >= 0;
@@ -267,12 +269,12 @@ export function readMarketStory(
         ? 'STĀSTS · rally pie zonas griestiem · meklē BUY · SELL tikai failed-break / reversal'
         : `STĀSTS · 30m rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
     confidence = 0.75;
-  } else if (recentSell && trek >= minPath) {
+  } else if (recentSell && trekFirm) {
     chapter = 'SELLOFF';
     allow = 'SELL';
     summary_lv = `STĀSTS · pēdējās 1m sarkanas · trek ${trek.toFixed(1)}pt · tikai SELL`;
     confidence = 0.7;
-  } else if (recentBuy && trek >= minPath) {
+  } else if (recentBuy && trekFirm) {
     chapter = 'RALLY';
     allow = 'BUY';
     summary_lv = `STĀSTS · pēdējās 1m zaļas · trek ${trek.toFixed(1)}pt · tikai BUY`;
