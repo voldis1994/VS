@@ -35,11 +35,13 @@ export type TraderThought = {
 export type SessionLesson = {
   diagnosis: string;
   lesson: string;
-  /** Peak/Target/TP only — never entry filters */
+  /** Soft / Peak / Target / TP / entry filters — full autotune freedom */
   intent:
     | 'ease_peak_target'
     | 'let_winners_run'
     | 'protect_sooner'
+    | 'tighten_filters'
+    | 'ease_filters'
     | 'hold_course';
 };
 
@@ -516,7 +518,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
 
 /**
  * After 5 closes — think like a human reviewing the day.
- * Changes Peak/Target/TP intent only — never entry filters.
+ * Soft / Peak / Target / TP / entry filters — all fair game.
  */
 export function reviewSessionLikeHuman(
   trades: Array<{
@@ -530,7 +532,7 @@ export function reviewSessionLikeHuman(
   if (!trades.length) {
     return {
       diagnosis: 'Nav darījumu ko vērtēt.',
-      lesson: 'Turpinu ar pašreizējiem Soft/Peak/Target.',
+      lesson: 'Turpinu ar pašreizējiem Soft/Peak/Target/filtriem.',
       intent: 'hold_course',
     };
   }
@@ -560,21 +562,22 @@ export function reviewSessionLikeHuman(
       );
     }).length >= 2;
 
+  // Knife/chop Soft entries first — filters are the right lever (before Peak ease)
+  if (knifeSoft && softLosses.length >= 2) {
+    return {
+      diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi pēc sliktām 30m nodaļām (knife/chop) — ienācu pret stāstu.`,
+      lesson:
+        'Pievelku entry filtrus (FLIP/struktūra) + Soft/Peak aizsardzību — atļauts regulēt filtrus.',
+      intent: 'tighten_filters',
+    };
+  }
+
   if (leftOnTable && e < 0.25) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. ${peakTiny.length}× Peak/Target bankoja sīku daļu no MFE — plusi tika nogriezti pārāk agri vai pārāk tālu mērķi.`,
       lesson:
-        'Kā cilvēks: neceļu Peak vēl augstāk. Atviegloju Peak/Target, lai peļņa tiktu ielikta kontā, pirms Soft apēd.',
+        'Atviegloju Peak/Target, lai peļņa tiktu ielikta kontā, pirms Soft apēd. Filtrus varu arī pievilkt, ja ieejas bija sliktas.',
       intent: 'ease_peak_target',
-    };
-  }
-
-  if (knifeSoft && softLosses.length >= 2) {
-    return {
-      diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi pēc sliktām 30m nodaļām (knife/chop) — ienācu pret stāstu, nevis Peak bija par zemu.`,
-      lesson:
-        'Kā cilvēks: nemainu filtrus. Peak/Target neceļu. Aizsargājos ātrāk nākamajos darījumos (ciešāks Peak trail), Soft paliek.',
-      intent: 'protect_sooner',
     };
   }
 
@@ -582,7 +585,7 @@ export function reviewSessionLikeHuman(
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi lielāki par to, ko Peak/Target atnes — R:R apgriezts.`,
       lesson:
-        'Vai nu Peak/Target jābūt sasniedzamākiem (ease), vai jālauj uzvarētājiem skriet — bet ne filtri.',
+        'Ease Peak/Target un/vai Soft; ja ieejas bija chop — pievelku filtrus.',
       intent: leftOnTable ? 'ease_peak_target' : 'ease_peak_target',
     };
   }
@@ -596,7 +599,7 @@ export function reviewSessionLikeHuman(
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft-lieluma zaudējumi ×${softSized} (bez HardInv tag) — R:R apgriezts.`,
       lesson:
-        'Samazinu Soft CAP/pct un atviegloju Peak/Target — Soft jāregulē, ne tikai Peak.',
+        'Samazinu Soft CAP/pct un atviegloju Peak/Target — Soft + filtri regulējami.',
       intent: 'ease_peak_target',
     };
   }
@@ -604,14 +607,15 @@ export function reviewSessionLikeHuman(
   if (e >= 0.25) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)} pozitīvs — pieeja strādā.`,
-      lesson: 'Nelielas Peak korekcijas ok; Soft netieku. Filtrus neaiztieku.',
+      lesson:
+        'Ļauju uzvarētājiem skriet (Soft/Peak/Target). Filtrus varu atvieglot, ja bija pārāk stingri.',
       intent: 'let_winners_run',
     };
   }
 
   return {
     diagnosis: `Logs E=${e.toFixed(2)} — jaukti rezultāti.`,
-    lesson: 'Turpinu Soft/Peak/Target kursu; mācos no nākamā loga.',
+    lesson: 'Turpinu Soft/Peak/Target/filtru kursu; mācos no nākamā loga.',
     intent: 'hold_course',
   };
 }

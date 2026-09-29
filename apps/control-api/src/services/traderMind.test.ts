@@ -115,7 +115,7 @@ describe('traderMind', () => {
     expect(t.why).toMatch(/Bankoju|peļņ/i);
   });
 
-  it('reviews session with diagnosis — never suggests filters', () => {
+  it('reviews knife Soft session — may tighten filters', () => {
     const lesson = reviewSessionLikeHuman([
       {
         pnl_pts: -2,
@@ -136,10 +136,20 @@ describe('traderMind', () => {
       { pnl_pts: -1.5, exit_reason: 'HardInvalidation', mfe: 0.2, mae: 1.7 },
     ]);
     expect(lesson.diagnosis.length).toBeGreaterThan(10);
-    expect(lesson.lesson).not.toMatch(/filtr/i);
-    expect(['ease_peak_target', 'protect_sooner', 'hold_course', 'let_winners_run']).toContain(
-      lesson.intent
-    );
+    expect(lesson.intent).toBe('tighten_filters');
+    expect(lesson.lesson).toMatch(/filtr/i);
+  });
+
+  it('positive window lesson allows Soft/Peak/filters — no ban text', () => {
+    const lesson = reviewSessionLikeHuman([
+      { pnl_pts: 4, exit_reason: 'PeakProtection', mfe: 5, mae: 0.5 },
+      { pnl_pts: 3, exit_reason: 'Target', mfe: 4, mae: 0.4 },
+      { pnl_pts: -1, exit_reason: 'HardInvalidation', mfe: 0.2, mae: 1.2 },
+      { pnl_pts: 5, exit_reason: 'PeakProtection', mfe: 6, mae: 0.3 },
+      { pnl_pts: 2, exit_reason: 'TimeDecay', mfe: 3, mae: 0.5 },
+    ]);
+    expect(lesson.intent).toBe('let_winners_run');
+    expect(lesson.lesson).not.toMatch(/neaiztieku|netieku/i);
   });
 
   it('ENTRY mind chooses SELL on selloff — not blind BUY fade', () => {
