@@ -28,6 +28,7 @@ function trade(partial: {
   exit_reason?: string;
   mfe?: number;
   mae?: number;
+  entry_ctx?: { chapter?: string | null } | null;
 }) {
   return {
     pnl_pts: partial.pnl_pts,
@@ -37,6 +38,7 @@ function trade(partial: {
     mfe: partial.mfe ?? Math.max(partial.pnl_pts, 0),
     mae: partial.mae ?? Math.min(partial.pnl_pts, 0),
     at: new Date().toISOString(),
+    entry_ctx: partial.entry_ctx ?? null,
   };
 }
 
@@ -277,8 +279,10 @@ describe('autoCalibrate', () => {
     expect(r.applied).toBe(true);
     expect(r.next.safety_tp_rr).toBeLessThan(tall.safety_tp_rr);
     expect(r.next.target_abs).toBeLessThan(tall.target_abs);
-    expect(r.next.entry_filter_level).toBe(0);
-    expect(r.changes.some((c) => /pullback|ease|PRĀTS|MĀCĪBA|OPEN/.test(c))).toBe(true);
+    // Filters free — no longer forced to OPEN on pullback
+    expect(r.next.entry_filter_level).toBeGreaterThanOrEqual(0);
+    expect(r.next.entry_filter_level).toBeLessThanOrEqual(3);
+    expect(r.changes.some((c) => /pullback|ease|PRĀTS|MĀCĪBA|filtr/i.test(c))).toBe(true);
   });
 
   it('never raises Target / TP RR past hard caps', () => {
@@ -299,18 +303,42 @@ describe('autoCalibrate', () => {
     expect(r.next.target_abs).toBeLessThanOrEqual(AUTO_CAL_MAX_TARGET_ABS);
   });
 
-  it('never raises entry_filter_level — human mind keeps filters OPEN', () => {
+  it('may raise entry_filter_level on knife Soft window (filters free)', () => {
     const base = defaultDeskCalibration();
     expect(base.entry_filter_level).toBe(0);
     const r = proposeAutoCalibration(base, [
-      trade({ pnl_pts: -2, exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: -1.5, exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: -0.8 }),
+      trade({
+        pnl_pts: -2,
+        exit_reason: 'HardInvalidation',
+        entry_ctx: { chapter: 'BOUNCE_IN_SELL' },
+      }),
+      trade({
+        pnl_pts: -1.5,
+        exit_reason: 'HardInvalidation',
+        entry_ctx: { chapter: 'RANGE_CHOP' },
+      }),
+      trade({ pnl_pts: -0.8, entry_ctx: { chapter: 'BOUNCE_IN_SELL' } }),
       trade({ pnl_pts: 0.2 }),
-      trade({ pnl_pts: -1.2 }),
+      trade({
+        pnl_pts: -1.2,
+        exit_reason: 'HardInvalidation',
+        entry_ctx: { chapter: 'DIP_IN_RALLY' },
+      }),
     ]);
-    expect(r.next.entry_filter_level).toBe(0);
-    expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('MĀCĪBA'))).toBe(true);
+    expect(r.next.entry_filter_level).toBeGreaterThanOrEqual(1);
+    expect(r.changes.some((c) => c.includes('entry_filter_level'))).toBe(true);
+  });
+
+  it('eases entry_filter_level toward OPEN after clearly positive window', () => {
+    const base = { ...defaultDeskCalibration(), entry_filter_level: 2 };
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: 4, exit_reason: 'PeakProtection', mfe: 5 }),
+      trade({ pnl_pts: 3.5, exit_reason: 'Target', mfe: 4 }),
+      trade({ pnl_pts: 2, exit_reason: 'PeakProtection', mfe: 3 }),
+      trade({ pnl_pts: 5, exit_reason: 'PeakProtection', mfe: 6 }),
+      trade({ pnl_pts: 1.5, exit_reason: 'TimeDecay', mfe: 2 }),
+    ]);
+    expect(r.next.entry_filter_level).toBeLessThan(2);
   });
 
   it('Soft-heavy window applies Soft tighten (no longer silent hold)', () => {
@@ -430,6 +458,7 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 1.2 }),
       trade({ pnl_pts: -0.4 }),
     ]);
-    expect(r.next.entry_filter_level).toBe(0);
+    // One step toward OPEN per cycle (not hard-reset to 0)
+    expect(r.next.entry_filter_level).toBe(1);
   });
 });

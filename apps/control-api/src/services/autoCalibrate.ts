@@ -3,10 +3,10 @@
  * retunes Soft/HardInv (abs+pct), Peak/Target, genome Peak/Soft memory,
  * multi-TF/regime perception, and regime allowlist every N closes.
  *
- * Freedom policy: Soft/HardInv/genome/regimes may all move for better
- * expectancy. Start OPEN TRADE-ALL; self-correct from closes + market ctx.
+ * Freedom policy: Soft/HardInv/genome/regimes/entry filters may all move for
+ * better expectancy. Start OPEN TRADE-ALL; self-correct from closes + market ctx.
  * Never empty allowlist below MIN_ENABLED_REGIMES. Lot untouched.
- * Entry filters stay OPEN (0). WHAT/WHY change logs for GUI + LIVE LOG.
+ * WHAT/WHY change logs for GUI + LIVE LOG.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -344,7 +344,7 @@ function clampOverreachKnobs(clientId?: number | null): void {
     if (cur.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
       patch.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
     }
-    if ((cur.entry_filter_level || 0) >= 3) patch.entry_filter_level = 0;
+    // entry_filter_level 0–3 is free — do not snap L3 back to OPEN
     if (Object.keys(patch).length) setDeskCalibration(patch, id);
   } catch {
     /* ignore */
@@ -872,16 +872,7 @@ export function proposeAutoCalibration(
   const next: DeskCalibration = {
     ...current,
     enabled_regimes: [...current.enabled_regimes],
-    entry_filter_level: 0,
   };
-  if ((current.entry_filter_level || 0) !== 0) {
-    changes.push(
-      autotuneLog(
-        `entry_filter_level ${current.entry_filter_level}→0`,
-        'OPEN — prāts nevis filtri'
-      )
-    );
-  }
 
   const rrNow = next.safety_tp_rr || 1.5;
   const alreadyTall =
@@ -910,7 +901,12 @@ export function proposeAutoCalibration(
         leftWinnerOnTable ||
         (asymmetryBad && (softLosses >= 2 || softSizedLosses >= 2))));
 
-  const needProtectSooner = human.intent === 'protect_sooner';
+  const needProtectSooner =
+    human.intent === 'protect_sooner' || human.intent === 'tighten_filters';
+  const needTightenFilters = human.intent === 'tighten_filters';
+  const needEaseFilters =
+    human.intent === 'ease_filters' ||
+    (human.intent === 'let_winners_run' && (current.entry_filter_level || 0) > 0 && expectancy >= 0.5);
 
   const needBiggerWinners =
     !needPullBack &&
@@ -1256,12 +1252,28 @@ export function proposeAutoCalibration(
     Math.max(AUTO_CAL_MIN_HARDINV_PCT, next.hardinv_pct)
   );
 
-  if ((next.entry_filter_level || 0) !== 0) {
-    const b = next.entry_filter_level;
-    next.entry_filter_level = 0;
-    if (!changes.some((c) => c.includes('entry_filter_level'))) {
-      changes.push(autotuneLog(`entry_filter_level ${b}→0 OPEN`, 'filters stay open'));
+  // Entry filters L0–L3 — full freedom (tighten on knife/chop, ease when winning)
+  {
+    const b = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
+    let lvl = b;
+    if (needTightenFilters && lvl < 3) {
+      lvl = Math.min(3, lvl + 1);
+      changes.push(
+        autotuneLog(
+          `entry_filter_level ${b}→${lvl}`,
+          'knife/chop Soft entries — tighten FLIP/structure filters'
+        )
+      );
+    } else if (needEaseFilters && lvl > 0) {
+      lvl = Math.max(0, lvl - 1);
+      changes.push(
+        autotuneLog(
+          `entry_filter_level ${b}→${lvl}`,
+          'positive window — ease filters toward OPEN'
+        )
+      );
     }
+    next.entry_filter_level = lvl;
   }
 
   // --- Regime book: any regime may demote with evidence; floor keeps trading ---
