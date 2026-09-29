@@ -77,7 +77,7 @@ describe('autoCalibrate', () => {
     expect(getAutoCalibrateStatus().cycles_run).toBe(1);
   });
 
-  it('soft-demotes satellite regime but NEVER turns OFF core (RANGE etc)', () => {
+  it('soft-demotes satellite regime; prefers satellites before cores', () => {
     const current = defaultDeskCalibration();
     const window = [
       trade({ pnl_pts: -1.5, regime: 'BREAKOUT_UP', exit_reason: 'HardInvalidation' }),
@@ -90,12 +90,11 @@ describe('autoCalibrate', () => {
     const result = proposeAutoCalibration(current, window, demoted);
     expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
     expect(result.next.enabled_regimes.includes('BREAKOUT_UP' as never)).toBe(false);
-    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
     expect(result.next.enabled_regimes.includes('TREND_UP' as never)).toBe(true);
     expect(result.changes.some((c) => c.includes('regime OFF BREAKOUT_UP'))).toBe(true);
   });
 
-  it('refuses to auto-OFF core RANGE even when it is the worst loser', () => {
+  it('may demote preferred RANGE when it is a clear loser (freedom · no core ban)', () => {
     const current = defaultDeskCalibration();
     const window = [
       trade({ pnl_pts: -2, regime: 'RANGE' }),
@@ -105,11 +104,13 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 0.5, regime: 'TREND_DOWN' }),
     ];
     const result = proposeAutoCalibration(current, window, new Set());
-    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
-    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(false);
-    for (const r of CORE_ALWAYS_ON_REGIMES) {
-      expect(result.next.enabled_regimes.includes(r as never)).toBe(true);
-    }
+    expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
+    expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(false);
+    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(true);
+    // Floor still keeps preferred liquid regimes present overall
+    expect(CORE_ALWAYS_ON_REGIMES.some((r) => result.next.enabled_regimes.includes(r as never))).toBe(
+      true
+    );
   });
 
   it('never empties allowlist even if all window regimes lose', () => {
@@ -159,7 +160,7 @@ describe('autoCalibrate', () => {
     expect(st.knobs_now.peak_mfe_abs).toBeGreaterThan(3);
   });
 
-  it('raises broker SAFETY TP R:R (safety_tp_rr) and leaves Soft HardInv/SL alone', () => {
+  it('raises broker SAFETY TP R:R and may also tune Soft (full Soft freedom)', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
       trade({ pnl_pts: 0.4 }),
@@ -171,8 +172,49 @@ describe('autoCalibrate', () => {
     expect(r.applied).toBe(true);
     expect(r.next.safety_tp_rr).toBeGreaterThan(base.safety_tp_rr);
     expect(r.next.safety_tp_rr).toBeLessThanOrEqual(AUTO_CAL_MAX_SAFETY_TP_RR);
-    expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
-    expect(r.changes.some((c) => c.startsWith('safety_tp_rr'))).toBe(true);
+    expect(r.changes.some((c) => c.includes('safety_tp_rr'))).toBe(true);
+    expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
+  });
+
+  it('Soft-heavy pullback tightens hardinv_abs AND hardinv_pct', () => {
+    const base = defaultDeskCalibration();
+    const r = proposeAutoCalibration(
+      base,
+      [
+        trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection', mfe: 2.5 }),
+        trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.2, exit_reason: 'PeakProtection', mfe: 2.0 }),
+      ],
+      new Set(),
+      { raise_streak: 3 }
+    );
+    expect(r.applied).toBe(true);
+    expect(r.next.hardinv_abs).toBeLessThan(base.hardinv_abs);
+    expect(r.next.hardinv_pct).toBeLessThan(base.hardinv_pct);
+    expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
+      true
+    );
+  });
+
+  it('Soft steps are clean decimals (2.2→2.0 not 1.9998)', () => {
+    const base = { ...defaultDeskCalibration(), hardinv_abs: 1.4 };
+    const r = proposeAutoCalibration(
+      base,
+      [
+        trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.2, exit_reason: 'PeakProtection', mfe: 1.5 }),
+        trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.1, exit_reason: 'PeakProtection', mfe: 1.2 }),
+      ],
+      new Set(),
+      { raise_streak: 3 }
+    );
+    expect(r.next.hardinv_abs).toBe(1.2);
+    expect(Number.isInteger(r.next.hardinv_abs * 10)).toBe(true);
+    expect(String(r.next.hardinv_abs)).not.toMatch(/\.\d{3,}/);
   });
 
   it('pulls back when targets overreached and expectancy still negative', () => {
@@ -235,9 +277,8 @@ describe('autoCalibrate', () => {
     expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('MĀCĪBA'))).toBe(true);
   });
 
-  it('applied=false when only PRĀTS/MĀCĪBA diagnostics — no knob/regime change', () => {
+  it('Soft-heavy window applies Soft tighten (no longer silent hold)', () => {
     const base = defaultDeskCalibration();
-    // Factory Peak/Target sit on Soft floor — ease intent keeps values (no raise)
     const r = proposeAutoCalibration(base, [
       trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' }),
       trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
@@ -247,12 +288,9 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.changes.some((c) => c.startsWith('PRĀTS'))).toBe(true);
     expect(r.changes.some((c) => c.startsWith('MĀCĪBA'))).toBe(true);
-    expect(r.next.peak_mfe_abs).toBe(base.peak_mfe_abs);
-    expect(r.next.target_abs).toBe(base.target_abs);
-    expect(r.next.safety_tp_rr).toBe(base.safety_tp_rr);
-    expect(r.next.peak_retention).toBe(base.peak_retention);
-    expect(r.next.enabled_regimes.slice().sort()).toEqual(base.enabled_regimes.slice().sort());
-    expect(r.applied).toBe(false);
+    expect(r.applied).toBe(true);
+    expect(r.next.hardinv_abs).toBeLessThan(base.hardinv_abs);
+    expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
   });
 
   it('pullback/ease never raises Peak/Target/TP on factory Soft floor', () => {

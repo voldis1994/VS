@@ -859,13 +859,27 @@ async function persistClosedTradeLedger(
     );
     const st = getAutoCalibrateStatus(undefined, s.client_id);
     if (cycle?.applied) {
+      const whatWhy = cycle.changes.filter((c) => c.includes('WHAT ·') || c.includes('WHY ·'));
+      const lines =
+        whatWhy.length > 0
+          ? whatWhy.slice(0, 8).join(' │ ')
+          : cycle.changes.join(' · ') || 'hold';
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · knobs updated · entries stay open · session E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level}`,
+        detail: `AUTOTUNE APPLIED · ${cycle.summary} · ${lines} · Soft ${st.knobs_now.hardinv_abs}/${Number(st.knobs_now.hardinv_pct).toFixed(5)} · Peak ${st.knobs_now.peak_mfe_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · E=${st.session_expectancy_pts.toFixed(2)}`,
       });
+      for (const line of whatWhy.slice(0, 12)) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `AUTOTUNE · ${line}`,
+        });
+      }
       if (cycleTouchesBrokerTp(cycle.changes)) {
         void syncAllOpenRobotsBrokerTp();
       }
@@ -875,7 +889,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTO-CAL hold · ${cycle.summary} · closes ${st.closes_in_session}`,
+        detail: `AUTOTUNE hold · ${cycle.summary} · closes ${st.closes_in_session} · Soft free · genome free`,
       });
     } else {
       pushTick(s, {
@@ -883,7 +897,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${st.knobs_now.safety_tp_rr}`,
+        detail: `AUTOTUNE watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · Soft ${st.knobs_now.hardinv_abs} · TP RR ${st.knobs_now.safety_tp_rr}`,
       });
     }
     // Push live counters to COMMAND so CLOSES/LEARNER update without full refresh
@@ -1047,9 +1061,20 @@ async function reconcileCapitalActivityCloses(
       ask: quote.ask,
       mid: quote.mid,
       detail: `RECONCILE CLOSE · ${side} ${actType} · deal ${dealId.slice(0, 12)} · CLOSES ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N}${
-        cycle?.applied ? ` · AUTO-CAL ${cycle.summary}` : ''
+        cycle?.applied ? ` · AUTOTUNE ${cycle.summary}` : ''
       } · Soft≈${soft.toFixed(1)}`,
     });
+    if (cycle?.applied) {
+      for (const line of cycle.changes.filter((c) => c.includes('WHAT ·')).slice(0, 8)) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `AUTOTUNE · ${line}`,
+        });
+      }
+    }
     if (s.client_id) {
       emitToClient(s.client_id, {
         type: 'auto_cal_update',
@@ -3789,7 +3814,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · (SĀKT NO JAUNA = wipe)`,
+      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs}/${Number(st.knobs_now.hardinv_pct).toFixed(5)} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {

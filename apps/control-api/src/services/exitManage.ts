@@ -64,9 +64,10 @@ export const PEAK_MFE_RETENTION = 0.72;
 export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
- * Gold-scale floors / caps.
- * Soft HardInv CAP (~2.2) must stay WELL BELOW Target / Peak MFE floors —
- * otherwise 80% tiny Peak wins + few large HardInv losses = negative expectancy.
+ * Gold-scale factory defaults (reference).
+ * Live Soft/Peak/Target follow desk calibration — auto-cal may move below these
+ * floors when Soft-heavy losses or ease intent require it. Abs floor only
+ * applies when it does not fight the Soft CAP.
  */
 export const HARDINV_ABS_FLOOR = 1.5;
 /** Cap Soft HardInv — `hardinv_abs` calibration knob is a CAP, not a floor. */
@@ -89,12 +90,10 @@ export function targetTakeProfitDistance(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const profile = regimeExitProfile(regime);
+  const targetAbs = cal.target_abs > 0 ? cal.target_abs : TARGET_ABS_FLOOR;
   return (
-    Math.max(
-      absEntry * cal.target_pct,
-      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
-      scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
-    ) * profile.target_mult
+    Math.max(absEntry * cal.target_pct, scaleDeskAbs(targetAbs, absEntry)) *
+    profile.target_mult
   );
 }
 
@@ -362,8 +361,10 @@ export function hardInvStopDistance(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const pct = absEntry * cal.hardinv_pct;
-  const floor = scaleDeskAbs(HARDINV_ABS_FLOOR, absEntry);
   const capGold = cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
+  // Floor never fights Soft CAP — auto-cal may tighten Soft below factory 1.5
+  const floorAbs = Math.min(HARDINV_ABS_FLOOR, capGold);
+  const floor = scaleDeskAbs(floorAbs, absEntry);
   const cap = scaleDeskAbs(capGold, absEntry);
   let sl = Math.min(Math.max(pct, floor), cap);
   const profile = regimeExitProfile(regime);
@@ -497,12 +498,10 @@ export function decideBestOutcomeExit(
   const sl = hardInvStopDistance(entry, thesisRegime);
   /** Peak/Target/TimeDecay — never bank below Soft loss size */
   const minBank = minProfitBank(sl);
+  const peakAbs = cal.peak_mfe_abs > 0 ? cal.peak_mfe_abs : PEAK_MFE_ABS_FLOOR;
   let mfeFloor =
-    Math.max(
-      absEntry * cal.peak_mfe_pct,
-      scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
-      scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
-    ) * profile.peak_mfe_mult;
+    Math.max(absEntry * cal.peak_mfe_pct, scaleDeskAbs(peakAbs, absEntry)) *
+    profile.peak_mfe_mult;
   if (
     overrides?.peak_mfe_floor != null &&
     Number.isFinite(overrides.peak_mfe_floor) &&
