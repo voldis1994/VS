@@ -570,6 +570,11 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     return null;
   }
 
+  // Belt-and-suspenders: story allow veto (mind already enforces; structure must too)
+  if (story.allow === 'BUY' && side === 'SELL') return null;
+  if (story.allow === 'SELL' && side === 'BUY') return null;
+  if (story.allow === 'NONE') return null;
+
   // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
   const raw = decideEntryFrom10sRegime(input.bar, regime);
   const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);

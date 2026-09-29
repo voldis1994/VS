@@ -250,6 +250,28 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/30m↑/);
   });
 
+  it('ENTRY never SELLs when story allow is BUY (tikai BUY · nepārdot)', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'RALLY',
+      allow: 'BUY',
+      story_conf: 0.75,
+      story_summary: 'STĀSTS · 30m rally · trek 13.7pt · tikai BUY · nepārdot',
+      red_1m: 8,
+      green_1m: 14,
+      zone_pos: 0.68,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).not.toBe('SELL');
+    expect(t.choice).toBe('WAIT');
+    expect(t.thesis + t.why).toMatch(/BUY|nepārdot|aizliegts/i);
+  });
+
   it('ENTRY mind SELLs when full stack is DOWN', () => {
     const t = thinkEntryLikeTrader({
       regime: 'TREND_DOWN',

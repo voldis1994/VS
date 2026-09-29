@@ -437,6 +437,26 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
+  // Hard veto: story allow is law — "tikai BUY · nepārdot" must never open SELL
+  if (allow === 'BUY' && choice === 'SELL') {
+    choice = 'WAIT';
+    thesis = `STĀSTS ${chapter} · tikai BUY · nepārdot — SELL aizliegts.`;
+    why = 'Noteikums: allow=BUY → nekad neieeju SELL (pret stāstu).';
+    confidence = 0.3;
+  }
+  if (allow === 'SELL' && choice === 'BUY') {
+    choice = 'WAIT';
+    thesis = `STĀSTS ${chapter} · tikai SELL · nepirkt — BUY aizliegts.`;
+    why = 'Noteikums: allow=SELL → nekad neieeju BUY (pret stāstu).';
+    confidence = 0.3;
+  }
+  if (allow === 'NONE' && choice !== 'WAIT') {
+    choice = 'WAIT';
+    thesis = `STĀSTS ${chapter} · allow NONE — gaidu skaidru pusi.`;
+    why = 'Nav atļautās puses — neieeju.';
+    confidence = 0.3;
+  }
+
   // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker (evolvable)
   if (genome.mtf_htf_veto) {
     if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
