@@ -937,10 +937,17 @@ export function proposeAutoCalibration(
       next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, next.hardinv_abs);
       next.hardinv_pct = Math.max(AUTO_CAL_MIN_HARDINV_PCT, roundPct(pctBefore * 0.9));
       if (next.hardinv_abs !== softBefore) {
+        const mkt = windowTrades
+          .map((t) => (t.exit_ctx || t.entry_ctx)?.chapter)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join('/');
         changes.push(
           autotuneLog(
             `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft tighten`,
-            `Soft-heavy Soft×${softLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}`
+            `Soft-heavy Soft×${softLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}${
+              mkt ? ` · mkt ${mkt}` : ''
+            }`
           )
         );
       }
