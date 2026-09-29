@@ -219,6 +219,30 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(r).not.toBe('RANGE');
   });
 
+  it('Gold V-recovery: dump then rally → TREND_UP/PULLBACK not RANGE fade', () => {
+    // Capital 15:20–16:05 Gold: ~12pt dump then ~9pt rally. Story correctly
+    // says "30m rally · trek 9.6pt · BUY", but early→late NET is small while
+    // PATH is huge → old efficiency gate kept RANGE + fade playbook.
+    const bars: TenSecBar[] = [];
+    const n = MIN_BARS_FOR_ZONE + 50;
+    const dumpN = Math.floor(n * 0.55);
+    for (let i = 0; i < n; i++) {
+      let c: number;
+      if (i < dumpN) {
+        c = 4175 - (i / (dumpN - 1)) * 12; // 4175 → 4163
+      } else {
+        c = 4163 + ((i - dumpN) / (n - dumpN - 1)) * 9; // 4163 → 4172
+      }
+      const o = c - 0.04;
+      bars.push(bar(o, c + 0.25, o - 0.2, c, i));
+    }
+    const tip = bars[bars.length - 1]!.close;
+    bars.push(bar(tip, tip + 0.15, tip - 0.4, tip - 0.08, n)); // quiet tip
+    const r = classifyRegime(bars, 'RANGE');
+    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = padBars([
       bar(100.0, 101.0, 99.6, 100.7, 0),

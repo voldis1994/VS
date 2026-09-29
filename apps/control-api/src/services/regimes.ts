@@ -323,31 +323,45 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   // Quiet 10s tips stay inside the rolling hi/lo box → old code always fell
   // through to RANGE even when 30m↑15m↑5m↑ and the zone itself walked up.
   // Use early vs late thirds + path efficiency so sideways oscillation ≠ trend.
+  //
+  // V-recovery (dump then sharp rally): early→late NET is small while PATH is
+  // huge → efficiency fails and we wrongly stayed RANGE (Capital Gold 16:05).
+  // Also score the *recent leg* (late vs mid third) so the recovery counts.
   const third = Math.max(1, Math.floor(zonePrior.length / 3));
   const earlyMean = mean(zonePrior.slice(0, third).map((b) => b.close));
+  const midMean = mean(zonePrior.slice(third, third * 2).map((b) => b.close));
   const lateMean = mean(zonePrior.slice(-third).map((b) => b.close));
   const zoneTrekPts = lateMean - earlyMean;
+  const recentLegPts = lateMean - midMean;
   const zoneTrekRef = Math.max(Math.abs(earlyMean), Math.abs(zoneMid), 1e-9);
   const zoneTrek = zoneTrekPts / zoneTrekRef;
+  const recentLeg = recentLegPts / zoneTrekRef;
   let zonePath = 0;
   for (let i = 1; i < zonePrior.length; i++) {
     zonePath += Math.abs(zonePrior[i]!.close - zonePrior[i - 1]!.close);
   }
   const trekEfficiency = zonePath > 1e-9 ? Math.abs(zoneTrekPts) / zonePath : 0;
   const trekShare = Math.abs(zoneTrekPts) / zoneWidth;
-  const zoneIsTrending =
+  const recentShare = Math.abs(recentLegPts) / zoneWidth;
+  const fullTrekOk =
     Math.abs(zoneTrek) >= TREND_ENTER * 4 &&
     trekShare >= 0.35 &&
     trekEfficiency >= 0.4;
-  if (inRange && zoneIsTrending) {
-    if (zoneTrek > 0) {
+  // Recent leg: after a V, mid sits near the low and late has climbed.
+  // Use a softer abs gate (×2 not ×4) — Gold recovery legs are often 3–5pt
+  // inside a 10–15pt dump/rally box, which fails the full-trek ×4 floor.
+  const recentLegOk =
+    Math.abs(recentLeg) >= TREND_ENTER * 2 && recentShare >= 0.25;
+  const trekDirPts = recentLegOk ? recentLegPts : zoneTrekPts;
+  if (inRange && (fullTrekOk || recentLegOk) && trekDirPts !== 0) {
+    if (trekDirPts > 0) {
       // Soft tip against the trek → pullback in uptrend (1m↓ while HTF↑)
       if (lastVel <= -PULLBACK || (lastVel < -MOVE && last.close < zoneMid)) {
         return 'PULLBACK_UPTREND';
       }
       return 'TREND_UP';
     }
-    if (zoneTrek < 0) {
+    if (trekDirPts < 0) {
       if (lastVel >= PULLBACK || (lastVel > MOVE && last.close > zoneMid)) {
         return 'PULLBACK_DOWNTREND';
       }
