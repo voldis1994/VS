@@ -43,6 +43,8 @@ export type EvalScore = {
   regime_score: number;
   /** Fingerprint of classify labels across regime fixtures — detects no-op mutations. */
   perception_fingerprint: string;
+  /** Per-scenario classify tip labels (for mutation-relevant ACCEPT gates). */
+  regime_labels: Record<string, string>;
 };
 
 export type EvalReport = {
@@ -281,6 +283,7 @@ function scoreFromReplay(): EvalScore {
     entry_wait_score: entryWaitScore(),
     regime_score: perception.score,
     perception_fingerprint: perception.fingerprint,
+    regime_labels: perception.labels,
   };
 }
 
@@ -364,6 +367,94 @@ export type EvaluateOpts = {
   genome_delta?: Record<string, unknown> | null;
 };
 
+/** Which regime scenarios a trading-intel key is expected to affect. */
+const INTEL_KEY_SCENARIOS: Record<string, readonly string[]> = {
+  regime_move: ['TREND_UP', 'TREND_DOWN', 'FAILED_BREAKOUT', 'TRANSITION', 'RANGE'],
+  regime_trend_stay: ['TREND_UP', 'TREND_DOWN'],
+  regime_trend_enter: ['TREND_UP', 'TREND_DOWN', 'BREAKOUT_UP', 'BREAKOUT_DOWN'],
+  regime_pullback: ['REVERSAL', 'TREND_UP', 'TREND_DOWN'],
+  regime_reversal: ['REVERSAL'],
+  regime_move_range: ['RANGE', 'COMPRESSION', 'TRANSITION'],
+  regime_compress_abs: ['COMPRESSION', 'RANGE', 'COMPRESSION_TO_EXPANSION'],
+  regime_expand_abs: ['EXPANSION', 'COMPRESSION_TO_EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN'],
+  regime_compress_avg_mult: ['COMPRESSION', 'RANGE'],
+  regime_expand_avg_mult: ['EXPANSION', 'COMPRESSION_TO_EXPANSION'],
+  regime_near_zone_mid: ['COMPRESSION', 'RANGE'],
+  regime_clear_break_frac: ['BREAKOUT_UP', 'BREAKOUT_DOWN', 'FAILED_BREAKOUT'],
+  regime_persist_enter: ['TREND_UP', 'TREND_DOWN'],
+  regime_persist_stay: ['TREND_UP', 'TREND_DOWN'],
+  regime_persist_pullback: ['REVERSAL', 'TREND_UP', 'TREND_DOWN'],
+  regime_min_dwell_bars: [
+    'TREND_UP',
+    'TREND_DOWN',
+    'RANGE',
+    'TRANSITION',
+    'COMPRESSION',
+    'EXPANSION',
+  ],
+  regime_confirm_bars: [
+    'TREND_UP',
+    'TREND_DOWN',
+    'RANGE',
+    'TRANSITION',
+    'COMPRESSION',
+    'EXPANSION',
+  ],
+  regime_mom_bars: ['TREND_UP', 'TREND_DOWN', 'REVERSAL', 'COMPRESSION', 'EXPANSION'],
+  regime_persist_window: ['TREND_UP', 'TREND_DOWN', 'REVERSAL'],
+};
+
+const MTF_INTEL_KEYS = new Set([
+  'mtf_trek_flat_frac',
+  'mtf_block_higher_fight',
+  'mtf_require_aligned_side',
+  'mtf_htf_veto',
+  'entry_story_conf_min',
+  'entry_chop_conf_max',
+]);
+
+function relevantScenarioIds(deltaKeys: string[]): string[] {
+  const ids = new Set<string>();
+  for (const k of deltaKeys) {
+    const mapped = INTEL_KEY_SCENARIOS[k];
+    if (mapped) for (const id of mapped) ids.add(id);
+  }
+  return [...ids];
+}
+
+function relevantPerceptionMoved(
+  baseline: EvalScore,
+  candidate: EvalScore,
+  deltaKeys: string[]
+): { moved: boolean; detail: string } {
+  const touchesMtf = deltaKeys.some((k) => MTF_INTEL_KEYS.has(k));
+  const entryMoved =
+    Math.abs(candidate.entry_wait_score - baseline.entry_wait_score) > 1e-9;
+  const relevant = relevantScenarioIds(deltaKeys);
+  const changed: string[] = [];
+  for (const id of relevant) {
+    if ((baseline.regime_labels?.[id] || '') !== (candidate.regime_labels?.[id] || '')) {
+      changed.push(id);
+    }
+  }
+  if (touchesMtf && entryMoved) {
+    return { moved: true, detail: `mtf/entry_wait ${baseline.entry_wait_score}→${candidate.entry_wait_score}` };
+  }
+  if (relevant.length === 0) {
+    // Unknown intel key — fall back to global fingerprint
+    const moved = candidate.perception_fingerprint !== baseline.perception_fingerprint || entryMoved;
+    return { moved, detail: moved ? 'global perception' : 'no perception change' };
+  }
+  if (changed.length) {
+    return { moved: true, detail: `scenarios ${changed.join(',')}` };
+  }
+  // Regime-only intel must move its own scenarios — unchanged elsewhere is not enough.
+  return {
+    moved: false,
+    detail: `relevant scenarios unchanged (${relevant.join(',')})`,
+  };
+}
+
 export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): EvalReport {
   const tests = runBrainTests();
   if (!tests.ok) {
@@ -383,15 +474,12 @@ export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): Eva
   const entryImprove = candidate.entry_wait_score > baseline.entry_wait_score + 0.04;
   const regimeImprove = candidate.regime_score > baseline.regime_score + 0.04;
   const notBroken = candidate.trades >= Math.max(0, baseline.trades - 3);
-  const perceptionMoved =
-    candidate.perception_fingerprint !== baseline.perception_fingerprint ||
-    Math.abs(candidate.entry_wait_score - baseline.entry_wait_score) > 1e-9 ||
-    Math.abs(candidate.regime_score - baseline.regime_score) > 1e-9;
 
   const deltaKeys = Object.keys(opts?.genome_delta || {}).filter((k) => k !== 'last_lesson');
   const touchesTradingIntel = deltaKeys.some((k) =>
     (TRADING_INTEL_GENOME_KEYS as readonly string[]).includes(k)
   );
+  const relevant = relevantPerceptionMoved(baseline, candidate, deltaKeys);
 
   // Measurable improvement required — flat E alone is not enough.
   let improved =
@@ -399,9 +487,8 @@ export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): Eva
     (eGain > 0.02 ||
       (eGain >= -0.01 && (softImprove || wrImprove || entryImprove || regimeImprove)));
 
-  // Trading-intel must move perception on the scenarios it owns — no free ACCEPT
-  // because expectancy stayed flat on an unrelated book.
-  if (improved && touchesTradingIntel && !perceptionMoved) {
+  // Trading-intel must move perception on scenarios the mutation owns.
+  if (improved && touchesTradingIntel && !relevant.moved) {
     improved = false;
   }
   // Trading-intel also needs a real score lift (not barely-not-worse E).
@@ -412,8 +499,8 @@ export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): Eva
   let reason: string;
   if (!notBroken)
     reason = `REJECTED — trade count collapsed ${baseline.trades}→${candidate.trades}`;
-  else if (touchesTradingIntel && !perceptionMoved)
-    reason = `REJECTED — trading-intel perception unchanged across regime/MTF scenarios`;
+  else if (touchesTradingIntel && !relevant.moved)
+    reason = `REJECTED — trading-intel ${relevant.detail}`;
   else if (improved)
     reason = `ACCEPTED — E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · WR ${(baseline.win_rate * 100).toFixed(0)}%→${(candidate.win_rate * 100).toFixed(0)}% · SoftShare ${(baseline.soft_loss_share * 100).toFixed(0)}%→${(candidate.soft_loss_share * 100).toFixed(0)}% · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}%`;
   else

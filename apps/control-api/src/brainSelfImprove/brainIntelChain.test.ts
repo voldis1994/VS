@@ -257,43 +257,49 @@ describe('brainSelfImprove trading-intel chain', () => {
   });
 
   it('regime_mom_bars / persist_window change is consumed by classify path', () => {
-    // Build bars where short mom window sees strong down persistence but long
-    // window dilutes with earlier quiet bars → label can flip with mom length.
     const bars: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
-      bars.push(bar(100, 100.05, 99.95, 100, i));
+      const wobble = ((i % 5) - 2) * 0.02;
+      const c = 100 + wobble;
+      bars.push(bar(c, c + 0.03, c - 0.03, c + 0.01, i));
     }
-    // Strong down bodies for last 6 bars (~0.05% each)
-    for (let i = 0; i < 6; i++) {
-      const o = 100 - i * 0.04;
-      const c = o - 0.05;
-      bars.push(bar(o, o + 0.01, c - 0.01, c, bars.length));
+    for (let i = 0; i < 5; i++) {
+      const o = 100.2 - i * 0.05;
+      const c = o - 0.13;
+      bars.push(bar(o, o + 0.01, c - 0.02, c, bars.length));
     }
 
     _resetBrainGenomeForTests({
-      regime_mom_bars: 6,
-      regime_persist_window: 6,
+      regime_mom_bars: 5,
+      regime_persist_window: 5,
       regime_persist_enter: 0.4,
       regime_trend_enter: 0.0003,
+      regime_move: 0.00008,
     });
-    const shortMom = classifyRegime(bars, 'UNKNOWN');
+    expect(classifyRegime(bars, 'UNKNOWN')).toBe('TREND_DOWN');
 
-    setBrainGenome({ regime_mom_bars: 16, regime_persist_window: 6 });
+    setBrainGenome({ regime_mom_bars: 16, regime_persist_window: 5 });
     reloadBrainGenome();
     expect(getBrainGenome().regime_mom_bars).toBe(16);
-    const longMom = classifyRegime(bars, 'UNKNOWN');
+    expect(getBrainGenome().regime_persist_window).toBe(5);
+    expect(classifyRegime(bars, 'UNKNOWN')).not.toBe('TREND_DOWN');
+  });
 
-    // At least one path produces a decided label, and mom length is live
-    expect(typeof shortMom).toBe('string');
-    expect(typeof longMom).toBe('string');
-    // Changing mom window must be able to change classification on this fixture
-    // (short window = concentrated down persistence; long = diluted).
-    expect(shortMom === longMom || shortMom !== longMom).toBe(true);
-    // Stronger assertion: short-mom should prefer TREND_DOWN more than long-mom dilution
-    if (shortMom === 'TREND_DOWN') {
-      expect(longMom === 'TREND_DOWN' || longMom === 'RANGE' || longMom === 'UNKNOWN').toBe(
-        true
-      );
-    }
+  it('intel ACCEPT requires relevant-scenario movement (not unrelated flat books)', () => {
+    const baseline = measureBaseline();
+    // Tiny dwell nudge often leaves tip labels identical on synthetic fixtures
+    setBrainGenome({
+      regime_min_dwell_bars: getBrainGenome().regime_min_dwell_bars, // no-op value
+      explore_step: 42,
+      last_lesson: 'noop intel',
+    });
+    const report = evaluateCandidate(baseline, {
+      genome_delta: {
+        regime_reversal: getBrainGenome().regime_reversal, // same value
+        explore_step: 42,
+      },
+    });
+    // Same reversal value → REVERSAL scenario unchanged → must not improve via intel path
+    expect(report.improved).toBe(false);
   });
 });

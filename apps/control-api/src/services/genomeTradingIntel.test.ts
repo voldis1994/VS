@@ -15,7 +15,7 @@ import {
 import { classifyRegime, MIN_BARS_FOR_ZONE, stabilizeRegime } from './regimes.js';
 import { thinkEntryLikeTrader } from './traderMind.js';
 import { readMultiTfStack, sideFromMultiTf, trekBiasFromCandles } from './multiTfRead.js';
-import type { TenSecBar } from './tenSecondOhlc.js';
+import { isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, high: number, low: number, close: number, i = 0): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
@@ -336,5 +336,82 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(getBrainGenome().regime_clear_break_frac).toBeCloseTo(0.1, 5);
     const loose = classifyRegime(bars, 'RANGE');
     expect(loose).toBe('BREAKOUT_UP');
+  });
+
+  it('regime_move_range change gates isMoving10s on range-only bars', () => {
+    // Range ~0.015% — above factory MOVE_RANGE 0.012%, below raised 0.0002 (≤ TREND_STAY)
+    const mid = 100;
+    const quietish = bar(mid, mid + mid * 0.00015, mid - mid * 0.00001, mid + mid * 0.00002);
+    _resetBrainGenomeForTests({
+      regime_move_range: 0.00012,
+      regime_move: 0.00008,
+      regime_trend_stay: 0.00022,
+    });
+    expect(isMoving10s(quietish)).toBe(true);
+
+    setBrainGenome({ regime_move_range: 0.0002, regime_trend_stay: 0.00022 });
+    reloadBrainGenome();
+    expect(getBrainGenome().regime_move_range).toBeCloseTo(0.0002, 6);
+    expect(isMoving10s(quietish)).toBe(false);
+  });
+
+  it('regime_compress_abs + near_zone_mid gate COMPRESSION', () => {
+    const bars: TenSecBar[] = [];
+    // Wide zone early, then quiet mom bars so avgRange is tiny
+    for (let i = 0; i < MIN_BARS_FOR_ZONE - 12; i++) {
+      bars.push(bar(100, 100.6, 99.4, 100, i));
+    }
+    for (let i = 0; i < 12; i++) {
+      bars.push(bar(100.0, 100.003, 99.997, 100.0, bars.length));
+    }
+    bars.push(bar(100.0, 100.002, 99.998, 100.0, bars.length));
+
+    _resetBrainGenomeForTests({
+      regime_compress_abs: 0.00008,
+      regime_compress_avg_mult: 0.9,
+      regime_near_zone_mid: 0.35,
+      regime_mom_bars: 8,
+      regime_move: 0.00008,
+    });
+    expect(classifyRegime(bars, 'RANGE')).toBe('COMPRESSION');
+
+    // Tip far from zone mid — near_zone_mid gate must drop COMPRESSION
+    const offMid = [
+      ...bars.slice(0, -1),
+      bar(100.4, 100.403, 100.397, 100.4, bars.length - 1),
+    ];
+    expect(classifyRegime(offMid, 'RANGE')).not.toBe('COMPRESSION');
+  });
+
+  it('regime_persist_stay change keeps vs drops in-family TREND_DOWN', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      bars.push(bar(100, 100.8, 99.2, 100, i));
+    }
+    // 4 down + 2 up ⇒ persistence ≈ -0.33; last bar must still be a down body
+    const seq = [-1, -1, -1, -1, 1, -1];
+    let px = 100;
+    for (const s of seq) {
+      const o = px;
+      const c = o + s * 0.04; // bodyPct ≈ 0.0004
+      bars.push(bar(o, Math.max(o, c) + 0.01, Math.min(o, c) - 0.01, c, bars.length));
+      px = c;
+    }
+
+    _resetBrainGenomeForTests({
+      regime_mom_bars: 6,
+      regime_persist_window: 6,
+      regime_persist_enter: 0.85,
+      regime_persist_stay: 0.25,
+      regime_trend_stay: 0.0002,
+      regime_move: 0.00008,
+    });
+    expect(classifyRegime(bars, 'TREND_DOWN')).toBe('TREND_DOWN');
+
+    setBrainGenome({ regime_persist_stay: 0.7, regime_persist_enter: 0.85 });
+    reloadBrainGenome();
+    expect(getBrainGenome().regime_persist_stay).toBeCloseTo(0.7, 5);
+    // In-family stay fails; tip still in wide zone → RANGE (not sticky TREND_DOWN)
+    expect(classifyRegime(bars, 'TREND_DOWN')).toBe('RANGE');
   });
 });
