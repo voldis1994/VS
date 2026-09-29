@@ -576,7 +576,7 @@ export function RobotUnitPage() {
                       className="input"
                       type="number"
                       step="1"
-                      min={50}
+                      min={10}
                       max={95}
                       value={Math.round(cal.peak_retention * 100)}
                       disabled={calBusy}

@@ -37,7 +37,9 @@ export const MIN_ENABLED_REGIMES = 5;
 export const AUTO_CAL_MAX_SAFETY_TP_RR = 3.0;
 export const AUTO_CAL_MAX_TARGET_ABS = 12.0;
 export const AUTO_CAL_MAX_PEAK_MFE_ABS = 8.0;
-export const AUTO_CAL_MAX_PEAK_RETENTION = 0.92;
+export const AUTO_CAL_MAX_PEAK_RETENTION = 0.95;
+/** Peak Keep % — full freedom (10%…95%). Old floors 65/78% blocked real regulation. */
+export const AUTO_CAL_MIN_PEAK_RETENTION = 0.1;
 /** Soft HardInv CAP range — full Soft freedom. */
 export const AUTO_CAL_MIN_HARDINV_ABS = 0.5;
 export const AUTO_CAL_MAX_HARDINV_ABS = 8.0;
@@ -675,8 +677,10 @@ function proposeGenomePatch(
   const changes: string[] = [];
   if (!g) return { patch, changes };
 
-  // Sync Peak Keep with desk retention (genome can go to 0.88)
-  const keepTarget = roundRet(Math.min(0.88, Math.max(0.65, next.peak_retention)));
+  // Sync Peak Keep with desk retention (genome follows 10%…95%)
+  const keepTarget = roundRet(
+    Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(AUTO_CAL_MIN_PEAK_RETENTION, next.peak_retention))
+  );
   if (Math.abs(g.peak_keep - keepTarget) >= 0.01) {
     patch.peak_keep = keepTarget;
     changes.push(
@@ -986,10 +990,12 @@ export function proposeAutoCalibration(
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
     if (softDominates) {
       next.peak_retention = roundRet(
-        Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(retBefore, 0.78))
+        Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(retBefore, retBefore + 0.04))
       );
     } else {
-      next.peak_retention = roundRet(Math.max(0.65, next.peak_retention - 0.04));
+      next.peak_retention = roundRet(
+        Math.max(AUTO_CAL_MIN_PEAK_RETENTION, next.peak_retention - 0.05)
+      );
     }
     next.peak_min_giveback_abs = roundAbs(Math.max(0.5, next.peak_min_giveback_abs - 0.15));
     const easedTgt = roundAbs(next.target_abs - 1.2);
@@ -1033,14 +1039,15 @@ export function proposeAutoCalibration(
     }
   } else if (needProtectSooner) {
     const retBefore = next.peak_retention;
+    // Protect sooner = keep MORE of MFE (higher Keep), free within 10%…95%
     next.peak_retention = roundRet(
-      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(0.78, next.peak_retention + 0.04))
+      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.05)
     );
     if (next.peak_retention !== retBefore) {
       changes.push(
         autotuneLog(
           `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} protect-sooner`,
-          'PRĀTS: protect winners sooner'
+          'PRĀTS: protect winners sooner — raise Peak Keep'
         )
       );
     }
@@ -1240,6 +1247,16 @@ export function proposeAutoCalibration(
       autotuneLog(
         `peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} cap`,
         'auto-cal max Keep'
+      )
+    );
+  }
+  if (next.peak_retention < AUTO_CAL_MIN_PEAK_RETENTION) {
+    const b = next.peak_retention;
+    next.peak_retention = AUTO_CAL_MIN_PEAK_RETENTION;
+    changes.push(
+      autotuneLog(
+        `peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} floor`,
+        'auto-cal min Keep 10%'
       )
     );
   }
