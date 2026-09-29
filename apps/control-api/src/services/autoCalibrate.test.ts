@@ -235,9 +235,9 @@ describe('autoCalibrate', () => {
     expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('MĀCĪBA'))).toBe(true);
   });
 
-  it('applied=false when only PRĀTS/MĀCĪBA diagnostics — no knob/regime change', () => {
+  it('Soft-heavy factory window tightens Soft — no longer hold/0', () => {
     const base = defaultDeskCalibration();
-    // Factory Peak/Target sit on Soft floor — ease intent keeps values (no raise)
+    // Soft losses dominate → ease intent; old floors Soft+1.5/Soft+3 blocked factory Peak/Target
     const r = proposeAutoCalibration(base, [
       trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' }),
       trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
@@ -246,13 +246,14 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: -1.5, exit_reason: 'HardInvalidation' }),
     ]);
     expect(r.changes.some((c) => c.startsWith('PRĀTS'))).toBe(true);
-    expect(r.changes.some((c) => c.startsWith('MĀCĪBA'))).toBe(true);
-    expect(r.next.peak_mfe_abs).toBe(base.peak_mfe_abs);
-    expect(r.next.target_abs).toBe(base.target_abs);
-    expect(r.next.safety_tp_rr).toBe(base.safety_tp_rr);
-    expect(r.next.peak_retention).toBe(base.peak_retention);
-    expect(r.next.enabled_regimes.slice().sort()).toEqual(base.enabled_regimes.slice().sort());
-    expect(r.applied).toBe(false);
+    expect(r.applied).toBe(true);
+    expect(r.next.hardinv_abs).toBeLessThan(base.hardinv_abs);
+    expect(r.next.hardinv_abs).toBeGreaterThanOrEqual(1.5);
+    expect(r.changes.some((c) => c.includes('Soft tighten'))).toBe(true);
+    // Must not raise Peak/Target/TP on Soft-heavy ease
+    expect(r.next.peak_mfe_abs).toBeLessThanOrEqual(base.peak_mfe_abs);
+    expect(r.next.target_abs).toBeLessThanOrEqual(base.target_abs);
+    expect(r.next.safety_tp_rr).toBeLessThanOrEqual(base.safety_tp_rr);
   });
 
   it('pullback/ease never raises Peak/Target/TP on factory Soft floor', () => {
@@ -272,13 +273,16 @@ describe('autoCalibrate', () => {
       new Set(),
       { raise_streak: 3 }
     );
-    // Old bug: Math.max(hardinv+1.5, peak-0.5) raised Peak 3.0→3.7 and Target 5.0→5.2
+    // Soft may tighten; Peak/Target may ease down — never raise above factory
     expect(r.next.peak_mfe_abs).toBeLessThanOrEqual(base.peak_mfe_abs);
     expect(r.next.target_abs).toBeLessThanOrEqual(base.target_abs);
     expect(r.next.safety_tp_rr).toBeLessThanOrEqual(base.safety_tp_rr);
-    expect(r.changes.some((c) => c.includes('PRĀTS') || c.includes('ease') || c.includes('pullback'))).toBe(
-      true
-    );
+    expect(r.applied).toBe(true);
+    expect(
+      r.changes.some((c) =>
+        /Soft tighten|ease|pullback|protect-sooner|PRĀTS/.test(c)
+      )
+    ).toBe(true);
   });
 
   it('isolates auto-cal per client — A closes do not count for B', () => {
