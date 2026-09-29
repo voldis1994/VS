@@ -75,7 +75,8 @@ export function trekBiasFromCandles(
   const trek =
     Math.max(...window.map((c) => c.high)) - Math.min(...window.map((c) => c.low));
   const mid = Math.abs(last.close) || 1;
-  if (trek < Math.max(mid * 0.0004, 0.5)) return 'FLAT';
+  const trekFlat = getBrainGenome().mtf_trek_flat_frac;
+  if (trek < Math.max(mid * trekFlat, 0.5)) return 'FLAT';
   if (up > down && net >= 0) return 'UP';
   if (down > up && net <= 0) return 'DOWN';
   if (net > 0 && up >= down) return 'UP';
@@ -133,14 +134,15 @@ export function readMultiTfStack(input: {
 
   const higherFight =
     (tf30 === 'UP' && tf15 === 'DOWN') || (tf30 === 'DOWN' && tf15 === 'UP');
-  // 30m vs 15m fight → no working side until the big TFs agree
-  if (higherFight) bias = 'FLAT';
+  const g = getBrainGenome();
+  // 30m vs 15m fight → no working side until the big TFs agree (evolvable)
+  if (higherFight && g.mtf_block_higher_fight) bias = 'FLAT';
 
   const midFight =
     bias !== 'FLAT' && tf5 !== 'FLAT' && tf5 !== bias;
   // 1m against the working side = pullback — HOLD the bias in UI, but do NOT
   // fire PRĀTS entry until the trigger agrees (was: SELL into green 1m → Soft spam)
-  const waitFight = getBrainGenome().wait_on_1m_fight;
+  const waitFight = g.wait_on_1m_fight;
   const triggerFight =
     waitFight && bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
   const only1m =
@@ -149,7 +151,7 @@ export function readMultiTfStack(input: {
   // Aligned = higher clear, 5m not fighting, 1m not fighting (trigger ready)
   const aligned =
     bias !== 'FLAT' &&
-    !higherFight &&
+    !(higherFight && g.mtf_block_higher_fight) &&
     !midFight &&
     !triggerFight &&
     (only1m || tf5 === bias || tf5 === 'FLAT' || tf15 === bias || tf30 === bias);
@@ -157,8 +159,10 @@ export function readMultiTfStack(input: {
   const summary = `30m${arrow(tf30)} 15m${arrow(tf15)} 5m${arrow(tf5)} 1m${arrow(tf1)}`;
 
   let thesis_lv: string;
-  if (higherFight) {
+  if (higherFight && g.mtf_block_higher_fight) {
     thesis_lv = `30m ${tf30} pret 15m ${tf15} — lielie TF nesakrīt, gaidu.`;
+  } else if (higherFight && !g.mtf_block_higher_fight) {
+    thesis_lv = `30m ${tf30} pret 15m ${tf15} — higher fight atzīmēts, bet genome atļauj turpināt.`;
   } else if (bias === 'UP') {
     thesis_lv = midFight
       ? `30/15m UP, bet 5m DOWN — gaidu 5m atgriešanos pirms BUY.`
@@ -181,19 +185,20 @@ export function readMultiTfStack(input: {
     tf5,
     tf1,
     bias,
-    aligned: aligned && !higherFight,
+    aligned: aligned && !(higherFight && g.mtf_block_higher_fight),
     summary,
     thesis_lv,
     higher_fight: higherFight,
   };
 }
 
-/** Resolve side from stack for entry mind — WAIT when not aligned. */
+/** Resolve side from stack for entry mind — WAIT when not aligned (evolvable). */
 export function sideFromMultiTf(stack: MultiTfStack): 'BUY' | 'SELL' | 'WAIT' {
-  if (stack.higher_fight) return 'WAIT';
+  const g = getBrainGenome();
+  if (stack.higher_fight && g.mtf_block_higher_fight) return 'WAIT';
   if (stack.bias === 'FLAT') return 'WAIT';
   // Pullback / mid fight: keep bias for UI thesis, but never execute PRĀTS
   // into a fighting 1m (that was Soft SELL spam on every bounce).
-  if (!stack.aligned) return 'WAIT';
+  if (g.mtf_require_aligned_side && !stack.aligned) return 'WAIT';
   return stack.bias === 'UP' ? 'BUY' : 'SELL';
 }

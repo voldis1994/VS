@@ -358,6 +358,18 @@ function bounceNum(cur: number, step: number, lo: number, hi: number, dir: 1 | -
   return Math.min(hi, Math.max(lo, next));
 }
 
+/** High-precision bounce for regime % fractions (0.00008 scale). */
+function bounceFrac(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  let next = Number((cur + dir * step).toFixed(8));
+  if (next > hi) next = Number((cur - step).toFixed(8));
+  if (next < lo) next = Number((cur + step).toFixed(8));
+  if (next === cur || !Number.isFinite(next)) {
+    next = Number((lo + ((cur - lo + step) % Math.max(step, hi - lo))).toFixed(8));
+    if (next === cur) next = cur >= (lo + hi) / 2 ? lo : hi;
+  }
+  return Math.min(hi, Math.max(lo, next));
+}
+
 function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
   let next = cur + dir * step;
   if (next > hi) next = cur - step;
@@ -381,6 +393,19 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;
   const flipTrig = !g.require_1m_trigger;
+  const rev = bounceFrac(g.regime_reversal, 0.00015, 0.0008, 0.004, dir);
+  const trendEnter = bounceFrac(g.regime_trend_enter, 0.00004, 0.0002, 0.0008, dir);
+  const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.25, 0.85, dir);
+  const pullback = bounceFrac(g.regime_pullback, 0.00005, 0.0003, 0.0012, dir);
+  const expandAbs = bounceFrac(g.regime_expand_abs, 0.00008, 0.0003, 0.002, dir);
+  const dwell = bounceInt(g.regime_min_dwell_bars, 1, 2, 12, dir);
+  const confirm = bounceInt(g.regime_confirm_bars, 1, 1, 8, dir);
+  const trekFlat = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
+  const flipBlockHf = !g.mtf_block_higher_fight;
+  const flipHtfVeto = !g.mtf_htf_veto;
+  const flipAligned = !g.mtf_require_aligned_side;
+  const storyMin = bounceNum(g.entry_story_conf_min, 0.05, 0.35, 0.8, dir);
+  const chopMax = bounceNum(g.entry_chop_conf_max, 0.05, 0.25, 0.65, dir === 1 ? -1 : 1);
 
   return [
     {
@@ -478,6 +503,92 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         ...codePatchesMicroScratch(rejectedN % 2),
       ],
     },
+    {
+      title: `Explore REVERSAL band→${rev} (step #${nextStep + 6})`,
+      rationale: 'Evolve how sensitive classify is to violent reverse bodies.',
+      task: `regime_reversal ${g.regime_reversal}→${rev}`,
+      genome_delta: {
+        regime_reversal: rev,
+        explore_step: nextStep + 6,
+        last_lesson: `Explore regime_reversal ${rev}`,
+      },
+      patches: [
+        genomePatch('regime_reversal', rev, `explore reversal ${rev}`),
+        genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
+      ],
+    },
+    {
+      title: `Explore TREND enter→${trendEnter} (step #${nextStep + 7})`,
+      rationale: 'Evolve how easily TREND enters from persistence + body.',
+      task: `regime_trend_enter→${trendEnter} persist_enter→${persistEnter}`,
+      genome_delta: {
+        regime_trend_enter: trendEnter,
+        regime_persist_enter: persistEnter,
+        explore_step: nextStep + 7,
+        last_lesson: `Explore trend_enter ${trendEnter}`,
+      },
+      patches: [
+        genomePatch('regime_trend_enter', trendEnter, `explore trend_enter ${trendEnter}`),
+        genomePatch('regime_persist_enter', persistEnter, `explore persist_enter ${persistEnter}`),
+        genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
+      ],
+    },
+    {
+      title: `Explore pullback/expand→${pullback}/${expandAbs} (step #${nextStep + 8})`,
+      rationale: 'Evolve PULLBACK body + EXPANSION abs range sensitivity.',
+      task: `regime_pullback→${pullback} regime_expand_abs→${expandAbs}`,
+      genome_delta: {
+        regime_pullback: pullback,
+        regime_expand_abs: expandAbs,
+        explore_step: nextStep + 8,
+        last_lesson: `Explore pullback/expand ${pullback}/${expandAbs}`,
+      },
+      patches: [
+        genomePatch('regime_pullback', pullback, `explore pullback ${pullback}`),
+        genomePatch('regime_expand_abs', expandAbs, `explore expand ${expandAbs}`),
+        genomePatch('explore_step', nextStep + 8, `explore_step ${nextStep + 8}`),
+      ],
+    },
+    {
+      title: `Explore dwell/confirm→${dwell}/${confirm} (step #${nextStep + 9})`,
+      rationale: 'Evolve regime stabilizer anti-flicker stringency.',
+      task: `regime_min_dwell_bars=${dwell} regime_confirm_bars=${confirm}`,
+      genome_delta: {
+        regime_min_dwell_bars: dwell,
+        regime_confirm_bars: confirm,
+        explore_step: nextStep + 9,
+        last_lesson: `Explore dwell/confirm ${dwell}/${confirm}`,
+      },
+      patches: [
+        genomePatch('regime_min_dwell_bars', dwell, `explore dwell ${dwell}`),
+        genomePatch('regime_confirm_bars', confirm, `explore confirm ${confirm}`),
+        genomePatch('explore_step', nextStep + 9, `explore_step ${nextStep + 9}`),
+      ],
+    },
+    {
+      title: `Explore multi-TF stringency (step #${nextStep + 10})`,
+      rationale: 'Evolve trek flat + higher-fight / HTF veto / aligned-side gates.',
+      task: `trek=${trekFlat} blockHF=${flipBlockHf} htfVeto=${flipHtfVeto} aligned=${flipAligned}`,
+      genome_delta: {
+        mtf_trek_flat_frac: trekFlat,
+        mtf_block_higher_fight: flipBlockHf,
+        mtf_htf_veto: flipHtfVeto,
+        mtf_require_aligned_side: flipAligned,
+        entry_story_conf_min: storyMin,
+        entry_chop_conf_max: chopMax,
+        explore_step: nextStep + 10,
+        last_lesson: `Explore mtf trek=${trekFlat} veto=${flipHtfVeto}`,
+      },
+      patches: [
+        genomePatch('mtf_trek_flat_frac', trekFlat, `explore trek ${trekFlat}`),
+        genomePatch('mtf_block_higher_fight', flipBlockHf, `flip blockHF→${flipBlockHf}`),
+        genomePatch('mtf_htf_veto', flipHtfVeto, `flip htfVeto→${flipHtfVeto}`),
+        genomePatch('mtf_require_aligned_side', flipAligned, `flip aligned→${flipAligned}`),
+        genomePatch('entry_story_conf_min', storyMin, `explore story_min ${storyMin}`),
+        genomePatch('entry_chop_conf_max', chopMax, `explore chop_max ${chopMax}`),
+        genomePatch('explore_step', nextStep + 10, `explore_step ${nextStep + 10}`),
+      ],
+    },
   ];
 }
 
@@ -492,11 +603,19 @@ function forceExploreHypothesis(
     const nextStep = baseStep + tried.size + i;
     const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
     const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, nextStep % 2 === 0 ? -1 : 1);
+    const rev = bounceFrac(
+      g.regime_reversal,
+      0.0001,
+      0.0008,
+      0.004,
+      nextStep % 2 === 0 ? 1 : -1
+    );
     const nonce = `${Date.now().toString(36)}_${i}`;
     const genome_delta: Record<string, unknown> = {
       explore_step: nextStep,
       peak_keep: keep,
       soft_plus_giveback: gb,
+      regime_reversal: rev,
       version: (g.version || 1) + 1,
       last_lesson: `Force explore #${nextStep} · ${nonce}`,
     };
@@ -504,6 +623,7 @@ function forceExploreHypothesis(
       genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
       genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
+      genomePatch('regime_reversal', rev, `force reversal ${rev}`),
       // Genome-only force explore — never rewrite flipFilter on unstick
     ]);
     const signature = hypothesisSignature({

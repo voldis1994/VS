@@ -194,6 +194,69 @@ describe('brainSelfImprove genome', () => {
     expect(g.peak_keep).toBeLessThanOrEqual(0.88);
     expect(g.soft_plus_giveback).toBeGreaterThanOrEqual(0.55);
   });
+
+  it('fills missing trading-intel fields from factory (backward compatible)', () => {
+    const g = sanitizeGenome({ peak_keep: 0.75 } as Partial<import('./brainGenome.js').BrainGenome>);
+    expect(g.regime_reversal).toBe(0.0016);
+    expect(g.regime_trend_enter).toBe(0.00038);
+    expect(g.regime_min_dwell_bars).toBe(5);
+    expect(g.mtf_htf_veto).toBe(true);
+    expect(g.entry_story_conf_min).toBe(0.55);
+  });
+
+  it('clamps regime bands and repairs ladder order', () => {
+    const g = sanitizeGenome({
+      regime_move: 0.002,
+      regime_trend_stay: 0.0001,
+      regime_trend_enter: 0.00005,
+      regime_pullback: 0.00004,
+      regime_reversal: 0.00003,
+    });
+    expect(g.regime_move).toBeLessThanOrEqual(0.0002);
+    expect(g.regime_move).toBeLessThan(g.regime_trend_stay);
+    expect(g.regime_trend_stay).toBeLessThan(g.regime_trend_enter);
+    expect(g.regime_trend_enter).toBeLessThan(g.regime_pullback);
+    expect(g.regime_pullback).toBeLessThan(g.regime_reversal);
+  });
+
+  it('explore can mutate regime_reversal / multi-TF knobs', () => {
+    const analysis = analyzeTrades(syntheticLessonTrades());
+    const rejected: string[] = [];
+    let sawIntel = false;
+    for (let i = 0; i < 40; i++) {
+      _resetBrainGenomeForTests({ explore_step: i });
+      const exp: BrainExperience = {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: analysis.patterns,
+        rejected_signatures: [...rejected],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      };
+      const hypo = buildHypothesis(analysis, exp);
+      expect(hypo).toBeTruthy();
+      rejected.push(hypo!.signature);
+      const keys = Object.keys(hypo!.genome_delta || {});
+      if (
+        keys.some(
+          (k) =>
+            k.startsWith('regime_') ||
+            k.startsWith('mtf_') ||
+            k === 'entry_story_conf_min' ||
+            k === 'entry_chop_conf_max'
+        )
+      ) {
+        sawIntel = true;
+        break;
+      }
+    }
+    expect(sawIntel).toBe(true);
+  });
 });
 
 describe('brainSelfImprove cycle (once)', () => {

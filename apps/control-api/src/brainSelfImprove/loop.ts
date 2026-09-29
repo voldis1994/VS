@@ -216,6 +216,30 @@ export async function runBrainCycle(opts?: {
     'peak_arm_soft_mult',
     'explore_step',
     'version',
+    // Trading-intelligence perception knobs (regime + multi-TF)
+    'regime_move',
+    'regime_trend_stay',
+    'regime_trend_enter',
+    'regime_pullback',
+    'regime_reversal',
+    'regime_move_range',
+    'regime_compress_abs',
+    'regime_expand_abs',
+    'regime_compress_avg_mult',
+    'regime_expand_avg_mult',
+    'regime_near_zone_mid',
+    'regime_clear_break_frac',
+    'regime_persist_enter',
+    'regime_persist_stay',
+    'regime_persist_pullback',
+    'regime_min_dwell_bars',
+    'regime_confirm_bars',
+    'mtf_trek_flat_frac',
+    'mtf_block_higher_fight',
+    'mtf_require_aligned_side',
+    'mtf_htf_veto',
+    'entry_story_conf_min',
+    'entry_chop_conf_max',
   ]);
   const deltaKeys = Object.keys(hypo.genome_delta || {}).filter((k) => k !== 'last_lesson');
   const eFlatOk =
@@ -226,14 +250,41 @@ export async function runBrainCycle(opts?: {
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k));
-  // Genome explore / Keep nudge with tests OK and E not worse — keep learning (don't thrash rollback)
+  // Genome explore / Keep / regime / multi-TF nudge with tests OK and E not worse
+  const intelKeys = new Set([
+    'peak_keep',
+    'soft_plus_giveback',
+    'peak_arm_soft_mult',
+    'regime_move',
+    'regime_trend_stay',
+    'regime_trend_enter',
+    'regime_pullback',
+    'regime_reversal',
+    'regime_move_range',
+    'regime_compress_abs',
+    'regime_expand_abs',
+    'regime_compress_avg_mult',
+    'regime_expand_avg_mult',
+    'regime_near_zone_mid',
+    'regime_clear_break_frac',
+    'regime_persist_enter',
+    'regime_persist_stay',
+    'regime_persist_pullback',
+    'regime_min_dwell_bars',
+    'regime_confirm_bars',
+    'mtf_trek_flat_frac',
+    'mtf_block_higher_fight',
+    'mtf_require_aligned_side',
+    'mtf_htf_veto',
+    'entry_story_conf_min',
+    'entry_chop_conf_max',
+  ]);
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
-    (hypo.pattern_id === 'explore' ||
-      deltaKeys.some((k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'));
+    (hypo.pattern_id === 'explore' || deltaKeys.some((k) => intelKeys.has(k)));
 
   const accept =
     (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
