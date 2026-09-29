@@ -143,7 +143,9 @@ if (isMain) {
         rejectProxy(
           res,
           404,
-          'Not found — public panel only proxies /api/client-auth, /api/client, /ws/client\n'
+          'Šis ir KLIENTA panelis (:18080), ne admin.\n' +
+            'Admin COMMAND: http://localhost:5173/\n' +
+            'Šeit tikai /api/client-auth, /api/client, /ws/client\n'
         );
         return;
       }
