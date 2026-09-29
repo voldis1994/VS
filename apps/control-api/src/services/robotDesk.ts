@@ -101,7 +101,14 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
-import { maybeExitForBrainCodeReload } from '../brainSelfImprove/brainReload.js';
+import {
+  hasBrainReloadRequest,
+  isControlApiLiveLoop,
+  maybeExitForBrainCodeReload,
+} from '../brainSelfImprove/brainReload.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type RobotTick = {
   at: string;
@@ -1214,12 +1221,196 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
-export function checkBrainCodeReload(): void {
-  const anyOpen = [...sessions.values()].some(
+/** Snapshot of a running robot — restored after BRAIN exit-75 API restart. */
+export type RunningRobotSnapshot = {
+  account_id: number;
+  epic: string;
+  lot_size: number;
+  trading_enabled: boolean;
+  entry_enabled: boolean;
+  display_name: string;
+  last_closed_side: 'BUY' | 'SELL' | null;
+  last_close_was_loss: boolean;
+  closed_at_ms: number;
+};
+
+export type RunningRobotsPersistFile = {
+  at: string;
+  reason: string;
+  robots: RunningRobotSnapshot[];
+};
+
+function repoRootFromRobotDesk(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '../../../../');
+}
+
+export function runningRobotsSnapshotPath(): string {
+  const env = process.env.BRAIN_RUNNING_ROBOTS_PATH?.trim();
+  if (env) return env;
+  return path.join(
+    repoRootFromRobotDesk(),
+    'data',
+    'brain-self-improve',
+    'running-robots.json'
+  );
+}
+
+function anyRunningOpenTrade(): boolean {
+  return [...sessions.values()].some(
     (x) => x.running && Boolean(x.open_side || x.deal_id)
   );
+}
+
+/**
+ * Persist running FLAT robots before BRAIN exit 75 so live-loop restart
+ * can rehydrate the same account/epic/lot/entry sessions.
+ */
+export function persistRunningRobotsForReload(reason = 'brain_code_reload'): number {
+  const robots: RunningRobotSnapshot[] = [];
+  for (const s of sessions.values()) {
+    if (!s.running) continue;
+    // Exit 75 only when all FLAT — skip any open just in case
+    if (s.open_side || s.deal_id) continue;
+    robots.push({
+      account_id: s.account_id,
+      epic: s.epic,
+      lot_size: s.lot_size,
+      trading_enabled: s.trading_enabled,
+      entry_enabled: s.entry_enabled,
+      display_name: s.display_name,
+      last_closed_side: s.last_closed_side,
+      last_close_was_loss: s.last_close_was_loss,
+      closed_at_ms: s.closed_at_ms,
+    });
+  }
+  const p = runningRobotsSnapshotPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const body: RunningRobotsPersistFile = {
+    at: new Date().toISOString(),
+    reason,
+    robots,
+  };
+  const tmp = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, p);
+  return robots.length;
+}
+
+export function clearRunningRobotsSnapshot(): void {
+  const p = runningRobotsSnapshotPath();
+  try {
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {
+    /* ignore */
+  }
+}
+
+function readRunningRobotsSnapshot(): RunningRobotsPersistFile | null {
+  const p = runningRobotsSnapshotPath();
+  try {
+    if (!fs.existsSync(p)) return null;
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as RunningRobotsPersistFile;
+    if (!raw || !Array.isArray(raw.robots)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After Control API restart (BRAIN exit 75), re-START previously running FLAT robots
+ * with the same account/epic/lot/entry state and resume polling.
+ */
+export async function restoreRunningRobotsAfterReload(): Promise<number> {
+  const snap = readRunningRobotsSnapshot();
+  if (!snap?.robots.length) {
+    clearRunningRobotsSnapshot();
+    return 0;
+  }
+  let restored = 0;
+  for (const r of snap.robots) {
+    try {
+      const session = await startRobotSession({
+        account_id: r.account_id,
+        epic: r.epic,
+        display_name: r.display_name,
+        lot_size: r.lot_size,
+        trading_enabled: r.trading_enabled,
+        entry_enabled: r.entry_enabled,
+      });
+      const internal = sessions.get(session.id);
+      if (internal) {
+        internal.last_closed_side = r.last_closed_side;
+        internal.last_close_was_loss = Boolean(r.last_close_was_loss);
+        internal.closed_at_ms = Number(r.closed_at_ms) || 0;
+        pushTick(internal, {
+          phase: 'INFO',
+          bid: null,
+          ask: null,
+          mid: null,
+          detail: `BRAIN reload restore · ${r.epic} · lot ${r.lot_size} · entry=${r.entry_enabled ? 'ON' : 'OFF'} · polling resumed`,
+        });
+        refreshEntryWatch(internal, {
+          last_reason: 'BRAIN reload restore · lasa tirgu · meklē entry',
+        });
+      }
+      restored += 1;
+    } catch (err) {
+      console.error(
+        `[robotDesk] BRAIN reload restore failed for account=${r.account_id} epic=${r.epic}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  clearRunningRobotsSnapshot();
+  if (restored > 0) {
+    console.log(`[robotDesk] BRAIN reload restored ${restored} robot session(s)`);
+  }
+  return restored;
+}
+
+/** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
+export function checkBrainCodeReload(): void {
+  const anyOpen = anyRunningOpenTrade();
+  if (hasBrainReloadRequest() && !anyOpen && isControlApiLiveLoop()) {
+    persistRunningRobotsForReload();
+  }
   maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+}
+
+/** Test helper — drop in-memory sessions (simulates API process death). */
+export function _resetRobotSessionsForTests(): void {
+  for (const s of sessions.values()) {
+    if (s.timer) clearInterval(s.timer);
+    s.timer = null;
+    s.running = false;
+  }
+  sessions.clear();
+}
+
+/** Test helper — mutate session fields (e.g. mark open trade). */
+export function _patchRobotSessionForTests(
+  id: string,
+  patch: Partial<{
+    open_side: 'BUY' | 'SELL' | null;
+    deal_id: string | null;
+    mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+    last_closed_side: 'BUY' | 'SELL' | null;
+    last_close_was_loss: boolean;
+    closed_at_ms: number;
+    entry_enabled: boolean;
+  }>
+): void {
+  const s = sessions.get(id);
+  if (!s) return;
+  Object.assign(s, patch);
+}
+
+/** Test helper — whether the interval poller is armed. */
+export function _robotHasPollTimerForTests(id: string): boolean {
+  const s = sessions.get(id);
+  return Boolean(s?.timer && s.cadence_ms > 0 && s.running);
 }
 
 /** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
@@ -2612,9 +2803,10 @@ async function robotCycle(s: Internal) {
     s.cycle_busy = false;
     s.cycle_busy_since = 0;
     // ACCEPTed BRAIN .ts → soft restart only when every robot is FLAT
-    const anyOpen = [...sessions.values()].some(
-      (x) => x.running && Boolean(x.open_side || x.deal_id)
-    );
+    const anyOpen = anyRunningOpenTrade();
+    if (hasBrainReloadRequest() && !anyOpen && isControlApiLiveLoop()) {
+      persistRunningRobotsForReload();
+    }
     maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
   }
 }
