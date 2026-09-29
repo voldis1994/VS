@@ -387,13 +387,14 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
               </div>
               {auto.knobs_now && (
                 <div className="hint-line mono" style={{ marginTop: 2 }}>
-                  Soft {auto.knobs_now.hardinv_abs}
+                  Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)}
                   {auto.knobs_now.hardinv_pct != null
                     ? `/${Number(auto.knobs_now.hardinv_pct).toFixed(5)}`
                     : ''}{' '}
-                  · Peak {auto.knobs_now.peak_mfe_abs}/
+                  · Peak {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
                   {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
-                  {auto.knobs_now.target_abs} · regimes {auto.knobs_now.enabled_regimes}
+                  {Number(auto.knobs_now.target_abs).toFixed(1)} · regimes{' '}
+                  {auto.knobs_now.enabled_regimes}
                   {auto.knobs_now.genome_peak_keep != null
                     ? ` · genome keep ${Number(auto.knobs_now.genome_peak_keep).toFixed(2)}`
                     : ''}
@@ -521,10 +522,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.hardinv_abs}
+                value={Number(cal.hardinv_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    hardinv_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    hardinv_abs: Math.round(cal.hardinv_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Peak keep % (75=25% giveback)</label>
               <input
@@ -536,32 +546,53 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 value={Math.round(cal.peak_retention * 100)}
                 disabled={calBusy}
                 onChange={(e) =>
-                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                  setCal({
+                    ...cal,
+                    peak_retention: Math.round(Number(e.target.value)) / 100,
+                  })
                 }
-                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
+                onBlur={() =>
+                  void saveCalibration({
+                    peak_retention: Math.round(cal.peak_retention * 100) / 100,
+                  })
+                }
               />
               <label className="field-label">Peak MFE floor</label>
               <input
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.peak_mfe_abs}
+                value={Number(cal.peak_mfe_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    peak_mfe_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    peak_mfe_abs: Math.round(cal.peak_mfe_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Peak min giveback</label>
               <input
                 className="input"
                 type="number"
-                step="0.05"
-                value={cal.peak_min_giveback_abs}
+                step="0.1"
+                value={Number(cal.peak_min_giveback_abs.toFixed(1))}
                 disabled={calBusy}
                 onChange={(e) =>
-                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                  setCal({
+                    ...cal,
+                    peak_min_giveback_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
                 }
                 onBlur={() =>
-                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                  void saveCalibration({
+                    peak_min_giveback_abs: Math.round(cal.peak_min_giveback_abs * 10) / 10,
+                  })
                 }
               />
               <label className="field-label">Target abs</label>
@@ -569,10 +600,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.target_abs}
+                value={Number(cal.target_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    target_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    target_abs: Math.round(cal.target_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Broker TP R:R (vs SL)</label>
               <input
@@ -581,10 +621,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 step="0.05"
                 min={1.5}
                 max={4}
-                value={cal.safety_tp_rr}
+                value={Number(cal.safety_tp_rr.toFixed(2))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ safety_tp_rr: cal.safety_tp_rr })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    safety_tp_rr: Math.round(Number(e.target.value) * 100) / 100,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    safety_tp_rr: Math.round(cal.safety_tp_rr * 100) / 100,
+                  })
+                }
               />
               <p className="hint-line" style={{ marginTop: 2 }}>
                 Soft Peak/Target banko peļņu — brokeram tikai SAFETY SL (bez TP scratch).

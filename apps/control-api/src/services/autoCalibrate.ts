@@ -719,12 +719,12 @@ function proposeGenomePatch(
       );
     }
   } else if (intent === 'let_winners_run' || expectancy > 0.25) {
-    const arm = Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult + 0.05));
-    if (arm !== g.peak_arm_soft_mult) {
+    const arm = roundRet(Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
+    if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
       changes.push(
         autotuneLog(
-          `genome peak_arm_soft_mult ${g.peak_arm_soft_mult.toFixed(2)}→${arm.toFixed(2)}`,
+          `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
           'let winners run — Peak arms later'
         )
       );
@@ -739,22 +739,22 @@ function proposeGenomePatch(
     return midShare && !ctx.expanding;
   }).length;
   if (choppyCtx >= 2 && expectancy < 0.1) {
-    const trek = Math.min(0.0012, Math.max(0.00015, g.mtf_trek_flat_frac * 1.08));
-    if (Math.abs(trek - g.mtf_trek_flat_frac) > 1e-7) {
+    const trek = roundPct(Math.min(0.0012, Math.max(0.00015, g.mtf_trek_flat_frac * 1.08)));
+    if (Math.abs(trek - roundPct(g.mtf_trek_flat_frac)) > 1e-7) {
       patch.mtf_trek_flat_frac = trek;
       changes.push(
         autotuneLog(
-          `genome mtf_trek_flat_frac ${g.mtf_trek_flat_frac.toFixed(5)}→${trek.toFixed(5)}`,
+          `genome mtf_trek_flat_frac ${roundPct(g.mtf_trek_flat_frac).toFixed(5)}→${trek.toFixed(5)}`,
           `choppy pressure ×${choppyCtx} — wider FLAT trek`
         )
       );
     }
-    const storyMin = Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03));
-    if (storyMin !== g.entry_story_conf_min) {
+    const storyMin = roundRet(Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03)));
+    if (storyMin !== roundRet(g.entry_story_conf_min)) {
       patch.entry_story_conf_min = storyMin;
       changes.push(
         autotuneLog(
-          `genome entry_story_conf_min ${g.entry_story_conf_min.toFixed(2)}→${storyMin.toFixed(2)}`,
+          `genome entry_story_conf_min ${roundRet(g.entry_story_conf_min).toFixed(2)}→${storyMin.toFixed(2)}`,
           'allow slightly weaker story when chop dominates'
         )
       );

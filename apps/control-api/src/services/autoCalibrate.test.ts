@@ -215,6 +215,14 @@ describe('autoCalibrate', () => {
     expect(r.next.hardinv_abs).toBe(1.2);
     expect(Number.isInteger(r.next.hardinv_abs * 10)).toBe(true);
     expect(String(r.next.hardinv_abs)).not.toMatch(/\.\d{3,}/);
+    // Peak/Target/retention also clean — no float dust
+    expect(Number.isInteger(r.next.peak_mfe_abs * 10)).toBe(true);
+    expect(Number.isInteger(r.next.target_abs * 10)).toBe(true);
+    expect(Number.isInteger(r.next.peak_retention * 100)).toBe(true);
+    // Abs logs: 1 decimal only (pct knobs use 5 by design)
+    for (const c of r.changes.filter((x) => /hardinv_abs|peak_mfe_abs|target_abs|peak_retention|safety_tp_rr/.test(x))) {
+      expect(c).not.toMatch(/(?:hardinv_abs|peak_mfe_abs|target_abs) \d+\.\d{2,}/);
+    }
   });
 
   it('pulls back when targets overreached and expectancy still negative', () => {
