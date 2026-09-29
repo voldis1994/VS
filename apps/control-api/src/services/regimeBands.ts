@@ -62,6 +62,8 @@ export type ActiveRegimeBands = {
   PERSIST_PULLBACK: number;
   MIN_DWELL_BARS: number;
   CONFIRM_BARS: number;
+  MOM_BARS: number;
+  PERSIST_WINDOW: number;
   ENTRY_DIP: number;
   ENTRY_RALLY: number;
 };
@@ -87,6 +89,8 @@ export function getActiveRegimeBands(): ActiveRegimeBands {
     PERSIST_PULLBACK: g.regime_persist_pullback,
     MIN_DWELL_BARS: g.regime_min_dwell_bars,
     CONFIRM_BARS: g.regime_confirm_bars,
+    MOM_BARS: g.regime_mom_bars,
+    PERSIST_WINDOW: g.regime_persist_window,
     ENTRY_DIP: -g.regime_move,
     ENTRY_RALLY: g.regime_move,
   };

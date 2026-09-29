@@ -1,15 +1,35 @@
 /**
- * Evaluate candidate: vitest (allowlisted suites) + strategy replay vs baseline.
- * Entry-gate score covers genome knobs that structure-replay alone cannot see.
+ * Evaluate candidate: vitest (factory genome regression) + multi-scenario replay
+ * vs baseline using the live candidate genome.
+ *
+ * Trading-intelligence mutations must move perception on relevant scenarios and
+ * show measurable score improvement — not free ACCEPT on flat expectancy.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { replayStrategy, syntheticTrendBars } from '../services/strategyReplay.js';
+import {
+  replayStrategy,
+  syntheticTrendBars,
+  syntheticRangeBars,
+  syntheticCompressionExpansionBars,
+  syntheticBreakoutBars,
+  syntheticReversalBars,
+  syntheticFailedBreakoutBars,
+} from '../services/strategyReplay.js';
 import { readMultiTfStack, sideFromMultiTf } from '../services/multiTfRead.js';
-import { defaultBrainGenome, reloadBrainGenome, getBrainGenome } from './brainGenome.js';
+import { classifyRegime, stabilizeRegime, type RegimeName } from '../services/regimes.js';
+import { thinkEntryLikeTrader } from '../services/traderMind.js';
+import type { TenSecBar } from '../services/tenSecondOhlc.js';
+import {
+  defaultBrainGenome,
+  reloadBrainGenome,
+  getBrainGenome,
+  TRADING_INTEL_GENOME_KEYS,
+} from './brainGenome.js';
 
 export type EvalScore = {
   expectancy_pts: number;
@@ -17,8 +37,12 @@ export type EvalScore = {
   win_rate: number;
   sum_pnl_pts: number;
   soft_loss_share: number;
-  /** Fraction of 1m-fight scenarios that correctly WAIT (higher = less Soft spam). */
+  /** Fraction of multi-TF fight scenarios that take the genome-consistent posture. */
   entry_wait_score: number;
+  /** Regime-scenario hit rate (factory-expected labels under active genome). */
+  regime_score: number;
+  /** Fingerprint of classify labels across regime fixtures — detects no-op mutations. */
+  perception_fingerprint: string;
 };
 
 export type EvalReport = {
@@ -35,7 +59,7 @@ function controlApiRoot(): string {
   return path.resolve(here, '../..');
 }
 
-/** Synthetic multi-TF stacks where 1m fights the higher-TF bias. */
+/** Synthetic multi-TF stacks covering fight / align / higher-fight / HTF cases. */
 function entryWaitScore(): number {
   reloadBrainGenome();
   const g = getBrainGenome();
@@ -44,13 +68,14 @@ function entryWaitScore(): number {
     tf15: 'UP' | 'DOWN' | 'FLAT';
     tf5: 'UP' | 'DOWN' | 'FLAT';
     tf1: 'UP' | 'DOWN' | 'FLAT';
-    /** When wait_on_1m_fight is on, these should WAIT. */
-    fightCase: boolean;
+    kind: 'fight' | 'aligned' | 'higher_fight';
   }> = [
-    { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN', tf1: 'UP', fightCase: true },
-    { tf30: 'UP', tf15: 'UP', tf5: 'UP', tf1: 'DOWN', fightCase: true },
-    { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN', tf1: 'DOWN', fightCase: false },
-    { tf30: 'UP', tf15: 'UP', tf5: 'UP', tf1: 'UP', fightCase: false },
+    { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN', tf1: 'UP', kind: 'fight' },
+    { tf30: 'UP', tf15: 'UP', tf5: 'UP', tf1: 'DOWN', kind: 'fight' },
+    { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN', tf1: 'DOWN', kind: 'aligned' },
+    { tf30: 'UP', tf15: 'UP', tf5: 'UP', tf1: 'UP', kind: 'aligned' },
+    { tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT', tf1: 'FLAT', kind: 'higher_fight' },
+    { tf30: 'DOWN', tf15: 'UP', tf5: 'DOWN', tf1: 'DOWN', kind: 'higher_fight' },
   ];
 
   let ok = 0;
@@ -62,28 +87,183 @@ function entryWaitScore(): number {
       tf1: c.tf1,
     });
     const side = sideFromMultiTf(stack);
-    if (c.fightCase) {
-      // Correct defensive posture: WAIT while 1m fights (when genome says so)
+    if (c.kind === 'fight') {
       if (g.wait_on_1m_fight) {
+        if (side === 'WAIT') ok += 1;
+      } else if (g.mtf_require_aligned_side) {
         if (side === 'WAIT') ok += 1;
       } else if (side !== 'WAIT') {
         ok += 1;
       }
-    } else if (side !== 'WAIT') {
-      ok += 1;
+    } else if (c.kind === 'aligned') {
+      if (side !== 'WAIT') ok += 1;
+    } else if (c.kind === 'higher_fight') {
+      if (g.mtf_block_higher_fight) {
+        if (side === 'WAIT') ok += 1;
+      } else if (side !== 'WAIT' || !g.mtf_require_aligned_side) {
+        ok += 1;
+      }
     }
   }
-  const triggerBonus = g.require_1m_trigger ? 0.1 : 0;
-  return Math.min(1, ok / cases.length + triggerBonus);
+
+  // HTF veto consistency: story SELL under UP 30/15 must WAIT when veto on
+  const vetoThought = thinkEntryLikeTrader({
+    regime: 'RANGE',
+    chapter: 'SELLOFF',
+    allow: 'SELL',
+    story_conf: 0.8,
+    red_1m: 14,
+    green_1m: 6,
+    zone_pos: 0.55,
+    bar_body_sign: -1,
+    m1_dir: 'FLAT',
+    bias: 'UP',
+    tf5_dir: 'FLAT',
+    tf15_dir: 'UP',
+    tf30_dir: 'UP',
+  });
+  if (g.mtf_htf_veto) {
+    if (vetoThought.choice !== 'SELL') ok += 1;
+  } else {
+    ok += 0.5;
+  }
+
+  const triggerBonus = g.require_1m_trigger ? 0.05 : 0;
+  const denom = cases.length + 1;
+  return Math.min(1, ok / denom + triggerBonus);
+}
+
+type RegimeScenario = {
+  id: string;
+  expected: RegimeName | RegimeName[];
+  previous: RegimeName;
+  bars: TenSecBar[];
+};
+
+function regimeScenarios(): RegimeScenario[] {
+  return [
+    {
+      id: 'TREND_UP',
+      expected: 'TREND_UP',
+      previous: 'UNKNOWN',
+      bars: syntheticTrendBars({ n: 200, step: 0.12 }),
+    },
+    {
+      id: 'TREND_DOWN',
+      expected: 'TREND_DOWN',
+      previous: 'UNKNOWN',
+      bars: syntheticTrendBars({ n: 200, start: 4300, step: -0.12 }),
+    },
+    {
+      id: 'RANGE',
+      expected: ['RANGE', 'COMPRESSION', 'TRANSITION'],
+      previous: 'RANGE',
+      bars: syntheticRangeBars({ n: 160 }),
+    },
+    {
+      id: 'COMPRESSION',
+      expected: ['COMPRESSION', 'RANGE'],
+      previous: 'RANGE',
+      bars: syntheticCompressionExpansionBars({ n: 140, expand_at: 999 }),
+    },
+    {
+      id: 'EXPANSION',
+      expected: ['EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'TREND_UP', 'TREND_DOWN'],
+      previous: 'COMPRESSION',
+      bars: syntheticCompressionExpansionBars({ n: 160, expand_at: 120 }),
+    },
+    {
+      id: 'COMPRESSION_TO_EXPANSION',
+      expected: ['EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'TREND_UP'],
+      previous: 'COMPRESSION',
+      bars: syntheticCompressionExpansionBars({ n: 180, expand_at: 130 }),
+    },
+    {
+      id: 'BREAKOUT_UP',
+      expected: ['BREAKOUT_UP', 'TREND_UP', 'EXPANSION'],
+      previous: 'RANGE',
+      bars: syntheticBreakoutBars({ direction: 'UP', n: 160 }),
+    },
+    {
+      id: 'BREAKOUT_DOWN',
+      expected: ['BREAKOUT_DOWN', 'TREND_DOWN', 'EXPANSION'],
+      previous: 'RANGE',
+      bars: syntheticBreakoutBars({ direction: 'DOWN', n: 160 }),
+    },
+    {
+      id: 'REVERSAL',
+      expected: ['REVERSAL_CANDIDATE', 'PULLBACK_UPTREND', 'TREND_DOWN', 'RANGE'],
+      previous: 'TREND_UP',
+      bars: syntheticReversalBars({ n: 150 }),
+    },
+    {
+      id: 'FAILED_BREAKOUT',
+      expected: ['FAILED_BREAKOUT_UP', 'FAILED_BREAKOUT_DOWN', 'RANGE', 'REVERSAL_CANDIDATE'],
+      previous: 'BREAKOUT_UP',
+      bars: syntheticFailedBreakoutBars({ n: 150 }),
+    },
+    {
+      id: 'TRANSITION',
+      expected: ['TRANSITION', 'RANGE', 'UNKNOWN', 'TREND_UP', 'TREND_DOWN'],
+      previous: 'TRANSITION',
+      bars: syntheticRangeBars({ n: 100, wobble: 0.03 }),
+    },
+  ];
+}
+
+function classifyTip(bars: TenSecBar[], previous: RegimeName): RegimeName {
+  const book = {
+    current: previous,
+    previous: 'UNKNOWN' as RegimeName,
+    bars_in_current: 20,
+    pending: null as RegimeName | null,
+    pending_count: 0,
+    since: new Date(0).toISOString(),
+  };
+  // Walk last stretch so stabilize can settle
+  const start = Math.max(0, bars.length - 24);
+  let label: RegimeName = previous;
+  for (let i = start; i < bars.length; i++) {
+    const hist = bars.slice(0, i + 1);
+    const raw = classifyRegime(hist, book.current);
+    label = stabilizeRegime(book, raw, new Date(i * 10_000).toISOString());
+  }
+  return label;
+}
+
+function regimePerception(): { score: number; fingerprint: string; labels: Record<string, string> } {
+  reloadBrainGenome();
+  const labels: Record<string, string> = {};
+  let hits = 0;
+  const scenarios = regimeScenarios();
+  for (const s of scenarios) {
+    const got = classifyTip(s.bars, s.previous);
+    labels[s.id] = got;
+    const ok = Array.isArray(s.expected) ? s.expected.includes(got) : got === s.expected;
+    if (ok) hits += 1;
+  }
+  const fingerprint = createHash('sha1')
+    .update(JSON.stringify(labels))
+    .digest('hex')
+    .slice(0, 16);
+  return { score: hits / scenarios.length, fingerprint, labels };
 }
 
 function scoreFromReplay(): EvalScore {
   reloadBrainGenome();
-  const barsA = syntheticTrendBars({ n: 320, step: 0.1 });
-  const barsB = syntheticTrendBars({ n: 280, start: 4300, step: -0.12 });
-  const a = replayStrategy(barsA, { spread_pts: 0.2, max_hold_bars: 70 });
-  const b = replayStrategy(barsB, { spread_pts: 0.2, max_hold_bars: 70 });
-  const trades = [...a.trades, ...b.trades];
+  const books = [
+    syntheticTrendBars({ n: 280, step: 0.1 }),
+    syntheticTrendBars({ n: 260, start: 4300, step: -0.12 }),
+    syntheticRangeBars({ n: 220 }),
+    syntheticCompressionExpansionBars({ n: 240, expand_at: 160 }),
+    syntheticBreakoutBars({ direction: 'UP', n: 220 }),
+    syntheticBreakoutBars({ direction: 'DOWN', n: 220 }),
+    syntheticReversalBars({ n: 220 }),
+    syntheticFailedBreakoutBars({ n: 220 }),
+  ];
+  const trades = books.flatMap((bars) =>
+    replayStrategy(bars, { spread_pts: 0.2, max_hold_bars: 70 }).trades
+  );
   const sum = trades.reduce((s, t) => s + (t.pnl_pts || 0), 0);
   const wins = trades.filter((t) => (t.pnl_pts || 0) > 1e-9).length;
   const losses = trades.filter((t) => (t.pnl_pts || 0) < -1e-9).length;
@@ -91,6 +271,7 @@ function scoreFromReplay(): EvalScore {
     /HardInvalidation|HardInv/i.test(String(t.exit_reason || ''))
   ).length;
   const decided = wins + losses;
+  const perception = regimePerception();
   return {
     expectancy_pts: trades.length ? sum / trades.length : 0,
     trades: trades.length,
@@ -98,11 +279,12 @@ function scoreFromReplay(): EvalScore {
     sum_pnl_pts: sum,
     soft_loss_share: trades.length ? softLosses / trades.length : 0,
     entry_wait_score: entryWaitScore(),
+    regime_score: perception.score,
+    perception_fingerprint: perception.fingerprint,
   };
 }
 
-/** Suites that guard trading-decision regressions. Never include brainSelfImprove.test.ts
- *  (that suite invokes the cycle → evaluate → vitest, which would recurse). */
+/** Suites that guard trading-decision regressions against factory genome. */
 const TEST_GLOBS = [
   'src/services/exitManage.test.ts',
   'src/services/traderMind.test.ts',
@@ -110,10 +292,8 @@ const TEST_GLOBS = [
   'src/services/manageBrain.test.ts',
   'src/services/strategyReplay.test.ts',
   'src/services/flipFilter.test.ts',
-  // structureEntry.test.ts omitted — 2 pre-existing reds on main would REJECT every cycle
 ];
 
-/** Resolve vitest entry without `npx` — on Windows spawnSync('npx') often returns status null. */
 function resolveVitestCli(cwd: string): string | null {
   const candidates = [
     path.join(cwd, 'node_modules', 'vitest', 'vitest.mjs'),
@@ -138,8 +318,7 @@ export function runBrainTests(): { ok: boolean; detail: string } {
       detail: `vitest FAIL — nav node_modules/vitest (cwd=${cwd}). Palaid npm install apps\\control-api`,
     };
   }
-  // Candidate genome (peak_keep etc.) must NOT break unit tests that assert factory Keep 75%.
-  // Tests run against a temp factory genome; replay scoring still uses the live candidate.
+  // Factory regression only — candidate scoring uses live genome separately.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-vitest-genome-'));
   const factoryGenomePath = path.join(tmpDir, 'genome.json');
   fs.writeFileSync(
@@ -180,7 +359,12 @@ export function runBrainTests(): { ok: boolean; detail: string } {
   };
 }
 
-export function evaluateCandidate(baseline: EvalScore): EvalReport {
+export type EvaluateOpts = {
+  /** Candidate genome_delta — used to require perception movement for trading-intel. */
+  genome_delta?: Record<string, unknown> | null;
+};
+
+export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): EvalReport {
   const tests = runBrainTests();
   if (!tests.ok) {
     return {
@@ -197,18 +381,43 @@ export function evaluateCandidate(baseline: EvalScore): EvalReport {
   const softImprove = candidate.soft_loss_share < baseline.soft_loss_share - 0.02;
   const wrImprove = candidate.win_rate > baseline.win_rate + 0.02;
   const entryImprove = candidate.entry_wait_score > baseline.entry_wait_score + 0.04;
+  const regimeImprove = candidate.regime_score > baseline.regime_score + 0.04;
   const notBroken = candidate.trades >= Math.max(0, baseline.trades - 3);
-  const improved =
+  const perceptionMoved =
+    candidate.perception_fingerprint !== baseline.perception_fingerprint ||
+    Math.abs(candidate.entry_wait_score - baseline.entry_wait_score) > 1e-9 ||
+    Math.abs(candidate.regime_score - baseline.regime_score) > 1e-9;
+
+  const deltaKeys = Object.keys(opts?.genome_delta || {}).filter((k) => k !== 'last_lesson');
+  const touchesTradingIntel = deltaKeys.some((k) =>
+    (TRADING_INTEL_GENOME_KEYS as readonly string[]).includes(k)
+  );
+
+  // Measurable improvement required — flat E alone is not enough.
+  let improved =
     notBroken &&
     (eGain > 0.02 ||
-      (eGain >= -0.01 && (softImprove || wrImprove || entryImprove)));
+      (eGain >= -0.01 && (softImprove || wrImprove || entryImprove || regimeImprove)));
+
+  // Trading-intel must move perception on the scenarios it owns — no free ACCEPT
+  // because expectancy stayed flat on an unrelated book.
+  if (improved && touchesTradingIntel && !perceptionMoved) {
+    improved = false;
+  }
+  // Trading-intel also needs a real score lift (not barely-not-worse E).
+  if (improved && touchesTradingIntel && eGain <= 0 && !entryImprove && !regimeImprove) {
+    improved = false;
+  }
 
   let reason: string;
-  if (!notBroken) reason = `REJECTED — trade count collapsed ${baseline.trades}→${candidate.trades}`;
+  if (!notBroken)
+    reason = `REJECTED — trade count collapsed ${baseline.trades}→${candidate.trades}`;
+  else if (touchesTradingIntel && !perceptionMoved)
+    reason = `REJECTED — trading-intel perception unchanged across regime/MTF scenarios`;
   else if (improved)
-    reason = `ACCEPTED — E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · WR ${(baseline.win_rate * 100).toFixed(0)}%→${(candidate.win_rate * 100).toFixed(0)}% · SoftShare ${(baseline.soft_loss_share * 100).toFixed(0)}%→${(candidate.soft_loss_share * 100).toFixed(0)}% · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}%`;
+    reason = `ACCEPTED — E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · WR ${(baseline.win_rate * 100).toFixed(0)}%→${(candidate.win_rate * 100).toFixed(0)}% · SoftShare ${(baseline.soft_loss_share * 100).toFixed(0)}%→${(candidate.soft_loss_share * 100).toFixed(0)}% · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}%`;
   else
-    reason = `REJECTED — no improvement E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}%`;
+    reason = `REJECTED — no improvement E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}%`;
 
   return {
     tests_ok: true,
@@ -223,3 +432,11 @@ export function evaluateCandidate(baseline: EvalScore): EvalReport {
 export function measureBaseline(): EvalScore {
   return scoreFromReplay();
 }
+
+/** Expose for integration tests */
+export const _evalInternals = {
+  entryWaitScore,
+  regimePerception,
+  scoreFromReplay,
+  regimeScenarios,
+};

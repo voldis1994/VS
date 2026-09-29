@@ -69,6 +69,10 @@ export type BrainGenome = {
   regime_min_dwell_bars: number;
   /** Cross-family confirm bars after dwell */
   regime_confirm_bars: number;
+  /** Momentum window length (10s bars) — factory 8 */
+  regime_mom_bars: number;
+  /** Persistence mean window inside mom (factory 6) */
+  regime_persist_window: number;
 
   // ——— Multi-TF / entry interpretation stringency ———
   /** Trek flat if range < mid * this (Capital candle trek) */
@@ -117,6 +121,8 @@ const DEFAULT_GENOME: BrainGenome = {
   regime_persist_pullback: 0.2,
   regime_min_dwell_bars: 5,
   regime_confirm_bars: 3,
+  regime_mom_bars: 8,
+  regime_persist_window: 6,
 
   mtf_trek_flat_frac: 0.0004,
   mtf_block_higher_fight: true,
@@ -295,6 +301,14 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       1,
       Math.min(8, Math.floor(Number(p.regime_confirm_bars) || DEFAULT_GENOME.regime_confirm_bars))
     ),
+    regime_mom_bars: Math.max(
+      4,
+      Math.min(16, Math.floor(Number(p.regime_mom_bars) || DEFAULT_GENOME.regime_mom_bars))
+    ),
+    regime_persist_window: Math.max(
+      3,
+      Math.min(12, Math.floor(Number(p.regime_persist_window) || DEFAULT_GENOME.regime_persist_window))
+    ),
 
     mtf_trek_flat_frac: clamp(
       Number(p.mtf_trek_flat_frac ?? DEFAULT_GENOME.mtf_trek_flat_frac),
@@ -321,6 +335,9 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
   }
 
   enforceRegimeLadder(g);
+  if (g.regime_persist_window > g.regime_mom_bars) {
+    g.regime_persist_window = g.regime_mom_bars;
+  }
   return g;
 }
 
@@ -404,12 +421,58 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_persist_pullback',
   'regime_min_dwell_bars',
   'regime_confirm_bars',
+  'regime_mom_bars',
+  'regime_persist_window',
   'mtf_trek_flat_frac',
   'mtf_block_higher_fight',
   'mtf_require_aligned_side',
   'mtf_htf_veto',
   'entry_story_conf_min',
   'entry_chop_conf_max',
+];
+
+/** Trading-intelligence keys that require measurable eval improvement to ACCEPT. */
+export const TRADING_INTEL_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
+  'regime_move',
+  'regime_trend_stay',
+  'regime_trend_enter',
+  'regime_pullback',
+  'regime_reversal',
+  'regime_move_range',
+  'regime_compress_abs',
+  'regime_expand_abs',
+  'regime_compress_avg_mult',
+  'regime_expand_avg_mult',
+  'regime_near_zone_mid',
+  'regime_clear_break_frac',
+  'regime_persist_enter',
+  'regime_persist_stay',
+  'regime_persist_pullback',
+  'regime_min_dwell_bars',
+  'regime_confirm_bars',
+  'regime_mom_bars',
+  'regime_persist_window',
+  'mtf_trek_flat_frac',
+  'mtf_block_higher_fight',
+  'mtf_require_aligned_side',
+  'mtf_htf_veto',
+  'entry_story_conf_min',
+  'entry_chop_conf_max',
+];
+
+/** Peak / Soft memory keys that may ACCEPT on E-flat defensive path. */
+export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
+  'peak_keep',
+  'peak_arm_soft_mult',
+  'soft_plus_giveback',
+  'require_1m_trigger',
+  'soft_same_side_pause_closes',
+  'soft_same_side_pause_min',
+  'wait_on_1m_fight',
+  'mind_bank_on_turn',
+  'explore_step',
+  'version',
+  'last_lesson',
 ];
 
 /** Test helper — updates cache and disk when BRAIN_GENOME_PATH is set. */

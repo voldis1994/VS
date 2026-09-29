@@ -117,8 +117,7 @@ export const ZONE_BARS = 180;
  * 90 × 10s = 15m — half zone; thinner books stay UNKNOWN (or sticky prior).
  */
 export const MIN_BARS_FOR_ZONE = 90;
-/** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
-const MOM_BARS = 8;
+/** Factory mom length — live path reads BrainGenome via getActiveRegimeBands(). */
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -202,6 +201,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     PERSIST_ENTER,
     PERSIST_STAY,
     PERSIST_PULLBACK,
+    MOM_BARS,
+    PERSIST_WINDOW,
   } = getActiveRegimeBands();
 
   const zone = bars.slice(-ZONE_BARS);
@@ -217,7 +218,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
   const lastVel = bodyPct(last);
   const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
+  const persistWindow = velocities.slice(-PERSIST_WINDOW);
   const persistence = mean(
     persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );

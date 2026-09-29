@@ -168,19 +168,42 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(sideFromMultiTf(open)).toBe('SELL');
   });
 
-  it('mtf_htf_veto is live-consumed from genome (default true)', () => {
-    _resetBrainGenomeForTests({ mtf_htf_veto: true });
-    expect(getBrainGenome().mtf_htf_veto).toBe(true);
-    _resetBrainGenomeForTests({ mtf_htf_veto: false });
-    expect(getBrainGenome().mtf_htf_veto).toBe(false);
-    const t = thinkEntryLikeTrader({
+  it('mtf_htf_veto true blocks knife SELL vs UP 30/15; false does not force WAIT for that reason', () => {
+    _resetBrainGenomeForTests({
+      mtf_htf_veto: true,
+      require_1m_trigger: false,
+      wait_on_1m_fight: false,
+      mtf_require_aligned_side: false,
+      mtf_block_higher_fight: false,
+      entry_story_conf_min: 0.4,
+    });
+    // Flat stack + regime short → SELL (no HTF UP)
+    const okSell = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.85,
+      red_1m: 16,
+      green_1m: 4,
+      zone_pos: 0.55,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
+      tf5_dir: 'FLAT',
+      tf15_dir: 'FLAT',
+      tf30_dir: 'FLAT',
+    });
+    expect(okSell.choice).toBe('SELL');
+
+    // Same short pressure but 30/15 UP — HTF veto must not allow SELL
+    const vetoed = thinkEntryLikeTrader({
       regime: 'RANGE',
       chapter: 'SELLOFF',
       allow: 'SELL',
-      story_conf: 0.8,
+      story_conf: 0.85,
       red_1m: 16,
       green_1m: 4,
-      zone_pos: 0.6,
+      zone_pos: 0.55,
       bar_body_sign: -1,
       m1_dir: 'FLAT',
       bias: 'UP',
@@ -188,9 +211,8 @@ describe('genome trading intelligence — regime + multi-TF', () => {
       tf15_dir: 'UP',
       tf30_dir: 'UP',
     });
-    // With veto off + UP stack, mind may BUY or WAIT — must not crash; flag is false
-    expect(getBrainGenome().mtf_htf_veto).toBe(false);
-    expect(['BUY', 'WAIT', 'SELL']).toContain(t.choice);
+    expect(vetoed.choice).not.toBe('SELL');
+    expect(getBrainGenome().mtf_htf_veto).toBe(true);
   });
 
   it('mtf_block_higher_fight false keeps working bias on 30/15 fight', () => {
@@ -235,5 +257,92 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     // Loose flat frac treats small trek as FLAT; tight may read UP
     expect(loose).toBe('FLAT');
     expect(['UP', 'FLAT']).toContain(tight);
+  });
+
+  it('raising regime_move changes persistence vote → can drop TREND_DOWN', () => {
+    // Bodies ~0.012% sit above factory MOVE (0.008%) but below raised MOVE (0.02%).
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      bars.push(bar(100, 100.04, 99.96, 100, i));
+    }
+    for (let i = 0; i < 6; i++) {
+      const o = 100 - i * 0.01;
+      const c = o - 0.012; // bodyPct ≈ 0.00012
+      bars.push(bar(o, o + 0.002, c - 0.002, c, bars.length));
+    }
+    _resetBrainGenomeForTests({
+      regime_mom_bars: 6,
+      regime_persist_window: 6,
+      regime_move: 0.00008,
+      regime_persist_enter: 0.45,
+      regime_trend_enter: 0.0001,
+      regime_trend_stay: 0.00009,
+    });
+    expect(classifyRegime(bars, 'UNKNOWN')).toBe('TREND_DOWN');
+
+    setBrainGenome({ regime_move: 0.0002 });
+    reloadBrainGenome();
+    expect(getBrainGenome().regime_move).toBeCloseTo(0.0002, 6);
+    expect(classifyRegime(bars, 'UNKNOWN')).not.toBe('TREND_DOWN');
+  });
+
+  it('regime_mom_bars change alters classify on diluted momentum fixture', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      // Mild up noise that pollutes a long mom window
+      const wobble = ((i % 5) - 2) * 0.02;
+      const c = 100 + wobble;
+      bars.push(bar(c, c + 0.03, c - 0.03, c + 0.01, i));
+    }
+    // Last 5 bars: strong down (~0.12% bodies)
+    for (let i = 0; i < 5; i++) {
+      const o = 100.2 - i * 0.05;
+      const c = o - 0.13;
+      bars.push(bar(o, o + 0.01, c - 0.02, c, bars.length));
+    }
+
+    _resetBrainGenomeForTests({
+      regime_mom_bars: 5,
+      regime_persist_window: 5,
+      regime_persist_enter: 0.4,
+      regime_trend_enter: 0.0003,
+      regime_move: 0.00008,
+    });
+    const short = classifyRegime(bars, 'UNKNOWN');
+    expect(short).toBe('TREND_DOWN');
+
+    setBrainGenome({ regime_mom_bars: 16, regime_persist_window: 5 });
+    reloadBrainGenome();
+    expect(getBrainGenome().regime_mom_bars).toBe(16);
+    const long = classifyRegime(bars, 'UNKNOWN');
+    // Long mom dilutes the 5 red bars with earlier quiet/up noise
+    expect(long).not.toBe('TREND_DOWN');
+  });
+
+  it('regime_clear_break_frac change gates BREAKOUT_UP', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      bars.push(bar(100, 100.3, 99.7, 100, i));
+    }
+    // Pierce only ~15% of zone width above hi — below factory CLEAR_BREAK 0.25
+    const hi = 100.3;
+    const zoneWidth = 0.6;
+    const pierce = hi + zoneWidth * 0.15;
+    bars.push(bar(100.1, pierce + 0.05, 100.0, pierce, bars.length));
+
+    _resetBrainGenomeForTests({
+      regime_clear_break_frac: 0.25,
+      regime_trend_enter: 0.0002,
+      regime_expand_abs: 0.0003,
+      regime_expand_avg_mult: 1.2,
+    });
+    const tight = classifyRegime(bars, 'RANGE');
+    expect(tight).not.toBe('BREAKOUT_UP');
+
+    setBrainGenome({ regime_clear_break_frac: 0.1 });
+    reloadBrainGenome();
+    expect(getBrainGenome().regime_clear_break_frac).toBeCloseTo(0.1, 5);
+    const loose = classifyRegime(bars, 'RANGE');
+    expect(loose).toBe('BREAKOUT_UP');
   });
 });
