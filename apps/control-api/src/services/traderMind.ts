@@ -259,6 +259,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
 
   const stack = readMultiTfStack({ tf30, tf15, tf5, tf1 });
   const stackSide = sideFromMultiTf(stack);
+  const genome = getBrainGenome();
 
   const situation = `Flat · ${stack.summary} · 1m ${m1}${strong ? ' (spēcīga)' : ''} · bias ${bias} · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
     pos != null && Number.isFinite(pos) ? pos.toFixed(2) : '—'
@@ -393,12 +394,12 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = `30m rally (${chapter}) un steks nav DOWN — esmu pircēja pusē.`;
       why = body > 0 ? 'Zaļš 10s apstiprina BUY.' : 'Gaidu BUY trigger.';
       confidence = Math.max(0.65, conf);
-    } else if (allow === 'SELL' && conf >= 0.55 && g <= r) {
+    } else if (allow === 'SELL' && conf >= genome.entry_story_conf_min && g <= r) {
       choice = 'SELL';
       thesis = `Stāsts atļauj SELL (${chapter}) · pressure G${g}/R${r} · ${stack.summary}.`;
       why = 'Izvēlos īso pusi no stāsta, kamēr multi-TF nav pretī.';
       confidence = conf;
-    } else if (allow === 'BUY' && conf >= 0.55 && r <= g) {
+    } else if (allow === 'BUY' && conf >= genome.entry_story_conf_min && r <= g) {
       choice = 'BUY';
       thesis = `Stāsts atļauj BUY (${chapter}) · pressure G${g}/R${r} · ${stack.summary}.`;
       why = 'Izvēlos garo pusi no stāsta, kamēr multi-TF nav pretī.';
@@ -421,7 +422,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = 'Pēc Soft SELL zaudējuma un augšup spiediena — otra puse.';
       why = 'Mācos no pēdējā close + live pressure.';
       confidence = 0.7;
-    } else if (chapter === 'RANGE_CHOP' || allow === 'NONE' || conf < 0.45) {
+    } else if (chapter === 'RANGE_CHOP' || allow === 'NONE' || conf < genome.entry_chop_conf_max) {
       choice = 'WAIT';
       thesis = `Chop / vājš stāsts (${chapter}, conf=${conf.toFixed(2)}) · ${stack.summary} — nav ko uzspiest.`;
       why = 'Cilvēks sēž malā, kamēr parādās skaidra puse.';
@@ -434,18 +435,20 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
-  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker
-  if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
-    choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
-    why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
-    confidence = 0.35;
-  }
-  if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
-    choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
-    why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
-    confidence = 0.35;
+  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker (evolvable)
+  if (genome.mtf_htf_veto) {
+    if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
+      choice = 'WAIT';
+      thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
+      why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
+      confidence = 0.35;
+    }
+    if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
+      choice = 'WAIT';
+      thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
+      why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
+      confidence = 0.35;
+    }
   }
 
   // Never fire PRĀTS into a fighting 1m (SELL on green 1m / BUY on red 1m → Soft)
@@ -489,7 +492,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   }
 
   // Genome: require 1m trigger when set
-  if (getBrainGenome().require_1m_trigger) {
+  if (genome.require_1m_trigger) {
     if (choice === 'SELL' && m1 !== 'DOWN') {
       choice = 'WAIT';
       thesis = `${stack.summary} · genome require_1m_trigger — gaidu DOWN 1m.`;

@@ -1,28 +1,19 @@
 /**
  * Single coherent % ladder for 10s Gold regime + entry.
- * All consumers (classify / stabilize / entry / watch / isMoving) MUST use these.
+ *
+ * Factory constants below = BrainGenome defaults (prior hardcoded behaviour).
+ * Live classify / stabilize / isMoving read getActiveRegimeBands() so Brain
+ * Self Improve can evolve perception without changing regime algorithm meaning.
  *
  * Strict body order (fraction of price):
  *   MOVE < TREND_STAY < TREND_ENTER < PULLBACK < REVERSAL
  *
  * Strict range order:
  *   COMPRESS_ABS < MOVE < MOVE_RANGE ≤ TREND_STAY < TREND_ENTER < EXPAND_ABS
- *
- * Gold ~2650 reference (points ≈ pct × 2650):
- *   MOVE        0.008% → 0.21 pt
- *   TREND_STAY  0.022% → 0.58 pt
- *   TREND_ENTER 0.038% → 1.01 pt
- *   PULLBACK    0.055% → 1.46 pt
- *   REVERSAL    0.160% → 4.24 pt
- *   COMPRESS    0.0055% → 0.15 pt
- *   EXPAND      0.060% → 1.59 pt
- *
- * Softened for real 10s scalps (Asia/quiet Gold): prior MOVE 0.012% / range 0.018%
- * starved overnight entries even when Capital 1m moved.
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
-/** Shared “real 10s move” floor — persist vote, isMoving body, entry dip/rally.
- *  Soft floor so quiet Gold 10s bars still arm — COMPRESS must stay strictly below. */
+/** Shared “real 10s move” floor — factory default (genome.regime_move). */
 export const MOVE = 0.00008;
 /** Stay in an existing trend (must be > MOVE) */
 export const TREND_STAY = 0.00022;
@@ -52,6 +43,58 @@ export const PERSIST_PULLBACK = 0.2;
 /** Entry dip/rally = ±MOVE (same floor as isMoving body) */
 export const ENTRY_DIP = -MOVE;
 export const ENTRY_RALLY = MOVE;
+
+export type ActiveRegimeBands = {
+  MOVE: number;
+  TREND_STAY: number;
+  TREND_ENTER: number;
+  PULLBACK: number;
+  REVERSAL: number;
+  MOVE_RANGE: number;
+  COMPRESS_ABS: number;
+  EXPAND_ABS: number;
+  COMPRESS_AVG_MULT: number;
+  EXPAND_AVG_MULT: number;
+  NEAR_ZONE_MID: number;
+  CLEAR_BREAK_FRAC: number;
+  PERSIST_ENTER: number;
+  PERSIST_STAY: number;
+  PERSIST_PULLBACK: number;
+  MIN_DWELL_BARS: number;
+  CONFIRM_BARS: number;
+  MOM_BARS: number;
+  PERSIST_WINDOW: number;
+  ENTRY_DIP: number;
+  ENTRY_RALLY: number;
+};
+
+/** Live ladder from active BrainGenome (factory when genome missing fields). */
+export function getActiveRegimeBands(): ActiveRegimeBands {
+  const g = getBrainGenome();
+  return {
+    MOVE: g.regime_move,
+    TREND_STAY: g.regime_trend_stay,
+    TREND_ENTER: g.regime_trend_enter,
+    PULLBACK: g.regime_pullback,
+    REVERSAL: g.regime_reversal,
+    MOVE_RANGE: g.regime_move_range,
+    COMPRESS_ABS: g.regime_compress_abs,
+    EXPAND_ABS: g.regime_expand_abs,
+    COMPRESS_AVG_MULT: g.regime_compress_avg_mult,
+    EXPAND_AVG_MULT: g.regime_expand_avg_mult,
+    NEAR_ZONE_MID: g.regime_near_zone_mid,
+    CLEAR_BREAK_FRAC: g.regime_clear_break_frac,
+    PERSIST_ENTER: g.regime_persist_enter,
+    PERSIST_STAY: g.regime_persist_stay,
+    PERSIST_PULLBACK: g.regime_persist_pullback,
+    MIN_DWELL_BARS: g.regime_min_dwell_bars,
+    CONFIRM_BARS: g.regime_confirm_bars,
+    MOM_BARS: g.regime_mom_bars,
+    PERSIST_WINDOW: g.regime_persist_window,
+    ENTRY_DIP: -g.regime_move,
+    ENTRY_RALLY: g.regime_move,
+  };
+}
 
 const GOLD_REF = 2650;
 

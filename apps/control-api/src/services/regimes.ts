@@ -1,23 +1,7 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
-import {
-  CLEAR_BREAK_FRAC,
-  COMPRESS_ABS,
-  COMPRESS_AVG_MULT,
-  EXPAND_ABS,
-  EXPAND_AVG_MULT,
-  MOVE,
-  MOVE_RANGE,
-  NEAR_ZONE_MID,
-  PERSIST_ENTER,
-  PERSIST_PULLBACK,
-  PERSIST_STAY,
-  PULLBACK,
-  REVERSAL,
-  TREND_ENTER,
-  TREND_STAY,
-} from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -133,12 +117,7 @@ export const ZONE_BARS = 180;
  * 90 × 10s = 15m — half zone; thinner books stay UNKNOWN (or sticky prior).
  */
 export const MIN_BARS_FOR_ZONE = 90;
-/** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
-const MOM_BARS = 8;
-/** Stay in a regime ≥50s before soft switches — room between % bands to settle */
-const MIN_DWELL_BARS = 5;
-/** Cross-family soft switches need this many agreeing candidates after dwell */
-const CONFIRM_BARS = 3;
+/** Factory mom length — live path reads BrainGenome via getActiveRegimeBands(). */
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -206,6 +185,26 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     return 'UNKNOWN';
   }
 
+  const {
+    MOVE,
+    TREND_STAY,
+    TREND_ENTER,
+    PULLBACK,
+    REVERSAL,
+    MOVE_RANGE,
+    COMPRESS_ABS,
+    EXPAND_ABS,
+    COMPRESS_AVG_MULT,
+    EXPAND_AVG_MULT,
+    NEAR_ZONE_MID,
+    CLEAR_BREAK_FRAC,
+    PERSIST_ENTER,
+    PERSIST_STAY,
+    PERSIST_PULLBACK,
+    MOM_BARS,
+    PERSIST_WINDOW,
+  } = getActiveRegimeBands();
+
   const zone = bars.slice(-ZONE_BARS);
   const mom = bars.slice(-MOM_BARS);
   const last = mom[mom.length - 1]!;
@@ -219,7 +218,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
   const lastVel = bodyPct(last);
   const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
+  const persistWindow = velocities.slice(-PERSIST_WINDOW);
   const persistence = mean(
     persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );
@@ -365,6 +364,7 @@ export function stabilizeRegime(
 
   const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
   const strong = isStrongSwitch(book.current, candidate);
+  const { MIN_DWELL_BARS, CONFIRM_BARS } = getActiveRegimeBands();
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   const need = sameFamily || strong ? 1 : CONFIRM_BARS;
@@ -401,6 +401,7 @@ export function regimeBookKey(epic: string, accountId?: number | string | null):
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   if (regime === 'UNKNOWN' || bars.length < 2) return 0;
   const last = bars[bars.length - 1]!;
+  const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
   // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
   const strength = Math.min(
     1,

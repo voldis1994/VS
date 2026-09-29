@@ -1,6 +1,6 @@
 /** Native 10-second OHLC — same TF as Capital.com 10s chart. */
 
-import { ENTRY_DIP, ENTRY_RALLY, EXPAND_ABS, MOVE, MOVE_RANGE, TREND_ENTER } from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 
 export type TenSecBar = {
   open_time_ms: number;
@@ -38,9 +38,10 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — MOVE / MOVE_RANGE from shared regimeBands ladder. */
+/** Visible on a Capital 10s chart — active genome MOVE / MOVE_RANGE ladder. */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
+  const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
   return Math.abs(bodyPct(bar)) >= MOVE || rangePct(bar) >= MOVE_RANGE;
 }
 
@@ -50,6 +51,7 @@ export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
  */
 export function isSpike10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
+  const { TREND_ENTER, EXPAND_ABS } = getActiveRegimeBands();
   return Math.abs(bodyPct(bar)) >= TREND_ENTER || rangePct(bar) >= EXPAND_ABS;
 }
 
@@ -277,13 +279,14 @@ export function decideFromClosed10s(
   const bp = bodyPct(bar);
   const rng = rangePct(bar);
   if (!isMoving10s(bar)) return null;
-  if (bp <= ENTRY_DIP) {
+  const bands = getActiveRegimeBands();
+  if (bp <= bands.ENTRY_DIP) {
     return {
       direction: 'BUY',
       reason: `10s OHLC pullback O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
     };
   }
-  if (bp >= ENTRY_RALLY) {
+  if (bp >= bands.ENTRY_RALLY) {
     return {
       direction: 'SELL',
       reason: `10s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,

@@ -358,6 +358,18 @@ function bounceNum(cur: number, step: number, lo: number, hi: number, dir: 1 | -
   return Math.min(hi, Math.max(lo, next));
 }
 
+/** High-precision bounce for regime % fractions (0.00008 scale). */
+function bounceFrac(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  let next = Number((cur + dir * step).toFixed(8));
+  if (next > hi) next = Number((cur - step).toFixed(8));
+  if (next < lo) next = Number((cur + step).toFixed(8));
+  if (next === cur || !Number.isFinite(next)) {
+    next = Number((lo + ((cur - lo + step) % Math.max(step, hi - lo))).toFixed(8));
+    if (next === cur) next = cur >= (lo + hi) / 2 ? lo : hi;
+  }
+  return Math.min(hi, Math.max(lo, next));
+}
+
 function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
   let next = cur + dir * step;
   if (next > hi) next = cur - step;
@@ -381,6 +393,29 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;
   const flipTrig = !g.require_1m_trigger;
+  const rev = bounceFrac(g.regime_reversal, 0.00015, 0.0008, 0.004, dir);
+  const trendEnter = bounceFrac(g.regime_trend_enter, 0.00004, 0.0002, 0.0008, dir);
+  const trendStay = bounceFrac(g.regime_trend_stay, 0.00002, 0.0001, 0.0005, dir);
+  const move = bounceFrac(g.regime_move, 0.00001, 0.00004, 0.0002, dir);
+  const moveRange = bounceFrac(g.regime_move_range, 0.000015, 0.00006, 0.0004, dir);
+  const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.25, 0.85, dir);
+  const persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.1, 0.7, dir);
+  const persistPull = bounceNum(g.regime_persist_pullback, 0.05, 0.05, 0.6, dir);
+  const pullback = bounceFrac(g.regime_pullback, 0.00005, 0.0003, 0.0012, dir);
+  const expandAbs = bounceFrac(g.regime_expand_abs, 0.00008, 0.0003, 0.002, dir);
+  const compressAbs = bounceFrac(g.regime_compress_abs, 0.000008, 0.00002, 0.00012, dir);
+  const compressMult = bounceNum(g.regime_compress_avg_mult, 0.05, 0.15, 0.7, dir);
+  const expandMult = bounceNum(g.regime_expand_avg_mult, 0.08, 1.2, 2.5, dir);
+  const nearMid = bounceNum(g.regime_near_zone_mid, 0.03, 0.12, 0.45, dir);
+  const clearBreak = bounceNum(g.regime_clear_break_frac, 0.04, 0.1, 0.5, dir);
+  const dwell = bounceInt(g.regime_min_dwell_bars, 1, 2, 12, dir);
+  const confirm = bounceInt(g.regime_confirm_bars, 1, 1, 8, dir);
+  const momBars = bounceInt(g.regime_mom_bars, 1, 4, 16, dir);
+  const persistWin = bounceInt(g.regime_persist_window, 1, 3, 12, dir);
+  const trekFlat = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
+  const flipBlockHf = !g.mtf_block_higher_fight;
+  const flipAligned = !g.mtf_require_aligned_side;
+  const storyMin = bounceNum(g.entry_story_conf_min, 0.05, 0.35, 0.8, dir);
 
   return [
     {
@@ -478,6 +513,172 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         ...codePatchesMicroScratch(rejectedN % 2),
       ],
     },
+    {
+      title: `Explore REVERSAL band→${rev} (step #${nextStep + 6})`,
+      rationale: 'Evolve how sensitive classify is to violent reverse bodies.',
+      task: `regime_reversal ${g.regime_reversal}→${rev}`,
+      genome_delta: {
+        regime_reversal: rev,
+        explore_step: nextStep + 6,
+        last_lesson: `Explore regime_reversal ${rev}`,
+      },
+      patches: [
+        genomePatch('regime_reversal', rev, `explore reversal ${rev}`),
+        genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
+      ],
+    },
+    {
+      title: `Explore TREND enter→${trendEnter} (step #${nextStep + 7})`,
+      rationale: 'Evolve how easily TREND enters from persistence + body.',
+      task: `regime_trend_enter→${trendEnter} persist_enter→${persistEnter}`,
+      genome_delta: {
+        regime_trend_enter: trendEnter,
+        regime_persist_enter: persistEnter,
+        explore_step: nextStep + 7,
+        last_lesson: `Explore trend_enter ${trendEnter}`,
+      },
+      patches: [
+        genomePatch('regime_trend_enter', trendEnter, `explore trend_enter ${trendEnter}`),
+        genomePatch('regime_persist_enter', persistEnter, `explore persist_enter ${persistEnter}`),
+        genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
+      ],
+    },
+    {
+      title: `Explore MOVE/stay/range→${move}/${trendStay}/${moveRange} (step #${nextStep + 8})`,
+      rationale: 'Evolve MOVE floor, TREND_STAY, and move_range ladder.',
+      task: `regime_move→${move} stay→${trendStay} move_range→${moveRange}`,
+      genome_delta: {
+        regime_move: move,
+        regime_trend_stay: trendStay,
+        regime_move_range: moveRange,
+        explore_step: nextStep + 8,
+        last_lesson: `Explore move/stay/range ${move}`,
+      },
+      patches: [
+        genomePatch('regime_move', move, `explore move ${move}`),
+        genomePatch('regime_trend_stay', trendStay, `explore stay ${trendStay}`),
+        genomePatch('regime_move_range', moveRange, `explore move_range ${moveRange}`),
+        genomePatch('explore_step', nextStep + 8, `explore_step ${nextStep + 8}`),
+      ],
+    },
+    {
+      title: `Explore pullback/expand→${pullback}/${expandAbs} (step #${nextStep + 9})`,
+      rationale: 'Evolve PULLBACK body + EXPANSION abs range sensitivity.',
+      task: `regime_pullback→${pullback} regime_expand_abs→${expandAbs}`,
+      genome_delta: {
+        regime_pullback: pullback,
+        regime_expand_abs: expandAbs,
+        explore_step: nextStep + 9,
+        last_lesson: `Explore pullback/expand ${pullback}/${expandAbs}`,
+      },
+      patches: [
+        genomePatch('regime_pullback', pullback, `explore pullback ${pullback}`),
+        genomePatch('regime_expand_abs', expandAbs, `explore expand ${expandAbs}`),
+        genomePatch('explore_step', nextStep + 9, `explore_step ${nextStep + 9}`),
+      ],
+    },
+    {
+      title: `Explore compress→${compressAbs}/${compressMult} expandMult→${expandMult} (step #${nextStep + 10})`,
+      rationale: 'Evolve compression abs/mult and expansion mult.',
+      task: `compress_abs→${compressAbs} compress_mult→${compressMult} expand_mult→${expandMult}`,
+      genome_delta: {
+        regime_compress_abs: compressAbs,
+        regime_compress_avg_mult: compressMult,
+        regime_expand_avg_mult: expandMult,
+        explore_step: nextStep + 10,
+        last_lesson: `Explore compress/expand mult`,
+      },
+      patches: [
+        genomePatch('regime_compress_abs', compressAbs, `explore compress_abs ${compressAbs}`),
+        genomePatch('regime_compress_avg_mult', compressMult, `explore compress_mult ${compressMult}`),
+        genomePatch('regime_expand_avg_mult', expandMult, `explore expand_mult ${expandMult}`),
+        genomePatch('explore_step', nextStep + 10, `explore_step ${nextStep + 10}`),
+      ],
+    },
+    {
+      title: `Explore zone mid/break→${nearMid}/${clearBreak} (step #${nextStep + 11})`,
+      rationale: 'Evolve near-zone-mid and clear-break fraction.',
+      task: `near_zone_mid→${nearMid} clear_break→${clearBreak}`,
+      genome_delta: {
+        regime_near_zone_mid: nearMid,
+        regime_clear_break_frac: clearBreak,
+        explore_step: nextStep + 11,
+        last_lesson: `Explore zone mid/break`,
+      },
+      patches: [
+        genomePatch('regime_near_zone_mid', nearMid, `explore near_mid ${nearMid}`),
+        genomePatch('regime_clear_break_frac', clearBreak, `explore clear_break ${clearBreak}`),
+        genomePatch('explore_step', nextStep + 11, `explore_step ${nextStep + 11}`),
+      ],
+    },
+    {
+      title: `Explore persist stay/pull→${persistStay}/${persistPull} (step #${nextStep + 12})`,
+      rationale: 'Evolve persistence stay + pullback thresholds.',
+      task: `persist_stay→${persistStay} persist_pullback→${persistPull}`,
+      genome_delta: {
+        regime_persist_stay: persistStay,
+        regime_persist_pullback: persistPull,
+        explore_step: nextStep + 12,
+        last_lesson: `Explore persist stay/pull`,
+      },
+      patches: [
+        genomePatch('regime_persist_stay', persistStay, `explore persist_stay ${persistStay}`),
+        genomePatch('regime_persist_pullback', persistPull, `explore persist_pull ${persistPull}`),
+        genomePatch('explore_step', nextStep + 12, `explore_step ${nextStep + 12}`),
+      ],
+    },
+    {
+      title: `Explore dwell/confirm→${dwell}/${confirm} (step #${nextStep + 13})`,
+      rationale: 'Evolve regime stabilizer anti-flicker stringency.',
+      task: `regime_min_dwell_bars=${dwell} regime_confirm_bars=${confirm}`,
+      genome_delta: {
+        regime_min_dwell_bars: dwell,
+        regime_confirm_bars: confirm,
+        explore_step: nextStep + 13,
+        last_lesson: `Explore dwell/confirm ${dwell}/${confirm}`,
+      },
+      patches: [
+        genomePatch('regime_min_dwell_bars', dwell, `explore dwell ${dwell}`),
+        genomePatch('regime_confirm_bars', confirm, `explore confirm ${confirm}`),
+        genomePatch('explore_step', nextStep + 13, `explore_step ${nextStep + 13}`),
+      ],
+    },
+    {
+      title: `Explore mom/persist window→${momBars}/${persistWin} (step #${nextStep + 14})`,
+      rationale: 'Evolve momentum + persistence window lengths.',
+      task: `regime_mom_bars=${momBars} regime_persist_window=${persistWin}`,
+      genome_delta: {
+        regime_mom_bars: momBars,
+        regime_persist_window: persistWin,
+        explore_step: nextStep + 14,
+        last_lesson: `Explore mom/persist window`,
+      },
+      patches: [
+        genomePatch('regime_mom_bars', momBars, `explore mom ${momBars}`),
+        genomePatch('regime_persist_window', persistWin, `explore persist_win ${persistWin}`),
+        genomePatch('explore_step', nextStep + 14, `explore_step ${nextStep + 14}`),
+      ],
+    },
+    {
+      title: `Explore multi-TF stringency (step #${nextStep + 15})`,
+      rationale: 'Evolve trek flat + higher-fight / aligned-side / story-conf gates.',
+      task: `trek=${trekFlat} blockHF=${flipBlockHf} aligned=${flipAligned} storyMin=${storyMin}`,
+      genome_delta: {
+        mtf_trek_flat_frac: trekFlat,
+        mtf_block_higher_fight: flipBlockHf,
+        mtf_require_aligned_side: flipAligned,
+        entry_story_conf_min: storyMin,
+        explore_step: nextStep + 15,
+        last_lesson: `Explore mtf trek=${trekFlat} aligned=${flipAligned}`,
+      },
+      patches: [
+        genomePatch('mtf_trek_flat_frac', trekFlat, `explore trek ${trekFlat}`),
+        genomePatch('mtf_block_higher_fight', flipBlockHf, `flip blockHF→${flipBlockHf}`),
+        genomePatch('mtf_require_aligned_side', flipAligned, `flip aligned→${flipAligned}`),
+        genomePatch('entry_story_conf_min', storyMin, `explore story_min ${storyMin}`),
+        genomePatch('explore_step', nextStep + 15, `explore_step ${nextStep + 15}`),
+      ],
+    },
   ];
 }
 
@@ -490,22 +691,78 @@ function forceExploreHypothesis(
   const baseStep = (g.explore_step || 0) + 1;
   for (let i = 0; i < 64; i++) {
     const nextStep = baseStep + tried.size + i;
-    const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
-    const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, nextStep % 2 === 0 ? -1 : 1);
+    const dir: 1 | -1 = nextStep % 2 === 0 ? 1 : -1;
+    const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, dir);
+    const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, dir === 1 ? -1 : 1);
+    const rev = bounceFrac(g.regime_reversal, 0.0001, 0.0008, 0.004, dir);
+    const mom = bounceInt(g.regime_mom_bars, 1, 4, 16, dir);
+    const compressAbs = bounceFrac(g.regime_compress_abs, 0.000008, 0.00002, 0.00012, dir);
+    const expandMult = bounceNum(g.regime_expand_avg_mult, 0.08, 1.2, 2.5, dir);
+    const persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.1, 0.7, dir);
+    const trek = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
     const nonce = `${Date.now().toString(36)}_${i}`;
-    const genome_delta: Record<string, unknown> = {
-      explore_step: nextStep,
-      peak_keep: keep,
-      soft_plus_giveback: gb,
-      version: (g.version || 1) + 1,
-      last_lesson: `Force explore #${nextStep} · ${nonce}`,
-    };
-    const patches = compactPatches([
-      genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
-      genomePatch('peak_keep', keep, `force Keep ${keep}`),
-      genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
-      // Genome-only force explore — never rewrite flipFilter on unstick
-    ]);
+    const mode = nextStep % 4;
+    let genome_delta: Record<string, unknown>;
+    let patches: ReturnType<typeof compactPatches>;
+    if (mode === 0) {
+      genome_delta = {
+        explore_step: nextStep,
+        peak_keep: keep,
+        soft_plus_giveback: gb,
+        version: (g.version || 1) + 1,
+        last_lesson: `Force explore peak #${nextStep} · ${nonce}`,
+      };
+      patches = compactPatches([
+        genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+        genomePatch('peak_keep', keep, `force Keep ${keep}`),
+        genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
+      ]);
+    } else if (mode === 1) {
+      genome_delta = {
+        explore_step: nextStep,
+        regime_reversal: rev,
+        regime_mom_bars: mom,
+        version: (g.version || 1) + 1,
+        last_lesson: `Force explore regime #${nextStep} · ${nonce}`,
+      };
+      patches = compactPatches([
+        genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+        genomePatch('regime_reversal', rev, `force reversal ${rev}`),
+        genomePatch('regime_mom_bars', mom, `force mom ${mom}`),
+      ]);
+    } else if (mode === 2) {
+      genome_delta = {
+        explore_step: nextStep,
+        regime_compress_abs: compressAbs,
+        regime_expand_avg_mult: expandMult,
+        regime_persist_stay: persistStay,
+        version: (g.version || 1) + 1,
+        last_lesson: `Force explore compress/persist #${nextStep} · ${nonce}`,
+      };
+      patches = compactPatches([
+        genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+        genomePatch('regime_compress_abs', compressAbs, `force compress ${compressAbs}`),
+        genomePatch('regime_expand_avg_mult', expandMult, `force expand_mult ${expandMult}`),
+        genomePatch('regime_persist_stay', persistStay, `force persist_stay ${persistStay}`),
+      ]);
+    } else {
+      genome_delta = {
+        explore_step: nextStep,
+        mtf_trek_flat_frac: trek,
+        mtf_require_aligned_side: !g.mtf_require_aligned_side,
+        version: (g.version || 1) + 1,
+        last_lesson: `Force explore mtf #${nextStep} · ${nonce}`,
+      };
+      patches = compactPatches([
+        genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+        genomePatch('mtf_trek_flat_frac', trek, `force trek ${trek}`),
+        genomePatch(
+          'mtf_require_aligned_side',
+          !g.mtf_require_aligned_side,
+          `force aligned→${!g.mtf_require_aligned_side}`
+        ),
+      ]);
+    }
     const signature = hypothesisSignature({
       pattern_id: 'explore',
       patches,
@@ -517,7 +774,7 @@ function forceExploreHypothesis(
       pattern_id: 'explore',
       title: `Force explore #${nextStep}`,
       rationale: `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
-      task: `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
+      task: `Mandatory explore_step=${nextStep} mode=${mode}`,
       patches,
       genome_delta,
       signature,
@@ -653,7 +910,11 @@ export function buildHypothesis(
   }
 
   const rejectedN = exp?.rejected_signatures?.length || 0;
-  for (const v of exploreVariants(g, rejectedN)) {
+  // Rotate start index so peak/soft explore variants do not starve trading-intel knobs.
+  const explore = exploreVariants(g, rejectedN);
+  const start = explore.length ? rejectedN % explore.length : 0;
+  for (let i = 0; i < explore.length; i++) {
+    const v = explore[(start + i) % explore.length]!;
     const hypo = tryVariant('explore', v, g, tried);
     if (hypo) return hypo;
   }

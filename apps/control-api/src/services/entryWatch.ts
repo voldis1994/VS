@@ -22,15 +22,20 @@ import {
   sameDirLockMs,
   sameDirectionBlocked,
 } from './flipFilter.js';
-import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 import { readMarketStory, type MarketStory } from './marketStory.js';
 import { readMultiTfStack, sideFromMultiTf, type TfDir } from './multiTfRead.js';
 import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 
-const DIP = ENTRY_DIP;
-const RALLY = ENTRY_RALLY;
-const MOVING_BODY = MOVE;
-const MOVING_RANGE = MOVE_RANGE;
+function watchBands() {
+  const b = getActiveRegimeBands();
+  return {
+    DIP: b.ENTRY_DIP,
+    RALLY: b.ENTRY_RALLY,
+    MOVING_BODY: b.MOVE,
+    MOVING_RANGE: b.MOVE_RANGE,
+  };
+}
 
 export type EntryWatchStatus =
   | 'STOPPED'
@@ -146,6 +151,7 @@ export function watchRecipe(regime?: string | null): {
   threshold_body_pct: number;
 } {
   const r = normalizeRegime(regime);
+  const { DIP, RALLY, MOVING_BODY } = watchBands();
   switch (r) {
     case 'TREND_UP':
       return {
@@ -271,6 +277,7 @@ function barVsTrigger(
   const body = bodyPct(bar);
   const rng = rangePct(bar);
   const mkt = marketOf(bar);
+  const { DIP, RALLY, MOVING_BODY, MOVING_RANGE } = watchBands();
   const bits = [
     `body ${pctStr(body)}`,
     `range ${pctStr(rng)}`,

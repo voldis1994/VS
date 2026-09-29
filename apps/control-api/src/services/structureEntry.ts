@@ -9,7 +9,7 @@
  * - Explicit rule per regime (all 14).
  */
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
-import { ENTRY_DIP, ENTRY_RALLY, MOVE } from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 import {
   MIN_BARS_FOR_ZONE,
   ZONE_BARS,
@@ -247,11 +247,11 @@ export function higherTfDir(
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= ENTRY_RALLY;
+  return bodyPct(bar) >= getActiveRegimeBands().ENTRY_RALLY;
 }
 
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= ENTRY_DIP;
+  return bodyPct(bar) <= getActiveRegimeBands().ENTRY_DIP;
 }
 
 function tag(zone: ZoneGeometry, md: string, bias?: string): string {
@@ -507,7 +507,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
   const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
   const m1Strong =
-    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5
+    m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * 0.5
       ? true
       : md !== 'FLAT' && md === bias;
 
@@ -614,11 +614,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
 }
 
-/** Test helper — MOVE kept for callers that want strong 1m body */
+/** Test helper — live genome MOVE for strong 1m body */
 export function minuteDirStrong(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLAT' {
   if (!m) return 'FLAT';
   const bp = bodyPct(m);
-  if (bp >= MOVE) return 'UP';
-  if (bp <= -MOVE) return 'DOWN';
+  const move = getActiveRegimeBands().MOVE;
+  if (bp >= move) return 'UP';
+  if (bp <= -move) return 'DOWN';
   return minuteDir(m);
 }
