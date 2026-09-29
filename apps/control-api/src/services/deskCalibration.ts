@@ -107,19 +107,22 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
   ] as RegimeName[];
 
   return {
-    hardinv_abs: clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50),
-    peak_mfe_abs: clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50),
-    peak_retention: clamp(Number(p.peak_retention ?? base.peak_retention), 0.5, 0.95),
-    peak_min_giveback_abs: clamp(
-      Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs),
-      0.1,
-      20
-    ),
-    target_abs: clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100),
-    safety_tp_rr: clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0),
-    hardinv_pct: clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02),
-    target_pct: clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05),
-    peak_mfe_pct: clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), 0.00005, 0.02),
+    hardinv_abs: Math.round(clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50) * 10) / 10,
+    peak_mfe_abs: Math.round(clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50) * 10) / 10,
+    peak_retention:
+      Math.round(clamp(Number(p.peak_retention ?? base.peak_retention), 0.5, 0.95) * 100) / 100,
+    peak_min_giveback_abs:
+      Math.round(clamp(Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs), 0.1, 20) * 10) /
+      10,
+    target_abs: Math.round(clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100) * 10) / 10,
+    safety_tp_rr:
+      Math.round(clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0) * 100) / 100,
+    hardinv_pct:
+      Math.round(clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02) * 1e5) / 1e5,
+    target_pct:
+      Math.round(clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05) * 1e5) / 1e5,
+    peak_mfe_pct:
+      Math.round(clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), 0.00005, 0.02) * 1e5) / 1e5,
     entry_filter_level: Math.round(
       clamp(Number(p.entry_filter_level ?? base.entry_filter_level), 0, 3)
     ),

@@ -37,14 +37,24 @@ type AutoCalStatus = {
   session_expectancy_pts: number;
   session_wins: number;
   session_losses: number;
+  history?: Array<{
+    at: string;
+    summary: string;
+    changes: string[];
+    applied: boolean;
+    window_expectancy: number;
+  }>;
   knobs_now: {
     hardinv_abs: number;
+    hardinv_pct?: number;
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
     safety_tp_rr?: number;
     entry_filter_level?: number;
     enabled_regimes: number;
+    genome_peak_keep?: number;
+    genome_soft_giveback?: number;
   };
 };
 
@@ -272,11 +282,11 @@ export function OverviewPage() {
         <div className="cmd-brain-head">
           <div>
             <div className="section-title" style={{ margin: 0 }}>
-              LEARNER · AUTO-CAL
+              LEARNER · AUTOTUNE
               {selectedClientId ? ` · #${selectedClientId}` : ''}
             </div>
             <p className="hint-line" style={{ margin: '4px 0 0' }}>
-              Online politika no closes · Soft = drošība · ik 5 closes Peak/Target mācība
+              Soft+HardInv+genome free · ik 5 closes · WHAT/WHY pārskats
             </p>
           </div>
           <div className="actions" style={{ margin: 0 }}>
@@ -341,10 +351,18 @@ export function OverviewPage() {
             </div>
             {auto.knobs_now && (
               <div className="hint-line mono cmd-knobs">
-                Soft {auto.knobs_now.hardinv_abs} · Peak {auto.knobs_now.peak_mfe_abs}/
+                Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)}
+                {auto.knobs_now.hardinv_pct != null
+                  ? `/${Number(auto.knobs_now.hardinv_pct).toFixed(5)}`
+                  : ''}{' '}
+                · Peak {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
                 {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
-                {auto.knobs_now.target_abs} · TP RR {auto.knobs_now.safety_tp_rr ?? 1.5} ·
+                {Number(auto.knobs_now.target_abs).toFixed(1)} · TP RR{' '}
+                {Number(auto.knobs_now.safety_tp_rr ?? 1.5).toFixed(2)} ·
                 regimes {auto.knobs_now.enabled_regimes}
+                {auto.knobs_now.genome_peak_keep != null
+                  ? ` · genome keep ${Number(auto.knobs_now.genome_peak_keep).toFixed(2)}`
+                  : ''}
               </div>
             )}
             {(auto.last_summary || auto.last_changes?.length > 0) && (
@@ -354,11 +372,29 @@ export function OverviewPage() {
                     <span className="cmd-label">Last</span> {auto.last_summary}
                   </div>
                 )}
-                {auto.last_changes?.length > 0 && (
-                  <div className="hint-line" style={{ color: 'var(--accent)' }}>
-                    <span className="cmd-label">Δ</span> {auto.last_changes.slice(0, 4).join(' · ')}
-                  </div>
-                )}
+                {auto.last_changes
+                  ?.filter((c) => c.includes('WHAT ·') || c.startsWith('PRĀTS') || c.startsWith('MĀCĪBA'))
+                  .slice(0, 8)
+                  .map((line, i) => {
+                    const what = /WHAT · (.+?) · WHY · (.+)/.exec(line);
+                    if (what) {
+                      return (
+                        <div key={`ov-ac-${i}`} className="autotune-info-row">
+                          <div className="autotune-what">
+                            <span className="cmd-label">WHAT</span> {what[1]}
+                          </div>
+                          <div className="autotune-why">
+                            <span className="cmd-label">WHY</span> {what[2]}
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={`ov-ac-${i}`} className="hint-line" style={{ color: 'var(--accent)' }}>
+                        {line}
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </>

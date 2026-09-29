@@ -1,12 +1,12 @@
 /**
  * Ultimate desk auto-calibrate — watches closes since robot START and
- * softly retunes Soft/Peak/Target + entry_filter_level + regime allowlist
- * every N closes.
+ * retunes Soft/HardInv (abs+pct), Peak/Target, genome Peak/Soft memory,
+ * multi-TF/regime perception, and regime allowlist every N closes.
  *
- * Soft by design: never daily/% entry blocks, never empty allowlist,
- * never starve below MIN_ENABLED_REGIMES; core regimes never auto-OFF.
- * Lot size untouched.
- * Entry filters start OPEN (0); auto-cal raises after bad closes.
+ * Freedom policy: Soft/HardInv/genome/regimes may all move for better
+ * expectancy. Start OPEN TRADE-ALL; self-correct from closes + market ctx.
+ * Never empty allowlist below MIN_ENABLED_REGIMES. Lot untouched.
+ * Entry filters stay OPEN (0). WHAT/WHY change logs for GUI + LIVE LOG.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,24 +22,37 @@ import type { RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
 import type { MarketContextCompact } from './marketContext.js';
 import { reviewSessionLikeHuman } from './traderMind.js';
+import {
+  getBrainGenome,
+  setBrainGenome,
+  type BrainGenome,
+} from '../brainSelfImprove/brainGenome.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
-/** After an applied calibrate — pause NEW entries so desk can settle setups. */
+/** After an applied calibrate — space next cycle; entries stay open. */
 export const AUTO_CALIBRATE_COOLDOWN_MS = 3 * 60_000;
 /** Never drop below this many regimes — entries stay possible. */
 export const MIN_ENABLED_REGIMES = 5;
-/** Hard caps — raising past these makes Soft exits eat all edge. */
-export const AUTO_CAL_MAX_SAFETY_TP_RR = 2.0;
-export const AUTO_CAL_MAX_TARGET_ABS = 7.0;
-export const AUTO_CAL_MAX_PEAK_MFE_ABS = 4.5;
-export const AUTO_CAL_MAX_PEAK_RETENTION = 0.75;
+/** Wide caps — learner explores; desk sanitize is the hard wall. */
+export const AUTO_CAL_MAX_SAFETY_TP_RR = 3.0;
+export const AUTO_CAL_MAX_TARGET_ABS = 12.0;
+export const AUTO_CAL_MAX_PEAK_MFE_ABS = 8.0;
+export const AUTO_CAL_MAX_PEAK_RETENTION = 0.92;
+/** Soft HardInv CAP range — full Soft freedom. */
+export const AUTO_CAL_MIN_HARDINV_ABS = 0.5;
+export const AUTO_CAL_MAX_HARDINV_ABS = 8.0;
+export const AUTO_CAL_MIN_HARDINV_PCT = 0.0002;
+export const AUTO_CAL_MAX_HARDINV_PCT = 0.004;
+export const AUTO_CAL_MIN_TARGET_PCT = 0.0008;
+export const AUTO_CAL_MAX_TARGET_PCT = 0.01;
+export const AUTO_CAL_MIN_PEAK_MFE_PCT = 0.0002;
+export const AUTO_CAL_MAX_PEAK_MFE_PCT = 0.006;
 /** After this many consecutive "raise winners" cycles with still-bad E → pull back. */
 export const AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK = 2;
 
 /**
- * Core liquid regimes — auto-cal NEVER turns these OFF.
- * Demoting RANGE/TREND left only rare BREAKOUT_* → robot starves.
- * Satellite regimes (BREAKOUT / FAILED / REVERSAL) may still soft-demote.
+ * Preferred liquid regimes at factory open. May demote when consistently losing;
+ * floor refill from tradable defaults keeps the robot from starving.
  */
 export const CORE_ALWAYS_ON_REGIMES: readonly string[] = [
   'RANGE',
@@ -54,6 +67,28 @@ export const CORE_ALWAYS_ON_REGIMES: readonly string[] = [
 
 export function isCoreAlwaysOnRegime(regime: string): boolean {
   return CORE_ALWAYS_ON_REGIMES.includes(String(regime || '').toUpperCase());
+}
+
+/** Structured WHAT/WHY log for GUI + LIVE LOG. */
+export function autotuneLog(what: string, why: string): string {
+  return `WHAT · ${what} · WHY · ${why}`;
+}
+
+/** Clean abs pts (1 decimal) — avoid 1.4→1.3999998 no-ops / UI noise. */
+function roundAbs(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+/** Clean retention / keep (2 decimals). */
+function roundRet(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+/** Clean RR (2 decimals). */
+function roundRr(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+/** Clean pct knobs (5 decimals) — Gold Soft must move visibly. */
+function roundPct(n: number): number {
+  return Math.round(n * 1e5) / 1e5;
 }
 
 /** True when a calibration knob or regime allowlist actually differs (ignores updated_at). */
@@ -126,12 +161,16 @@ export type AutoCalibrateStatus = {
   history: AutoCalCycleRecord[];
   knobs_now: {
     hardinv_abs: number;
+    hardinv_pct: number;
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
+    target_pct: number;
     safety_tp_rr: number;
     entry_filter_level: number;
     enabled_regimes: number;
+    genome_peak_keep: number;
+    genome_soft_giveback: number;
   };
 };
 
@@ -140,6 +179,8 @@ export type AutoCalibrateProposeResult = {
   summary: string;
   changes: string[];
   next: DeskCalibration;
+  genome_patch?: Partial<BrainGenome>;
+  genome_changes?: string[];
 };
 
 type SessionState = {
@@ -264,13 +305,15 @@ function hydrateSession(clientId?: number | null): void {
   }
 }
 
-function ensureCoreRegimesOn(clientId?: number | null): void {
+/** Factory open — ensure ALL tradable regimes ON (trade everything). */
+function ensureTradeAllRegimesOn(clientId?: number | null): void {
   const id = resolveDeskClientId(clientId);
   try {
     const cur = getDeskCalibration(id);
+    const want = tradableDefaultRegimes();
     const have = new Set(cur.enabled_regimes.map((r) => String(r).toUpperCase()));
     let changed = false;
-    for (const r of CORE_ALWAYS_ON_REGIMES) {
+    for (const r of want) {
       if (!have.has(r)) {
         have.add(r);
         changed = true;
@@ -282,6 +325,11 @@ function ensureCoreRegimesOn(clientId?: number | null): void {
   } catch {
     /* ignore */
   }
+}
+
+/** @deprecated alias — trade-all open uses full tradable set */
+function ensureCoreRegimesOn(clientId?: number | null): void {
+  ensureTradeAllRegimesOn(clientId);
 }
 
 /** Snap already-overreached knobs back to caps (live sessions that climbed too far). */
@@ -296,13 +344,13 @@ function clampOverreachKnobs(clientId?: number | null): void {
     if (cur.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
       patch.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
     }
-    // L3 with bad climb — open one step so trades can happen again
-    if ((cur.entry_filter_level || 0) >= 3) patch.entry_filter_level = 2;
+    if ((cur.entry_filter_level || 0) >= 3) patch.entry_filter_level = 0;
     if (Object.keys(patch).length) setDeskCalibration(patch, id);
   } catch {
     /* ignore */
   }
 }
+void clampOverreachKnobs;
 
 export function setAutoCalibrateEnabled(on: boolean, clientId?: number | null): void {
   const id = resolveDeskClientId(clientId);
@@ -320,7 +368,7 @@ export function isAutoCalibrateEnabled(clientId?: number | null): boolean {
 
 /**
  * Factory open: Soft/Peak/Target/TP RR defaults, filters L0, ALL regimes ON,
- * wipe auto-cal watch. Use on robot START / Reset — start trading everything again.
+ * wipe auto-cal watch. Use on Reset — start trading everything again.
  */
 export function resetClientToOpenTradeAll(
   clientId?: number | null,
@@ -347,8 +395,13 @@ export function beginAutoCalibrateSession(
   st.trades = [];
   st.cycles_run = 0;
   st.last_cycle_at = null;
-  st.last_summary = `OPEN TRADE-ALL · client ${id} · ${reason} · filters L0 · all regimes`;
-  st.last_changes = ['factory open · Soft 2.2 · Peak 3 keep72% · Target 5 · TP RR 1.5 · filters 0 · Soft loses-only'];
+  st.last_summary = `OPEN TRADE-ALL · client ${id} · ${reason} · Soft+HardInv+genome free · all regimes`;
+  st.last_changes = [
+    autotuneLog(
+      'factory open Soft 2.2/pct0.0008 · Peak 3 keep72% · Target 5 · TP RR 1.5 · filters 0 · all regimes',
+      'Sākt no jauna — trade everything, self-correct from closes'
+    ),
+  ];
   st.demoted.clear();
   st.cooldown_until_ms = null;
   st.last_window_expectancy = null;
@@ -359,7 +412,7 @@ export function beginAutoCalibrateSession(
   } catch {
     /* ignore */
   }
-  ensureCoreRegimesOn(id);
+  ensureTradeAllRegimesOn(id);
   persistSession(id);
   return getAutoCalibrateStatus(undefined, id);
 }
@@ -367,7 +420,6 @@ export function beginAutoCalibrateSession(
 /**
  * Robot START — keep the close watch (do NOT wipe counted trades).
  * Factory wipe only via SĀKT NO JAUNA / resetClientToOpenTradeAll.
- * If session never started, open a fresh watch without resetting knobs mid-day.
  */
 export function ensureAutoCalibrateSession(
   reason = 'robot_start',
@@ -378,15 +430,15 @@ export function ensureAutoCalibrateSession(
   const st = bucket(id).state;
   if (!st.started_at) {
     st.started_at = new Date().toISOString();
-    st.last_summary = `session · client ${id} · ${reason}`;
-    st.last_changes = [`session start · ${reason} · closes preserved`];
-    ensureCoreRegimesOn(id);
+    st.last_summary = `session · client ${id} · ${reason} · OPEN`;
+    st.last_changes = [
+      autotuneLog(`session start · ${reason}`, 'closes preserved · Soft/genome free to learn'),
+    ];
+    ensureTradeAllRegimesOn(id);
     persistSession(id);
   }
   return getAutoCalibrateStatus(undefined, id);
 }
-
-
 
 export function isAutoCalibrateCooldownActive(
   nowMs = Date.now(),
@@ -438,6 +490,12 @@ export function getAutoCalibrateStatus(
   const left = autoCalibrateCooldownLeftSec(now, id);
   const cal = getDeskCalibration(id);
   const stats = sessionStats(id);
+  let genome: BrainGenome | null = null;
+  try {
+    genome = getBrainGenome();
+  } catch {
+    genome = null;
+  }
   return {
     client_id: id,
     enabled: bucket(id).enabled,
@@ -456,21 +514,24 @@ export function getAutoCalibrateStatus(
     history: st.history.slice(0, 8),
     knobs_now: {
       hardinv_abs: cal.hardinv_abs,
+      hardinv_pct: cal.hardinv_pct,
       peak_mfe_abs: cal.peak_mfe_abs,
       peak_retention: cal.peak_retention,
       target_abs: cal.target_abs,
+      target_pct: cal.target_pct,
       safety_tp_rr: cal.safety_tp_rr,
       entry_filter_level: cal.entry_filter_level,
       enabled_regimes: cal.enabled_regimes.length,
+      genome_peak_keep: genome?.peak_keep ?? 0.75,
+      genome_soft_giveback: genome?.soft_plus_giveback ?? 0.75,
     },
   };
 }
 
 /**
  * Record one closed trade. Every AUTO_CALIBRATE_EVERY_N closes since START,
- * softly retunes desk calibration. Applied change starts a short settle
- * before the next auto-cal cycle — entries stay open (PRĀTS still trades).
- * Never throws. Open positions still managed during settle.
+ * retunes desk + genome. Applied change starts a short settle before the next
+ * auto-cal cycle — entries stay open. Never throws.
  */
 export function noteClosedTradeForAutoCalibrate(
   trade: SessionTrade,
@@ -500,8 +561,15 @@ export function noteClosedTradeForAutoCalibrate(
 
   const window = state.trades.slice(-AUTO_CALIBRATE_EVERY_N);
   const current = getDeskCalibration(id);
+  let genomeNow: BrainGenome | null = null;
+  try {
+    genomeNow = getBrainGenome();
+  } catch {
+    genomeNow = null;
+  }
   const proposed = proposeAutoCalibration(current, window, state.demoted, {
     raise_streak: state.raise_streak,
+    genome: genomeNow ?? undefined,
   });
   const windowSum = window.reduce((a, t) => a + t.pnl_pts, 0);
   const windowE = window.length ? windowSum / window.length : 0;
@@ -522,12 +590,36 @@ export function noteClosedTradeForAutoCalibrate(
     if (state.history.length > 12) state.history.length = 12;
   };
 
-  const raisedWinners = proposed.changes.some((c) =>
-    /^(safety_tp_rr|peak_mfe_abs|peak_retention|target_abs) /.test(c) && c.includes('→')
+  const raisedWinners = proposed.changes.some(
+    (c) =>
+      /peak_mfe_abs|peak_retention|target_abs|safety_tp_rr|hardinv_abs ease|hardinv_pct ease/.test(
+        c
+      ) && /→/.test(c) && !/pullback|tighten|ease Peak|ease Target/.test(c)
   );
-  const pulledBack = proposed.changes.some((c) => c.includes('pullback') || c.includes('ease'));
+  const pulledBack = proposed.changes.some(
+    (c) => /pullback|ease|tighten|Soft-heavy|protect/.test(c)
+  );
 
-  if (!proposed.applied) {
+  const genomeApplied =
+    proposed.genome_patch && Object.keys(proposed.genome_patch).length > 0
+      ? (() => {
+          try {
+            setBrainGenome({
+              ...proposed.genome_patch,
+              explore_step: (genomeNow?.explore_step ?? 0) + 1,
+              last_lesson: proposed.summary.slice(0, 200),
+            });
+            return true;
+          } catch {
+            return false;
+          }
+        })()
+      : false;
+
+  const deskApplied = proposed.applied;
+  const anyApplied = deskApplied || genomeApplied;
+
+  if (!anyApplied) {
     state.cycles_run += 1;
     state.last_cycle_at = at;
     state.last_summary = proposed.summary;
@@ -541,21 +633,184 @@ export function noteClosedTradeForAutoCalibrate(
   else if (raisedWinners) state.raise_streak += 1;
   else state.raise_streak = Math.max(0, state.raise_streak - 1);
 
-  const saved = setDeskCalibration(proposed.next, id);
+  const saved = deskApplied ? setDeskCalibration(proposed.next, id) : current;
   for (const ch of proposed.changes) {
-    const m = /^regime OFF (.+)$/.exec(ch);
-    if (m) state.demoted.add(m[1]!);
-    const p = /^regime ON (.+)$/.exec(ch);
-    if (p) state.demoted.delete(p[1]!);
+    const m = /^WHAT · regime OFF (.+?) ·/.exec(ch) || /^regime OFF (.+)$/.exec(ch);
+    if (m) state.demoted.add(m[1]!.split(' ')[0]!);
+    const p = /^WHAT · regime ON (.+?) ·/.exec(ch) || /^regime ON (.+)$/.exec(ch);
+    if (p) state.demoted.delete(p[1]!.split(' ')[0]!);
   }
   state.cooldown_until_ms = Date.now() + AUTO_CALIBRATE_COOLDOWN_MS;
   state.cycles_run += 1;
   state.last_cycle_at = at;
-  state.last_summary = `${proposed.summary} · cal settle ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m (entries OK)`;
-  state.last_changes = proposed.changes;
+  const genomeNote = genomeApplied
+    ? ` · genome ${proposed.genome_changes?.length ?? 0}`
+    : '';
+  state.last_summary = `${proposed.summary}${genomeNote} · cal settle ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m (entries OK)`;
+  state.last_changes = [
+    ...proposed.changes,
+    ...(proposed.genome_changes || []),
+  ];
   pushHistory(true, AUTO_CALIBRATE_COOLDOWN_MS / 1000);
   persistSession(id);
-  return { ...proposed, next: saved };
+  return {
+    ...proposed,
+    applied: true,
+    next: saved,
+    changes: state.last_changes,
+  };
+}
+
+function proposeGenomePatch(
+  next: DeskCalibration,
+  windowTrades: SessionTrade[],
+  intent: string,
+  softDominates: boolean,
+  expectancy: number,
+  softLosses: number,
+  genome?: BrainGenome | null
+): { patch: Partial<BrainGenome>; changes: string[] } {
+  const g = genome ?? null;
+  const patch: Partial<BrainGenome> = {};
+  const changes: string[] = [];
+  if (!g) return { patch, changes };
+
+  // Sync Peak Keep with desk retention (genome can go to 0.88)
+  const keepTarget = roundRet(Math.min(0.88, Math.max(0.65, next.peak_retention)));
+  if (Math.abs(g.peak_keep - keepTarget) >= 0.01) {
+    patch.peak_keep = keepTarget;
+    changes.push(
+      autotuneLog(
+        `genome peak_keep ${roundRet(g.peak_keep).toFixed(2)}→${keepTarget.toFixed(2)}`,
+        'sync with desk Peak retention'
+      )
+    );
+  }
+
+  if (softDominates || intent === 'protect_sooner') {
+    const give = roundRet(Math.min(0.85, Math.max(0.55, g.soft_plus_giveback + 0.03)));
+    if (give !== roundRet(g.soft_plus_giveback)) {
+      patch.soft_plus_giveback = give;
+      changes.push(
+        autotuneLog(
+          `genome soft_plus_giveback ${roundRet(g.soft_plus_giveback).toFixed(2)}→${give.toFixed(2)}`,
+          'Soft-heavy — bank Soft+ sooner'
+        )
+      );
+    }
+    const arm = roundRet(Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult - 0.05)));
+    if (arm !== roundRet(g.peak_arm_soft_mult)) {
+      patch.peak_arm_soft_mult = arm;
+      changes.push(
+        autotuneLog(
+          `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
+          'arm Peak earlier after Soft losses'
+        )
+      );
+    }
+    const pause = Math.min(12, g.soft_same_side_pause_closes + 1);
+    if (pause !== g.soft_same_side_pause_closes && softLosses >= 2) {
+      patch.soft_same_side_pause_closes = pause;
+      changes.push(
+        autotuneLog(
+          `genome soft_same_side_pause_closes ${g.soft_same_side_pause_closes}→${pause}`,
+          'pause same-side after Soft chop'
+        )
+      );
+    }
+  } else if (intent === 'let_winners_run' || expectancy > 0.25) {
+    const arm = roundRet(Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
+    if (arm !== roundRet(g.peak_arm_soft_mult)) {
+      patch.peak_arm_soft_mult = arm;
+      changes.push(
+        autotuneLog(
+          `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
+          'let winners run — Peak arms later'
+        )
+      );
+    }
+  }
+
+  // Market context — choppy / mixed pressure → loosen trek / story bar slightly
+  const choppyCtx = windowTrades.filter((t) => {
+    const ctx = t.exit_ctx || t.entry_ctx;
+    if (!ctx) return false;
+    const midShare = ctx.green_share > 0.35 && ctx.green_share < 0.65;
+    return midShare && !ctx.expanding;
+  }).length;
+  if (choppyCtx >= 2 && expectancy < 0.1) {
+    const trek = roundPct(Math.min(0.0012, Math.max(0.00015, g.mtf_trek_flat_frac * 1.08)));
+    if (Math.abs(trek - roundPct(g.mtf_trek_flat_frac)) > 1e-7) {
+      patch.mtf_trek_flat_frac = trek;
+      changes.push(
+        autotuneLog(
+          `genome mtf_trek_flat_frac ${roundPct(g.mtf_trek_flat_frac).toFixed(5)}→${trek.toFixed(5)}`,
+          `choppy pressure ×${choppyCtx} — wider FLAT trek`
+        )
+      );
+    }
+    const storyMin = roundRet(Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03)));
+    if (storyMin !== roundRet(g.entry_story_conf_min)) {
+      patch.entry_story_conf_min = storyMin;
+      changes.push(
+        autotuneLog(
+          `genome entry_story_conf_min ${roundRet(g.entry_story_conf_min).toFixed(2)}→${storyMin.toFixed(2)}`,
+          'allow slightly weaker story when chop dominates'
+        )
+      );
+    }
+  }
+
+  // Bad expectancy + multi-TF fights in context → require aligned side
+  if (expectancy < -0.2 && !g.mtf_require_aligned_side) {
+    patch.mtf_require_aligned_side = true;
+    changes.push(
+      autotuneLog(
+        'genome mtf_require_aligned_side false→true',
+        'negative E — demand multi-TF alignment'
+      )
+    );
+  }
+
+  // Expanding market pressure → slightly faster regime confirm (self-build perception)
+  const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
+  if (expandingCtx >= 3 && expectancy > 0.15) {
+    const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
+    if (confirm !== g.regime_confirm_bars) {
+      patch.regime_confirm_bars = confirm;
+      changes.push(
+        autotuneLog(
+          `genome regime_confirm_bars ${g.regime_confirm_bars}→${confirm}`,
+          `expanding market ×${expandingCtx} — faster regime confirm`
+        )
+      );
+    }
+  } else if (choppyCtx >= 2 && expectancy < 0) {
+    const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
+    if (dwell !== g.regime_min_dwell_bars) {
+      patch.regime_min_dwell_bars = dwell;
+      changes.push(
+        autotuneLog(
+          `genome regime_min_dwell_bars ${g.regime_min_dwell_bars}→${dwell}`,
+          `choppy ×${choppyCtx} — longer dwell before regime switch`
+        )
+      );
+    }
+  }
+
+  // Fight feed disagreement → HTF veto on
+  const fightCtx = windowTrades.filter((t) => {
+    const a = (t.exit_ctx || t.entry_ctx)?.feed_agreement;
+    return a === 'FIGHT' || a === 'fight' || a === 'DISAGREE';
+  }).length;
+  if (fightCtx >= 2 && expectancy < 0.05 && !g.mtf_htf_veto) {
+    patch.mtf_htf_veto = true;
+    changes.push(
+      autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
+    );
+  }
+
+  return { patch, changes };
 }
 
 /** Pure propose — unit-tested without disk. */
@@ -563,7 +818,7 @@ export function proposeAutoCalibration(
   current: DeskCalibration,
   windowTrades: SessionTrade[],
   demotedSession: Set<string> = new Set(),
-  opts?: { raise_streak?: number }
+  opts?: { raise_streak?: number; genome?: BrainGenome | null }
 ): AutoCalibrateProposeResult {
   const raiseStreak = Math.max(0, Number(opts?.raise_streak) || 0);
   const changes: string[] = [];
@@ -592,7 +847,6 @@ export function proposeAutoCalibration(
     (t) => t.pnl_pts > 1e-9 && t.pnl_pts < Math.max(1.0, avgLossAbs * 0.45)
   ).length;
 
-  // --- Human review of the 5-close window (Peak/Target only — NEVER filters) ---
   const peakExits = windowTrades.filter((t) =>
     /PeakProtection|MindBank|MindCut|TimeDecay|Target/i.test(String(t.exit_reason || ''))
   );
@@ -609,14 +863,17 @@ export function proposeAutoCalibration(
   const next: DeskCalibration = {
     ...current,
     enabled_regimes: [...current.enabled_regimes],
-    // Operator asked for AI brains, not filters — keep OPEN
     entry_filter_level: 0,
   };
   if ((current.entry_filter_level || 0) !== 0) {
-    changes.push(`entry_filter_level ${current.entry_filter_level}→0 (OPEN · prāts nevis filtri)`);
+    changes.push(
+      autotuneLog(
+        `entry_filter_level ${current.entry_filter_level}→0`,
+        'OPEN — prāts nevis filtri'
+      )
+    );
   }
 
-  // --- Detect overreach: raised Peak/Target/TP so far Soft always eats the trade ---
   const rrNow = next.safety_tp_rr || 1.5;
   const alreadyTall =
     rrNow >= AUTO_CAL_MAX_SAFETY_TP_RR - 0.01 ||
@@ -627,13 +884,20 @@ export function proposeAutoCalibration(
   const asymmetryBad =
     avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.85 && microWins >= 2;
 
+  const softDominates =
+    softLosses >= 2 &&
+    expectancy < 0.05 &&
+    avgLossAbs >= 1.0 &&
+    (wins.length === 0 || avgWin < avgLossAbs * 0.75);
+
   const needPullBack =
     human.intent === 'ease_peak_target' ||
     (expectancy < 0.05 &&
       (raiseStreak >= AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK ||
         alreadyTall ||
         leftWinnerOnTable ||
-        (asymmetryBad && softLosses >= 2)));
+        (asymmetryBad && softLosses >= 2) ||
+        softDominates));
 
   const needProtectSooner = human.intent === 'protect_sooner';
 
@@ -656,73 +920,237 @@ export function proposeAutoCalibration(
 
   const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
 
+  // Soft too tight: many Soft cuts but avg Soft distance looks small vs MFE left on table
+  const softTooTight =
+    !softDominates &&
+    softLosses >= 2 &&
+    highMfeTinyPnl >= 1 &&
+    expectancy < 0.15 &&
+    next.hardinv_abs <= 2.0;
+
   if (needPullBack) {
-    // Targets unreachable — ease back toward Soft so winners can bank before Soft chops.
-    // Pullback must NEVER raise Peak/Target/TP. If Soft floor would force an increase, keep old.
+    // Soft-heavy — tighten Soft CAP + pct so Soft chops cost less (live Soft follows both)
+    if (softDominates) {
+      const softBefore = next.hardinv_abs;
+      const pctBefore = next.hardinv_pct;
+      next.hardinv_abs = Math.max(AUTO_CAL_MIN_HARDINV_ABS, roundAbs(softBefore - 0.2));
+      next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, next.hardinv_abs);
+      next.hardinv_pct = Math.max(AUTO_CAL_MIN_HARDINV_PCT, roundPct(pctBefore * 0.9));
+      if (next.hardinv_abs !== softBefore) {
+        const mkt = windowTrades
+          .map((t) => (t.exit_ctx || t.entry_ctx)?.chapter)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join('/');
+        changes.push(
+          autotuneLog(
+            `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft tighten`,
+            `Soft-heavy Soft×${softLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}${
+              mkt ? ` · mkt ${mkt}` : ''
+            }`
+          )
+        );
+      }
+      if (next.hardinv_pct !== pctBefore) {
+        changes.push(
+          autotuneLog(
+            `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft tighten`,
+            'pct must move or Gold Soft stays pct-bound'
+          )
+        );
+      }
+    }
+
     const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.max(1.5, rrBefore - 0.25);
+    next.safety_tp_rr = Math.max(1.5, roundRr(rrBefore - 0.25));
     if (next.safety_tp_rr !== rrBefore) {
-      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} pullback`);
+      changes.push(
+        autotuneLog(
+          `safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} pullback`,
+          'targets overreached vs Soft — shrink broker TP RR'
+        )
+      );
     }
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    const easedPeak = next.peak_mfe_abs - 0.5;
-    const peakFloor = next.hardinv_abs + 1.5;
+    const easedPeak = roundAbs(next.peak_mfe_abs - 0.5);
+    const peakFloor = roundAbs(next.hardinv_abs + 0.5);
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
-    next.peak_retention = Math.max(0.72, next.peak_retention - 0.04);
-    next.peak_min_giveback_abs = Math.max(0.85, next.peak_min_giveback_abs - 0.15);
-    const easedTgt = next.target_abs - 1.25;
-    const tgtFloor = next.hardinv_abs + 3;
+    if (softDominates) {
+      next.peak_retention = roundRet(
+        Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(retBefore, 0.78))
+      );
+    } else {
+      next.peak_retention = roundRet(Math.max(0.65, next.peak_retention - 0.04));
+    }
+    next.peak_min_giveback_abs = roundAbs(Math.max(0.5, next.peak_min_giveback_abs - 0.15));
+    const easedTgt = roundAbs(next.target_abs - 1.2);
+    const tgtFloor = roundAbs(next.hardinv_abs + 1.5);
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
-    next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
+    const tgtPctBefore = next.target_pct;
+    next.target_pct = roundPct(Math.max(AUTO_CAL_MIN_TARGET_PCT, next.target_pct / 1.12));
     if (next.peak_mfe_abs !== peakBefore) {
-      changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`);
+      changes.push(
+        autotuneLog(
+          `peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`,
+          'bank earlier — Peak floor Soft+0.5'
+        )
+      );
     }
-    if (next.peak_retention !== retBefore) {
-      changes.push(`peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ease`);
-    }
-    if (next.target_abs !== tgtBefore) {
-      changes.push(`target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)} ease`);
-    }
-  } else if (needProtectSooner) {
-    // Human: protect winners sooner — tighter Peak retention, Soft untouched
-    const retBefore = next.peak_retention;
-    next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(0.78, next.peak_retention + 0.04));
     if (next.peak_retention !== retBefore) {
       changes.push(
-        `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} protect-sooner`
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ${
+            softDominates ? 'protect-sooner' : 'ease'
+          }`,
+          softDominates ? 'Soft eats winners — keep more of Peak MFE' : 'ease Keep for room'
+        )
+      );
+    }
+    if (next.target_abs !== tgtBefore) {
+      changes.push(
+        autotuneLog(
+          `target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)} ease`,
+          'Target nearer Soft so winners bank'
+        )
+      );
+    }
+    if (next.target_pct !== tgtPctBefore) {
+      changes.push(
+        autotuneLog(
+          `target_pct ${tgtPctBefore.toFixed(5)}→${next.target_pct.toFixed(5)} ease`,
+          'pct Target follows abs ease'
+        )
+      );
+    }
+  } else if (needProtectSooner) {
+    const retBefore = next.peak_retention;
+    next.peak_retention = roundRet(
+      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(0.78, next.peak_retention + 0.04))
+    );
+    if (next.peak_retention !== retBefore) {
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} protect-sooner`,
+          'PRĀTS: protect winners sooner'
+        )
       );
     }
   } else if (doRaise) {
+    // Soft may ease slightly so winners have room (Soft+HardInv free)
+    if (softTooTight || human.intent === 'let_winners_run') {
+      const softBefore = next.hardinv_abs;
+      const pctBefore = next.hardinv_pct;
+      next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
+      next.hardinv_pct = Math.min(AUTO_CAL_MAX_HARDINV_PCT, roundPct(pctBefore * 1.05));
+      if (next.hardinv_abs !== softBefore) {
+        changes.push(
+          autotuneLog(
+            `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft ease`,
+            'give Soft room so winners are not Soft-chopped'
+          )
+        );
+      }
+      if (next.hardinv_pct !== pctBefore) {
+        changes.push(
+          autotuneLog(
+            `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft ease`,
+            'raise Soft pct with abs'
+          )
+        );
+      }
+    }
     const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.min(AUTO_CAL_MAX_SAFETY_TP_RR, rrBefore + 0.15);
+    next.safety_tp_rr = Math.min(AUTO_CAL_MAX_SAFETY_TP_RR, roundRr(rrBefore + 0.15));
     if (next.safety_tp_rr !== rrBefore) {
-      changes.push(`safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`);
+      changes.push(
+        autotuneLog(
+          `safety_tp_rr ${rrBefore.toFixed(2)}→${next.safety_tp_rr.toFixed(2)}`,
+          'let winners run — raise broker TP RR'
+        )
+      );
     }
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.peak_mfe_abs + 0.35);
-    next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.03);
-    next.peak_min_giveback_abs = Math.min(1.5, next.peak_min_giveback_abs + 0.1);
-    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.target_abs + 0.75);
-    next.target_pct = Math.min(0.004, next.target_pct * 1.06);
-    next.peak_mfe_pct = Math.min(0.002, next.peak_mfe_pct * 1.05);
+    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, roundAbs(next.peak_mfe_abs + 0.4));
+    next.peak_retention = roundRet(
+      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.03)
+    );
+    next.peak_min_giveback_abs = roundAbs(Math.min(2.0, next.peak_min_giveback_abs + 0.1));
+    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, roundAbs(next.target_abs + 0.8));
+    const tgtPctBefore = next.target_pct;
+    const peakPctBefore = next.peak_mfe_pct;
+    next.target_pct = roundPct(Math.min(AUTO_CAL_MAX_TARGET_PCT, next.target_pct * 1.06));
+    next.peak_mfe_pct = roundPct(Math.min(AUTO_CAL_MAX_PEAK_MFE_PCT, next.peak_mfe_pct * 1.05));
     if (next.peak_mfe_abs !== peakBefore) {
-      changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`);
+      changes.push(
+        autotuneLog(
+          `peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`,
+          'raise Peak arm for bigger winners'
+        )
+      );
     }
     if (next.peak_retention !== retBefore) {
-      changes.push(`peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)}`);
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)}`,
+          'keep more of Peak MFE'
+        )
+      );
     }
     if (next.target_abs !== tgtBefore) {
-      changes.push(`target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)}`);
+      changes.push(
+        autotuneLog(
+          `target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)}`,
+          'raise Soft Target'
+        )
+      );
+    }
+    if (next.target_pct !== tgtPctBefore) {
+      changes.push(
+        autotuneLog(
+          `target_pct ${tgtPctBefore.toFixed(5)}→${next.target_pct.toFixed(5)}`,
+          'pct Target with abs raise'
+        )
+      );
+    }
+    if (next.peak_mfe_pct !== peakPctBefore) {
+      changes.push(
+        autotuneLog(
+          `peak_mfe_pct ${peakPctBefore.toFixed(5)}→${next.peak_mfe_pct.toFixed(5)}`,
+          'pct Peak with abs raise'
+        )
+      );
     }
   }
 
-  // Soft HardInv / broker SL: intentionally NOT auto-tuned — SL stays as opened.
+  // Soft ease when too tight even without full raise path
+  if (!needPullBack && !doRaise && softTooTight) {
+    const softBefore = next.hardinv_abs;
+    const pctBefore = next.hardinv_pct;
+    next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
+    next.hardinv_pct = Math.min(AUTO_CAL_MAX_HARDINV_PCT, roundPct(pctBefore * 1.06));
+    if (next.hardinv_abs !== softBefore) {
+      changes.push(
+        autotuneLog(
+          `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft ease`,
+          'Soft too tight vs MFE left on table'
+        )
+      );
+    }
+    if (next.hardinv_pct !== pctBefore) {
+      changes.push(
+        autotuneLog(
+          `hardinv_pct ${pctBefore.toFixed(5)}→${next.hardinv_pct.toFixed(5)} Soft ease`,
+          'Soft too tight — raise pct'
+        )
+      );
+    }
+  }
 
-  // Already healthy — tiny retention polish only
+  // Healthy polish
   if (
     !doRaise &&
     !needPullBack &&
@@ -732,56 +1160,100 @@ export function proposeAutoCalibration(
     wins.length >= losses.length
   ) {
     const retBefore = next.peak_retention;
-    next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.01);
+    next.peak_retention = roundRet(
+      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.01)
+    );
     if (next.peak_retention !== retBefore) {
-      changes.push(`peak_retention hold+ ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)}`);
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} hold+`,
+          'healthy window — tiny Keep polish'
+        )
+      );
     }
   }
 
-  // Ensure Peak stays above Soft CAP (but never above hard max).
-  // During pullback/ease never raise Peak/Target — floor conflict keeps prior values.
+  // Peak above Soft CAP (never raise during pullback)
   if (!needPullBack) {
     if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
-      next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, next.hardinv_abs + 1.5);
-      changes.push(`peak_mfe_abs floor vs Soft →${next.peak_mfe_abs.toFixed(1)}`);
+      const b = next.peak_mfe_abs;
+      next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, roundAbs(next.hardinv_abs + 1.5));
+      if (next.peak_mfe_abs !== b) {
+        changes.push(
+          autotuneLog(
+            `peak_mfe_abs ${b.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} floor vs Soft`,
+            'Peak must sit above Soft CAP'
+          )
+        );
+      }
     }
     if (next.target_abs <= next.hardinv_abs + 1) {
-      next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.hardinv_abs + 3);
-      changes.push(`target_abs floor vs Soft →${next.target_abs.toFixed(1)}`);
+      const b = next.target_abs;
+      next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, roundAbs(next.hardinv_abs + 3));
+      if (next.target_abs !== b) {
+        changes.push(
+          autotuneLog(
+            `target_abs ${b.toFixed(1)}→${next.target_abs.toFixed(1)} floor vs Soft`,
+            'Target must sit above Soft CAP'
+          )
+        );
+      }
     }
   }
-  // Clamp any overshoot from older sessions
+
+  // Clamp overshoot
   if (next.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) {
     const b = next.safety_tp_rr;
     next.safety_tp_rr = AUTO_CAL_MAX_SAFETY_TP_RR;
-    changes.push(`safety_tp_rr ${b.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} cap`);
+    changes.push(
+      autotuneLog(
+        `safety_tp_rr ${b.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} cap`,
+        'auto-cal max TP RR'
+      )
+    );
   }
   if (next.target_abs > AUTO_CAL_MAX_TARGET_ABS) {
     const b = next.target_abs;
     next.target_abs = AUTO_CAL_MAX_TARGET_ABS;
-    changes.push(`target_abs ${b.toFixed(1)}→${next.target_abs.toFixed(1)} cap`);
+    changes.push(
+      autotuneLog(`target_abs ${b.toFixed(1)}→${next.target_abs.toFixed(1)} cap`, 'auto-cal max Target')
+    );
   }
   if (next.peak_mfe_abs > AUTO_CAL_MAX_PEAK_MFE_ABS) {
     const b = next.peak_mfe_abs;
     next.peak_mfe_abs = AUTO_CAL_MAX_PEAK_MFE_ABS;
-    changes.push(`peak_mfe_abs ${b.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} cap`);
+    changes.push(
+      autotuneLog(`peak_mfe_abs ${b.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} cap`, 'auto-cal max Peak')
+    );
   }
   if (next.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
     const b = next.peak_retention;
     next.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
-    changes.push(`peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} cap`);
+    changes.push(
+      autotuneLog(
+        `peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} cap`,
+        'auto-cal max Keep'
+      )
+    );
   }
+  next.hardinv_abs = Math.min(
+    AUTO_CAL_MAX_HARDINV_ABS,
+    Math.max(AUTO_CAL_MIN_HARDINV_ABS, next.hardinv_abs)
+  );
+  next.hardinv_pct = Math.min(
+    AUTO_CAL_MAX_HARDINV_PCT,
+    Math.max(AUTO_CAL_MIN_HARDINV_PCT, next.hardinv_pct)
+  );
 
-  // --- Entry filters: ALWAYS OPEN — human mind, not filter ladder ---
   if ((next.entry_filter_level || 0) !== 0) {
     const b = next.entry_filter_level;
     next.entry_filter_level = 0;
-    if (!changes.some((c) => c.startsWith('entry_filter_level'))) {
-      changes.push(`entry_filter_level ${b}→0 OPEN`);
+    if (!changes.some((c) => c.includes('entry_filter_level'))) {
+      changes.push(autotuneLog(`entry_filter_level ${b}→0 OPEN`, 'filters stay open'));
     }
   }
 
-  // --- Soft regime book ---
+  // --- Regime book: any regime may demote with evidence; floor keeps trading ---
   const byRegime = new Map<string, { sum: number; n: number }>();
   for (const t of windowTrades) {
     const r = String(t.regime || 'UNKNOWN').toUpperCase();
@@ -794,49 +1266,52 @@ export function proposeAutoCalibration(
 
   let enabled = new Set(next.enabled_regimes.map((r) => String(r).toUpperCase()));
 
-  // Promote clear winners
   for (const [r, st] of byRegime) {
     if (st.n >= 1 && st.sum > 0.4 && !enabled.has(r)) {
       enabled.add(r);
       demotedSession.delete(r);
-      changes.push(`regime ON ${r}`);
+      changes.push(autotuneLog(`regime ON ${r}`, `winner sum=${st.sum.toFixed(1)} n=${st.n}`));
     }
   }
 
-  // Demote at most ONE worst *satellite* offender (never CORE)
   let demotedThisCycle: string | null = null;
+  // Prefer satellites first; cores only with stronger evidence (n≥2, sum<-0.8)
   const offenders = [...byRegime.entries()]
-    .filter(
-      ([r, st]) =>
-        !isCoreAlwaysOnRegime(r) && st.n >= 2 && st.sum < -0.35
-    )
-    .sort((a, b) => a[1].sum - b[1].sum);
+    .filter(([r, st]) => {
+      if (st.n < 2 || st.sum >= -0.35) return false;
+      if (isCoreAlwaysOnRegime(r)) return st.sum < -0.8;
+      return true;
+    })
+    .sort((a, b) => {
+      const aCore = isCoreAlwaysOnRegime(a[0]) ? 1 : 0;
+      const bCore = isCoreAlwaysOnRegime(b[0]) ? 1 : 0;
+      if (aCore !== bCore) return aCore - bCore;
+      return a[1].sum - b[1].sum;
+    });
   if (offenders.length && enabled.size > MIN_ENABLED_REGIMES) {
     const worst = offenders[0]![0];
     if (enabled.has(worst) && enabled.size - 1 >= MIN_ENABLED_REGIMES) {
       enabled.delete(worst);
       demotedSession.add(worst);
       demotedThisCycle = worst;
-      changes.push(`regime OFF ${worst}`);
+      const coreNote = isCoreAlwaysOnRegime(worst) ? ' (was preferred)' : '';
+      changes.push(
+        autotuneLog(
+          `regime OFF ${worst}${coreNote}`,
+          `loser sum=${byRegime.get(worst)!.sum.toFixed(1)} n=${byRegime.get(worst)!.n}`
+        )
+      );
     }
   }
 
-  // Positive cycle OR flat — soft re-promote one previously demoted regime
   if ((expectancy > 0.1 || !demotedThisCycle) && demotedSession.size) {
     const candidate = [...demotedSession].find((r) => r !== demotedThisCycle);
     if (candidate && !enabled.has(candidate)) {
       enabled.add(candidate);
       demotedSession.delete(candidate);
-      changes.push(`regime ON ${candidate}`);
-    }
-  }
-
-  // Core always stay ON — cannot starve liquid regimes
-  for (const r of CORE_ALWAYS_ON_REGIMES) {
-    if (!enabled.has(r)) {
-      enabled.add(r);
-      demotedSession.delete(r);
-      changes.push(`regime ON ${r} (core)`);
+      changes.push(
+        autotuneLog(`regime ON ${candidate}`, 're-promote after positive/flat cycle')
+      );
     }
   }
 
@@ -846,27 +1321,50 @@ export function proposeAutoCalibration(
       if (enabled.size >= MIN_ENABLED_REGIMES) break;
       if (!enabled.has(r)) {
         enabled.add(r);
-        changes.push(`regime ON ${r} (floor)`);
+        changes.push(autotuneLog(`regime ON ${r}`, 'floor — keep trading possible'));
       }
     }
   }
 
   next.enabled_regimes = [...enabled] as RegimeName[];
 
-  // No forced raise — hold is OK when already capped / balanced
+  // Snap all numeric knobs to clean decimals — real steps, no float dust
+  next.hardinv_abs = roundAbs(next.hardinv_abs);
+  next.peak_mfe_abs = roundAbs(next.peak_mfe_abs);
+  next.target_abs = roundAbs(next.target_abs);
+  next.peak_min_giveback_abs = roundAbs(next.peak_min_giveback_abs);
+  next.peak_retention = roundRet(next.peak_retention);
+  next.safety_tp_rr = roundRr(next.safety_tp_rr);
+  next.hardinv_pct = roundPct(next.hardinv_pct);
+  next.target_pct = roundPct(next.target_pct);
+  next.peak_mfe_pct = roundPct(next.peak_mfe_pct);
+
+  const genomeResult = proposeGenomePatch(
+    next,
+    windowTrades,
+    human.intent,
+    softDominates,
+    expectancy,
+    softLosses,
+    opts?.genome
+  );
 
   const paramOrRegimeChanged = deskCalibrationMateriallyChanged(current, next);
+  const genomeChanged = Object.keys(genomeResult.patch).length > 0;
   const summary =
     `n=${windowTrades.length} E=${expectancy.toFixed(2)} ` +
     `W/L=${wins.length}/${losses.length} avgW=${avgWin.toFixed(2)} avgL=${avgLossAbs.toFixed(2)}` +
-    (paramOrRegimeChanged ? ` · ${changes.length} tweaks` : ' · hold');
+    (paramOrRegimeChanged || genomeChanged
+      ? ` · ${changes.length + genomeResult.changes.length} tweaks`
+      : ' · hold');
 
   return {
-    // PRĀTS/MĀCĪBA stay in changes for diagnostics, but applied only on real knob/regime change
     applied: paramOrRegimeChanged,
     summary,
     changes,
     next,
+    genome_patch: genomeChanged ? genomeResult.patch : undefined,
+    genome_changes: genomeChanged ? genomeResult.changes : undefined,
   };
 }
 
@@ -875,7 +1373,7 @@ export function _resetAutoCalibrateForTests(clientId: number = 0): void {
   const id = resolveDeskClientId(clientId);
   const b = bucket(id);
   b.enabled = true;
-  b.hydrated = true; // skip disk during unit tests
+  b.hydrated = true;
   b.state = emptyState();
   try {
     const file = sessionPath(id);
@@ -883,7 +1381,6 @@ export function _resetAutoCalibrateForTests(clientId: number = 0): void {
   } catch {
     /* ignore */
   }
-  // Also wipe sibling test clients commonly used
   for (const other of [0, 1, 2, 7, 99]) {
     if (other === id) continue;
     if (buckets.has(other)) {

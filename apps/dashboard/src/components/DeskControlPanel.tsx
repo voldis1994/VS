@@ -65,12 +65,16 @@ export type AutoCalStatus = {
   }>;
   knobs_now?: {
     hardinv_abs: number;
+    hardinv_pct?: number;
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
+    target_pct?: number;
     safety_tp_rr?: number;
     entry_filter_level?: number;
     enabled_regimes: number;
+    genome_peak_keep?: number;
+    genome_soft_giveback?: number;
   };
 };
 
@@ -258,7 +262,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
           CONTROL
         </div>
         <span className="hint-line" style={{ margin: 0 }}>
-          Start · HardInv / Peak · Regimes — visas sadaļas vienā skatā
+          Start · Soft/HardInv free · Autotune WHAT/WHY · Regimes — trade-all
         </span>
       </div>
 
@@ -362,9 +366,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
         </section>
 
         <section className="panel control-panel">
-          <div className="section-title">LEARNER · AUTO-CAL</div>
+          <div className="section-title">LEARNER · AUTOTUNE</div>
           <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
-            Online politika · Soft drošība · Sākt no jauna = OPEN TRADE-ALL
+            Soft+HardInv+genome free · OPEN TRADE-ALL · WHAT/WHY logs
           </p>
           {auto ? (
             <>
@@ -383,21 +387,22 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
               </div>
               {auto.knobs_now && (
                 <div className="hint-line mono" style={{ marginTop: 2 }}>
-                  Knobs Soft {auto.knobs_now.hardinv_abs} · Peak {auto.knobs_now.peak_mfe_abs}/
-                  {Math.round(auto.knobs_now.peak_retention * 100)}% · Target {auto.knobs_now.target_abs} ·
-                  regimes {auto.knobs_now.enabled_regimes}
+                  Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)}
+                  {auto.knobs_now.hardinv_pct != null
+                    ? `/${Number(auto.knobs_now.hardinv_pct).toFixed(5)}`
+                    : ''}{' '}
+                  · Peak {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
+                  {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
+                  {Number(auto.knobs_now.target_abs).toFixed(1)} · regimes{' '}
+                  {auto.knobs_now.enabled_regimes}
+                  {auto.knobs_now.genome_peak_keep != null
+                    ? ` · genome keep ${Number(auto.knobs_now.genome_peak_keep).toFixed(2)}`
+                    : ''}
                 </div>
               )}
               {cal && (
                 <div className="hint-line mono" style={{ marginTop: 4 }}>
-                  Entry filters L{cal.entry_filter_level ?? 0} ·{' '}
-                  {(cal.entry_filter_level ?? 0) === 0
-                    ? 'OPEN'
-                    : (cal.entry_filter_level ?? 0) === 1
-                      ? 'FLIP lock'
-                      : (cal.entry_filter_level ?? 0) === 2
-                        ? 'FLIP+structure'
-                        : 'STRICT'}
+                  Entry filters L{cal.entry_filter_level ?? 0} · OPEN · Soft/HardInv/genome regulējami
                 </div>
               )}
               {auto.last_summary && (
@@ -405,11 +410,65 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                   Last: {auto.last_summary}
                 </div>
               )}
-              {auto.last_changes?.length > 0 && (
-                <div className="hint-line" style={{ marginTop: 2 }}>
-                  Changed: {auto.last_changes.join(' · ')}
+            </>
+          ) : (
+            <div className="empty-state">Auto-cal loading…</div>
+          )}
+        </section>
+
+        <section className="panel control-panel">
+          <div className="section-title">AUTOTUNE INFO · WHAT / WHY</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 6 }}>
+            Ko viņš maina un kāpēc — Soft, HardInv, Peak, Target, regimes, genome
+          </p>
+          {auto?.last_changes && auto.last_changes.length > 0 ? (
+            <div className="autotune-info-log">
+              {auto.last_changes.map((line, i) => {
+                const what = /WHAT · (.+?) · WHY · (.+)/.exec(line);
+                if (what) {
+                  return (
+                    <div key={`ac-${i}`} className="autotune-info-row">
+                      <div className="autotune-what">
+                        <span className="cmd-label">WHAT</span> {what[1]}
+                      </div>
+                      <div className="autotune-why">
+                        <span className="cmd-label">WHY</span> {what[2]}
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={`ac-${i}`} className="hint-line mono" style={{ marginTop: 2 }}>
+                    {line}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-state">Vēl nav cikla — ik 5 closes parādīsies WHAT/WHY</div>
+          )}
+          {auto?.history && auto.history.length > 0 && (
+            <div className="autotune-history" style={{ marginTop: 8 }}>
+              <div className="hint-line" style={{ marginBottom: 4 }}>
+                Pēdējie cikli
+              </div>
+              {auto.history.slice(0, 5).map((h, i) => (
+                <div key={`hist-${i}`} className="autotune-hist-row">
+                  <span className="mono">
+                    {h.applied ? 'APPLIED' : 'hold'} · E={Number(h.window_expectancy).toFixed(2)} ·{' '}
+                    {h.at?.slice(11, 19) || '—'}
+                  </span>
+                  <div className="hint-line" style={{ marginTop: 2 }}>
+                    {(h.changes || [])
+                      .filter((c) => c.includes('WHAT ·'))
+                      .slice(0, 3)
+                      .join(' · ') || h.summary}
+                  </div>
                 </div>
-              )}
+              ))}
+            </div>
+          )}
+          {auto && (
               <div className="actions" style={{ marginTop: 6, gap: 6 }}>
                 <button
                   className="btn"
@@ -443,16 +502,13 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                     }).then((r) => {
                       setAuto(r.auto);
                       if (r.calibration) setCal(r.calibration);
-                      setCalMsg('OPEN TRADE-ALL · Soft 2.2 · Peak 3 · Target 5 · filters L0');
+                      setCalMsg('OPEN TRADE-ALL · Soft+HardInv+genome free · all regimes');
                     });
                   }}
                 >
                   Sākt no jauna
                 </button>
               </div>
-            </>
-          ) : (
-            <div className="empty-state">Auto-cal loading…</div>
           )}
         </section>
 
@@ -466,10 +522,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.hardinv_abs}
+                value={Number(cal.hardinv_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    hardinv_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    hardinv_abs: Math.round(cal.hardinv_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Peak keep % (75=25% giveback)</label>
               <input
@@ -481,32 +546,53 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 value={Math.round(cal.peak_retention * 100)}
                 disabled={calBusy}
                 onChange={(e) =>
-                  setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                  setCal({
+                    ...cal,
+                    peak_retention: Math.round(Number(e.target.value)) / 100,
+                  })
                 }
-                onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
+                onBlur={() =>
+                  void saveCalibration({
+                    peak_retention: Math.round(cal.peak_retention * 100) / 100,
+                  })
+                }
               />
               <label className="field-label">Peak MFE floor</label>
               <input
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.peak_mfe_abs}
+                value={Number(cal.peak_mfe_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    peak_mfe_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    peak_mfe_abs: Math.round(cal.peak_mfe_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Peak min giveback</label>
               <input
                 className="input"
                 type="number"
-                step="0.05"
-                value={cal.peak_min_giveback_abs}
+                step="0.1"
+                value={Number(cal.peak_min_giveback_abs.toFixed(1))}
                 disabled={calBusy}
                 onChange={(e) =>
-                  setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                  setCal({
+                    ...cal,
+                    peak_min_giveback_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
                 }
                 onBlur={() =>
-                  void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                  void saveCalibration({
+                    peak_min_giveback_abs: Math.round(cal.peak_min_giveback_abs * 10) / 10,
+                  })
                 }
               />
               <label className="field-label">Target abs</label>
@@ -514,10 +600,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 className="input"
                 type="number"
                 step="0.1"
-                value={cal.target_abs}
+                value={Number(cal.target_abs.toFixed(1))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    target_abs: Math.round(Number(e.target.value) * 10) / 10,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    target_abs: Math.round(cal.target_abs * 10) / 10,
+                  })
+                }
               />
               <label className="field-label">Broker TP R:R (vs SL)</label>
               <input
@@ -526,10 +621,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 step="0.05"
                 min={1.5}
                 max={4}
-                value={cal.safety_tp_rr}
+                value={Number(cal.safety_tp_rr.toFixed(2))}
                 disabled={calBusy}
-                onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
-                onBlur={() => void saveCalibration({ safety_tp_rr: cal.safety_tp_rr })}
+                onChange={(e) =>
+                  setCal({
+                    ...cal,
+                    safety_tp_rr: Math.round(Number(e.target.value) * 100) / 100,
+                  })
+                }
+                onBlur={() =>
+                  void saveCalibration({
+                    safety_tp_rr: Math.round(cal.safety_tp_rr * 100) / 100,
+                  })
+                }
               />
               <p className="hint-line" style={{ marginTop: 2 }}>
                 Soft Peak/Target banko peļņu — brokeram tikai SAFETY SL (bez TP scratch).

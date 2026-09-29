@@ -197,17 +197,15 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
   const g: BrainGenome = {
     version: Math.max(1, Math.floor(Number(p.version) || 1)),
     updated_at: String(p.updated_at || new Date().toISOString()),
-    peak_keep: clamp(Number(p.peak_keep ?? DEFAULT_GENOME.peak_keep), 0.65, 0.88),
-    peak_arm_soft_mult: clamp(
-      Number(p.peak_arm_soft_mult ?? DEFAULT_GENOME.peak_arm_soft_mult),
-      0.5,
-      1.2
-    ),
-    soft_plus_giveback: clamp(
-      Number(p.soft_plus_giveback ?? DEFAULT_GENOME.soft_plus_giveback),
-      0.55,
-      0.85
-    ),
+    peak_keep: Math.round(clamp(Number(p.peak_keep ?? DEFAULT_GENOME.peak_keep), 0.65, 0.88) * 100) / 100,
+    peak_arm_soft_mult:
+      Math.round(
+        clamp(Number(p.peak_arm_soft_mult ?? DEFAULT_GENOME.peak_arm_soft_mult), 0.5, 1.2) * 100
+      ) / 100,
+    soft_plus_giveback:
+      Math.round(
+        clamp(Number(p.soft_plus_giveback ?? DEFAULT_GENOME.soft_plus_giveback), 0.55, 0.85) * 100
+      ) / 100,
     require_1m_trigger: p.require_1m_trigger !== false,
     soft_same_side_pause_closes: Math.max(
       1,
@@ -310,24 +308,22 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       Math.min(12, Math.floor(Number(p.regime_persist_window) || DEFAULT_GENOME.regime_persist_window))
     ),
 
-    mtf_trek_flat_frac: clamp(
-      Number(p.mtf_trek_flat_frac ?? DEFAULT_GENOME.mtf_trek_flat_frac),
-      0.00015,
-      0.0012
-    ),
+    mtf_trek_flat_frac:
+      Math.round(
+        clamp(Number(p.mtf_trek_flat_frac ?? DEFAULT_GENOME.mtf_trek_flat_frac), 0.00015, 0.0012) *
+          1e5
+      ) / 1e5,
     mtf_block_higher_fight: p.mtf_block_higher_fight !== false,
     mtf_require_aligned_side: p.mtf_require_aligned_side !== false,
     mtf_htf_veto: p.mtf_htf_veto !== false,
-    entry_story_conf_min: clamp(
-      Number(p.entry_story_conf_min ?? DEFAULT_GENOME.entry_story_conf_min),
-      0.35,
-      0.8
-    ),
-    entry_chop_conf_max: clamp(
-      Number(p.entry_chop_conf_max ?? DEFAULT_GENOME.entry_chop_conf_max),
-      0.25,
-      0.65
-    ),
+    entry_story_conf_min:
+      Math.round(
+        clamp(Number(p.entry_story_conf_min ?? DEFAULT_GENOME.entry_story_conf_min), 0.35, 0.8) * 100
+      ) / 100,
+    entry_chop_conf_max:
+      Math.round(
+        clamp(Number(p.entry_chop_conf_max ?? DEFAULT_GENOME.entry_chop_conf_max), 0.25, 0.65) * 100
+      ) / 100,
   };
 
   if (!(g.entry_chop_conf_max < g.entry_story_conf_min)) {
