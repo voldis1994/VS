@@ -110,7 +110,7 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     hardinv_abs: Math.round(clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50) * 10) / 10,
     peak_mfe_abs: Math.round(clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50) * 10) / 10,
     peak_retention:
-      Math.round(clamp(Number(p.peak_retention ?? base.peak_retention), 0.5, 0.95) * 100) / 100,
+      Math.round(clamp(Number(p.peak_retention ?? base.peak_retention), 0.1, 0.95) * 100) / 100,
     peak_min_giveback_abs:
       Math.round(clamp(Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs), 0.1, 20) * 10) /
       10,
