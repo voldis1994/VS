@@ -170,6 +170,8 @@ echo [OK]
 echo.
 
 echo [4/5] Palaisu API + publisko paneli :18080 ...
+REM Drop stale BRAIN reload flag so a leftover cycle does not bounce API on boot
+if exist "%ROOT%\data\brain-self-improve\reload-needed.json" del /q "%ROOT%\data\brain-self-improve\reload-needed.json" >nul 2>&1
 set "LIVE_TRADING_ENABLED=true"
 set "OPERATING_MODE=LIVE"
 set "MARKET_CORE_BRIDGE=1"
