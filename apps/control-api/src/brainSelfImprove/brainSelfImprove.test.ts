@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertPatchesAllowed,
   isPathAllowed,
@@ -264,6 +265,12 @@ describe('brainSelfImprove cycle (once)', () => {
   const prevGen = process.env.BRAIN_GENOME_PATH;
   const prevSkip = process.env.BRAIN_SKIP_NESTED_TESTS;
   let tmp: string;
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const patchTargets = [
+    path.join(repoRoot, 'apps/control-api/src/services/flipFilter.ts'),
+    path.join(repoRoot, 'apps/control-api/src/services/traderMind.ts'),
+  ];
+  const patchSnapshots = new Map<string, string>();
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-si-'));
@@ -271,6 +278,14 @@ describe('brainSelfImprove cycle (once)', () => {
     process.env.BRAIN_GENOME_PATH = path.join(tmp, 'genome.json');
     // Nested vitest from evaluate would re-enter this file — skip in unit cycle test.
     process.env.BRAIN_SKIP_NESTED_TESTS = '1';
+    patchSnapshots.clear();
+    for (const p of patchTargets) {
+      try {
+        patchSnapshots.set(p, fs.readFileSync(p, 'utf8'));
+      } catch {
+        /* ignore */
+      }
+    }
     _resetBrainGenomeForTests({
       peak_keep: 0.75,
       peak_arm_soft_mult: 1,
@@ -303,6 +318,14 @@ describe('brainSelfImprove cycle (once)', () => {
     if (prevSkip === undefined) delete process.env.BRAIN_SKIP_NESTED_TESTS;
     else process.env.BRAIN_SKIP_NESTED_TESTS = prevSkip;
     _resetBrainGenomeForTests();
+    for (const [p, body] of patchSnapshots) {
+      try {
+        fs.writeFileSync(p, body, 'utf8');
+      } catch {
+        /* ignore */
+      }
+    }
+    patchSnapshots.clear();
     try {
       fs.rmSync(tmp, { recursive: true, force: true });
     } catch {
