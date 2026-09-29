@@ -111,6 +111,8 @@ type RobotSession = {
   cycle_busy?: boolean;
   cycle_busy_age_ms?: number;
   last_tick_at?: string | null;
+  last_quote_at?: string | null;
+  last_activity_at?: string | null;
 };
 
 function fmt(n: number | null | undefined, d = 5) {
@@ -360,20 +362,36 @@ export function RobotUnitPage() {
         </header>
 
         {error && <div className="error-state">{error}</div>}
-        {session?.cycle_busy && (session.cycle_busy_age_ms || 0) > 8_000 && (
-          <div className="error-state">
-            CYCLE STUCK {Math.round((session.cycle_busy_age_ms || 0) / 1000)}s — Capital/feed hang ·
-            gaida UNSTUCK
-          </div>
-        )}
-        {session?.last_tick_at &&
-          Date.now() - new Date(session.last_tick_at).getTime() > 15_000 &&
-          session.running && (
-            <div className="error-state">
-              LIVE LOG stale — pēdējais tick{' '}
-              {Math.round((Date.now() - new Date(session.last_tick_at).getTime()) / 1000)}s atpakaļ
+        {(() => {
+          if (!session?.running) return null;
+          const busyAge = session.cycle_busy ? session.cycle_busy_age_ms || 0 : 0;
+          // Multi-account Capital lock often holds 15–40s — that is a queue, not a hang.
+          if (session.cycle_busy && busyAge >= 40_000) {
+            return (
+              <div className="error-state">
+                CYCLE STUCK {Math.round(busyAge / 1000)}s — Capital/feed hang · gaida UNSTUCK
+              </div>
+            );
+          }
+          if (session.cycle_busy && busyAge >= 15_000) {
+            return (
+              <div className="warn-state">
+                Capital aizņemts {Math.round(busyAge / 1000)}s — rinda / lēns API (citi konti OK) · nav hang
+              </div>
+            );
+          }
+          // While cycle_busy, LIVE LOG pauses by design — do not double-alarm.
+          if (session.cycle_busy) return null;
+          const activityIso = session.last_activity_at || session.last_tick_at || session.last_quote_at;
+          if (!activityIso) return null;
+          const age = Date.now() - new Date(activityIso).getTime();
+          if (age <= 45_000) return null;
+          return (
+            <div className="warn-state">
+              LIVE LOG stale — pēdējā aktivitāte {Math.round(age / 1000)}s atpakaļ
             </div>
-          )}
+          );
+        })()}
 
         <div className="robot-unit-grid">
           <section className="robot-unit-panel robot-unit-status">
