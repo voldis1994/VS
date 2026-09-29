@@ -317,6 +317,11 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = 'Bounce selloff bez skaidras 5m/1m UP — nepalieku long pret selloff.';
       why = 'Gaidu, kamēr zemākie TF apstiprina vai selloff atsākas.';
       confidence = 0.5;
+    } else if (chapter === 'DIP_IN_RALLY' && m1 !== 'UP') {
+      choice = 'WAIT';
+      thesis = 'Dip pēc rally breakout — pārāk ātri BUY; gaidu 1m UP resume.';
+      why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
+      confidence = 0.45;
     } else {
       choice = 'BUY';
       thesis =
@@ -351,6 +356,13 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = 'Dip rally bez skaidras 5m/1m DOWN — ne shortoju dip.';
       why = 'Gaidu zemāko TF apstiprinājumu.';
       confidence = 0.5;
+    } else if (chapter === 'BOUNCE_IN_SELL' && m1 !== 'DOWN') {
+      // First green after dump — real pullback OR bias change. Wait for resume.
+      choice = 'WAIT';
+      thesis =
+        'Bounce pēc sell breakout — pārāk ātri SELL; gaidu 1m DOWN resume (ne first fade).';
+      why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
+      confidence = 0.45;
     } else {
       choice = 'SELL';
       thesis =
@@ -386,12 +398,37 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = `Steks jauktā (${stack.summary}), bet regime ${regime} — turu īso pusi kā darba hipotēzi.`;
       why = 'Bez skaidra multi-TF sekoju live regime; gaidu SELL setup.';
       confidence = 0.62;
-    } else if (chapter === 'BOUNCE_IN_SELL' || (allow === 'SELL' && chapter === 'SELLOFF')) {
+    } else if (chapter === 'BOUNCE_IN_SELL') {
+      if (m1 !== 'DOWN') {
+        choice = 'WAIT';
+        thesis =
+          'Bounce pēc selloff — pārāk ātri SELL; gaidu 1m DOWN resume (ne first fade).';
+        why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
+        confidence = 0.45;
+      } else {
+        choice = 'SELL';
+        thesis = `30m selloff bounce + 1m DOWN — SELL resume.`;
+        why = '1m apstiprina selloff atsākšanos pēc bounce.';
+        confidence = Math.max(0.7, conf);
+      }
+    } else if (allow === 'SELL' && chapter === 'SELLOFF') {
       choice = 'SELL';
       thesis = `30m selloff (${chapter}) un steks nav UP — esmu pārdevēja pusē.`;
       why = body < 0 ? 'Sarkans 10s apstiprina SELL.' : 'Gaidu SELL trigger.';
       confidence = Math.max(0.65, conf);
-    } else if (chapter === 'DIP_IN_RALLY' || (allow === 'BUY' && chapter === 'RALLY')) {
+    } else if (chapter === 'DIP_IN_RALLY') {
+      if (m1 !== 'UP') {
+        choice = 'WAIT';
+        thesis = 'Dip pēc rally — pārāk ātri BUY; gaidu 1m UP resume.';
+        why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
+        confidence = 0.45;
+      } else {
+        choice = 'BUY';
+        thesis = `30m rally dip + 1m UP — BUY resume.`;
+        why = '1m apstiprina rally atsākšanos pēc dip.';
+        confidence = Math.max(0.7, conf);
+      }
+    } else if (allow === 'BUY' && chapter === 'RALLY') {
       choice = 'BUY';
       thesis = `30m rally (${chapter}) un steks nav DOWN — esmu pircēja pusē.`;
       why = body > 0 ? 'Zaļš 10s apstiprina BUY.' : 'Gaidu BUY trigger.';

@@ -310,7 +310,48 @@ describe('traderMind', () => {
       tf30_dir: 'DOWN',
     });
     expect(t.choice).toBe('WAIT');
-    expect(t.why).toMatch(/1m|bounce|Soft|trigger/i);
+    expect(t.why).toMatch(/1m|bounce|Soft|trigger|kustību|bias/i);
+  });
+
+  it('ENTRY WAITs first bounce after sell breakout until 1m DOWN resume', () => {
+    // Gold 17:45 case: dump then first green — pullback OR bias change
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'BOUNCE_IN_SELL',
+      allow: 'SELL',
+      story_conf: 0.85,
+      red_1m: 14,
+      green_1m: 6,
+      zone_pos: 0.2,
+      bar_body_sign: 1,
+      m1_dir: 'FLAT',
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.thesis + t.why).toMatch(/bounce|gaidu|1m DOWN|kustību|bias/i);
+  });
+
+  it('ENTRY SELL after bounce only when 1m DOWN resumes', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'BOUNCE_IN_SELL',
+      allow: 'SELL',
+      story_conf: 0.85,
+      red_1m: 14,
+      green_1m: 6,
+      zone_pos: 0.35,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      m1_strong: true,
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('SELL');
   });
 
   it('ENTRY WAITs same-side after Soft SELL without fresh 1m DOWN', () => {

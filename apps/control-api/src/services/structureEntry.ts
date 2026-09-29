@@ -712,7 +712,20 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     );
   }
 
-  if (matched === raw && raw) {
+  // SETUP NOW must NOT skip scalp on FADE / post-dump bounce — that was the
+  // Gold 17:45 "RANGE SELL" on the first green after a sell breakout (too early;
+  // could still be bias change). Breakout/trend continuation may fire now.
+  const setupNeedsConfirm =
+    !raw ||
+    raw.setup === 'FADE' ||
+    story.chapter === 'BOUNCE_IN_SELL' ||
+    story.chapter === 'DIP_IN_RALLY' ||
+    story.chapter === 'EXHAUST_LO' ||
+    story.chapter === 'EXHAUST_HI' ||
+    gateRegime === 'RANGE' ||
+    gateRegime === 'COMPRESSION' ||
+    gateRegime === 'TRANSITION';
+  if (matched === raw && raw && !setupNeedsConfirm) {
     return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
   }
 

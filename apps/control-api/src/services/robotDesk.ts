@@ -2101,8 +2101,15 @@ async function enterTradeLocked(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.safety_tp = profitLevel != null && Number.isFinite(profitLevel) ? profitLevel : null;
   s.error = null;
-  // Freeze exit thesis at fill — live classify must not rewrite Soft/Peak mid-trade
-  s.entry_regime = s.regime;
+  // Freeze exit thesis at fill — use Capital-promoted playbook, not false RANGE label
+  const fillBar = s.ohlcState.last_closed;
+  const fillStory = fillBar ? readMarketStory(s.closedBars, fillBar) : null;
+  s.entry_regime = effectiveEntryRegime(s.regime, fillStory, {
+    tf30: capitalHigherTfDir(s.last_tf30_candles),
+    tf15: capitalHigherTfDir(s.last_tf15_candles),
+    tf5: capitalHigherTfDir(s.last_tf5_candles),
+    m1: capitalCandleDir(s.last_minute_candles),
+  });
   s.entry_setup = setupType ?? null;
   const z = zoneGeometry(s.closedBars);
   s.entry_zone = z
