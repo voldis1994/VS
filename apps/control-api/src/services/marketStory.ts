@@ -7,7 +7,7 @@
  */
 import { ZONE_BARS, MIN_BARS_FOR_ZONE } from './regimes.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
-import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 
 export type StoryChapter =
   | 'SEEDING'
@@ -446,6 +446,7 @@ export function scalpStoryConfirms(
   const m1 = story.last_1m;
   const d1 = oneMDir(m1);
   const pos = story.zone_pos;
+  const { ENTRY_DIP, ENTRY_RALLY } = getActiveRegimeBands();
   const trigBuy = trigger != null && bodyPct(trigger) >= ENTRY_RALLY;
   const trigSell = trigger != null && bodyPct(trigger) <= ENTRY_DIP;
 

@@ -45,6 +45,11 @@ export type EvalScore = {
   perception_fingerprint: string;
   /** Per-scenario classify tip labels (for mutation-relevant ACCEPT gates). */
   regime_labels: Record<string, string>;
+  /**
+   * Per TRADING_INTEL key: hit rate on that key's discriminative probe(s).
+   * Used to tell measurable improvement from mere behaviour change.
+   */
+  intel_probe_by_key: Record<string, number>;
 };
 
 export type EvalReport = {
@@ -143,74 +148,339 @@ type RegimeScenario = {
 };
 
 function regimeScenarios(): RegimeScenario[] {
+  // Price ~100 so body/range fractions clear factory MOVE/TREND bands
+  // (Gold-scale synthetics with tiny absolute steps classify as RANGE/EXPANSION).
   return [
     {
       id: 'TREND_UP',
-      expected: 'TREND_UP',
-      previous: 'UNKNOWN',
-      bars: syntheticTrendBars({ n: 200, step: 0.12 }),
+      expected: ['TREND_UP', 'EXPANSION', 'PULLBACK_UPTREND', 'REVERSAL_CANDIDATE'],
+      previous: 'TREND_UP',
+      bars: syntheticTrendBars({ n: 200, start: 100, step: 0.05 }),
     },
     {
       id: 'TREND_DOWN',
-      expected: 'TREND_DOWN',
-      previous: 'UNKNOWN',
-      bars: syntheticTrendBars({ n: 200, start: 4300, step: -0.12 }),
+      expected: ['TREND_DOWN', 'EXPANSION', 'PULLBACK_DOWNTREND', 'REVERSAL_CANDIDATE'],
+      previous: 'TREND_DOWN',
+      bars: syntheticTrendBars({ n: 200, start: 100, step: -0.05 }),
     },
     {
       id: 'RANGE',
       expected: ['RANGE', 'COMPRESSION', 'TRANSITION'],
       previous: 'RANGE',
-      bars: syntheticRangeBars({ n: 160 }),
+      bars: syntheticRangeBars({ n: 160, start: 100 }),
     },
     {
       id: 'COMPRESSION',
       expected: ['COMPRESSION', 'RANGE'],
       previous: 'RANGE',
-      bars: syntheticCompressionExpansionBars({ n: 140, expand_at: 999 }),
+      bars: syntheticCompressionExpansionBars({ n: 140, start: 100, expand_at: 999 }),
     },
     {
       id: 'EXPANSION',
       expected: ['EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'TREND_UP', 'TREND_DOWN'],
       previous: 'COMPRESSION',
-      bars: syntheticCompressionExpansionBars({ n: 160, expand_at: 120 }),
+      bars: syntheticCompressionExpansionBars({ n: 160, start: 100, expand_at: 120 }),
     },
     {
       id: 'COMPRESSION_TO_EXPANSION',
-      expected: ['EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'TREND_UP'],
+      expected: ['EXPANSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'TREND_UP', 'TREND_DOWN'],
       previous: 'COMPRESSION',
-      bars: syntheticCompressionExpansionBars({ n: 180, expand_at: 130 }),
+      bars: syntheticCompressionExpansionBars({ n: 180, start: 100, expand_at: 130 }),
     },
     {
       id: 'BREAKOUT_UP',
       expected: ['BREAKOUT_UP', 'TREND_UP', 'EXPANSION'],
       previous: 'RANGE',
-      bars: syntheticBreakoutBars({ direction: 'UP', n: 160 }),
+      bars: syntheticBreakoutBars({ direction: 'UP', n: 160, start: 100 }),
     },
     {
       id: 'BREAKOUT_DOWN',
       expected: ['BREAKOUT_DOWN', 'TREND_DOWN', 'EXPANSION'],
       previous: 'RANGE',
-      bars: syntheticBreakoutBars({ direction: 'DOWN', n: 160 }),
+      bars: syntheticBreakoutBars({ direction: 'DOWN', n: 160, start: 100 }),
     },
     {
       id: 'REVERSAL',
-      expected: ['REVERSAL_CANDIDATE', 'PULLBACK_UPTREND', 'TREND_DOWN', 'RANGE'],
+      expected: ['REVERSAL_CANDIDATE', 'PULLBACK_UPTREND', 'TREND_DOWN', 'RANGE', 'BREAKOUT_DOWN'],
       previous: 'TREND_UP',
-      bars: syntheticReversalBars({ n: 150 }),
+      bars: syntheticReversalBars({ n: 150, start: 100 }),
     },
     {
       id: 'FAILED_BREAKOUT',
       expected: ['FAILED_BREAKOUT_UP', 'FAILED_BREAKOUT_DOWN', 'RANGE', 'REVERSAL_CANDIDATE'],
       previous: 'BREAKOUT_UP',
-      bars: syntheticFailedBreakoutBars({ n: 150 }),
+      bars: syntheticFailedBreakoutBars({ n: 150, start: 100 }),
     },
     {
       id: 'TRANSITION',
-      expected: ['TRANSITION', 'RANGE', 'UNKNOWN', 'TREND_UP', 'TREND_DOWN'],
+      expected: ['TRANSITION', 'RANGE', 'UNKNOWN', 'TREND_UP', 'TREND_DOWN', 'COMPRESSION'],
       previous: 'TRANSITION',
-      bars: syntheticRangeBars({ n: 100, wobble: 0.03 }),
+      bars: syntheticRangeBars({ n: 100, start: 100, wobble: 0.03 }),
     },
   ];
+}
+
+function tipBar(open: number, high: number, low: number, close: number, i: number): TenSecBar {
+  return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
+}
+
+/** Handcrafted books that factory genome hits and a hostile key mutation can miss. */
+function reversalProbeBars(): TenSecBar[] {
+  const quiet: TenSecBar[] = [];
+  for (let i = 0; i < 90 - 10; i++) {
+    quiet.push(tipBar(100, 101.2, 98.8, 100, i));
+  }
+  for (let i = 0; i < 9; i++) {
+    const c = 100.4 + i * 0.01;
+    quiet.push(tipBar(c, c + 0.015, c - 0.015, c + 0.008, quiet.length));
+  }
+  const flipOpen = 100.5;
+  const flipClose = flipOpen * (1 - 0.002);
+  quiet.push(tipBar(flipOpen, flipOpen + 0.02, flipClose - 0.2, flipClose, quiet.length));
+  return quiet;
+}
+
+function failedBreakProbeBars(): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  for (let i = 0; i < 90; i++) {
+    bars.push(tipBar(100, 100.4, 99.6, 100, i));
+  }
+  const o = 100.05;
+  const c = o - 0.012;
+  bars.push(tipBar(o, o + 0.005, c - 0.005, c, bars.length));
+  return bars;
+}
+
+function momDilutionBars(): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  for (let i = 0; i < 90; i++) {
+    const wobble = ((i % 5) - 2) * 0.02;
+    const c = 100 + wobble;
+    bars.push(tipBar(c, c + 0.03, c - 0.03, c + 0.01, i));
+  }
+  for (let i = 0; i < 5; i++) {
+    const o = 100.2 - i * 0.05;
+    const c = o - 0.13;
+    bars.push(tipBar(o, o + 0.01, c - 0.02, c, bars.length));
+  }
+  return bars;
+}
+
+function persistStayBars(): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  for (let i = 0; i < 90; i++) {
+    bars.push(tipBar(100, 100.8, 99.2, 100, i));
+  }
+  const seq = [-1, -1, -1, -1, 1, -1];
+  let px = 100;
+  for (const s of seq) {
+    const o = px;
+    const c = o + s * 0.04;
+    bars.push(tipBar(o, Math.max(o, c) + 0.01, Math.min(o, c) - 0.01, c, bars.length));
+    px = c;
+  }
+  return bars;
+}
+
+function compressNearMidBars(): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  for (let i = 0; i < 90 - 12; i++) {
+    bars.push(tipBar(100, 100.6, 99.4, 100, i));
+  }
+  for (let i = 0; i < 12; i++) {
+    bars.push(tipBar(100.0, 100.003, 99.997, 100.0, bars.length));
+  }
+  bars.push(tipBar(100.0, 100.002, 99.998, 100.0, bars.length));
+  return bars;
+}
+
+function clearBreakBars(): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  for (let i = 0; i < 90; i++) {
+    bars.push(tipBar(100, 100.3, 99.7, 100, i));
+  }
+  const pierce = 100.3 + 0.6 * 0.15;
+  bars.push(tipBar(100.1, pierce + 0.05, 100.0, pierce, bars.length));
+  return bars;
+}
+
+/**
+ * Discriminative probes per intelligence key — factory genome should hit;
+ * hostile mutation of that key should miss. Enables improve-vs-mere-change.
+ */
+function intelKeyProbes(): Array<{
+  key: string;
+  id: string;
+  previous: RegimeName;
+  expected: RegimeName | RegimeName[];
+  bars: TenSecBar[];
+}> {
+  return [
+    {
+      key: 'regime_move',
+      id: 'p_move',
+      previous: 'BREAKOUT_UP',
+      expected: 'FAILED_BREAKOUT_UP',
+      bars: failedBreakProbeBars(),
+    },
+    {
+      key: 'regime_trend_stay',
+      id: 'p_stay',
+      previous: 'TREND_DOWN',
+      expected: 'TREND_DOWN',
+      bars: persistStayBars(),
+    },
+    {
+      key: 'regime_trend_enter',
+      id: 'p_enter',
+      previous: 'UNKNOWN',
+      expected: 'TREND_DOWN',
+      bars: momDilutionBars(),
+    },
+    {
+      key: 'regime_pullback',
+      id: 'p_pull',
+      previous: 'TREND_UP',
+      expected: ['TREND_UP', 'PULLBACK_UPTREND', 'REVERSAL_CANDIDATE'],
+      bars: syntheticTrendBars({ n: 200, start: 100, step: 0.05 }),
+    },
+    {
+      key: 'regime_reversal',
+      id: 'p_rev',
+      previous: 'TREND_UP',
+      expected: 'REVERSAL_CANDIDATE',
+      bars: reversalProbeBars(),
+    },
+    {
+      key: 'regime_move_range',
+      id: 'p_mrange',
+      previous: 'RANGE',
+      expected: ['RANGE', 'COMPRESSION'],
+      bars: syntheticRangeBars({ n: 160, start: 100 }),
+    },
+    {
+      key: 'regime_compress_abs',
+      id: 'p_cabs',
+      previous: 'RANGE',
+      expected: 'COMPRESSION',
+      bars: compressNearMidBars(),
+    },
+    {
+      key: 'regime_expand_abs',
+      id: 'p_eabs',
+      previous: 'COMPRESSION',
+      expected: ['EXPANSION', 'TREND_UP', 'TREND_DOWN', 'BREAKOUT_UP'],
+      bars: syntheticCompressionExpansionBars({ n: 160, start: 100, expand_at: 120 }),
+    },
+    {
+      key: 'regime_compress_avg_mult',
+      id: 'p_cmult',
+      previous: 'RANGE',
+      expected: 'COMPRESSION',
+      bars: compressNearMidBars(),
+    },
+    {
+      key: 'regime_expand_avg_mult',
+      id: 'p_emult',
+      previous: 'COMPRESSION',
+      expected: ['EXPANSION', 'TREND_UP', 'TREND_DOWN', 'BREAKOUT_UP'],
+      bars: syntheticCompressionExpansionBars({ n: 160, start: 100, expand_at: 120 }),
+    },
+    {
+      key: 'regime_near_zone_mid',
+      id: 'p_near',
+      previous: 'RANGE',
+      expected: 'COMPRESSION',
+      bars: compressNearMidBars(),
+    },
+    {
+      key: 'regime_clear_break_frac',
+      id: 'p_break',
+      previous: 'RANGE',
+      expected: ['BREAKOUT_UP', 'TREND_UP', 'RANGE', 'EXPANSION'],
+      bars: clearBreakBars(),
+    },
+    {
+      key: 'regime_persist_enter',
+      id: 'p_penter',
+      previous: 'UNKNOWN',
+      expected: 'TREND_DOWN',
+      bars: momDilutionBars(),
+    },
+    {
+      key: 'regime_persist_stay',
+      id: 'p_pstay',
+      previous: 'TREND_DOWN',
+      expected: 'TREND_DOWN',
+      bars: persistStayBars(),
+    },
+    {
+      key: 'regime_persist_pullback',
+      id: 'p_ppull',
+      previous: 'TREND_UP',
+      expected: ['TREND_UP', 'PULLBACK_UPTREND', 'REVERSAL_CANDIDATE', 'RANGE'],
+      bars: syntheticTrendBars({ n: 200, start: 100, step: 0.05 }),
+    },
+    {
+      key: 'regime_min_dwell_bars',
+      id: 'p_dwell',
+      previous: 'RANGE',
+      expected: ['RANGE', 'COMPRESSION', 'TRANSITION', 'UNKNOWN'],
+      bars: syntheticRangeBars({ n: 160, start: 100 }),
+    },
+    {
+      key: 'regime_confirm_bars',
+      id: 'p_confirm',
+      previous: 'TRANSITION',
+      expected: ['TRANSITION', 'RANGE', 'UNKNOWN', 'COMPRESSION'],
+      bars: syntheticRangeBars({ n: 100, start: 100, wobble: 0.03 }),
+    },
+    {
+      key: 'regime_mom_bars',
+      id: 'p_mom',
+      previous: 'UNKNOWN',
+      expected: 'TREND_DOWN',
+      bars: momDilutionBars(),
+    },
+    {
+      key: 'regime_persist_window',
+      id: 'p_pwin',
+      previous: 'UNKNOWN',
+      expected: 'TREND_DOWN',
+      bars: momDilutionBars(),
+    },
+  ];
+}
+
+function scoreIntelProbes(): Record<string, number> {
+  reloadBrainGenome();
+  const probes = intelKeyProbes();
+  const sums: Record<string, { hit: number; n: number }> = {};
+  for (const p of probes) {
+    // Direct classify (not stabilize) — probes measure perception thresholds
+    const got = classifyRegime(p.bars, p.previous);
+    const ok = labelHit(p.expected, got);
+    const slot = sums[p.key] || { hit: 0, n: 0 };
+    slot.n += 1;
+    if (ok) slot.hit += 1;
+    sums[p.key] = slot;
+  }
+  const entry = entryWaitScore();
+  for (const k of [
+    'mtf_trek_flat_frac',
+    'mtf_block_higher_fight',
+    'mtf_require_aligned_side',
+    'mtf_htf_veto',
+    'entry_story_conf_min',
+    'entry_chop_conf_max',
+  ]) {
+    sums[k] = { hit: entry, n: 1 };
+  }
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(sums)) {
+    out[k] = v.n ? v.hit / v.n : 0;
+  }
+  return out;
 }
 
 function classifyTip(bars: TenSecBar[], previous: RegimeName): RegimeName {
@@ -233,6 +503,10 @@ function classifyTip(bars: TenSecBar[], previous: RegimeName): RegimeName {
   return label;
 }
 
+function labelHit(expected: RegimeName | RegimeName[], got: RegimeName): boolean {
+  return Array.isArray(expected) ? expected.includes(got) : got === expected;
+}
+
 function regimePerception(): { score: number; fingerprint: string; labels: Record<string, string> } {
   reloadBrainGenome();
   const labels: Record<string, string> = {};
@@ -241,7 +515,7 @@ function regimePerception(): { score: number; fingerprint: string; labels: Recor
   for (const s of scenarios) {
     const got = classifyTip(s.bars, s.previous);
     labels[s.id] = got;
-    const ok = Array.isArray(s.expected) ? s.expected.includes(got) : got === s.expected;
+    const ok = labelHit(s.expected, got);
     if (ok) hits += 1;
   }
   const fingerprint = createHash('sha1')
@@ -284,6 +558,7 @@ function scoreFromReplay(): EvalScore {
     regime_score: perception.score,
     perception_fingerprint: perception.fingerprint,
     regime_labels: perception.labels,
+    intel_probe_by_key: scoreIntelProbes(),
   };
 }
 
@@ -422,6 +697,15 @@ function relevantScenarioIds(deltaKeys: string[]): string[] {
   return [...ids];
 }
 
+function meanProbeForKeys(
+  probes: Record<string, number>,
+  keys: string[]
+): number | null {
+  const vals = keys.map((k) => probes[k]).filter((v) => typeof v === 'number');
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
 function relevantPerceptionMoved(
   baseline: EvalScore,
   candidate: EvalScore,
@@ -437,18 +721,32 @@ function relevantPerceptionMoved(
       changed.push(id);
     }
   }
+  const intelKeys = deltaKeys.filter((k) =>
+    (TRADING_INTEL_GENOME_KEYS as readonly string[]).includes(k)
+  );
+  const baseProbe = meanProbeForKeys(baseline.intel_probe_by_key || {}, intelKeys);
+  const candProbe = meanProbeForKeys(candidate.intel_probe_by_key || {}, intelKeys);
+  const probeMoved =
+    baseProbe != null && candProbe != null && Math.abs(candProbe - baseProbe) > 1e-9;
+
   if (touchesMtf && entryMoved) {
     return { moved: true, detail: `mtf/entry_wait ${baseline.entry_wait_score}→${candidate.entry_wait_score}` };
   }
   if (relevant.length === 0) {
-    // Unknown intel key — fall back to global fingerprint
-    const moved = candidate.perception_fingerprint !== baseline.perception_fingerprint || entryMoved;
+    const moved =
+      candidate.perception_fingerprint !== baseline.perception_fingerprint ||
+      entryMoved ||
+      Boolean(probeMoved);
     return { moved, detail: moved ? 'global perception' : 'no perception change' };
   }
-  if (changed.length) {
-    return { moved: true, detail: `scenarios ${changed.join(',')}` };
+  if (changed.length || probeMoved) {
+    return {
+      moved: true,
+      detail: changed.length
+        ? `scenarios ${changed.join(',')}`
+        : `probe ${baseProbe?.toFixed(2)}→${candProbe?.toFixed(2)}`,
+    };
   }
-  // Regime-only intel must move its own scenarios — unchanged elsewhere is not enough.
   return {
     moved: false,
     detail: `relevant scenarios unchanged (${relevant.join(',')})`,
@@ -480,20 +778,30 @@ export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): Eva
     (TRADING_INTEL_GENOME_KEYS as readonly string[]).includes(k)
   );
   const relevant = relevantPerceptionMoved(baseline, candidate, deltaKeys);
+  const intelKeys = deltaKeys.filter((k) =>
+    (TRADING_INTEL_GENOME_KEYS as readonly string[]).includes(k)
+  );
+  const baseProbe = meanProbeForKeys(baseline.intel_probe_by_key || {}, intelKeys);
+  const candProbe = meanProbeForKeys(candidate.intel_probe_by_key || {}, intelKeys);
+  const probeImprove =
+    baseProbe != null && candProbe != null && candProbe > baseProbe + 0.04;
+  const probeNotWorse =
+    baseProbe == null || candProbe == null || candProbe >= baseProbe - 1e-9;
 
-  // Measurable improvement required — flat E alone is not enough.
+  // Peak/memory: measurable improvement — flat E alone is not enough.
   let improved =
     notBroken &&
     (eGain > 0.02 ||
       (eGain >= -0.01 && (softImprove || wrImprove || entryImprove || regimeImprove)));
 
-  // Trading-intel must move perception on scenarios the mutation owns.
-  if (improved && touchesTradingIntel && !relevant.moved) {
-    improved = false;
-  }
-  // Trading-intel also needs a real score lift (not barely-not-worse E).
-  if (improved && touchesTradingIntel && eGain <= 0 && !entryImprove && !regimeImprove) {
-    improved = false;
+  if (touchesTradingIntel) {
+    // Intel: must move owned scenarios/probes, must not degrade key probes,
+    // and must show real lift (probe/entry/E) — mere behaviour change ≠ ACCEPT.
+    improved =
+      notBroken &&
+      relevant.moved &&
+      probeNotWorse &&
+      (probeImprove || entryImprove || eGain > 0.02 || (regimeImprove && probeImprove));
   }
 
   let reason: string;
@@ -501,10 +809,12 @@ export function evaluateCandidate(baseline: EvalScore, opts?: EvaluateOpts): Eva
     reason = `REJECTED — trade count collapsed ${baseline.trades}→${candidate.trades}`;
   else if (touchesTradingIntel && !relevant.moved)
     reason = `REJECTED — trading-intel ${relevant.detail}`;
+  else if (touchesTradingIntel && !probeNotWorse)
+    reason = `REJECTED — intel probe degraded ${baseProbe?.toFixed(2)}→${candProbe?.toFixed(2)} (mere change, not improvement)`;
   else if (improved)
-    reason = `ACCEPTED — E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · WR ${(baseline.win_rate * 100).toFixed(0)}%→${(candidate.win_rate * 100).toFixed(0)}% · SoftShare ${(baseline.soft_loss_share * 100).toFixed(0)}%→${(candidate.soft_loss_share * 100).toFixed(0)}% · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}%`;
+    reason = `ACCEPTED — E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · WR ${(baseline.win_rate * 100).toFixed(0)}%→${(candidate.win_rate * 100).toFixed(0)}% · SoftShare ${(baseline.soft_loss_share * 100).toFixed(0)}%→${(candidate.soft_loss_share * 100).toFixed(0)}% · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}% · Probe ${baseProbe != null ? baseProbe.toFixed(2) : 'n/a'}→${candProbe != null ? candProbe.toFixed(2) : 'n/a'}`;
   else
-    reason = `REJECTED — no improvement E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}%`;
+    reason = `REJECTED — no improvement E ${baseline.expectancy_pts.toFixed(3)}→${candidate.expectancy_pts.toFixed(3)} · EntryWait ${(baseline.entry_wait_score * 100).toFixed(0)}%→${(candidate.entry_wait_score * 100).toFixed(0)}% · Regime ${(baseline.regime_score * 100).toFixed(0)}%→${(candidate.regime_score * 100).toFixed(0)}% · Probe ${baseProbe != null ? baseProbe.toFixed(2) : 'n/a'}→${candProbe != null ? candProbe.toFixed(2) : 'n/a'}`;
 
   return {
     tests_ok: true,
@@ -526,4 +836,6 @@ export const _evalInternals = {
   regimePerception,
   scoreFromReplay,
   regimeScenarios,
+  intelKeyProbes,
+  scoreIntelProbes,
 };
