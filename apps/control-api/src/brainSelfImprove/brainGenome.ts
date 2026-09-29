@@ -197,7 +197,7 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
   const g: BrainGenome = {
     version: Math.max(1, Math.floor(Number(p.version) || 1)),
     updated_at: String(p.updated_at || new Date().toISOString()),
-    peak_keep: Math.round(clamp(Number(p.peak_keep ?? DEFAULT_GENOME.peak_keep), 0.65, 0.88) * 100) / 100,
+    peak_keep: Math.round(clamp(Number(p.peak_keep ?? DEFAULT_GENOME.peak_keep), 0.1, 0.95) * 100) / 100,
     peak_arm_soft_mult:
       Math.round(
         clamp(Number(p.peak_arm_soft_mult ?? DEFAULT_GENOME.peak_arm_soft_mult), 0.5, 1.2) * 100
