@@ -23,26 +23,87 @@ import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
 import { thinkEntryLikeTrader } from './traderMind.js';
 import type { MarketStory } from './marketStory.js';
 
+export type TfBiasDir = 'UP' | 'DOWN' | 'FLAT';
+
+export type EffectiveRegimeHtf = {
+  /** Capital.com closed candles preferred — not 10s-book noise */
+  tf30?: TfBiasDir | null;
+  tf15?: TfBiasDir | null;
+  tf5?: TfBiasDir | null;
+  m1?: TfBiasDir | null;
+};
+
+/** Chop labels that may wrongly starve TREND/BREAKOUT/PULLBACK/… playbooks. */
+const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
+
 /**
- * False RANGE (or chop labels) must not apply fade half-gates / REGIME OFF when
- * the 30m story is a clear rally/selloff — promote to TREND/PULLBACK so RANGE
- * does not block other regime playbooks.
+ * Capital HTF bias from 30→15→5 (m1 only for pullback tip).
+ * Majority of directional HTFs wins — one opposing TF must not freeze as MIXED.
+ */
+export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
+  if (!htf) return 'FLAT';
+  const stack: TfBiasDir[] = [];
+  for (const d of [htf.tf30, htf.tf15, htf.tf5]) {
+    if (d === 'UP' || d === 'DOWN') stack.push(d);
+  }
+  if (!stack.length) {
+    if (htf.m1 === 'UP' || htf.m1 === 'DOWN') return htf.m1;
+    return 'FLAT';
+  }
+  const up = stack.filter((d) => d === 'UP').length;
+  const down = stack.filter((d) => d === 'DOWN').length;
+  if (up > down) return 'UP';
+  if (down > up) return 'DOWN';
+  // Equal opposing HTFs (e.g. 30↑ 15↓) — truly mixed
+  return 'MIXED';
+}
+
+/**
+ * Entry playbook regime.
+ *
+ * - Real TREND / PULLBACK / BREAKOUT / EXPANSION / REVERSAL / FAILED → unchanged.
+ *   RANGE never demotes or blocks those.
+ * - RANGE / COMPRESSION / TRANSITION → RANGE fade playbook ONLY when Capital HTF
+ *   is flat/mixed AND story is chop. If Capital 30/15/5 (not 10s) shows direction,
+ *   promote to TREND/PULLBACK so false RANGE cannot starve other modes.
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
-  story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefined
+  story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefined,
+  htf?: EffectiveRegimeHtf | null
 ): RegimeName {
   const r = normalizeRegime(regime);
-  if (r !== 'RANGE' && r !== 'COMPRESSION' && r !== 'TRANSITION') return r;
+  // Other regimes stand — RANGE label must not overwrite them
+  if (!CHOP_LABELS.has(r)) return r;
+
+  const bias = capitalHtfBias(htf);
   const ch = String(story?.chapter || '').toUpperCase();
   const allow = String(story?.allow || '').toUpperCase();
-  // Dip/bounce chapters → pullback playbook (not fade half-gates)
+  const m1 = htf?.m1;
+
+  // Capital HTF first (what you see on the chart) — not noisy 10s classifier
+  if (bias === 'UP') {
+    if (ch === 'DIP_IN_RALLY' || m1 === 'DOWN') return 'PULLBACK_UPTREND';
+    if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
+    return 'TREND_UP';
+  }
+  if (bias === 'DOWN') {
+    if (ch === 'BOUNCE_IN_SELL' || m1 === 'UP') return 'PULLBACK_DOWNTREND';
+    if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
+    return 'TREND_DOWN';
+  }
+
+  // No clear Capital HTF — story chapter may still promote off false RANGE
   if (ch === 'DIP_IN_RALLY') return 'PULLBACK_UPTREND';
   if (ch === 'BOUNCE_IN_SELL') return 'PULLBACK_DOWNTREND';
-  const buyCh = ch === 'RALLY' || ch === 'BREAK_UP' || ch === 'EXHAUST_HI';
-  const sellCh = ch === 'SELLOFF' || ch === 'BREAK_DOWN' || ch === 'EXHAUST_LO';
+  if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
+  if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
+  const buyCh = ch === 'RALLY' || ch === 'EXHAUST_HI';
+  const sellCh = ch === 'SELLOFF' || ch === 'EXHAUST_LO';
   if (allow === 'BUY' || buyCh) return 'TREND_UP';
   if (allow === 'SELL' || sellCh) return 'TREND_DOWN';
+
+  // True chop: RANGE fade playbook only here
   return r;
 }
 
@@ -513,7 +574,6 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
-  const gateRegime = effectiveEntryRegime(regime, story);
 
   // Prefer Capital candles (what the human sees) over 10s-book aggregates
   const bookMd = minuteDir(m1);
@@ -528,9 +588,27 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     book: 'UP' | 'DOWN' | 'FLAT'
   ): 'UP' | 'DOWN' | 'FLAT' =>
     capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  // Capital HTF only for promote — never promote off 10s-book buckets alone
+  const hasCapitalHtf =
+    input.capital_tf5_dir != null ||
+    input.capital_tf15_dir != null ||
+    input.capital_tf30_dir != null ||
+    input.capital_m1_dir != null;
   const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
   const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
   const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
+  const gateRegime = effectiveEntryRegime(
+    regime,
+    story,
+    hasCapitalHtf
+      ? {
+          tf30: input.capital_tf30_dir ?? null,
+          tf15: input.capital_tf15_dir ?? null,
+          tf5: input.capital_tf5_dir ?? null,
+          m1: input.capital_m1_dir ?? null,
+        }
+      : null
+  );
   const m1Strong =
     m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * 0.5
       ? true
