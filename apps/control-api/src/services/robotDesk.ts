@@ -72,7 +72,6 @@ import {
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
-import { capitalTfTrekDir } from './multiTfRead.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -632,21 +631,15 @@ function capitalCandleDir(
 }
 
 /**
- * Higher TF (5m/15m/30m) — trek over closed Capital candles so
- * BrainGenome.mtf_trek_flat_frac reaches thinkEntryLikeTrader.
- * Returns null when no closed candle yet (same as capitalCandleDir).
+ * Higher TF (5m/15m/30m) — same rule as Capital.com chart and as 1m:
+ * last *closed* candle open vs close. Do NOT invent direction from a 4-candle
+ * trek average (that showed 5m↑ while Capital’s last 5m was clearly red).
+ * Returns null when no closed candle yet.
  */
 function capitalHigherTfDir(
   candles: CapitalPriceCandle[]
 ): 'UP' | 'DOWN' | 'FLAT' | null {
-  if (candles.length < 2) return null;
-  const asTf = candles.map((c) => ({
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-  }));
-  return capitalTfTrekDir(asTf, 4);
+  return capitalCandleDir(candles);
 }
 
 /**
