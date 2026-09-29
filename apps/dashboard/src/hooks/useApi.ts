@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { humanizeApiNetworkError } from './apiNetworkError';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 const ADMIN_TOKEN = String(import.meta.env.VITE_ADMIN_TOKEN || '').trim();
@@ -64,10 +65,7 @@ export function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
       return body as T;
     })
     .catch((e) => {
-      if (e instanceof Error && e.name === 'AbortError') {
-        throw new Error('API timeout — dati neatjaunojas');
-      }
-      throw e;
+      throw humanizeApiNetworkError(e);
     })
     .finally(() => clearTimeout(timer));
 }
