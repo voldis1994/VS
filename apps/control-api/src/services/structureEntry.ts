@@ -21,6 +21,30 @@ import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
 import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
 import { thinkEntryLikeTrader } from './traderMind.js';
+import type { MarketStory } from './marketStory.js';
+
+/**
+ * False RANGE (or chop labels) must not apply fade half-gates / REGIME OFF when
+ * the 30m story is a clear rally/selloff — promote to TREND/PULLBACK so RANGE
+ * does not block other regime playbooks.
+ */
+export function effectiveEntryRegime(
+  regime: RegimeName | string | null | undefined,
+  story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefined
+): RegimeName {
+  const r = normalizeRegime(regime);
+  if (r !== 'RANGE' && r !== 'COMPRESSION' && r !== 'TRANSITION') return r;
+  const ch = String(story?.chapter || '').toUpperCase();
+  const allow = String(story?.allow || '').toUpperCase();
+  // Dip/bounce chapters → pullback playbook (not fade half-gates)
+  if (ch === 'DIP_IN_RALLY') return 'PULLBACK_UPTREND';
+  if (ch === 'BOUNCE_IN_SELL') return 'PULLBACK_DOWNTREND';
+  const buyCh = ch === 'RALLY' || ch === 'BREAK_UP' || ch === 'EXHAUST_HI';
+  const sellCh = ch === 'SELLOFF' || ch === 'BREAK_DOWN' || ch === 'EXHAUST_LO';
+  if (allow === 'BUY' || buyCh) return 'TREND_UP';
+  if (allow === 'SELL' || sellCh) return 'TREND_DOWN';
+  return r;
+}
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -489,6 +513,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
   const story = readMarketStory(input.closedBars, input.bar);
+  const gateRegime = effectiveEntryRegime(regime, story);
 
   // Prefer Capital candles (what the human sees) over 10s-book aggregates
   const bookMd = minuteDir(m1);
@@ -515,8 +540,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
   // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
+  // Use promoted regime so false RANGE does not starve regimeLong/regimeShort bias
   const thought = thinkEntryLikeTrader({
-    regime,
+    regime: gateRegime,
     chapter: story.chapter,
     allow: story.allow,
     story_conf: story.confidence,
@@ -538,7 +564,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // Learner advises once it has enough closes (same pattern as manage brain)
   const learned = entryLearnerChoose(
     {
-      regime,
+      regime: gateRegime,
       story,
       bar: input.bar,
       zone_pos: zone?.pos ?? story.zone_pos,
@@ -576,8 +602,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   if (story.allow === 'NONE') return null;
 
   // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
-  const raw = decideEntryFrom10sRegime(input.bar, regime);
-  const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
+  const raw = decideEntryFrom10sRegime(input.bar, gateRegime);
+  const started = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
   const matched =
     raw && raw.direction === side
       ? raw
@@ -586,11 +612,11 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
         : null;
   const candidate: RegimeEntry = matched ?? {
     direction: side,
-    setup: 'PRĀTS',
-    reason: `${regime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
+    setup: 'CONTINUATION',
+    reason: `${gateRegime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
   };
 
-  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
+  const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
   const withMind = (reason: string): StructuredEntry => ({
@@ -614,7 +640,8 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
 
   if (story.chapter === 'SEEDING') return null;
 
-  const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
+  // Promoted regime so TREND/PULLBACK scalp paths fire — not RANGE fade starve
+  const scalp = scalpStoryConfirms(story, candidate.direction, gateRegime, input.bar);
   if (!scalp.ok) return null;
   return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
 }

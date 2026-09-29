@@ -5,6 +5,7 @@ import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
   aggregateTenSecToMinutes,
   decideEntryWithStructure,
+  effectiveEntryRegime,
   lastClosed1mFromTenSec,
   minuteTrendBias,
   structureGate,
