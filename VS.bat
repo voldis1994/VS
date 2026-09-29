@@ -216,6 +216,7 @@ if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
 REM Live stack: NO tsx watch — BRAIN writing .ts must not kill API mid-trade
 REM (watch caused Failed to fetch / LIVE LOG stale). Code reload = exit 75 when FLAT.
+REM Live-loop also auto-restarts on unexpected crashes (no more permanent Failed to fetch).
 start "MR-ControlAPI" /D "%ROOT%" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& node tools\control-api-live-loop.mjs
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
