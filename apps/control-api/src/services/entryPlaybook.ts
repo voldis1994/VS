@@ -152,6 +152,18 @@ export function pickEntryPlaybook(input: {
       why_lv: 'TREND smadzenes · BOUNCE_IN_SELL (gaida 1m confirm)',
     };
   }
+  // EXHAUST without Capital HTF is still chop-edge — RANGE fade brain, not fake TREND
+  if (
+    CHOP.has(live) &&
+    (bias === 'FLAT' || bias === 'MIXED') &&
+    (ch === 'EXHAUST_HI' || ch === 'EXHAUST_LO')
+  ) {
+    return {
+      lane: 'RANGE_FADE',
+      regime: live === 'TRANSITION' || live === 'COMPRESSION' ? live : 'RANGE',
+      why_lv: `RANGE smadzenes · ${ch} bez HTF (ne fake TREND)`,
+    };
+  }
   if (ch === 'RALLY' || ch === 'EXHAUST_HI' || allow === 'BUY') {
     return {
       lane: 'TREND_PULLBACK',

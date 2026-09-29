@@ -322,7 +322,7 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND'); // 5 + pend
   });
 
-  it('does not freeze — pending survives dwell so RANGE can become TREND_UP', () => {
+  it('RANGE → TREND_UP is strong switch — flips at the right moment (no dwell lag)', () => {
     const book = {
       current: 'RANGE' as RegimeName,
       previous: 'UNKNOWN' as RegimeName,
@@ -331,12 +331,23 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
       pending_count: 0,
       since: new Date().toISOString(),
     };
-    // dwell=5 + confirm=3 — switch on 5th agreeing candidate
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    // Chop→trend must not wait CONFIRM_BARS — live stayed RANGE while classify already saw TREND
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
+    expect(book.current).toBe('TREND_UP');
+  });
+
+  it('RANGE → TREND_DOWN / PULLBACK also strong-switch immediately', () => {
+    for (const to of ['TREND_DOWN', 'PULLBACK_UPTREND', 'PULLBACK_DOWNTREND'] as RegimeName[]) {
+      const book = {
+        current: 'RANGE' as RegimeName,
+        previous: 'UNKNOWN' as RegimeName,
+        bars_in_current: 2,
+        pending: null as RegimeName | null,
+        pending_count: 0,
+        since: new Date().toISOString(),
+      };
+      expect(stabilizeRegime(book, to)).toBe(to);
+    }
   });
 
   it('observeClosedBars does not visit every regime in one minute of 10s bars', () => {

@@ -64,4 +64,21 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
       'DOWN'
     );
   });
+
+  it('EXHAUST_HI/LO + flat HTF stays RANGE_FADE — not fake TREND', () => {
+    const hi = pickEntryPlaybook({
+      liveRegime: 'RANGE',
+      story: { allow: 'BUY', chapter: 'EXHAUST_HI' },
+      htf: { tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT' },
+    });
+    expect(hi.lane).toBe('RANGE_FADE');
+    expect(hi.regime).toBe('RANGE');
+    const lo = pickEntryPlaybook({
+      liveRegime: 'COMPRESSION',
+      story: { allow: 'SELL', chapter: 'EXHAUST_LO' },
+      htf: { tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT' },
+    });
+    expect(lo.lane).toBe('RANGE_FADE');
+    expect(lo.regime).toBe('COMPRESSION');
+  });
 });

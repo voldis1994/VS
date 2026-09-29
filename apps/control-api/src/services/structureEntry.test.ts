@@ -143,9 +143,11 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
       'BREAKOUT_UP'
     );
+    // EXHAUST without Capital HTF = chop-edge → RANGE fade brain (not fake TREND)
     expect(effectiveEntryRegime('TRANSITION', { allow: 'BOTH', chapter: 'EXHAUST_HI' })).toBe(
-      'TREND_UP'
+      'TRANSITION'
     );
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'EXHAUST_HI' })).toBe('RANGE');
   });
 
   it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL when HTF flat', () => {
