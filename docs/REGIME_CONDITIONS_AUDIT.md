@@ -11,6 +11,8 @@
 - `EXPANSION` — impuls + pareizā puse.
 - `COMPRESSION` / `TRANSITION` — wait-only (entry null).
 
+**2026-09-29 right-moment + playbook:** skatīt **[REGIME_RIGHT_MOMENT_AUDIT.md](./REGIME_RIGHT_MOMENT_AUDIT.md)** (dwell strong-switch, trekFirm, RANGE_FADE only when chop, no sell-break fade).
+
 ---
 
 ## Kopīgie sliekšņi (10s bārs)

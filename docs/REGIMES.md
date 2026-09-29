@@ -4,7 +4,8 @@
 >
 > **Capital live desk** uses TypeScript `classifyRegime` + `decideEntryWithStructure`
 > (`apps/control-api/src/services/regimes.ts`, `entryFromRegime.ts`, `structureEntry.ts`).
-> Full conditions + executability audit: **[REGIME_CONDITIONS_AUDIT.md](./REGIME_CONDITIONS_AUDIT.md)**.
+> Full conditions + executability audit: **[REGIME_CONDITIONS_AUDIT.md](./REGIME_CONDITIONS_AUDIT.md)**.  
+> Right-moment + playbook audit (2026-09-29): **[REGIME_RIGHT_MOMENT_AUDIT.md](./REGIME_RIGHT_MOMENT_AUDIT.md)**.
 
 Regime classification is also available via C++ `RegimeEngine` (`libs/regime-engine`) from `MarketState`. Config: `config/regimes.yaml` (primary horizon 10s). **FAILED_BREAKOUT_*** are live in TS; reserved / unused in C++ `classify()`.
 
