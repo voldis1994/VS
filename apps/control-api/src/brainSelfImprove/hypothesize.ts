@@ -414,10 +414,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const persistWin = bounceInt(g.regime_persist_window, 1, 3, 12, dir);
   const trekFlat = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
   const flipBlockHf = !g.mtf_block_higher_fight;
-  const flipHtfVeto = !g.mtf_htf_veto;
   const flipAligned = !g.mtf_require_aligned_side;
   const storyMin = bounceNum(g.entry_story_conf_min, 0.05, 0.35, 0.8, dir);
-  const chopMax = bounceNum(g.entry_chop_conf_max, 0.05, 0.25, 0.65, dir === 1 ? -1 : 1);
 
   return [
     {
@@ -663,25 +661,21 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     },
     {
       title: `Explore multi-TF stringency (step #${nextStep + 15})`,
-      rationale: 'Evolve trek flat + higher-fight / HTF veto / aligned-side gates.',
-      task: `trek=${trekFlat} blockHF=${flipBlockHf} htfVeto=${flipHtfVeto} aligned=${flipAligned}`,
+      rationale: 'Evolve trek flat + higher-fight / aligned-side / story-conf gates.',
+      task: `trek=${trekFlat} blockHF=${flipBlockHf} aligned=${flipAligned} storyMin=${storyMin}`,
       genome_delta: {
         mtf_trek_flat_frac: trekFlat,
         mtf_block_higher_fight: flipBlockHf,
-        mtf_htf_veto: flipHtfVeto,
         mtf_require_aligned_side: flipAligned,
         entry_story_conf_min: storyMin,
-        entry_chop_conf_max: chopMax,
         explore_step: nextStep + 15,
-        last_lesson: `Explore mtf trek=${trekFlat} veto=${flipHtfVeto}`,
+        last_lesson: `Explore mtf trek=${trekFlat} aligned=${flipAligned}`,
       },
       patches: [
         genomePatch('mtf_trek_flat_frac', trekFlat, `explore trek ${trekFlat}`),
         genomePatch('mtf_block_higher_fight', flipBlockHf, `flip blockHF→${flipBlockHf}`),
-        genomePatch('mtf_htf_veto', flipHtfVeto, `flip htfVeto→${flipHtfVeto}`),
         genomePatch('mtf_require_aligned_side', flipAligned, `flip aligned→${flipAligned}`),
         genomePatch('entry_story_conf_min', storyMin, `explore story_min ${storyMin}`),
-        genomePatch('entry_chop_conf_max', chopMax, `explore chop_max ${chopMax}`),
         genomePatch('explore_step', nextStep + 15, `explore_step ${nextStep + 15}`),
       ],
     },
@@ -755,14 +749,18 @@ function forceExploreHypothesis(
       genome_delta = {
         explore_step: nextStep,
         mtf_trek_flat_frac: trek,
-        mtf_htf_veto: !g.mtf_htf_veto,
+        mtf_require_aligned_side: !g.mtf_require_aligned_side,
         version: (g.version || 1) + 1,
         last_lesson: `Force explore mtf #${nextStep} · ${nonce}`,
       };
       patches = compactPatches([
         genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
         genomePatch('mtf_trek_flat_frac', trek, `force trek ${trek}`),
-        genomePatch('mtf_htf_veto', !g.mtf_htf_veto, `force htf_veto→${!g.mtf_htf_veto}`),
+        genomePatch(
+          'mtf_require_aligned_side',
+          !g.mtf_require_aligned_side,
+          `force aligned→${!g.mtf_require_aligned_side}`
+        ),
       ]);
     }
     const signature = hypothesisSignature({

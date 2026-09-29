@@ -20,7 +20,7 @@ import {
   syntheticReversalBars,
   syntheticFailedBreakoutBars,
 } from '../services/strategyReplay.js';
-import { readMultiTfStack, sideFromMultiTf } from '../services/multiTfRead.js';
+import { readMultiTfStack, sideFromMultiTf, capitalTfTrekDir } from '../services/multiTfRead.js';
 import { classifyRegime, stabilizeRegime, type RegimeName } from '../services/regimes.js';
 import { thinkEntryLikeTrader } from '../services/traderMind.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
@@ -465,21 +465,85 @@ function scoreIntelProbes(): Record<string, number> {
     if (ok) slot.hit += 1;
     sums[p.key] = slot;
   }
-  const entry = entryWaitScore();
-  for (const k of [
-    'mtf_trek_flat_frac',
-    'mtf_block_higher_fight',
-    'mtf_require_aligned_side',
-    'mtf_htf_veto',
-    'entry_story_conf_min',
-    'entry_chop_conf_max',
-  ]) {
-    sums[k] = { hit: entry, n: 1 };
-  }
+  // Per-key MTF / entry probes — must move when THAT key changes (not shared entryWaitScore)
+  Object.assign(sums, scoreMtfIntelProbes());
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(sums)) {
     out[k] = v.n ? v.hit / v.n : 0;
   }
+  return out;
+}
+
+/**
+ * Discriminative probes for each MTF / entry-mind genome key.
+ * Always scored against factory-expected outcome so flipping that key drops the hit.
+ */
+function scoreMtfIntelProbes(): Record<string, { hit: number; n: number }> {
+  reloadBrainGenome();
+  const out: Record<string, { hit: number; n: number }> = {};
+
+  // mtf_trek_flat_frac — Gold-scale trek ~2pts: factory 0.0004 (≈1.06 flat) → UP;
+  // loose 0.001 (≈2.65 flat) → FLAT
+  {
+    const candles = [
+      { open: 2650.0, high: 2650.6, low: 2649.8, close: 2650.4 },
+      { open: 2650.4, high: 2651.0, low: 2650.2, close: 2650.8 },
+      { open: 2650.8, high: 2651.4, low: 2650.5, close: 2651.1 },
+      { open: 2651.1, high: 2651.6, low: 2650.9, close: 2651.4 },
+      { open: 2651.4, high: 2651.8, low: 2651.2, close: 2651.5 }, // tip dropped
+    ];
+    const dir = capitalTfTrekDir(candles, 4);
+    out.mtf_trek_flat_frac = { hit: dir === 'UP' ? 1 : 0, n: 1 };
+  }
+
+  // mtf_block_higher_fight — factory true: 30/15 fight → FLAT bias + WAIT
+  {
+    const stack = readMultiTfStack({
+      tf30: 'UP',
+      tf15: 'DOWN',
+      tf5: 'FLAT',
+      tf1: 'FLAT',
+    });
+    const hit = stack.bias === 'FLAT' && sideFromMultiTf(stack) === 'WAIT';
+    out.mtf_block_higher_fight = { hit: hit ? 1 : 0, n: 1 };
+  }
+
+  // mtf_require_aligned_side — factory true: 1m fight → WAIT
+  {
+    const stack = readMultiTfStack({
+      tf30: 'DOWN',
+      tf15: 'DOWN',
+      tf5: 'DOWN',
+      tf1: 'UP',
+    });
+    out.mtf_require_aligned_side = {
+      hit: sideFromMultiTf(stack) === 'WAIT' ? 1 : 0,
+      n: 1,
+    };
+  }
+
+  // entry_story_conf_min — factory 0.55: conf 0.5 must not take story SELL.
+  // Avoid SELLOFF auto-SELL; tf5 UP vs m1 DOWN keeps stack bias FLAT (no only-1m
+  // bias) so we reach the story-conf branch; m1 DOWN satisfies require_1m_trigger.
+  {
+    const thought = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'BREAK_DOWN',
+      allow: 'SELL',
+      story_conf: 0.5,
+      red_1m: 14,
+      green_1m: 6,
+      zone_pos: 0.5,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'FLAT',
+      tf5_dir: 'UP',
+      tf15_dir: 'FLAT',
+      tf30_dir: 'FLAT',
+    });
+    out.entry_story_conf_min = { hit: thought.choice !== 'SELL' ? 1 : 0, n: 1 };
+  }
+
   return out;
 }
 
@@ -683,9 +747,7 @@ const MTF_INTEL_KEYS = new Set([
   'mtf_trek_flat_frac',
   'mtf_block_higher_fight',
   'mtf_require_aligned_side',
-  'mtf_htf_veto',
   'entry_story_conf_min',
-  'entry_chop_conf_max',
 ]);
 
 function relevantScenarioIds(deltaKeys: string[]): string[] {
@@ -838,4 +900,5 @@ export const _evalInternals = {
   regimeScenarios,
   intelKeyProbes,
   scoreIntelProbes,
+  scoreMtfIntelProbes,
 };

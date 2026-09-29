@@ -6,6 +6,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   _resetBrainGenomeForTests,
   getBrainGenome,
@@ -13,9 +14,10 @@ import {
   setBrainGenome,
 } from '../brainSelfImprove/brainGenome.js';
 import { classifyRegime, MIN_BARS_FOR_ZONE, stabilizeRegime } from './regimes.js';
-import { thinkEntryLikeTrader } from './traderMind.js';
-import { readMultiTfStack, sideFromMultiTf, trekBiasFromCandles } from './multiTfRead.js';
+import { readMultiTfStack, sideFromMultiTf, trekBiasFromCandles, capitalTfTrekDir } from './multiTfRead.js';
 import { isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
+import { thinkEntryLikeTrader } from './traderMind.js';
+import { _evalInternals } from '../brainSelfImprove/evaluate.js';
 
 function bar(open: number, high: number, low: number, close: number, i = 0): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
@@ -242,21 +244,146 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(sideFromMultiTf(open)).toBe('SELL');
   });
 
+  it('factory genome: single closed Capital candle trek equals tip color (1:1)', () => {
+    // closed + forming tip — same contract as capitalCandleDir / lastClosed
+    const candles = [
+      { open: 2650.0, high: 2650.8, low: 2649.9, close: 2650.6 }, // closed UP
+      { open: 2650.6, high: 2650.7, low: 2650.4, close: 2650.5 }, // forming
+    ];
+    _resetBrainGenomeForTests();
+    expect(getBrainGenome().mtf_trek_flat_frac).toBeCloseTo(0.0004, 6);
+    expect(capitalTfTrekDir(candles, 4)).toBe('UP');
+    expect(trekBiasFromCandles(candles, 4)).toBe('UP');
+  });
+
   it('mtf_trek_flat_frac change alters trekBias flatness', () => {
     const candles = [
-      { open: 100, high: 100.05, low: 99.98, close: 100.02 },
-      { open: 100.02, high: 100.06, low: 100.0, close: 100.04 },
-      { open: 100.04, high: 100.07, low: 100.01, close: 100.05 },
-      { open: 100.05, high: 100.08, low: 100.02, close: 100.06 },
-      { open: 100.06, high: 100.09, low: 100.03, close: 100.07 },
+      { open: 2650.0, high: 2650.6, low: 2649.8, close: 2650.4 },
+      { open: 2650.4, high: 2651.0, low: 2650.2, close: 2650.8 },
+      { open: 2650.8, high: 2651.4, low: 2650.5, close: 2651.1 },
+      { open: 2651.1, high: 2651.6, low: 2650.9, close: 2651.4 },
+      { open: 2651.4, high: 2651.8, low: 2651.2, close: 2651.5 },
     ];
-    _resetBrainGenomeForTests({ mtf_trek_flat_frac: 0.00015 });
-    const tight = trekBiasFromCandles(candles, 4);
+    _resetBrainGenomeForTests({ mtf_trek_flat_frac: 0.0004 });
+    const factory = trekBiasFromCandles(candles, 4);
+    expect(factory).toBe('UP');
+
     _resetBrainGenomeForTests({ mtf_trek_flat_frac: 0.001 });
     const loose = trekBiasFromCandles(candles, 4);
-    // Loose flat frac treats small trek as FLAT; tight may read UP
     expect(loose).toBe('FLAT');
-    expect(['UP', 'FLAT']).toContain(tight);
+  });
+
+  it('mtf_trek_flat_frac live path: Capital TF trek → mind stack → entry decision → evaluator', () => {
+    const candles = [
+      { open: 2650.0, high: 2650.6, low: 2649.8, close: 2650.4 },
+      { open: 2650.4, high: 2651.0, low: 2650.2, close: 2650.8 },
+      { open: 2650.8, high: 2651.4, low: 2650.5, close: 2651.1 },
+      { open: 2651.1, high: 2651.6, low: 2650.9, close: 2651.4 },
+      { open: 2651.4, high: 2651.8, low: 2651.2, close: 2651.5 },
+    ];
+
+    _resetBrainGenomeForTests({
+      mtf_trek_flat_frac: 0.0004,
+      mtf_block_higher_fight: true,
+      mtf_require_aligned_side: false,
+      wait_on_1m_fight: false,
+      mtf_htf_veto: false,
+    });
+    const tf30 = capitalTfTrekDir(candles, 4);
+    expect(tf30).toBe('UP');
+    const stack = readMultiTfStack({
+      tf30,
+      tf15: 'UP',
+      tf5: 'UP',
+      tf1: 'UP',
+    });
+    expect(sideFromMultiTf(stack)).toBe('BUY');
+    const buyMind = thinkEntryLikeTrader({
+      regime: 'TREND_UP',
+      chapter: 'RALLY',
+      allow: 'BUY',
+      story_conf: 0.8,
+      red_1m: 4,
+      green_1m: 16,
+      zone_pos: 0.4,
+      bar_body_sign: 1,
+      m1_dir: 'UP',
+      bias: stack.bias,
+      tf5_dir: 'UP',
+      tf15_dir: 'UP',
+      tf30_dir: tf30,
+    });
+    expect(buyMind.choice).toBe('BUY');
+
+    setBrainGenome({ mtf_trek_flat_frac: 0.001 });
+    reloadBrainGenome();
+    const tf30Loose = capitalTfTrekDir(candles, 4);
+    expect(tf30Loose).toBe('FLAT');
+    const flatStack = readMultiTfStack({
+      tf30: tf30Loose,
+      tf15: 'FLAT',
+      tf5: 'FLAT',
+      tf1: 'FLAT',
+    });
+    expect(sideFromMultiTf(flatStack)).toBe('WAIT');
+
+    _resetBrainGenomeForTests({ mtf_trek_flat_frac: 0.0004 });
+    const factoryProbes = _evalInternals.scoreMtfIntelProbes();
+    expect(factoryProbes.mtf_trek_flat_frac.hit).toBe(1);
+
+    setBrainGenome({ mtf_trek_flat_frac: 0.001 });
+    reloadBrainGenome();
+    const looseProbes = _evalInternals.scoreMtfIntelProbes();
+    expect(looseProbes.mtf_trek_flat_frac.hit).toBe(0);
+  });
+
+  it('each MTF / entry intel probe moves only when that key is hostile', () => {
+    _resetBrainGenomeForTests();
+    const factory = _evalInternals.scoreMtfIntelProbes();
+    for (const k of [
+      'mtf_trek_flat_frac',
+      'mtf_block_higher_fight',
+      'mtf_require_aligned_side',
+      'entry_story_conf_min',
+    ] as const) {
+      expect(factory[k]?.hit, `${k} factory hit`).toBe(1);
+    }
+
+    const hostiles: Array<{ key: string; patch: Record<string, unknown> }> = [
+      { key: 'mtf_trek_flat_frac', patch: { mtf_trek_flat_frac: 0.001 } },
+      { key: 'mtf_block_higher_fight', patch: { mtf_block_higher_fight: false } },
+      { key: 'mtf_require_aligned_side', patch: { mtf_require_aligned_side: false } },
+      { key: 'entry_story_conf_min', patch: { entry_story_conf_min: 0.4 } },
+    ];
+
+    for (const h of hostiles) {
+      _resetBrainGenomeForTests(h.patch);
+      const scored = _evalInternals.scoreMtfIntelProbes();
+      expect(scored[h.key]?.hit, `${h.key} hostile must miss`).toBe(0);
+      for (const other of hostiles) {
+        if (other.key === h.key) continue;
+        expect(scored[other.key]?.hit, `${h.key} hostile must not break ${other.key}`).toBe(1);
+      }
+    }
+  });
+
+  it('robotDesk live Capital higher TF path consumes capitalTfTrekDir (not tip capitalCandleDir)', () => {
+    const src = fs.readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        'robotDesk.ts'
+      ),
+      'utf8'
+    );
+    expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf5_candles\)/);
+    expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf15_candles\)/);
+    expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf30_candles\)/);
+    expect(src).toMatch(/capitalTfTrekDir/);
+    expect(src).not.toMatch(/capital_tf5_dir:\s*capitalCandleDir/);
+    expect(src).not.toMatch(/capital_tf15_dir:\s*capitalCandleDir/);
+    expect(src).not.toMatch(/capital_tf30_dir:\s*capitalCandleDir/);
+    // 1m trigger stays tip-candle (not trek)
+    expect(src).toMatch(/capital_m1_dir:\s*capitalCandleDir/);
   });
 
   it('raising regime_move changes FAILED_BREAKOUT_UP classify', () => {

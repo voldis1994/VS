@@ -431,7 +431,13 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'entry_chop_conf_max',
 ];
 
-/** Trading-intelligence keys that require measurable eval improvement to ACCEPT. */
+/**
+ * Trading-intelligence keys that require measurable eval improvement to ACCEPT.
+ * Only keys that reach the live decideEntryWithStructure → thinkEntryLikeTrader
+ * path and have a discriminative probe. Dead / thesis-only knobs stay on the
+ * genome but are not evolved as trading-intel (mtf_htf_veto unreachable once
+ * multiTfRead sets stackSide; entry_chop_conf_max only swaps WAIT thesis).
+ */
 export const TRADING_INTEL_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_move',
   'regime_trend_stay',
@@ -455,9 +461,7 @@ export const TRADING_INTEL_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'mtf_trek_flat_frac',
   'mtf_block_higher_fight',
   'mtf_require_aligned_side',
-  'mtf_htf_veto',
   'entry_story_conf_min',
-  'entry_chop_conf_max',
 ];
 
 /** Peak / Soft memory keys that may ACCEPT on E-flat defensive path. */

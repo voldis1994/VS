@@ -51,7 +51,21 @@ export function dirFromCandles(candles: TfCandle[] | null | undefined): TfDir {
 }
 
 /**
+ * Live Capital higher-TF direction (5m / 15m / 30m).
+ * Uses trek over recent closed candles so `mtf_trek_flat_frac` reaches
+ * decideEntryWithStructure → thinkEntryLikeTrader (not a single tip candle).
+ * With only one closed candle, equals last-closed color (factory-compatible).
+ */
+export function capitalTfTrekDir(
+  candles: TfCandle[] | null | undefined,
+  lookback = 4
+): TfDir {
+  return trekBiasFromCandles(candles, lookback);
+}
+
+/**
  * Trek bias over last N closed candles (color majority + net path).
+ * Consumes BrainGenome.mtf_trek_flat_frac.
  */
 export function trekBiasFromCandles(
   candles: TfCandle[] | null | undefined,

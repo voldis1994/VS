@@ -72,6 +72,7 @@ import {
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
+import { capitalTfTrekDir } from './multiTfRead.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -383,9 +384,9 @@ function refreshEntryWatch(
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
     capital_m1_dir: capitalCandleDir(s.last_minute_candles),
-    capital_tf5_dir: capitalCandleDir(s.last_tf5_candles),
-    capital_tf15_dir: capitalCandleDir(s.last_tf15_candles),
-    capital_tf30_dir: capitalCandleDir(s.last_tf30_candles),
+    capital_tf5_dir: capitalHigherTfDir(s.last_tf5_candles),
+    capital_tf15_dir: capitalHigherTfDir(s.last_tf15_candles),
+    capital_tf30_dir: capitalHigherTfDir(s.last_tf30_candles),
   });
 }
 
@@ -621,6 +622,24 @@ function capitalCandleDir(
   if (c.close > c.open) return 'UP';
   if (c.close < c.open) return 'DOWN';
   return 'FLAT';
+}
+
+/**
+ * Higher TF (5m/15m/30m) — trek over closed Capital candles so
+ * BrainGenome.mtf_trek_flat_frac reaches thinkEntryLikeTrader.
+ * Returns null when no closed candle yet (same as capitalCandleDir).
+ */
+function capitalHigherTfDir(
+  candles: CapitalPriceCandle[]
+): 'UP' | 'DOWN' | 'FLAT' | null {
+  if (candles.length < 2) return null;
+  const asTf = candles.map((c) => ({
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+  }));
+  return capitalTfTrekDir(asTf, 4);
 }
 
 /**
@@ -3133,9 +3152,9 @@ async function robotCycleLocked(s: Internal) {
           /* keep previous */
         }
         const capitalMd = capitalCandleDir(s.last_minute_candles);
-        const capitalTf5 = capitalCandleDir(s.last_tf5_candles);
-        const capitalTf15 = capitalCandleDir(s.last_tf15_candles);
-        const capitalTf30 = capitalCandleDir(s.last_tf30_candles);
+        const capitalTf5 = capitalHigherTfDir(s.last_tf5_candles);
+        const capitalTf15 = capitalHigherTfDir(s.last_tf15_candles);
+        const capitalTf30 = capitalHigherTfDir(s.last_tf30_candles);
         const sig = decideEntryWithStructure({
           bar: mindBar,
           regime: s.regime,

@@ -204,16 +204,8 @@ describe('brainSelfImprove trading-intel chain', () => {
   it('every TRADING_INTEL key has a discriminative evaluator probe', () => {
     const probes = _evalInternals.intelKeyProbes();
     const probeKeys = new Set(probes.map((p) => p.key));
-    for (const k of [
-      'mtf_trek_flat_frac',
-      'mtf_block_higher_fight',
-      'mtf_require_aligned_side',
-      'mtf_htf_veto',
-      'entry_story_conf_min',
-      'entry_chop_conf_max',
-    ]) {
-      probeKeys.add(k);
-    }
+    const mtfProbes = _evalInternals.scoreMtfIntelProbes();
+    for (const k of Object.keys(mtfProbes)) probeKeys.add(k);
     const missing = TRADING_INTEL_GENOME_KEYS.filter((k) => !probeKeys.has(k));
     expect(missing, `keys without probes: ${missing.join(', ')}`).toEqual([]);
 
@@ -232,6 +224,13 @@ describe('brainSelfImprove trading-intel chain', () => {
       genome_delta: { regime_reversal: 0.0035 },
     });
     expect(report.improved).toBe(false);
+
+    // Per-key MTF probes must miss under hostile genome (not shared entryWaitScore)
+    _resetBrainGenomeForTests();
+    expect(_evalInternals.scoreMtfIntelProbes().mtf_trek_flat_frac.hit).toBe(1);
+    setBrainGenome({ mtf_trek_flat_frac: 0.001 });
+    reloadBrainGenome();
+    expect(_evalInternals.scoreMtfIntelProbes().mtf_trek_flat_frac.hit).toBe(0);
   });
 
   it('structureEntry + marketStory live path consume getActiveRegimeBands (not factory MOVE)', () => {
