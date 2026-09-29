@@ -86,6 +86,13 @@ describe('zone geometry uses entry close', () => {
 });
 
 describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
   it('promotes RANGE→TREND_UP on RALLY / allow=BUY', () => {
     expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
@@ -130,19 +137,19 @@ describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
     expect(effectiveEntryRegime('RANGE', null)).toBe('RANGE');
   });
 
-  it('structureGate uses promoted regime — mid-zone BUY not killed by RANGE half-fade', () => {
-    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331 });
+  it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {
+    // pos > 0.5 → RANGE fade blocks BUY; TREND_UP still allows
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
     const entry = book[book.length - 1]!;
     const zone = zoneGeometry(book, entry)!;
+    expect(zone.pos).toBeGreaterThan(0.5);
     const sig = {
       direction: 'BUY' as const,
       setup: 'CONTINUATION' as const,
       reason: 'mind BUY',
     };
-    // Raw RANGE mid-zone would block
     const rawGate = structureGate(sig, 'RANGE', entry, zone, null, 'UP');
     expect(rawGate.ok).toBe(false);
-    // After promote to TREND_UP — allowed
     const promoted = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
     expect(promoted).toBe('TREND_UP');
     const trendGate = structureGate(sig, promoted, entry, zone, null, 'UP');
@@ -294,8 +301,11 @@ describe('executable gates (not impossible AND-stacks)', () => {
       regime: 'RANGE',
       closedBars: book,
     });
-    // RANGE fade BUY blocked into selloff
-    expect(fadeBuy).toBeNull();
+    // False RANGE + selloff story → promote TREND_DOWN: may SELL, never knife BUY
+    if (fadeBuy) {
+      expect(fadeBuy.direction).toBe('SELL');
+      expect(fadeBuy.reason).toMatch(/TREND_DOWN|PRĀTS ENTRY SELL/);
+    }
 
     // TREND_UP into multi-1m selloff: entry brain uses the picture — may SELL/WAIT,
     // never knife a RANGE-style bounce BUY against the book.
