@@ -259,31 +259,23 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(['UP', 'FLAT']).toContain(tight);
   });
 
-  it('raising regime_move changes persistence vote → can drop TREND_DOWN', () => {
-    // Bodies ~0.012% sit above factory MOVE (0.008%) but below raised MOVE (0.02%).
+  it('raising regime_move changes FAILED_BREAKOUT_UP classify', () => {
+    // In-range tip with body ~0.012%: below raised MOVE (0.02%), above factory (0.008%).
     const bars: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
-      bars.push(bar(100, 100.04, 99.96, 100, i));
+      bars.push(bar(100, 100.4, 99.6, 100, i));
     }
-    for (let i = 0; i < 6; i++) {
-      const o = 100 - i * 0.01;
-      const c = o - 0.012; // bodyPct ≈ 0.00012
-      bars.push(bar(o, o + 0.002, c - 0.002, c, bars.length));
-    }
-    _resetBrainGenomeForTests({
-      regime_mom_bars: 6,
-      regime_persist_window: 6,
-      regime_move: 0.00008,
-      regime_persist_enter: 0.45,
-      regime_trend_enter: 0.0001,
-      regime_trend_stay: 0.00009,
-    });
-    expect(classifyRegime(bars, 'UNKNOWN')).toBe('TREND_DOWN');
+    const o = 100.05;
+    const c = o - 0.012; // bodyPct ≈ 0.00012 — still inside [99.6, 100.4]
+    bars.push(bar(o, o + 0.005, c - 0.005, c, bars.length));
+
+    _resetBrainGenomeForTests({ regime_move: 0.00008 });
+    expect(classifyRegime(bars, 'BREAKOUT_UP')).toBe('FAILED_BREAKOUT_UP');
 
     setBrainGenome({ regime_move: 0.0002 });
     reloadBrainGenome();
     expect(getBrainGenome().regime_move).toBeCloseTo(0.0002, 6);
-    expect(classifyRegime(bars, 'UNKNOWN')).not.toBe('TREND_DOWN');
+    expect(classifyRegime(bars, 'BREAKOUT_UP')).not.toBe('FAILED_BREAKOUT_UP');
   });
 
   it('regime_mom_bars change alters classify on diluted momentum fixture', () => {
