@@ -3389,8 +3389,24 @@ async function robotCycleLocked(s: Internal) {
     const decideNow = Boolean(mindBar);
 
     if (decideNow && mindBar) {
+      // Capital HTF first — RANGE promote must not rely on 10s-book alone
+      try {
+        await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
+      } catch {
+        /* keep previous */
+      }
+      const capitalMd = capitalCandleDir(s.last_minute_candles);
+      const capitalTf5 = capitalHigherTfDir(s.last_tf5_candles);
+      const capitalTf15 = capitalHigherTfDir(s.last_tf15_candles);
+      const capitalTf30 = capitalHigherTfDir(s.last_tf30_candles);
+      const capitalHtf = {
+        tf30: capitalTf30,
+        tf15: capitalTf15,
+        tf5: capitalTf5,
+        m1: capitalMd,
+      };
       const storySnap = readMarketStory(s.closedBars, mindBar);
-      const entryRegime = effectiveEntryRegime(s.regime, storySnap);
+      const entryRegime = effectiveEntryRegime(s.regime, storySnap, capitalHtf);
       if (!regimeAllowedForEntry(entryRegime, s.client_id)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
@@ -3409,15 +3425,6 @@ async function robotCycleLocked(s: Internal) {
         });
       } else {
         // Mind reads Capital 30m→15m→5m→1m — BUY/SELL executes (no FORMING starve)
-        try {
-          await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
-        } catch {
-          /* keep previous */
-        }
-        const capitalMd = capitalCandleDir(s.last_minute_candles);
-        const capitalTf5 = capitalHigherTfDir(s.last_tf5_candles);
-        const capitalTf15 = capitalHigherTfDir(s.last_tf15_candles);
-        const capitalTf30 = capitalHigherTfDir(s.last_tf30_candles);
         const sig = decideEntryWithStructure({
           bar: mindBar,
           regime: s.regime,
@@ -3551,8 +3558,19 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
+      try {
+        await refreshCapitalMultiTf(session, s, { forceHigher: false });
+      } catch {
+        /* keep previous */
+      }
+      const pendingHtf = {
+        tf30: capitalHigherTfDir(s.last_tf30_candles),
+        tf15: capitalHigherTfDir(s.last_tf15_candles),
+        tf5: capitalHigherTfDir(s.last_tf5_candles),
+        m1: capitalCandleDir(s.last_minute_candles),
+      };
       const pendingStory = readMarketStory(s.closedBars, entryBar);
-      const pendingRegime = effectiveEntryRegime(s.regime, pendingStory);
+      const pendingRegime = effectiveEntryRegime(s.regime, pendingStory, pendingHtf);
       if (!regimeAllowedForEntry(pendingRegime, s.client_id)) {
         s.pending_entry = null;
         refreshEntryWatch(s, {

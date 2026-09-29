@@ -85,7 +85,7 @@ describe('zone geometry uses entry close', () => {
   });
 });
 
-describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
+describe('effectiveEntryRegime — RANGE only when truly range; never blocks others', () => {
   beforeEach(() => {
     _setTradeOpenAtStartForTests(false);
   });
@@ -93,22 +93,67 @@ describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
     _setTradeOpenAtStartForTests(null);
   });
 
-  it('promotes RANGE→TREND_UP on RALLY / allow=BUY', () => {
+  it('never demotes TREND/PULLBACK/BREAKOUT/EXPANSION/REVERSAL/FAILED', () => {
+    const story = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
+    const htf = { tf30: 'DOWN' as const, tf15: 'DOWN' as const, tf5: 'DOWN' as const };
+    for (const r of [
+      'TREND_UP',
+      'TREND_DOWN',
+      'PULLBACK_UPTREND',
+      'PULLBACK_DOWNTREND',
+      'BREAKOUT_UP',
+      'BREAKOUT_DOWN',
+      'EXPANSION',
+      'REVERSAL_CANDIDATE',
+      'FAILED_BREAKOUT_UP',
+      'FAILED_BREAKOUT_DOWN',
+    ] as const) {
+      expect(effectiveEntryRegime(r, story, htf)).toBe(r);
+    }
+  });
+
+  it('Capital HTF UP/DOWN promotes off false RANGE — not 10s chop story', () => {
+    const chop = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
+    expect(
+      effectiveEntryRegime('RANGE', chop, {
+        tf30: 'UP',
+        tf15: 'UP',
+        tf5: 'UP',
+      })
+    ).toBe('TREND_UP');
+    expect(
+      effectiveEntryRegime('RANGE', chop, {
+        tf30: 'DOWN',
+        tf15: 'DOWN',
+        tf5: 'FLAT',
+      })
+    ).toBe('TREND_DOWN');
+    expect(
+      effectiveEntryRegime('COMPRESSION', chop, {
+        tf30: 'UP',
+        tf15: 'UP',
+        tf5: 'DOWN',
+        m1: 'DOWN',
+      })
+    ).toBe('PULLBACK_UPTREND');
+  });
+
+  it('promotes RANGE→TREND_UP on RALLY / allow=BUY when HTF flat', () => {
     expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
-      'TREND_UP'
+      'BREAKOUT_UP'
     );
     expect(effectiveEntryRegime('TRANSITION', { allow: 'BOTH', chapter: 'EXHAUST_HI' })).toBe(
       'TREND_UP'
     );
   });
 
-  it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL', () => {
+  it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL when HTF flat', () => {
     expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
       'TREND_DOWN'
     );
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'SELL', chapter: 'BREAK_DOWN' })).toBe(
-      'TREND_DOWN'
+      'BREAKOUT_DOWN'
     );
   });
 
@@ -121,20 +166,17 @@ describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
     );
   });
 
-  it('leaves real TREND/PULLBACK/BREAKOUT alone', () => {
-    expect(effectiveEntryRegime('TREND_UP', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
-    expect(effectiveEntryRegime('PULLBACK_DOWNTREND', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
-      'PULLBACK_DOWNTREND'
-    );
-    expect(effectiveEntryRegime('BREAKOUT_UP', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
-      'BREAKOUT_UP'
-    );
-  });
-
-  it('keeps RANGE when story is chop / none', () => {
+  it('keeps RANGE only when Capital HTF flat/mixed AND story is chop', () => {
     expect(effectiveEntryRegime('RANGE', { allow: 'NONE', chapter: 'RANGE_CHOP' })).toBe('RANGE');
     expect(effectiveEntryRegime('RANGE', { allow: 'BOTH', chapter: 'MIXED' })).toBe('RANGE');
     expect(effectiveEntryRegime('RANGE', null)).toBe('RANGE');
+    expect(
+      effectiveEntryRegime(
+        'RANGE',
+        { allow: 'NONE', chapter: 'RANGE_CHOP' },
+        { tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT' }
+      )
+    ).toBe('RANGE');
   });
 
   it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {

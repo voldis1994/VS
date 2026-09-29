@@ -371,8 +371,13 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     input.last_closed && bars.length
       ? readMarketStory(bars, input.last_closed)
       : null;
-  // False RANGE must not REGIME_OFF when story is rally/selloff and TREND is on
-  const entryRegime = effectiveEntryRegime(regime, storySnap);
+  // RANGE fade only when truly chop — Capital HTF (not 10s) promotes off false RANGE
+  const entryRegime = effectiveEntryRegime(regime, storySnap, {
+    tf30: input.capital_tf30_dir,
+    tf15: input.capital_tf15_dir,
+    tf5: input.capital_tf5_dir,
+    m1: input.capital_m1_dir,
+  });
   const regimeOn = regimeAllowedForEntry(entryRegime);
   const zone = zoneBarProgress(input.closed_bar_count ?? 0);
   const bar = input.last_closed || null;
