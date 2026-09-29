@@ -5,6 +5,7 @@ import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
   aggregateTenSecToMinutes,
   decideEntryWithStructure,
+  effectiveEntryRegime,
   lastClosed1mFromTenSec,
   minuteTrendBias,
   structureGate,
@@ -81,6 +82,78 @@ describe('zone geometry uses entry close', () => {
     const z = zoneGeometry(book, entry);
     expect(z).not.toBeNull();
     expect(z!.pos).toBeLessThan(0.5);
+  });
+});
+
+describe('effectiveEntryRegime — RANGE must not block TREND/PULLBACK', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
+  it('promotes RANGE→TREND_UP on RALLY / allow=BUY', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
+    expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
+      'TREND_UP'
+    );
+    expect(effectiveEntryRegime('TRANSITION', { allow: 'BOTH', chapter: 'EXHAUST_HI' })).toBe(
+      'TREND_UP'
+    );
+  });
+
+  it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
+      'TREND_DOWN'
+    );
+    expect(effectiveEntryRegime('COMPRESSION', { allow: 'SELL', chapter: 'BREAK_DOWN' })).toBe(
+      'TREND_DOWN'
+    );
+  });
+
+  it('promotes dip/bounce chapters to PULLBACK playbooks', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'DIP_IN_RALLY' })).toBe(
+      'PULLBACK_UPTREND'
+    );
+    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'BOUNCE_IN_SELL' })).toBe(
+      'PULLBACK_DOWNTREND'
+    );
+  });
+
+  it('leaves real TREND/PULLBACK/BREAKOUT alone', () => {
+    expect(effectiveEntryRegime('TREND_UP', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
+    expect(effectiveEntryRegime('PULLBACK_DOWNTREND', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
+      'PULLBACK_DOWNTREND'
+    );
+    expect(effectiveEntryRegime('BREAKOUT_UP', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
+      'BREAKOUT_UP'
+    );
+  });
+
+  it('keeps RANGE when story is chop / none', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'NONE', chapter: 'RANGE_CHOP' })).toBe('RANGE');
+    expect(effectiveEntryRegime('RANGE', { allow: 'BOTH', chapter: 'MIXED' })).toBe('RANGE');
+    expect(effectiveEntryRegime('RANGE', null)).toBe('RANGE');
+  });
+
+  it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {
+    // pos > 0.5 → RANGE fade blocks BUY; TREND_UP still allows
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
+    const entry = book[book.length - 1]!;
+    const zone = zoneGeometry(book, entry)!;
+    expect(zone.pos).toBeGreaterThan(0.5);
+    const sig = {
+      direction: 'BUY' as const,
+      setup: 'CONTINUATION' as const,
+      reason: 'mind BUY',
+    };
+    const rawGate = structureGate(sig, 'RANGE', entry, zone, null, 'UP');
+    expect(rawGate.ok).toBe(false);
+    const promoted = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
+    expect(promoted).toBe('TREND_UP');
+    const trendGate = structureGate(sig, promoted, entry, zone, null, 'UP');
+    expect(trendGate.ok).toBe(true);
   });
 });
 
@@ -228,8 +301,11 @@ describe('executable gates (not impossible AND-stacks)', () => {
       regime: 'RANGE',
       closedBars: book,
     });
-    // RANGE fade BUY blocked into selloff
-    expect(fadeBuy).toBeNull();
+    // False RANGE + selloff story → promote TREND_DOWN: may SELL, never knife BUY
+    if (fadeBuy) {
+      expect(fadeBuy.direction).toBe('SELL');
+      expect(fadeBuy.reason).toMatch(/TREND_DOWN|PRĀTS ENTRY SELL/);
+    }
 
     // TREND_UP into multi-1m selloff: entry brain uses the picture — may SELL/WAIT,
     // never knife a RANGE-style bounce BUY against the book.

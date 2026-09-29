@@ -71,7 +71,8 @@ import {
   getAutoCalibrateStatus,
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
-import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
+import { decideEntryWithStructure, zoneGeometry, effectiveEntryRegime } from './structureEntry.js';
+import { readMarketStory } from './marketStory.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -3388,11 +3389,16 @@ async function robotCycleLocked(s: Internal) {
     const decideNow = Boolean(mindBar);
 
     if (decideNow && mindBar) {
-      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
+      const storySnap = readMarketStory(s.closedBars, mindBar);
+      const entryRegime = effectiveEntryRegime(s.regime, storySnap);
+      if (!regimeAllowedForEntry(entryRegime, s.client_id)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
-          last_reason: `${s.regime} OFF kalibrācijā`,
+          last_reason:
+            entryRegime !== s.regime
+              ? `${s.regime}→${entryRegime} OFF kalibrācijā`
+              : `${s.regime} OFF kalibrācijā`,
         });
         pushTick(s, {
           phase: 'DECIDE',
@@ -3545,11 +3551,16 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
-      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
+      const pendingStory = readMarketStory(s.closedBars, entryBar);
+      const pendingRegime = effectiveEntryRegime(s.regime, pendingStory);
+      if (!regimeAllowedForEntry(pendingRegime, s.client_id)) {
         s.pending_entry = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
-          last_reason: `${s.regime} OFF · cleared pending retry`,
+          last_reason:
+            pendingRegime !== s.regime
+              ? `${s.regime}→${pendingRegime} OFF · cleared pending retry`
+              : `${s.regime} OFF · cleared pending retry`,
         });
         pushTick(s, {
           phase: 'DECIDE',

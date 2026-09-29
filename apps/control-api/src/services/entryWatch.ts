@@ -8,6 +8,7 @@ import {
 import type { RegimeEntry } from './entryFromRegime.js';
 import {
   decideEntryWithStructure,
+  effectiveEntryRegime,
   higherTfDir,
   minuteTrendBias,
   lastClosed1mFromTenSec,
@@ -361,7 +362,18 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const regime = normalizeRegime(input.regime);
   const recipe = watchRecipe(regime);
   const enabled = getDeskCalibration().enabled_regimes;
-  const regimeOn = regimeAllowedForEntry(regime);
+  const bars = input.closed_bars?.length
+    ? input.closed_bars
+    : input.last_closed
+      ? [input.last_closed]
+      : [];
+  const storySnap =
+    input.last_closed && bars.length
+      ? readMarketStory(bars, input.last_closed)
+      : null;
+  // False RANGE must not REGIME_OFF when story is rally/selloff and TREND is on
+  const entryRegime = effectiveEntryRegime(regime, storySnap);
+  const regimeOn = regimeAllowedForEntry(entryRegime);
   const zone = zoneBarProgress(input.closed_bar_count ?? 0);
   const bar = input.last_closed || null;
   const body = bar ? bodyPct(bar) : null;
@@ -383,11 +395,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
       ? decideEntryWithStructure({
           bar,
           regime,
-          closedBars: input.closed_bars?.length
-            ? input.closed_bars
-            : bar
-              ? [bar]
-              : [],
+          closedBars: bars,
           last_closed_side: lastClosedSide,
           last_close_was_loss: wasLoss,
           capital_m1_dir: input.capital_m1_dir,
@@ -427,7 +435,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
       last_reason = flipFilterReason(blockedSig, lastClosedSide, lockLeft, wasLoss);
     } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
-      last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
+      last_reason =
+        entryRegime !== regime
+          ? `${regime}→${entryRegime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
+          : `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
     else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
     else if (status === 'MANAGE') last_reason = `Pozīcija ${input.open_side} — manage`;
     else if (status === 'MANAGE_ONLY') last_reason = 'Entry smadzenes OFF (manage-only)';
@@ -444,10 +455,12 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     ? ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
-  const story: MarketStory = readMarketStory(
-    input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
-    bar
-  );
+  const story: MarketStory =
+    storySnap ??
+    readMarketStory(
+      bars,
+      bar
+    );
   const tfLine = multiTfWatchLine({
     closed_bars: input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
     capital_m1_dir: input.capital_m1_dir,
