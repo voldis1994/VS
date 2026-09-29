@@ -163,10 +163,10 @@ describe('autoCalibrate', () => {
   it('raises broker SAFETY TP R:R when micro-wins vs modest Soft (not Soft-heavy dominate)', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
-      trade({ pnl_pts: 0.4, exit_reason: 'PeakProtection', mfe: 1.2 }),
-      trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection', mfe: 1.0 }),
+      trade({ pnl_pts: 0.8, exit_reason: 'Target', mfe: 0.9 }),
+      trade({ pnl_pts: 0.7, exit_reason: 'Target', mfe: 0.8 }),
       trade({ pnl_pts: -1.0, exit_reason: 'HardInvalidation' }),
-      trade({ pnl_pts: 0.5, exit_reason: 'PeakProtection', mfe: 1.5 }),
+      trade({ pnl_pts: 0.6, exit_reason: 'PeakProtection', mfe: 0.7 }),
       trade({ pnl_pts: -0.9, exit_reason: 'HardInvalidation' }),
     ]);
     expect(r.applied).toBe(true);

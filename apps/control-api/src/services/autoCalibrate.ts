@@ -840,8 +840,11 @@ export function proposeAutoCalibration(
     ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length)
     : 0;
   const expectancy = sum / windowTrades.length;
-  const softLosses = windowTrades.filter((t) =>
-    /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason))
+  const softLosses = windowTrades.filter(
+    (t) =>
+      /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason)) &&
+      t.pnl_pts < -1e-9 &&
+      Math.abs(t.pnl_pts) >= Math.max(1.0, current.hardinv_abs * 0.65)
   ).length;
   /** Soft-sized cuts even when exit_reason is MindCut/Structure/EXTERNAL — still Soft R:R. */
   const softSizedLosses = windowTrades.filter(
