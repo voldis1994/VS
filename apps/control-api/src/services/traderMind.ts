@@ -587,6 +587,20 @@ export function reviewSessionLikeHuman(
     };
   }
 
+  // Soft-sized losses without HardInv tag (MindCut/Structure/EXTERNAL) — still Soft R:R invert
+  const softCap = 2.2; // diagnosis only; auto-cal owns live Soft abs
+  const softSized = trades.filter(
+    (t) => t.pnl_pts < -1e-9 && Math.abs(t.pnl_pts) >= softCap * 0.65
+  ).length;
+  if (e < 0 && softSized >= 2 && softLosses.length < 2) {
+    return {
+      diagnosis: `Logs E=${e.toFixed(2)}. Soft-lieluma zaudējumi ×${softSized} (bez HardInv tag) — R:R apgriezts.`,
+      lesson:
+        'Samazinu Soft CAP/pct un atviegloju Peak/Target — Soft jāregulē, ne tikai Peak.',
+      intent: 'ease_peak_target',
+    };
+  }
+
   if (e >= 0.25) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)} pozitīvs — pieeja strādā.`,

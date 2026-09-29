@@ -843,6 +843,12 @@ export function proposeAutoCalibration(
   const softLosses = windowTrades.filter((t) =>
     /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason))
   ).length;
+  /** Soft-sized cuts even when exit_reason is MindCut/Structure/EXTERNAL — still Soft R:R. */
+  const softSizedLosses = windowTrades.filter(
+    (t) =>
+      t.pnl_pts < -1e-9 &&
+      Math.abs(t.pnl_pts) >= Math.max(1.0, current.hardinv_abs * 0.65)
+  ).length;
   const microWins = windowTrades.filter(
     (t) => t.pnl_pts > 1e-9 && t.pnl_pts < Math.max(1.0, avgLossAbs * 0.45)
   ).length;
@@ -885,19 +891,21 @@ export function proposeAutoCalibration(
     avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.85 && microWins >= 2;
 
   const softDominates =
-    softLosses >= 2 &&
     expectancy < 0.05 &&
     avgLossAbs >= 1.0 &&
-    (wins.length === 0 || avgWin < avgLossAbs * 0.75);
+    (wins.length === 0 || avgWin < avgLossAbs * 0.75) &&
+    (softLosses >= 2 ||
+      softSizedLosses >= 2 ||
+      (losses.length >= 3 && avgLossAbs >= current.hardinv_abs * 0.7));
 
   const needPullBack =
     human.intent === 'ease_peak_target' ||
+    softDominates ||
     (expectancy < 0.05 &&
       (raiseStreak >= AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK ||
         alreadyTall ||
         leftWinnerOnTable ||
-        (asymmetryBad && softLosses >= 2) ||
-        softDominates));
+        (asymmetryBad && (softLosses >= 2 || softSizedLosses >= 2))));
 
   const needProtectSooner = human.intent === 'protect_sooner';
 
@@ -945,7 +953,7 @@ export function proposeAutoCalibration(
         changes.push(
           autotuneLog(
             `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft tighten`,
-            `Soft-heavy Soft×${softLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}${
+            `Soft-heavy SoftTag×${softLosses} SoftSized×${softSizedLosses} E=${expectancy.toFixed(2)} avgL=${avgLossAbs.toFixed(1)}${
               mkt ? ` · mkt ${mkt}` : ''
             }`
           )
