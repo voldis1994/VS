@@ -158,6 +158,32 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars)).toBe('BREAKOUT_DOWN');
   });
 
+  it('Gold local sell-break of shelf → BREAKOUT_DOWN even if still inside wider 30m box', () => {
+    // Wider 30m already contains earlier dump (zone lo low). Local 10m shelf
+    // 4149–4154 then pierce → human sell-breakout must not stay RANGE.
+    const bars: TenSecBar[] = [];
+    const n = MIN_BARS_FOR_ZONE + 80;
+    for (let i = 0; i < n; i++) {
+      let c: number;
+      if (i < 40) {
+        c = 4160 - (i / 39) * 10; // early dump 4160→4150 — sets wide zone lo
+      } else if (i < n - 8) {
+        // local shelf chop ~4149.5–4153.5
+        c = 4151.5 + ((i % 5) - 2) * 0.35;
+      } else {
+        // pierce shelf
+        c = 4148.5 - (i - (n - 8)) * 0.4;
+      }
+      const o = c + 0.05;
+      bars.push(bar(o, Math.max(o, c) + 0.2, Math.min(o, c) - 0.15, c, i));
+    }
+    // Strong expanding red tip below local shelf (real Capital dump body)
+    const tip = bars[bars.length - 1]!.close;
+    bars.push(bar(tip + 0.4, tip + 0.5, tip - 3.5, tip - 3.2, n));
+    const r = classifyRegime(bars, 'RANGE');
+    expect(r).toBe('BREAKOUT_DOWN');
+  });
+
   it('FAILED_BREAKOUT_UP after a breakout fades back inside', () => {
     const prior: RegimeName = 'BREAKOUT_UP';
     const bars = padBars([

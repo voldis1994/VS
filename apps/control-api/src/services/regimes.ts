@@ -258,6 +258,25 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     fromChop && breakoutUp && (last.close - hi) / zoneWidth >= CLEAR_BREAK_FRAC;
   const clearBreakDown =
     fromChop && breakoutDown && (lo - last.close) / zoneWidth >= CLEAR_BREAK_FRAC;
+
+  // Local consolidation break (last ~10m), independent of full 30m box.
+  // Gold 17:45: dump pierced 4149–4154 shelf while still "inRange" of the wider
+  // 30m zone that already contained the earlier 4160→… selloff → false RANGE.
+  const localLookback = Math.min(60, Math.max(18, zonePrior.length - 6));
+  const localStruct = zonePrior.slice(0, -6).slice(-localLookback);
+  let localBreakUp = false;
+  let localBreakDown = false;
+  if (localStruct.length >= 12) {
+    const lHi = Math.max(...localStruct.map((b) => b.high));
+    const lLo = Math.min(...localStruct.map((b) => b.low));
+    const lW = Math.max(lHi - lLo, 1e-9);
+    const localFrac = Math.max(0.12, CLEAR_BREAK_FRAC * 0.5);
+    localBreakUp =
+      fromChop && last.close > lHi && (last.close - lHi) / lW >= localFrac;
+    localBreakDown =
+      fromChop && last.close < lLo && (lLo - last.close) / lW >= localFrac;
+  }
+
   const reversal =
     (previous === 'TREND_UP' &&
       lastVel < -REVERSAL &&
@@ -279,6 +298,28 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (trendingDown || lastVel < -TREND_ENTER)
   )
     return 'BREAKOUT_DOWN';
+
+  // Local shelf pierce while STILL inside the wider 30m box (Gold 17:45).
+  // Without this, dump through a 10m shelf stays "RANGE" because zone.lo already
+  // includes the earlier selloff. Require expanding + enter-band body.
+  if (
+    inRange &&
+    fromChop &&
+    localBreakUp &&
+    expanding &&
+    lastVel > TREND_ENTER
+  ) {
+    return 'BREAKOUT_UP';
+  }
+  if (
+    inRange &&
+    fromChop &&
+    localBreakDown &&
+    expanding &&
+    lastVel < -TREND_ENTER
+  ) {
+    return 'BREAKOUT_DOWN';
+  }
 
   // Violent in-range flip (≥ REVERSAL) before soft pullback / bare EXPANSION
   if (reversal) return 'REVERSAL_CANDIDATE';
