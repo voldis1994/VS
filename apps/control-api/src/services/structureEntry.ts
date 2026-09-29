@@ -22,89 +22,26 @@ import { entryStructureEnabled } from './tradeOpenPolicy.js';
 import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
 import { thinkEntryLikeTrader } from './traderMind.js';
 import type { MarketStory } from './marketStory.js';
+import {
+  pickEntryPlaybook,
+  setupAllowedOnLane,
+  type EffectiveRegimeHtf,
+  type TfBiasDir,
+} from './entryPlaybook.js';
 
-export type TfBiasDir = 'UP' | 'DOWN' | 'FLAT';
-
-export type EffectiveRegimeHtf = {
-  /** Capital.com closed candles preferred — not 10s-book noise */
-  tf30?: TfBiasDir | null;
-  tf15?: TfBiasDir | null;
-  tf5?: TfBiasDir | null;
-  m1?: TfBiasDir | null;
-};
-
-/** Chop labels that may wrongly starve TREND/BREAKOUT/PULLBACK/… playbooks. */
-const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
+export type { EffectiveRegimeHtf, TfBiasDir } from './entryPlaybook.js';
+export { capitalHtfBias, pickEntryPlaybook, setupAllowedOnLane } from './entryPlaybook.js';
 
 /**
- * Capital HTF bias from 30→15→5 (m1 only for pullback tip).
- * Majority of directional HTFs wins — one opposing TF must not freeze as MIXED.
- */
-export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
-  if (!htf) return 'FLAT';
-  const stack: TfBiasDir[] = [];
-  for (const d of [htf.tf30, htf.tf15, htf.tf5]) {
-    if (d === 'UP' || d === 'DOWN') stack.push(d);
-  }
-  if (!stack.length) {
-    if (htf.m1 === 'UP' || htf.m1 === 'DOWN') return htf.m1;
-    return 'FLAT';
-  }
-  const up = stack.filter((d) => d === 'UP').length;
-  const down = stack.filter((d) => d === 'DOWN').length;
-  if (up > down) return 'UP';
-  if (down > up) return 'DOWN';
-  // Equal opposing HTFs (e.g. 30↑ 15↓) — truly mixed
-  return 'MIXED';
-}
-
-/**
- * Entry playbook regime.
- *
- * - Real TREND / PULLBACK / BREAKOUT / EXPANSION / REVERSAL / FAILED → unchanged.
- *   RANGE never demotes or blocks those.
- * - RANGE / COMPRESSION / TRANSITION → RANGE fade playbook ONLY when Capital HTF
- *   is flat/mixed AND story is chop. If Capital 30/15/5 (not 10s) shows direction,
- *   promote to TREND/PULLBACK so false RANGE cannot starve other modes.
+ * Entry playbook regime — delegates to pickEntryPlaybook (split brains).
+ * RANGE fade only when that router picks RANGE_FADE lane.
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
   story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefined,
   htf?: EffectiveRegimeHtf | null
 ): RegimeName {
-  const r = normalizeRegime(regime);
-  // Other regimes stand — RANGE label must not overwrite them
-  if (!CHOP_LABELS.has(r)) return r;
-
-  const bias = capitalHtfBias(htf);
-  const ch = String(story?.chapter || '').toUpperCase();
-  const allow = String(story?.allow || '').toUpperCase();
-  const m1 = htf?.m1;
-
-  // Capital HTF first (what you see on the chart) — not noisy 10s classifier
-  if (bias === 'UP') {
-    if (ch === 'DIP_IN_RALLY' || m1 === 'DOWN') return 'PULLBACK_UPTREND';
-    if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
-    return 'TREND_UP';
-  }
-  if (bias === 'DOWN') {
-    if (ch === 'BOUNCE_IN_SELL' || m1 === 'UP') return 'PULLBACK_DOWNTREND';
-    if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
-    return 'TREND_DOWN';
-  }
-
-  // No clear Capital HTF — story chapter may still promote off false RANGE
-  if (ch === 'DIP_IN_RALLY') return 'PULLBACK_UPTREND';
-  if (ch === 'BOUNCE_IN_SELL') return 'PULLBACK_DOWNTREND';
-  if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
-  if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
-  const buyCh = ch === 'RALLY' || ch === 'EXHAUST_HI';
-  const sellCh = ch === 'SELLOFF' || ch === 'EXHAUST_LO';
-  if (allow === 'BUY' || buyCh) return 'TREND_UP';
-  if (allow === 'SELL' || sellCh) return 'TREND_DOWN';
-
-  // True chop: RANGE fade playbook only here
-  return r;
+  return pickEntryPlaybook({ liveRegime: regime, story, htf }).regime;
 }
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
@@ -597,18 +534,21 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
   const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
   const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
-  const gateRegime = effectiveEntryRegime(
-    regime,
+  const htfSnap = hasCapitalHtf
+    ? {
+        tf30: input.capital_tf30_dir ?? null,
+        tf15: input.capital_tf15_dir ?? null,
+        tf5: input.capital_tf5_dir ?? null,
+        m1: input.capital_m1_dir ?? null,
+      }
+    : null;
+  // Split brains: HTF / breakout / range — not one RANGE label for everything
+  const playbook = pickEntryPlaybook({
+    liveRegime: regime,
     story,
-    hasCapitalHtf
-      ? {
-          tf30: input.capital_tf30_dir ?? null,
-          tf15: input.capital_tf15_dir ?? null,
-          tf5: input.capital_tf5_dir ?? null,
-          m1: input.capital_m1_dir ?? null,
-        }
-      : null
-  );
+    htf: htfSnap,
+  });
+  const gateRegime = playbook.regime;
   const m1Strong =
     m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * 0.5
       ? true
@@ -679,9 +619,13 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   if (story.allow === 'SELL' && side === 'BUY') return null;
   if (story.allow === 'NONE') return null;
 
-  // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
-  const raw = decideEntryFrom10sRegime(input.bar, gateRegime);
-  const started = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
+  // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
+  const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);
+  const raw =
+    rawAll && setupAllowedOnLane(playbook.lane, rawAll.setup) ? rawAll : null;
+  const startedAll = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
+  const started =
+    startedAll && setupAllowedOnLane(playbook.lane, startedAll.setup) ? startedAll : null;
   const matched =
     raw && raw.direction === side
       ? raw
@@ -691,8 +635,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const candidate: RegimeEntry = matched ?? {
     direction: side,
     setup: 'CONTINUATION',
-    reason: `${gateRegime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
+    reason: `${playbook.why_lv} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
   };
+  if (!setupAllowedOnLane(playbook.lane, candidate.setup)) return null;
 
   const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
@@ -726,7 +671,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     gateRegime === 'COMPRESSION' ||
     gateRegime === 'TRANSITION';
   if (matched === raw && raw && !setupNeedsConfirm) {
-    return withMind(`${gate.tag} · SETUP NOW · ${story.summary_lv}`);
+    return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
   }
 
   if (story.chapter === 'SEEDING') return null;
@@ -734,7 +679,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // Promoted regime so TREND/PULLBACK scalp paths fire — not RANGE fade starve
   const scalp = scalpStoryConfirms(story, candidate.direction, gateRegime, input.bar);
   if (!scalp.ok) return null;
-  return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
+  return withMind(`${gate.tag} · ${playbook.lane} · ${story.summary_lv} · ${scalp.tag}`);
 }
 
 /** Test helper — live genome MOVE for strong 1m body */
