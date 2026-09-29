@@ -772,6 +772,44 @@ function proposeGenomePatch(
     );
   }
 
+  // Expanding market pressure → slightly faster regime confirm (self-build perception)
+  const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
+  if (expandingCtx >= 3 && expectancy > 0.15) {
+    const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
+    if (confirm !== g.regime_confirm_bars) {
+      patch.regime_confirm_bars = confirm;
+      changes.push(
+        autotuneLog(
+          `genome regime_confirm_bars ${g.regime_confirm_bars}→${confirm}`,
+          `expanding market ×${expandingCtx} — faster regime confirm`
+        )
+      );
+    }
+  } else if (choppyCtx >= 2 && expectancy < 0) {
+    const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
+    if (dwell !== g.regime_min_dwell_bars) {
+      patch.regime_min_dwell_bars = dwell;
+      changes.push(
+        autotuneLog(
+          `genome regime_min_dwell_bars ${g.regime_min_dwell_bars}→${dwell}`,
+          `choppy ×${choppyCtx} — longer dwell before regime switch`
+        )
+      );
+    }
+  }
+
+  // Fight feed disagreement → HTF veto on
+  const fightCtx = windowTrades.filter((t) => {
+    const a = (t.exit_ctx || t.entry_ctx)?.feed_agreement;
+    return a === 'FIGHT' || a === 'fight' || a === 'DISAGREE';
+  }).length;
+  if (fightCtx >= 2 && expectancy < 0.05 && !g.mtf_htf_veto) {
+    patch.mtf_htf_veto = true;
+    changes.push(
+      autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
+    );
+  }
+
   return { patch, changes };
 }
 
