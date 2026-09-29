@@ -66,6 +66,10 @@ export function capitalTfTrekDir(
 /**
  * Trek bias over last N closed candles (color majority + net path).
  * Consumes BrainGenome.mtf_trek_flat_frac.
+ *
+ * If the *most recent* closed candle fights the older majority, trust the tip.
+ * Otherwise a 9‑minute Gold dump still showed `5m↑` because 3 prior greens
+ * outvoted one fresh red — desk vs Capital chart mismatch.
  */
 export function trekBiasFromCandles(
   candles: TfCandle[] | null | undefined,
@@ -91,11 +95,19 @@ export function trekBiasFromCandles(
   const mid = Math.abs(last.close) || 1;
   const trekFlat = getBrainGenome().mtf_trek_flat_frac;
   if (trek < Math.max(mid * trekFlat, 0.5)) return 'FLAT';
-  if (up > down && net >= 0) return 'UP';
-  if (down > up && net <= 0) return 'DOWN';
-  if (net > 0 && up >= down) return 'UP';
-  if (net < 0 && down >= up) return 'DOWN';
-  return 'FLAT';
+
+  let trekDir: TfDir = 'FLAT';
+  if (up > down && net >= 0) trekDir = 'UP';
+  else if (down > up && net <= 0) trekDir = 'DOWN';
+  else if (net > 0 && up >= down) trekDir = 'UP';
+  else if (net < 0 && down >= up) trekDir = 'DOWN';
+
+  const tipDir = candleDir(last);
+  // Fresh closed TF candle fights stale majority → desk reads the tip (Capital)
+  if (trekDir !== 'FLAT' && tipDir !== 'FLAT' && tipDir !== trekDir) {
+    return tipDir;
+  }
+  return trekDir;
 }
 
 function arrow(d: TfDir): string {
