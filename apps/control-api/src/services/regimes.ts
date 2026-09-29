@@ -319,6 +319,42 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
 
+  // Zone trek — multi-minute directional grind (Gold HH/HL rally).
+  // Quiet 10s tips stay inside the rolling hi/lo box → old code always fell
+  // through to RANGE even when 30m↑15m↑5m↑ and the zone itself walked up.
+  // Use early vs late thirds + path efficiency so sideways oscillation ≠ trend.
+  const third = Math.max(1, Math.floor(zonePrior.length / 3));
+  const earlyMean = mean(zonePrior.slice(0, third).map((b) => b.close));
+  const lateMean = mean(zonePrior.slice(-third).map((b) => b.close));
+  const zoneTrekPts = lateMean - earlyMean;
+  const zoneTrekRef = Math.max(Math.abs(earlyMean), Math.abs(zoneMid), 1e-9);
+  const zoneTrek = zoneTrekPts / zoneTrekRef;
+  let zonePath = 0;
+  for (let i = 1; i < zonePrior.length; i++) {
+    zonePath += Math.abs(zonePrior[i]!.close - zonePrior[i - 1]!.close);
+  }
+  const trekEfficiency = zonePath > 1e-9 ? Math.abs(zoneTrekPts) / zonePath : 0;
+  const trekShare = Math.abs(zoneTrekPts) / zoneWidth;
+  const zoneIsTrending =
+    Math.abs(zoneTrek) >= TREND_ENTER * 4 &&
+    trekShare >= 0.35 &&
+    trekEfficiency >= 0.4;
+  if (inRange && zoneIsTrending) {
+    if (zoneTrek > 0) {
+      // Soft tip against the trek → pullback in uptrend (1m↓ while HTF↑)
+      if (lastVel <= -PULLBACK || (lastVel < -MOVE && last.close < zoneMid)) {
+        return 'PULLBACK_UPTREND';
+      }
+      return 'TREND_UP';
+    }
+    if (zoneTrek < 0) {
+      if (lastVel >= PULLBACK || (lastVel > MOVE && last.close > zoneMid)) {
+        return 'PULLBACK_DOWNTREND';
+      }
+      return 'TREND_DOWN';
+    }
+  }
+
   // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
   if (inRange) return 'RANGE';

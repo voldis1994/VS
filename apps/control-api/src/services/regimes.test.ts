@@ -200,6 +200,25 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
   });
 
+  it('Gold grind: quiet 10s tips inside expanding zone → TREND_UP not RANGE', () => {
+    // Simulate ~30m Gold HH/HL rally: each 10s bar is quiet (body << TREND_ENTER)
+    // but the rolling zone walks ~20 pts — same shape as Capital 1m 4154→4175.
+    const bars: TenSecBar[] = [];
+    const start = 4154;
+    const n = MIN_BARS_FOR_ZONE + 40;
+    for (let i = 0; i < n; i++) {
+      const c = start + (i / (n - 1)) * 20; // ~20pt grind
+      const o = c - 0.05; // body ~0.0012% << TREND_ENTER 0.038%
+      bars.push(bar(o, c + 0.3, o - 0.2, c, i));
+    }
+    // Tip slightly red (1m↓ pullback noise) but still in zone
+    const tipOpen = bars[bars.length - 1]!.close;
+    bars.push(bar(tipOpen, tipOpen + 0.2, tipOpen - 0.8, tipOpen - 0.05, n));
+    const r = classifyRegime(bars, 'RANGE');
+    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = padBars([
       bar(100.0, 101.0, 99.6, 100.7, 0),
