@@ -160,16 +160,18 @@ describe('autoCalibrate', () => {
     expect(st.knobs_now.peak_mfe_abs).toBeGreaterThan(3);
   });
 
-  it('raises broker SAFETY TP R:R and may also tune Soft (full Soft freedom)', () => {
+  it('raises broker SAFETY TP R:R when micro-wins vs modest Soft (not Soft-heavy dominate)', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
-      trade({ pnl_pts: 0.4 }),
-      trade({ pnl_pts: 0.3 }),
-      trade({ pnl_pts: -2.5 }),
-      trade({ pnl_pts: 0.2 }),
-      trade({ pnl_pts: -1.8 }),
+      trade({ pnl_pts: 0.8, exit_reason: 'Target', mfe: 0.9 }),
+      trade({ pnl_pts: 0.7, exit_reason: 'Target', mfe: 0.8 }),
+      trade({ pnl_pts: -1.0, exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: 0.6, exit_reason: 'PeakProtection', mfe: 0.7 }),
+      trade({ pnl_pts: -0.9, exit_reason: 'HardInvalidation' }),
     ]);
     expect(r.applied).toBe(true);
+    // Soft-sized bar is Soft*0.65≈1.43 — these losses stay under Soft-heavy
+    expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
     expect(r.next.safety_tp_rr).toBeGreaterThan(base.safety_tp_rr);
     expect(r.next.safety_tp_rr).toBeLessThanOrEqual(AUTO_CAL_MAX_SAFETY_TP_RR);
     expect(r.changes.some((c) => c.includes('safety_tp_rr'))).toBe(true);
@@ -196,6 +198,32 @@ describe('autoCalibrate', () => {
     expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
       true
     );
+  });
+
+  it('Soft-heavy without HardInv tag still tightens Soft (MindCut/Structure sized losses)', () => {
+    const base = {
+      ...defaultDeskCalibration(),
+      hardinv_abs: 2.2,
+      peak_mfe_abs: 3.7,
+      peak_retention: 0.72,
+      target_abs: 6.3,
+    };
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: -3.85, exit_reason: 'MindCut' }),
+      trade({ pnl_pts: -3.85, exit_reason: 'StructureInvalidation' }),
+      trade({ pnl_pts: -3.9, exit_reason: 'EXTERNAL · Capital' }),
+      trade({ pnl_pts: -3.8, exit_reason: 'TimeDecay' }),
+      trade({ pnl_pts: 0, exit_reason: 'Scratch' }),
+    ]);
+    expect(r.applied).toBe(true);
+    expect(r.next.hardinv_abs).toBe(2.0);
+    expect(r.next.hardinv_pct).toBeLessThan(base.hardinv_pct);
+    expect(r.next.peak_mfe_abs).toBeLessThan(base.peak_mfe_abs);
+    expect(r.next.target_abs).toBeLessThan(base.target_abs);
+    expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
+      true
+    );
+    expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
   });
 
   it('Soft steps are clean decimals (2.2→2.0 not 1.9998)', () => {
