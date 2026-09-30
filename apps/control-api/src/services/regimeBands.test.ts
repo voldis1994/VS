@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertActiveRegimeBandsCoherent,
   assertRegimeBandsCoherent,
   bandPts,
   COMPRESS_ABS,
@@ -15,10 +16,28 @@ import {
 } from './regimeBands.js';
 import { isMoving10s } from './tenSecondOhlc.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
+import { sanitizeGenome, _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 
 describe('regimeBands — one ladder that actually works together', () => {
   it('assertRegimeBandsCoherent passes (module load already ran it)', () => {
     expect(() => assertRegimeBandsCoherent()).not.toThrow();
+    expect(() => assertActiveRegimeBandsCoherent()).not.toThrow();
+  });
+
+  it('collapsed genome is repaired to real atstarpes before live classify', () => {
+    _resetBrainGenomeForTests(
+      sanitizeGenome({
+        regime_move: 0.0001,
+        regime_trend_stay: 0.000102,
+        regime_trend_enter: 0.000104,
+        regime_pullback: 0.000106,
+        regime_reversal: 0.00011,
+        regime_compress_abs: 0.00009,
+        regime_expand_abs: 0.0002,
+      })
+    );
+    expect(() => assertActiveRegimeBandsCoherent()).not.toThrow();
+    _resetBrainGenomeForTests();
   });
 
   it('strict body order with real Gold~2650 point gaps', () => {

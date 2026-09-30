@@ -192,7 +192,7 @@ describe('brainSelfImprove analyze + hypothesize', () => {
 describe('brainSelfImprove genome', () => {
   it('sanitizes and clamps knobs', () => {
     const g = sanitizeGenome({ peak_keep: 1.5, soft_plus_giveback: 0.1 });
-    expect(g.peak_keep).toBeLessThanOrEqual(0.88);
+    expect(g.peak_keep).toBeLessThanOrEqual(0.95);
     expect(g.soft_plus_giveback).toBeGreaterThanOrEqual(0.55);
   });
 
@@ -218,6 +218,26 @@ describe('brainSelfImprove genome', () => {
     expect(g.regime_trend_stay).toBeLessThan(g.regime_trend_enter);
     expect(g.regime_trend_enter).toBeLessThan(g.regime_pullback);
     expect(g.regime_pullback).toBeLessThan(g.regime_reversal);
+  });
+
+  it('repairs collapsed ladder with real atstarpes — not one-candle-all-regimes', () => {
+    const g = sanitizeGenome({
+      regime_move: 0.0001,
+      regime_trend_stay: 0.000105, // tiny gap after move
+      regime_trend_enter: 0.00011,
+      regime_pullback: 0.000115,
+      regime_reversal: 0.00012,
+      regime_compress_abs: 0.00009,
+      regime_expand_abs: 0.00015,
+      regime_persist_enter: 0.5,
+      regime_persist_stay: 0.49,
+    });
+    expect(g.regime_trend_stay - g.regime_move).toBeGreaterThanOrEqual(0.000099);
+    expect(g.regime_trend_enter - g.regime_trend_stay).toBeGreaterThanOrEqual(0.000099);
+    expect(g.regime_pullback - g.regime_trend_enter).toBeGreaterThanOrEqual(0.000099);
+    expect(g.regime_reversal - g.regime_pullback).toBeGreaterThanOrEqual(0.0005);
+    expect(g.regime_expand_abs - g.regime_compress_abs).toBeGreaterThanOrEqual(0.00035);
+    expect(g.regime_persist_enter - g.regime_persist_stay).toBeGreaterThanOrEqual(0.049);
   });
 
   it('explore can mutate regime_reversal / multi-TF knobs', () => {

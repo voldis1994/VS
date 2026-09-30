@@ -149,31 +149,42 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
-/** Tiny positive step used when repairing ladder order after a wild mutation. */
+/** Positive step when repairing ladder — rounded to avoid float collapse. */
 function bumpAbove(floor: number, gap: number): number {
-  return floor + gap;
+  return Math.round((floor + gap) * 1e8) / 1e8;
 }
 
 /**
+ * Min gaps between regime thresholds — without these, one 10s candle body
+ * sits in MOVE≈STAY≈ENTER≈PULLBACK and every regime lights up.
+ * Matches assertRegimeBandsCoherent mins (factory Gold ladder is wider).
+ */
+const GAP_MOVE_STAY = 0.0001;
+const GAP_STAY_ENTER = 0.0001;
+const GAP_ENTER_PULLBACK = 0.0001;
+const GAP_PULLBACK_REVERSAL = 0.0005;
+const GAP_COMPRESS_EXPAND = 0.00035;
+
+/**
  * Keep body/range ladder coherent after independent clamps.
- * Does not change meaning of regimes — only prevents contradictory thresholds.
+ * Always enforces real atstarpes (not just a < b) so Brain mutations
+ * cannot collapse regimes into one candle.
  */
 function enforceRegimeLadder(g: BrainGenome): void {
-  const bodyGap = 0.00005;
   if (!(g.regime_compress_abs < g.regime_move)) {
     g.regime_compress_abs = Math.min(g.regime_compress_abs, g.regime_move - 1e-7);
   }
-  if (!(g.regime_move < g.regime_trend_stay)) {
-    g.regime_trend_stay = bumpAbove(g.regime_move, bodyGap);
+  if (g.regime_trend_stay < g.regime_move + GAP_MOVE_STAY) {
+    g.regime_trend_stay = bumpAbove(g.regime_move, GAP_MOVE_STAY);
   }
-  if (!(g.regime_trend_stay < g.regime_trend_enter)) {
-    g.regime_trend_enter = bumpAbove(g.regime_trend_stay, bodyGap);
+  if (g.regime_trend_enter < g.regime_trend_stay + GAP_STAY_ENTER) {
+    g.regime_trend_enter = bumpAbove(g.regime_trend_stay, GAP_STAY_ENTER);
   }
-  if (!(g.regime_trend_enter < g.regime_pullback)) {
-    g.regime_pullback = bumpAbove(g.regime_trend_enter, bodyGap);
+  if (g.regime_pullback < g.regime_trend_enter + GAP_ENTER_PULLBACK) {
+    g.regime_pullback = bumpAbove(g.regime_trend_enter, GAP_ENTER_PULLBACK);
   }
-  if (!(g.regime_pullback < g.regime_reversal)) {
-    g.regime_reversal = bumpAbove(g.regime_pullback, bodyGap * 2);
+  if (g.regime_reversal < g.regime_pullback + GAP_PULLBACK_REVERSAL) {
+    g.regime_reversal = bumpAbove(g.regime_pullback, GAP_PULLBACK_REVERSAL);
   }
   if (!(g.regime_move <= g.regime_move_range)) {
     g.regime_move_range = g.regime_move;
@@ -181,14 +192,22 @@ function enforceRegimeLadder(g: BrainGenome): void {
   if (!(g.regime_move_range <= g.regime_trend_stay)) {
     g.regime_move_range = g.regime_trend_stay;
   }
-  if (!(g.regime_expand_abs > g.regime_trend_enter)) {
-    g.regime_expand_abs = bumpAbove(g.regime_trend_enter, bodyGap);
+  if (g.regime_expand_abs <= g.regime_trend_enter) {
+    g.regime_expand_abs = bumpAbove(g.regime_trend_enter, GAP_STAY_ENTER);
+  }
+  if (g.regime_expand_abs - g.regime_compress_abs < GAP_COMPRESS_EXPAND) {
+    g.regime_expand_abs = g.regime_compress_abs + GAP_COMPRESS_EXPAND;
   }
   if (!(g.regime_persist_stay <= g.regime_persist_enter)) {
     g.regime_persist_stay = Math.min(g.regime_persist_stay, g.regime_persist_enter);
   }
   if (!(g.regime_persist_pullback <= g.regime_persist_enter)) {
     g.regime_persist_pullback = Math.min(g.regime_persist_pullback, g.regime_persist_enter);
+  }
+  // Persist stay must sit below enter with a real gap (else stay≈enter → all trends)
+  if (g.regime_persist_enter - g.regime_persist_stay < 0.05 - 1e-12) {
+    g.regime_persist_stay =
+      Math.round(Math.max(0.1, g.regime_persist_enter - 0.05) * 100) / 100;
   }
 }
 
