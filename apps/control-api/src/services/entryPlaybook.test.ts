@@ -65,7 +65,7 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     );
   });
 
-  it('EXHAUST_HI/LO + flat HTF stays RANGE_FADE — not fake TREND', () => {
+  it('EXHAUST_HI/LO + flat HTF stays RANGE book — not fake TREND (entry waits reject)', () => {
     const hi = pickEntryPlaybook({
       liveRegime: 'RANGE',
       story: { allow: 'BUY', chapter: 'EXHAUST_HI' },
@@ -73,6 +73,7 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     });
     expect(hi.lane).toBe('RANGE_FADE');
     expect(hi.regime).toBe('RANGE');
+    expect(hi.why_lv).toMatch(/reject|tip/i);
     const lo = pickEntryPlaybook({
       liveRegime: 'COMPRESSION',
       story: { allow: 'SELL', chapter: 'EXHAUST_LO' },

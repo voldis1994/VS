@@ -156,12 +156,18 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     input.minute_policy === 'reverse' ||
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     (mkt != null && storyFightsSide(mkt.story?.allow, input.open_side));
-
-  if (
-    genome.mind_bank_on_turn &&
+  // Soft+ bank thresholds are genome-owned (Brain may ease/tighten — no hard Soft ceiling).
+  const runnerMfe = mfe >= soft * genome.soft_plus_runner_mult;
+  const softPlusLeg = mfe >= soft * genome.soft_plus_leg_mult;
+  const deepGiveback = retention < keep - 0.12;
+  const softPlusBankOk =
     greenSoft &&
-    (marketChanged || againstUs || givingBack)
-  ) {
+    (marketChanged ||
+      againstUs ||
+      (givingBack && runnerMfe) ||
+      (givingBack && softPlusLeg && deepGiveback));
+
+  if (genome.mind_bank_on_turn && softPlusBankOk) {
     decision = 'BANK';
     why = givingBack
       ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'

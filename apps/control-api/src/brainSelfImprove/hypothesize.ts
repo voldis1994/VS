@@ -388,7 +388,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const nextStep = (g.explore_step || 0) + 1;
   const keep = bounceNum(g.peak_keep, step, 0.65, 0.88, dir);
   const gb = bounceNum(g.soft_plus_giveback, step, 0.55, 0.85, dir);
-  const arm = bounceNum(g.peak_arm_soft_mult, step, 0.5, 1.2, dir === 1 ? -1 : 1);
+  const arm = bounceNum(g.peak_arm_soft_mult, step, 0.5, 2.0, dir === 1 ? -1 : 1);
   const pause = bounceInt(g.soft_same_side_pause_closes, 1, 1, 12, dir);
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;

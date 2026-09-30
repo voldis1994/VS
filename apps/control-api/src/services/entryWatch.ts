@@ -230,21 +230,24 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'RANGE · fade / start apakšējā vai augšējā pusē (ne wrong-half)',
+        looking_for:
+          'RANGE · fade pēc reject · LO BUY / HI SELL (ne tip-chase breakout / fake-break)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'COMPRESSION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
+        looking_for:
+          'COMPRESSION · fade pēc reject · LO BUY / HI SELL (ne tip-chase · auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for: 'TRANSITION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
+        looking_for:
+          'TRANSITION · fade pēc reject · LO BUY / HI SELL (ne tip-chase · auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':

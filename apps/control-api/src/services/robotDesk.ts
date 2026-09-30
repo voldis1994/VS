@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import {
   withCapitalAccountSession,
   closeCapitalPosition,
@@ -2513,7 +2514,7 @@ function decideOpenManageExit(
     });
   }
 
-  // Soft-sized MFE → arm Peak trail early (Soft no longer BE-locks winners)
+  // Soft+ MFE → arm Peak trail (genome peak_arm_soft_mult — Soft×1 was Soft ceiling)
   if (
     !s.peak_protect_armed &&
     s.open_side &&
@@ -2521,14 +2522,15 @@ function decideOpenManageExit(
     quote.mid != null
   ) {
     const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
-    if (s.mfe >= softSl) {
+    const armNeed = softSl * getBrainGenome().peak_arm_soft_mult;
+    if (s.mfe >= armNeed) {
       s.peak_protect_armed = true;
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `PeakProtect ARMED · Soft MFE reached (${s.mfe.toFixed(2)} ≥ Soft ${softSl.toFixed(2)}) · trail owns winners`,
+        detail: `PeakProtect ARMED · Soft×${getBrainGenome().peak_arm_soft_mult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
       });
     }
   }
@@ -2628,8 +2630,7 @@ function decideOpenManageExit(
     return `${mindExit.tag} · ${brain.reason} · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)}`;
   }
 
-  // Belt: Soft+ green giving back under Keep % — take the PLUS even if mind said HOLD
-  // (1m continue used to HOLD forever → Soft ate the winner as a minus)
+  // Belt: Soft+ giveback — genome runner/leg mults (Brain may ease; Soft×1 was Soft ceiling)
   const keepCfg = cal.peak_retention > 0 ? cal.peak_retention : 0.75;
   const retNow =
     s.peak_retention != null
@@ -2637,10 +2638,15 @@ function decideOpenManageExit(
       : s.mfe > 0
         ? Math.max(0, favNowBrain / s.mfe)
         : 1;
+  const gBank = getBrainGenome();
+  const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
+  const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
+  const deepGiveback = retNow < keepCfg - 0.12;
   if (
     execNow >= softSlNow &&
-    s.mfe >= softSlNow &&
-    retNow < keepCfg
+    softPlusLeg &&
+    retNow < keepCfg &&
+    (s.peak_protect_armed || runnerMfe || deepGiveback)
   ) {
     s.last_brain_action = 'BANK';
     return `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;

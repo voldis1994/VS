@@ -5,6 +5,7 @@
  * Soft HardInv + Soft-sized structure remain sacred (never delayed / widened).
  * Brain owns Soft-sized green banks: BANK/CUT execute closes — not only Peak nudge.
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { thesisFailureReason, type ExitSide } from './exitManage.js';
 import {
   pressureFightsSide,
@@ -274,6 +275,8 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     Boolean(thesisFail);
 
+  // Soft× arm threshold is genome-owned (Soft×1 was a hidden Soft ceiling)
+  const armNeed = soft * Math.max(0.5, getBrainGenome().peak_arm_soft_mult);
   if (action === 'BANK') {
     soft_gate_override = true;
     force_peak_arm = true;
@@ -284,9 +287,9 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     peak_mfe_floor_override = Math.max(soft, input.peak_mfe_floor * 0.85);
   } else if (action === 'HOLD') {
     soft_gate_override = false;
-    if (mfe >= soft) force_peak_arm = true;
+    if (mfe >= armNeed) force_peak_arm = true;
   } else {
-    force_peak_arm = mfe >= soft * 0.6 || input.peak_protect_armed;
+    force_peak_arm = mfe >= armNeed || input.peak_protect_armed;
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 

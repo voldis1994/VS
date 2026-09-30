@@ -293,16 +293,16 @@ function peakShouldCut(
 }
 
 /**
- * Peak trail floor once Soft-sized MFE exists.
- *
- * Gold (~4300) scales peak_mfe_abs 4.45 → ~9.5 via scaleDeskAbs — then a real
- * 8pt winner never Peak-cuts while UI shows "Peak floor 4.45 / Keep 75%".
- * Soft-sized MFE is enough to trail retention; do not wait for a higher scaled floor.
+ * Peak trail floor — genome-owned Soft× mults (not hardcoded Soft ceiling).
+ * Factory peak_arm_soft_mult=1.35 / peak_trail_soft_cap_mult=1.75; Brain may evolve.
  */
 export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: number): number {
   const softSized = Math.max(softSl, minBank);
-  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return softSized;
-  return Math.min(mfeFloor, softSized);
+  const g = getBrainGenome();
+  const lo = softSized * Math.max(0.5, g.peak_arm_soft_mult);
+  const hi = softSized * Math.max(lo / softSized, g.peak_trail_soft_cap_mult);
+  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return lo;
+  return Math.min(hi, Math.max(lo, mfeFloor));
 }
 
 /**
@@ -517,12 +517,8 @@ export function decideBestOutcomeExit(
         ? Math.max(0, fav / mfe)
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
-  // Soft-sized MFE → trail at Keep %; do not wait for inflated Gold-scaled peak_mfe_abs.
-  // Genome peak_arm_soft_mult < 1 arms Peak earlier; > 1 waits for more MFE.
-  const trailFloor = Math.max(
-    minBank * 0.5,
-    peakTrailMfeFloor(mfeFloor, sl, minBank) * genome.peak_arm_soft_mult
-  );
+  // Genome peak_arm_soft_mult / peak_trail_soft_cap_mult own Soft× trail floor
+  const trailFloor = Math.max(minBank * 0.5, peakTrailMfeFloor(mfeFloor, sl, minBank));
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
