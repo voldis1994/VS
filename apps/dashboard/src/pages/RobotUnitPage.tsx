@@ -28,6 +28,8 @@ type FeedLeg = {
 
 type EntryWatch = {
   regime: string;
+  live_regime?: string;
+  lane?: string;
   regime_enabled: boolean;
   status: string;
   looking_for: string;
@@ -82,6 +84,8 @@ type RobotSession = {
   unrealized: number | null;
   mode: string;
   regime?: string;
+  live_regime?: string;
+  entry_regime?: string | null;
   feed_source?: string;
   feed_contributing?: number;
   feed_sender_count?: number;

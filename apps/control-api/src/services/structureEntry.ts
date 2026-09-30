@@ -34,8 +34,8 @@ export type { EffectiveRegimeHtf, TfBiasDir } from './entryPlaybook.js';
 export { capitalHtfBias, pickEntryPlaybook, setupAllowedOnLane } from './entryPlaybook.js';
 
 /**
- * Entry playbook regime — delegates to pickEntryPlaybook (split brains).
- * RANGE fade only when that router picks RANGE_FADE lane.
+ * Canonical entry thesis regime — one playbook result for UI / entry / exit / learn.
+ * Live classify may differ; thesis is what the brain trades.
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
@@ -43,6 +43,71 @@ export function effectiveEntryRegime(
   htf?: EffectiveRegimeHtf | null
 ): RegimeName {
   return pickEntryPlaybook({ liveRegime: regime, story, htf }).regime;
+}
+
+const LIVE_CHOP = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
+
+/**
+ * Tip-chase knife (genome exhaust_*).
+ * Runs on RANGE_FADE and on false-RANGE promote (chop live → TREND_PULLBACK),
+ * so HTF promote cannot skip tip safety. BREAKOUT lane still may pierce.
+ * Independent of entry_filter_level (L0) — this is thesis safety, not soft structure.
+ */
+export function tipChaseBlocksEntry(input: {
+  liveRegime: RegimeName;
+  lane: string;
+  chapter: string;
+  side: 'BUY' | 'SELL';
+  zpos: number | null | undefined;
+  barSign: -1 | 0 | 1;
+}): boolean {
+  const ch = String(input.chapter || '').toUpperCase();
+  const { extremeHi, extremeLo } = structKnobs();
+  const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
+  const tipLo = getBrainGenome().exhaust_pos_lo || 0.2;
+  const exhaustTipBlock = getBrainGenome().exhaust_tip_chase_block !== false;
+  const lane = input.lane;
+  const live = input.liveRegime;
+  const applies =
+    lane === 'RANGE_FADE' ||
+    (LIVE_CHOP.has(live) && lane === 'TREND_PULLBACK');
+  if (!applies) return false;
+  if (lane === 'RANGE_FADE' && (ch === 'BREAK_UP' || ch === 'BREAK_DOWN')) return true;
+  if (exhaustTipBlock) {
+    if (ch === 'EXHAUST_HI' && input.side === 'BUY') return true;
+    if (ch === 'EXHAUST_LO' && input.side === 'SELL') return true;
+    if (ch === 'EXHAUST_HI' && input.side === 'SELL' && input.barSign > 0) return true;
+    if (ch === 'EXHAUST_LO' && input.side === 'BUY' && input.barSign < 0) return true;
+  }
+  const zpos = input.zpos;
+  if (ch === 'RALLY' && input.side === 'BUY' && zpos != null && zpos >= tipHi) return true;
+  if (ch === 'SELLOFF' && input.side === 'SELL' && zpos != null && zpos <= tipLo) return true;
+  if (
+    zpos != null &&
+    ((input.side === 'SELL' && zpos >= extremeHi && input.barSign > 0) ||
+      (input.side === 'BUY' && zpos <= extremeLo && input.barSign < 0))
+  ) {
+    return true;
+  }
+  // False RANGE promote: never arm tip knives (BUY@HI / SELL@LO) even if story ≠ RALLY
+  if (
+    LIVE_CHOP.has(live) &&
+    lane === 'TREND_PULLBACK' &&
+    zpos != null &&
+    ((input.side === 'BUY' && zpos >= tipHi) || (input.side === 'SELL' && zpos <= tipLo))
+  ) {
+    return true;
+  }
+  if (
+    lane === 'RANGE_FADE' &&
+    (ch === 'RANGE_CHOP' || ch === 'MIXED' || !ch) &&
+    zpos != null &&
+    ((input.side === 'BUY' && zpos >= 0.85 && input.barSign > 0) ||
+      (input.side === 'SELL' && zpos <= 0.15 && input.barSign < 0))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
@@ -746,43 +811,20 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // allow NONE: block mind-invented sides; raw SETUP NOW on non-RANGE lanes may proceed
   if (story.allow === 'NONE' && !rawFillsThinStory) return null;
 
-  // RANGE fade must NOT knife the tip of a move (looks like breakout / fake-breakout chase).
-  // EXHAUST_HI → only SELL fade after reject; EXHAUST_LO → only BUY; never both-way tip spam.
+  // Tip-chase knife — RANGE_FADE and chop→TREND promote (false RANGE). Not skipped by L0.
   const ch = chEarly;
   const zpos = zone?.pos ?? story.zone_pos;
-  const { extremeHi, extremeLo } = structKnobs();
-  const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
-  const tipLo = getBrainGenome().exhaust_pos_lo || 0.2;
-  const exhaustTipBlock = getBrainGenome().exhaust_tip_chase_block !== false;
-  if (playbook.lane === 'RANGE_FADE') {
-    if (ch === 'BREAK_UP' || ch === 'BREAK_DOWN') return null;
-    if (exhaustTipBlock) {
-      if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
-      if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
-      // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
-      if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
-      if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
-    }
-    // Chase with the tip: BUY into HI after rally / SELL into LO after selloff
-    if (ch === 'RALLY' && side === 'BUY' && zpos != null && zpos >= tipHi) return null;
-    if (ch === 'SELLOFF' && side === 'SELL' && zpos != null && zpos <= tipLo) return null;
-    // With-move tip = breakout / fake-break lookalike (SELL HI green / BUY LO red)
-    if (
-      zpos != null &&
-      ((side === 'SELL' && zpos >= extremeHi && barSign > 0) ||
-        (side === 'BUY' && zpos <= extremeLo && barSign < 0))
-    ) {
-      return null;
-    }
-    // Mid-zone RANGE_CHOP tip after a one-way 10s expansion — treat as break tip, not fade
-    if (
-      (ch === 'RANGE_CHOP' || ch === 'MIXED' || !ch) &&
-      zpos != null &&
-      ((side === 'BUY' && zpos >= 0.85 && barSign > 0) ||
-        (side === 'SELL' && zpos <= 0.15 && barSign < 0))
-    ) {
-      return null;
-    }
+  if (
+    tipChaseBlocksEntry({
+      liveRegime: regime,
+      lane: playbook.lane,
+      chapter: ch,
+      side,
+      zpos,
+      barSign,
+    })
+  ) {
+    return null;
   }
 
   const startedAll = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
