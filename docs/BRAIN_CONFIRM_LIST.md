@@ -10,6 +10,8 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
+**STATUS 2026-09-30:** wired + suite green (542). Ārpusē tikai lot / dealing-rules / sistēma.
+
 ---
 
 ## JAU GENOME — paturēt + wire explore (44)
