@@ -291,7 +291,7 @@
   "regime_conf_max": 0.95,
   "book_confidence_floor_after_switch": 0.55,
   "soft_move_trek_pullback_shortcut": true,
-  "chop_to_trend_confirm_bars": 2,
+  "chop_to_trend_confirm_bars": 1,
   "sticky_prior_enabled": true,
   "transition_detect_enabled": false,
   "playbook_promote_vs_live_unify": true,

@@ -1,13 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { REGIME_NAMES } from './regimes.js';
 import {
+  byRegimeExitProfiles,
+  exitProfilesFromGenome,
+  peakRetentionFromGenome,
   regimeExitFamily,
   regimeExitProfile,
   shouldArmPeakProtect,
   structureInvalidationReason,
 } from './regimeExitProfile.js';
+import { _resetBrainGenomeForTests, getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 describe('regimeExitProfile — all 14 regimes', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
   it('maps every regime to a profile without fallthrough', () => {
     for (const r of REGIME_NAMES) {
       const p = regimeExitProfile(r);
@@ -16,6 +24,25 @@ describe('regimeExitProfile — all 14 regimes', () => {
       expect(p.target_mult).toBeGreaterThan(0);
       expect(p.timedecay_hold_ms).toBeGreaterThan(60_000);
     }
+  });
+
+  it('factory genome matches prior hardcoded family table', () => {
+    const g = getBrainGenome();
+    const by = byRegimeExitProfiles(g);
+    expect(by.TREND_UP.hardinv_mult).toBe(1);
+    expect(by.TREND_UP.peak_retention).toBeNull();
+    expect(by.TREND_UP.target_mult).toBe(1.15);
+    expect(by.TREND_UP.timedecay_hold_ms).toBe(840_000);
+    expect(by.TREND_UP.structure).toBe('none');
+    expect(by.RANGE.family).toBe('fade');
+    expect(by.RANGE.peak_retention).toBe(0.7);
+    expect(by.RANGE.structure).toBe('through_mid');
+    expect(by.BREAKOUT_UP.structure).toBe('back_in_range');
+    expect(by.FAILED_BREAKOUT_UP.family).toBe('break_fail');
+    expect(by.REVERSAL_CANDIDATE.peak_arm).toBe('fast');
+    expect(peakRetentionFromGenome(0)).toBeNull();
+    expect(peakRetentionFromGenome(0.7)).toBe(0.7);
+    expect(exitProfilesFromGenome(g).trend.peak_arm).toBe('reverse_1m');
   });
 
   it('TREND lets winners run; RANGE/FAILED still shorter hold — but Target never < Soft', () => {
@@ -58,9 +85,24 @@ describe('regimeExitProfile — all 14 regimes', () => {
     expect(regimeExitFamily('TRANSITION')).toBe('chop');
     expect(regimeExitFamily('UNKNOWN')).toBe('chop');
   });
+
+  it('reads live genome overrides for exit_* knobs', () => {
+    _resetBrainGenomeForTests({
+      exit_trend_target_mult: 1.5,
+      exit_trend_peak_retention: 0.8,
+      exit_fade_hardinv_mult: 0.7,
+    });
+    expect(regimeExitProfile('TREND_UP').target_mult).toBe(1.5);
+    expect(regimeExitProfile('TREND_DOWN').peak_retention).toBe(0.8);
+    expect(regimeExitProfile('RANGE').hardinv_mult).toBe(0.7);
+  });
 });
 
 describe('structureInvalidationReason', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
   const zone = { hi: 4340, lo: 4320, mid: 4330, width: 20 };
 
   it('BREAKOUT_UP dies back under hi; TREND does not', () => {
@@ -94,6 +136,10 @@ describe('structureInvalidationReason', () => {
 });
 
 describe('shouldArmPeakProtect', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
   const zone = { hi: 4340, lo: 4320, mid: 4330, width: 20 };
 
   it('TREND arms only on reverse 1m', () => {

@@ -566,7 +566,7 @@ export type BrainGenome = {
   book_confidence_floor_after_switch: number;
   /** Soft MOVE tip against trek → pullback shortcut */
   soft_move_trek_pullback_shortcut: boolean;
-  /** Extra confirm bars chop→trend */
+  /** Chop→trend pending confirm bars (factory 1 = prior immediate strong flip) */
   chop_to_trend_confirm_bars: number;
   /** Sticky prior instead of dead TRANSITION */
   sticky_prior_enabled: boolean;
@@ -983,7 +983,7 @@ const DEFAULT_GENOME: BrainGenome = {
   regime_conf_max: 0.95,
   book_confidence_floor_after_switch: 0.55,
   soft_move_trek_pullback_shortcut: true,
-  chop_to_trend_confirm_bars: 2,
+  chop_to_trend_confirm_bars: 1,
   sticky_prior_enabled: true,
   transition_detect_enabled: false,
   playbook_promote_vs_live_unify: true,
