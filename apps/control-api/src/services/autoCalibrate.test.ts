@@ -94,10 +94,11 @@ describe('autoCalibrate', () => {
     expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
     expect(result.next.enabled_regimes.includes('BREAKOUT_UP' as never)).toBe(false);
     expect(result.next.enabled_regimes.includes('TREND_UP' as never)).toBe(true);
-    expect(result.changes.some((c) => c.includes('regime OFF BREAKOUT_UP'))).toBe(true);
+    expect(result.next.soft_off_regimes.includes('BREAKOUT_UP' as never)).toBe(true);
+    expect(result.changes.some((c) => c.includes('regime Soft OFF BREAKOUT_UP'))).toBe(true);
   });
 
-  it('may demote preferred RANGE when it is a clear loser (freedom · no core ban)', () => {
+  it('may Soft OFF preferred RANGE when it is a clear loser (freedom · no core ban)', () => {
     const current = defaultDeskCalibration();
     const window = [
       trade({ pnl_pts: -2, regime: 'RANGE' }),
@@ -109,7 +110,8 @@ describe('autoCalibrate', () => {
     const result = proposeAutoCalibration(current, window, new Set());
     expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
     expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(false);
-    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(true);
+    expect(result.next.soft_off_regimes.includes('RANGE' as never)).toBe(true);
+    expect(result.changes.some((c) => c.includes('regime Soft OFF RANGE'))).toBe(true);
     // Floor still keeps preferred liquid regimes present overall
     expect(CORE_ALWAYS_ON_REGIMES.some((r) => result.next.enabled_regimes.includes(r as never))).toBe(
       true

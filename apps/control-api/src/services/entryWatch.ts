@@ -15,7 +15,13 @@ import {
   minuteDir,
 } from './structureEntry.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
-import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
+import {
+  regimeAllowedForEntry,
+  regimeEntryPermitted,
+  regimeIsSoftOff,
+  getDeskCalibration,
+} from './deskCalibration.js';
+import { isStrongEntrySignal } from './strongEntrySignal.js';
 import {
   flipFilterReason,
   requiredFlipSide,
@@ -382,6 +388,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     m1: input.capital_m1_dir,
   });
   const regimeOn = regimeAllowedForEntry(entryRegime);
+  const softOff = regimeIsSoftOff(entryRegime);
   const zone = zoneBarProgress(input.closed_bar_count ?? 0);
   const bar = input.last_closed || null;
   const body = bar ? bodyPct(bar) : null;
@@ -398,27 +405,49 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const needSide = lockEnabled
     ? requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss })
     : null;
-  const rawSig =
-    bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
-      ? decideEntryWithStructure({
-          bar,
-          regime,
-          closedBars: bars,
-          last_closed_side: lastClosedSide,
-          last_close_was_loss: wasLoss,
-          capital_m1_dir: input.capital_m1_dir,
-          capital_tf5_dir: input.capital_tf5_dir,
-          capital_tf15_dir: input.capital_tf15_dir,
-          capital_tf30_dir: input.capital_tf30_dir,
-        })
-      : null;
+  // Soft OFF still evaluates entry — strong signal may override
+  const mayEvalEntry =
+    bar &&
+    zone.zone_ready &&
+    (regimeOn || softOff) &&
+    input.entry_enabled &&
+    !input.open_side;
+  const rawSig = mayEvalEntry
+    ? decideEntryWithStructure({
+        bar,
+        regime,
+        closedBars: bars,
+        last_closed_side: lastClosedSide,
+        last_close_was_loss: wasLoss,
+        capital_m1_dir: input.capital_m1_dir,
+        capital_tf5_dir: input.capital_tf5_dir,
+        capital_tf15_dir: input.capital_tf15_dir,
+        capital_tf30_dir: input.capital_tf30_dir,
+      })
+    : null;
+  const strongOverride =
+    Boolean(rawSig) &&
+    softOff &&
+    isStrongEntrySignal({
+      direction: rawSig!.direction,
+      setup: rawSig!.setup,
+      storyAllow: storySnap?.allow,
+      storyChapter: storySnap?.chapter,
+      storyConf: storySnap?.confidence,
+      htf: {
+        tf30: input.capital_tf30_dir,
+        tf15: input.capital_tf15_dir,
+        tf5: input.capital_tf5_dir,
+      },
+    });
+  const entryPermitted = regimeEntryPermitted(entryRegime, { strong: strongOverride });
   const flipBlocked = Boolean(
     rawSig &&
       sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs, Date.now(), {
         wasLoss,
       })
   );
-  const sig = flipBlocked ? null : rawSig;
+  const sig = flipBlocked || !entryPermitted ? null : rawSig;
 
   let status: EntryWatchStatus = 'WAITING_TRIGGER';
   if (!input.running) status = 'STOPPED';
@@ -430,23 +459,29 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   else if (input.status_override) status = input.status_override;
   else if (!zone.zone_ready || !bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';
-  else if (!regimeOn) status = 'REGIME_OFF';
+  else if (!entryPermitted) status = 'REGIME_OFF';
   else if (sig) status = 'ARMED';
   else status = 'WAITING_TRIGGER';
 
   const vs = barVsTrigger(bar, recipe, sig);
   let last_reason = input.last_reason || '';
   if (!last_reason) {
-    if (status === 'ARMED' && sig) last_reason = sig.reason;
-    else if (status === 'FLIP_FILTER' && lastClosedSide) {
+    if (status === 'ARMED' && sig) {
+      last_reason = strongOverride
+        ? `Soft OFF override · ${sig.reason}`
+        : sig.reason;
+    } else if (status === 'FLIP_FILTER' && lastClosedSide) {
       const blockedSig = flipBlocked && rawSig ? rawSig.direction : lastClosedSide;
       last_reason = flipFilterReason(blockedSig, lastClosedSide, lockLeft, wasLoss);
     } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
-      last_reason =
-        entryRegime !== regime
-          ? `${regime}→${entryRegime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
-          : `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
+      last_reason = softOff
+        ? entryRegime !== regime
+          ? `${regime}→${entryRegime} Soft OFF · gaida strong signal`
+          : `${regime} Soft OFF · gaida strong signal`
+        : entryRegime !== regime
+          ? `${regime}→${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
+          : `${regime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
     else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
     else if (status === 'MANAGE') last_reason = `Pozīcija ${input.open_side} — manage`;
     else if (status === 'MANAGE_ONLY') last_reason = 'Entry smadzenes OFF (manage-only)';

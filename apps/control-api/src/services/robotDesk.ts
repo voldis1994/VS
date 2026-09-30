@@ -61,7 +61,13 @@ import {
   entryLearnerLearnFromClose,
   type EntryFeatures,
 } from './entryLearner.js';
-import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
+import {
+  regimeAllowedForEntry,
+  regimeEntryPermitted,
+  regimeIsSoftOff,
+  getDeskCalibration,
+} from './deskCalibration.js';
+import { isStrongEntrySignal } from './strongEntrySignal.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
   recordClosedTrade,
@@ -3522,21 +3528,24 @@ async function robotCycleLocked(s: Internal) {
       };
       const storySnap = readMarketStory(s.closedBars, mindBar);
       const entryRegime = effectiveEntryRegime(s.regime, storySnap, capitalHtf);
-      if (!regimeAllowedForEntry(entryRegime, s.client_id)) {
+      const softOff = regimeIsSoftOff(entryRegime, s.client_id);
+      const hardBlocked =
+        !regimeAllowedForEntry(entryRegime, s.client_id) && !softOff;
+      if (hardBlocked) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
           last_reason:
             entryRegime !== s.regime
-              ? `${s.regime}→${entryRegime} OFF kalibrācijā`
-              : `${s.regime} OFF kalibrācijā`,
+              ? `${s.regime}→${entryRegime} Hard OFF kalibrācijā`
+              : `${s.regime} Hard OFF kalibrācijā`,
         });
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
+          detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime Hard OFF · no entry`,
         });
       } else {
         // Mind reads Capital 30m→15m→5m→1m — BUY/SELL executes (no FORMING starve)
@@ -3552,8 +3561,46 @@ async function robotCycleLocked(s: Internal) {
           capital_tf15_dir: capitalTf15,
           capital_tf30_dir: capitalTf30,
         });
-        if (sig) {
+        const strong =
+          Boolean(sig) &&
+          isStrongEntrySignal({
+            direction: sig!.direction,
+            setup: sig!.setup,
+            storyAllow: storySnap.allow,
+            storyChapter: storySnap.chapter,
+            storyConf: storySnap.confidence,
+            htf: capitalHtf,
+          });
+        if (
+          softOff &&
+          !regimeEntryPermitted(entryRegime, { strong, clientId: s.client_id })
+        ) {
+          s.entry_close_latch = null;
+          refreshEntryWatch(s, {
+            status_override: 'REGIME_OFF',
+            last_reason:
+              entryRegime !== s.regime
+                ? `${s.regime}→${entryRegime} Soft OFF · gaida strong signal`
+                : `${s.regime} Soft OFF · gaida strong signal`,
+          });
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `${ohlcLine} · ENTRY WATCH · Soft OFF ${entryRegime} · nav strong signal · no entry`,
+          });
+        } else if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;
+          if (softOff && strong) {
+            pushTick(s, {
+              phase: 'DECIDE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `${ohlcLine} · Soft OFF override · strong ${sig.direction} ${sig.setup} · ${entryRegime}`,
+            });
+          }
           const flipOpts = { wasLoss: s.last_close_was_loss };
           const lockMs = sameDirLockMs(s.last_close_was_loss);
           if (
@@ -3686,21 +3733,35 @@ async function robotCycleLocked(s: Internal) {
       };
       const pendingStory = readMarketStory(s.closedBars, entryBar);
       const pendingRegime = effectiveEntryRegime(s.regime, pendingStory, pendingHtf);
-      if (!regimeAllowedForEntry(pendingRegime, s.client_id)) {
+      const pendingStrong = isStrongEntrySignal({
+        direction: s.pending_entry.direction,
+        setup: s.pending_entry.setup,
+        storyAllow: pendingStory.allow,
+        storyChapter: pendingStory.chapter,
+        storyConf: pendingStory.confidence,
+        htf: pendingHtf,
+      });
+      if (
+        !regimeEntryPermitted(pendingRegime, {
+          strong: pendingStrong,
+          clientId: s.client_id,
+        })
+      ) {
         s.pending_entry = null;
+        const soft = regimeIsSoftOff(pendingRegime, s.client_id);
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
           last_reason:
             pendingRegime !== s.regime
-              ? `${s.regime}→${pendingRegime} OFF · cleared pending retry`
-              : `${s.regime} OFF · cleared pending retry`,
+              ? `${s.regime}→${pendingRegime} ${soft ? 'Soft OFF' : 'Hard OFF'} · cleared pending retry`
+              : `${s.regime} ${soft ? 'Soft OFF' : 'Hard OFF'} · cleared pending retry`,
         });
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · pending cleared · regime OFF`,
+          detail: `${ohlcLine} · pending cleared · regime ${soft ? 'Soft OFF' : 'Hard OFF'}`,
         });
       } else if (
         sameDirectionBlocked(

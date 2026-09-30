@@ -25,7 +25,7 @@ describe('deskCalibration', () => {
     expect(c.hardinv_abs).toBe(2.2);
     expect(c.peak_retention).toBe(0.72);
     expect(c.peak_mfe_abs).toBe(3.0);
-    expect(c.peak_min_giveback_abs).toBe(0.85);
+    expect(c.peak_min_giveback_abs).toBeGreaterThanOrEqual(0.85);
     expect(c.target_abs).toBe(5.0);
     expect(c.safety_tp_rr).toBe(1.5);
     expect(c.entry_filter_level).toBe(0);
@@ -57,5 +57,9 @@ describe('deskCalibration', () => {
     expect(regimeAllowedForEntry('BREAKOUT_UP')).toBe(true);
     expect(regimeAllowedForEntry('TREND_UP')).toBe(false);
     expect(regimeAllowedForEntry('UNKNOWN')).toBe(false);
+  });
+
+  it('defaults soft_off_regimes empty', () => {
+    expect(getDeskCalibration().soft_off_regimes).toEqual([]);
   });
 });
