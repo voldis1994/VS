@@ -27,6 +27,10 @@ import {
   setBrainGenome,
   type BrainGenome,
 } from '../brainSelfImprove/brainGenome.js';
+import {
+  readSoftTargetLayers,
+  suggestLayersFromExcursions,
+} from './profitLayers.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
 /** After an applied calibrate — space next cycle; entries stay open. */
@@ -106,10 +110,16 @@ export function softPctFromAbs(hardinvAbs: number): number {
 /** True when a calibration knob or regime allowlist actually differs (ignores updated_at). */
 function deskCalibrationMateriallyChanged(a: DeskCalibration, b: DeskCalibration): boolean {
   if (a.hardinv_abs !== b.hardinv_abs) return true;
+  if (a.soft_l1_abs !== b.soft_l1_abs) return true;
+  if (a.soft_l2_abs !== b.soft_l2_abs) return true;
+  if (a.soft_l3_abs !== b.soft_l3_abs) return true;
   if (a.peak_mfe_abs !== b.peak_mfe_abs) return true;
   if (a.peak_retention !== b.peak_retention) return true;
   if (a.peak_min_giveback_abs !== b.peak_min_giveback_abs) return true;
   if (a.target_abs !== b.target_abs) return true;
+  if (a.target_l1_abs !== b.target_l1_abs) return true;
+  if (a.target_l2_abs !== b.target_l2_abs) return true;
+  if (a.target_l3_abs !== b.target_l3_abs) return true;
   if (a.safety_tp_rr !== b.safety_tp_rr) return true;
   if (a.hardinv_pct !== b.hardinv_pct) return true;
   if (a.target_pct !== b.target_pct) return true;
@@ -731,6 +741,16 @@ function proposeGenomePatch(
         )
       );
     }
+    const unlock = roundRet(Math.min(1.5, Math.max(0.5, g.soft_layer_unlock_mult + 0.05)));
+    if (unlock !== roundRet(g.soft_layer_unlock_mult)) {
+      patch.soft_layer_unlock_mult = unlock;
+      changes.push(
+        autotuneLog(
+          `genome soft_layer_unlock_mult ${roundRet(g.soft_layer_unlock_mult).toFixed(2)}→${unlock.toFixed(2)}`,
+          'Soft-heavy — harder to unlock fat Soft L2/L3'
+        )
+      );
+    }
     // Soft HardInv after TREND + bounce/dip chapter → tighten pullback-episode Soft×
     const pbSoft = windowTrades.filter((t) => {
       const er = String(t.exit_reason || '');
@@ -843,6 +863,16 @@ function proposeGenomePatch(
         autotuneLog(
           `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
           'let winners run — Peak arms later'
+        )
+      );
+    }
+    const unlockEase = roundRet(Math.min(1.5, Math.max(0.5, g.soft_layer_unlock_mult - 0.05)));
+    if (unlockEase !== roundRet(g.soft_layer_unlock_mult)) {
+      patch.soft_layer_unlock_mult = unlockEase;
+      changes.push(
+        autotuneLog(
+          `genome soft_layer_unlock_mult ${roundRet(g.soft_layer_unlock_mult).toFixed(2)}→${unlockEase.toFixed(2)}`,
+          'winners — easier Soft L2/L3 unlock for runners'
         )
       );
     }
@@ -1514,6 +1544,47 @@ export function proposeAutoCalibration(
   );
   next.target_pct = roundPct(next.target_pct);
   next.peak_mfe_pct = roundPct(next.peak_mfe_pct);
+
+  // Soft×3 + Target×3 — calibrate L1/L2 from MFE/Soft-loss; L3 stays tuned hardinv/target
+  {
+    const before = readSoftTargetLayers(next);
+    const mfes = windowTrades.map((t) => Math.max(0, Number(t.mfe) || 0));
+    const lossAbs = windowTrades
+      .filter((t) => t.pnl_pts < -1e-9)
+      .map((t) => Math.abs(t.pnl_pts));
+    const suggested = suggestLayersFromExcursions(mfes, lossAbs, before);
+    const softL3 = roundAbs(next.hardinv_abs);
+    const tgtL3 = roundAbs(next.target_abs);
+    let softL1 = roundAbs(before.soft[0]! * 0.55 + suggested.soft[0]! * 0.45);
+    let softL2 = roundAbs(before.soft[1]! * 0.55 + suggested.soft[1]! * 0.45);
+    softL1 = Math.min(softL1, softL3);
+    softL2 = Math.min(Math.max(softL2, softL1), softL3);
+    let tgtL1 = roundAbs(before.target[0]! * 0.55 + suggested.target[0]! * 0.45);
+    let tgtL2 = roundAbs(before.target[1]! * 0.55 + suggested.target[1]! * 0.45);
+    tgtL1 = Math.max(Math.min(tgtL1, tgtL3), softL1);
+    tgtL2 = Math.max(Math.min(Math.max(tgtL2, tgtL1), tgtL3), softL2);
+    next.soft_l1_abs = softL1;
+    next.soft_l2_abs = softL2;
+    next.soft_l3_abs = softL3;
+    next.hardinv_abs = softL3;
+    next.target_l1_abs = tgtL1;
+    next.target_l2_abs = tgtL2;
+    next.target_l3_abs = tgtL3;
+    next.target_abs = tgtL3;
+    if (
+      next.soft_l1_abs !== before.soft[0] ||
+      next.soft_l2_abs !== before.soft[1] ||
+      next.target_l1_abs !== before.target[0] ||
+      next.target_l2_abs !== before.target[1]
+    ) {
+      changes.push(
+        autotuneLog(
+          `Soft layers ${before.soft[0]!.toFixed(1)}/${before.soft[1]!.toFixed(1)}/${before.soft[2]!.toFixed(1)}→${next.soft_l1_abs.toFixed(1)}/${next.soft_l2_abs.toFixed(1)}/${next.soft_l3_abs.toFixed(1)} · Target ${before.target[0]!.toFixed(1)}/${before.target[1]!.toFixed(1)}/${before.target[2]!.toFixed(1)}→${next.target_l1_abs.toFixed(1)}/${next.target_l2_abs.toFixed(1)}/${next.target_l3_abs.toFixed(1)}`,
+          '3 Soft + 3 Target — L1/L2 from MFE/Soft-loss · L3 = Soft CAP / Target CAP'
+        )
+      );
+    }
+  }
 
   const genomeResult = proposeGenomePatch(
     next,

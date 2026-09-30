@@ -5,16 +5,28 @@ import { REGIME_NAMES, type RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
 
 export type DeskCalibration = {
-  /** Soft HardInv absolute CAP (price points) — not a floor */
+  /** Soft HardInv absolute CAP (price points) — not a floor · alias Soft L3 */
   hardinv_abs: number;
+  /** Soft HardInv L1 (tightest) — no MFE → this room */
+  soft_l1_abs: number;
+  /** Soft HardInv L2 — unlocked after Soft L1-sized MFE */
+  soft_l2_abs: number;
+  /** Soft HardInv L3 (= hardinv_abs) — unlocked after Soft L2-sized MFE */
+  soft_l3_abs: number;
   /** PeakProtect arms / cuts only after this MFE (pts) — must be > hardinv */
   peak_mfe_abs: number;
   /** Keep this fraction of MFE (0.65 ≈ 35% giveback) */
   peak_retention: number;
   /** Min absolute giveback before Peak cuts (pts) */
   peak_min_giveback_abs: number;
-  /** Soft Target absolute floor (pts) — should be > hardinv */
+  /** Soft Target absolute floor (pts) — alias Target L3 */
   target_abs: number;
+  /** Target L1 — scalp bank when leg never stretched to L2 */
+  target_l1_abs: number;
+  /** Target L2 — mid bank when leg never stretched to L3 */
+  target_l2_abs: number;
+  /** Target L3 (= target_abs) — full runner */
+  target_l3_abs: number;
   /**
    * Broker SAFETY TP as multiple of SAFETY SL distance.
    * This is what Capital profitLevel uses — Soft Target alone does not move
@@ -61,11 +73,18 @@ export function defaultDeskCalibration(): DeskCalibration {
   return {
     // Positive R:R — Soft HardInv CAP ~2.2; Peak only after real ≥3pt leg; Target ≥4–5
     // (old scalp profile banked +0.5 Peak vs −4 Soft HardInv → 80% wins, net minus)
+    // Soft/Target 3-layer ladder — L3 aliases hardinv_abs / target_abs
     hardinv_abs: 2.2,
+    soft_l1_abs: 1.2,
+    soft_l2_abs: 1.8,
+    soft_l3_abs: 2.2,
     peak_mfe_abs: 3.0,
     peak_retention: 0.72,
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
+    target_l1_abs: 2.5,
+    target_l2_abs: 3.5,
+    target_l3_abs: 5.0,
     safety_tp_rr: 1.5,
     hardinv_pct: 0.0008,
     target_pct: 0.0025,
@@ -124,15 +143,33 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     Array.isArray(p.soft_off_regimes) ? p.soft_off_regimes : base.soft_off_regimes
   ).filter((r) => !enabled.includes(r));
 
+  // Soft/Target 3-layer ladder — L3 syncs hardinv_abs / target_abs
+  const {
+    soft_l1_abs,
+    soft_l2_abs,
+    soft_l3_abs,
+    hardinv_abs,
+    target_l1_abs,
+    target_l2_abs,
+    target_l3_abs,
+    target_abs,
+  } = coerceLayerFieldsInline(p, base);
+
   return {
-    hardinv_abs: Math.round(clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50) * 10) / 10,
+    hardinv_abs,
+    soft_l1_abs,
+    soft_l2_abs,
+    soft_l3_abs,
     peak_mfe_abs: Math.round(clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50) * 10) / 10,
     peak_retention:
       Math.round(clamp(Number(p.peak_retention ?? base.peak_retention), 0.1, 0.95) * 100) / 100,
     peak_min_giveback_abs:
       Math.round(clamp(Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs), 0.1, 20) * 10) /
       10,
-    target_abs: Math.round(clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100) * 10) / 10,
+    target_abs,
+    target_l1_abs,
+    target_l2_abs,
+    target_l3_abs,
     safety_tp_rr:
       Math.round(clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0) * 100) / 100,
     hardinv_pct:
@@ -147,6 +184,58 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     enabled_regimes: enabled,
     soft_off_regimes: softOff,
     updated_at: new Date().toISOString(),
+  };
+}
+
+/** Inline coerce — keep deskCalibration free of circular imports with profitLayers. */
+function coerceLayerFieldsInline(
+  p: Partial<DeskCalibration>,
+  base: DeskCalibration
+): {
+  soft_l1_abs: number;
+  soft_l2_abs: number;
+  soft_l3_abs: number;
+  hardinv_abs: number;
+  target_l1_abs: number;
+  target_l2_abs: number;
+  target_l3_abs: number;
+  target_abs: number;
+} {
+  const sort3 = (a: number, b: number, c: number): [number, number, number] => {
+    const xs = [a, b, c].sort((x, y) => x - y);
+    return [xs[0]!, xs[1]!, xs[2]!];
+  };
+  const s3 = Math.round(clamp(Number(p.hardinv_abs ?? p.soft_l3_abs ?? base.hardinv_abs), 0.2, 50) * 10) / 10;
+  const s1 =
+    Math.round(
+      clamp(Number(p.soft_l1_abs ?? base.soft_l1_abs ?? s3 * 0.55), 0.2, 50) * 10
+    ) / 10;
+  const s2 =
+    Math.round(
+      clamp(Number(p.soft_l2_abs ?? base.soft_l2_abs ?? s3 * 0.8), 0.2, 50) * 10
+    ) / 10;
+  const soft = sort3(s1, s2, s3);
+  const t3 =
+    Math.round(clamp(Number(p.target_abs ?? p.target_l3_abs ?? base.target_abs), 0.5, 100) * 10) /
+    10;
+  const t1 =
+    Math.round(
+      clamp(Number(p.target_l1_abs ?? base.target_l1_abs ?? t3 * 0.5), 0.5, 100) * 10
+    ) / 10;
+  const t2 =
+    Math.round(
+      clamp(Number(p.target_l2_abs ?? base.target_l2_abs ?? t3 * 0.7), 0.5, 100) * 10
+    ) / 10;
+  const target = sort3(t1, t2, t3);
+  return {
+    soft_l1_abs: soft[0]!,
+    soft_l2_abs: soft[1]!,
+    soft_l3_abs: soft[2]!,
+    hardinv_abs: soft[2]!,
+    target_l1_abs: target[0]!,
+    target_l2_abs: target[1]!,
+    target_l3_abs: target[2]!,
+    target_abs: target[2]!,
   };
 }
 
@@ -276,12 +365,18 @@ export function deskCalibrationCatalog() {
     tradable_default: [...TRADABLE_DEFAULT],
     knobs: [
       'hardinv_abs',
+      'soft_l1_abs',
+      'soft_l2_abs',
+      'soft_l3_abs',
       'hardinv_pct',
       'peak_mfe_abs',
       'peak_mfe_pct',
       'peak_retention',
       'peak_min_giveback_abs',
       'target_abs',
+      'target_l1_abs',
+      'target_l2_abs',
+      'target_l3_abs',
       'target_pct',
       'safety_tp_rr',
       'entry_filter_level',

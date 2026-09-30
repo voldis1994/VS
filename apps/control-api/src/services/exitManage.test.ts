@@ -195,6 +195,8 @@ describe('decideBestOutcomeExit', () => {
     const aged = {
       entry_at: new Date(now - 60_000).toISOString(),
       hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 1_000),
+      // Unlock Soft L3 so HardInv distance matches hardInvStopDistance (broker CAP)
+      mfe: 10,
     };
     const slTrend = hardInvStopDistance(2000, 'TREND_UP');
     const hold = decideBestOutcomeExit(
@@ -216,6 +218,7 @@ describe('decideBestOutcomeExit', () => {
         entry_price: 2000,
         regime: 'TREND_UP',
         entry_at: aged.entry_at,
+        mfe: 10,
         hardinv_breach_since_ms: 0,
       }),
       2000 - slTrend - 0.2,

@@ -6,6 +6,11 @@ import {
   structureInvalidationReason,
   type ExitZoneSnap,
 } from './regimeExitProfile.js';
+import {
+  activeSoftAbs,
+  readSoftTargetLayers,
+  targetLayerHit,
+} from './profitLayers.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -353,25 +358,40 @@ export function scaleDeskAbs(refAbsPts: number, entry: number): number {
 /**
  * Soft HardInv distance in price pts.
  * Base CAP/floor at REF, then × regime exit profile (entry thesis).
+ * Without MFE → Soft L3 CAP (broker safety / sizing). Live manage uses
+ * {@link layeredHardInvDistance} so L1/L2 unlock with proven MFE.
  */
 export function hardInvStopDistance(
   entry: number,
   regime?: string | null
 ): number {
+  return layeredHardInvDistance(entry, /* mfe */ Number.POSITIVE_INFINITY, regime).dist;
+}
+
+/**
+ * Soft HardInv with 3-layer unlock — no MFE keeps L1 tight; MFE earns L2/L3.
+ */
+export function layeredHardInvDistance(
+  entry: number,
+  mfe: number,
+  regime?: string | null
+): { dist: number; layer: 1 | 2 | 3; abs: number } {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
+  const { abs, layer } = activeSoftAbs(
+    Number.isFinite(mfe) ? Math.max(0, mfe) : Number.POSITIVE_INFINITY,
+    cal
+  );
   const pct = absEntry * cal.hardinv_pct;
-  const capGold = cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
-  // Floor never fights Soft CAP — auto-cal may tighten Soft below factory 1.5
-  const floorAbs = Math.min(HARDINV_ABS_FLOOR, capGold);
+  const floorAbs = Math.min(HARDINV_ABS_FLOOR, abs);
   const floor = scaleDeskAbs(floorAbs, absEntry);
-  const cap = scaleDeskAbs(capGold, absEntry);
-  let sl = Math.min(Math.max(pct, floor), cap);
+  const cap = scaleDeskAbs(abs, absEntry);
+  // Rich instruments: pct may exceed L1 abs — still capped by active layer
+  let sl = Math.min(Math.max(pct * (layer / 3), floor), cap);
   const profile = regimeExitProfile(regime);
   sl *= profile.hardinv_mult;
-  // Never explode past ~1.3× scaled cap after regime widen (RANGE 1.15 etc.)
   sl = Math.min(sl, cap * 1.3);
-  return sl;
+  return { dist: sl, layer, abs };
 }
 
 /** Structure invalidation grace / confirm (faster than Soft Soft — thesis broken). */
@@ -494,9 +514,19 @@ export function decideBestOutcomeExit(
   ) {
     minGiveback = Math.min(minGiveback, overrides.min_giveback);
   }
-  const tp = targetTakeProfitDistance(entry, thesisRegime);
-  const sl = hardInvStopDistance(entry, thesisRegime);
-  /** Peak/Target/TimeDecay — never bank below Soft loss size */
+  const mfe = Math.max(s.mfe, Math.max(0, fav));
+  // Soft L1/L2/L3 — widen HardInv only after proven MFE (not day-one fat Soft)
+  const softLayered = layeredHardInvDistance(entry, mfe, thesisRegime);
+  const sl = softLayered.dist;
+  const layers = readSoftTargetLayers(cal);
+  const profileMult = profile.target_mult;
+  const targetDists = layers.target.map((abs) => {
+    const floor = scaleDeskAbs(abs, absEntry);
+    const pctShare = abs / Math.max(layers.target[2]!, 1e-9);
+    return Math.max(floor, absEntry * cal.target_pct * pctShare) * profileMult;
+  }) as [number, number, number];
+  const tp = targetDists[2]!;
+  /** Peak/Target/TimeDecay — never bank below Soft loss size (active layer) */
   const minBank = minProfitBank(sl);
   const peakAbs = cal.peak_mfe_abs > 0 ? cal.peak_mfe_abs : PEAK_MFE_ABS_FLOOR;
   let mfeFloor =
@@ -509,7 +539,6 @@ export function decideBestOutcomeExit(
   ) {
     mfeFloor = Math.min(mfeFloor, Math.max(overrides.peak_mfe_floor, sl));
   }
-  const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
       ? s.peak_retention
@@ -565,7 +594,7 @@ export function decideBestOutcomeExit(
         if (breachedFor >= HARDINV_CONFIRM_MS) {
           return {
             exit: true,
-            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)}) · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+            reason: `HardInvalidation · Soft L${softLayered.layer} · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)}) · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
             hardinv_breaching: true,
           };
         }
@@ -614,7 +643,20 @@ export function decideBestOutcomeExit(
     if (fav >= tp && execFav >= minBank) {
       return {
         exit: true,
-        reason: `Target / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
+        reason: `Target L3 / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
+      };
+    }
+    const layerHit = targetLayerHit({
+      fav,
+      mfe,
+      execFav,
+      minBank,
+      targetDists,
+    });
+    if (layerHit && layerHit.layer < 3) {
+      return {
+        exit: true,
+        reason: `Target L${layerHit.layer} · ${profile.family} · UPL ${fav.toFixed(5)} ≥ T${layerHit.layer} ${layerHit.dist.toFixed(5)} · MFE ${mfe.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft L${softLayered.layer} ${sl.toFixed(5)}`,
       };
     }
 
