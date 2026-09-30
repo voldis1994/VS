@@ -1,15 +1,14 @@
 /**
- * Entry playbook router — who looks at what.
+ * Entry thesis router — one canonical regime/lane for this bar.
  *
- * One classifier label (esp. false RANGE) used to drive every gate. That mixed
- * Capital HTF trend, local shelf breakouts, and mid-zone fades into one pipe
- * (Gold 17:45 RANGE SELL on a sell-break).
+ * Live classify can mislabel (esp. false RANGE). Thesis picks who trades the bar
+ * so UI / entry / exit / learn share one truth (not live label vs hidden promote).
  *
  * Lanes (mutually exclusive for setup selection):
  * - BREAKOUT     — story/live break; follow pierce, never fade
- * - TREND_PULLBACK — Capital 30/15/5 bias + dip/bounce; never RANGE half-fade
+ * - TREND_PULLBACK — Capital 30/15/5 bias + dip/bounce
  * - RANGE_FADE   — ONLY when HTF flat/mixed AND story is chop
- * - REVERSAL     — violent flip playbook
+ * - REVERSAL     — violent flip
  * - LIVE         — EXPANSION / FAILED stand as-is
  */
 import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
@@ -70,7 +69,7 @@ function allowOf(story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefine
 }
 
 /**
- * Pick which brain owns this bar's entry playbook.
+ * Pick the entry thesis for this bar (lane + regime).
  * Capital HTF + story chapter decide before the 10s RANGE label.
  */
 export function pickEntryPlaybook(input: {
