@@ -127,15 +127,18 @@ export function suggestLayersFromExcursions(
     const i = Math.min(xs.length - 1, Math.max(0, Math.floor((xs.length - 1) * p)));
     return Math.round(xs[i]! * 10) / 10;
   };
+  const p35 = Math.max(0.05, Math.min(0.95, g.layer_suggest_p35 || 0.35));
+  const p60 = Math.max(p35, Math.min(0.95, g.layer_suggest_p60 || 0.6));
+  const p85 = Math.max(p60, Math.min(0.99, g.layer_suggest_p85 || 0.85));
   let soft: [number, number, number] = [
-    pct(neg, 0.35, current.soft[0]!),
-    pct(neg, 0.6, current.soft[1]!),
-    pct(neg, 0.85, current.soft[2]!),
+    pct(neg, p35, current.soft[0]!),
+    pct(neg, p60, current.soft[1]!),
+    pct(neg, p85, current.soft[2]!),
   ];
   let target: [number, number, number] = [
-    pct(pos, 0.35, current.target[0]!),
-    pct(pos, 0.6, current.target[1]!),
-    pct(pos, 0.85, current.target[2]!),
+    pct(pos, p35, current.target[0]!),
+    pct(pos, p60, current.target[1]!),
+    pct(pos, p85, current.target[2]!),
   ];
   soft = sortThree(soft[0]!, soft[1]!, soft[2]!);
   target = sortThree(target[0]!, target[1]!, target[2]!);
