@@ -1305,7 +1305,9 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     peak_mfe_abs: round1(clamp(Number(p.peak_mfe_abs ?? d.peak_mfe_abs), 0.2, 50)),
     peak_mfe_pct_bp: clamp(coerceMicroBp(p.peak_mfe_pct_bp, d.peak_mfe_pct_bp), 0.1, 200),
     peak_retention: round2(clamp(Number(p.peak_retention ?? d.peak_retention), 0.1, 0.95)),
-    peak_min_giveback_abs: round1(clamp(Number(p.peak_min_giveback_abs ?? d.peak_min_giveback_abs), 0.1, 20)),
+    peak_min_giveback_abs: round2(
+      clamp(Number(p.peak_min_giveback_abs ?? d.peak_min_giveback_abs), 0.1, 20)
+    ),
     target_l1_abs: round1(clamp(Number(p.target_l1_abs ?? d.target_l1_abs), 0.5, 100)),
     target_l2_abs: round1(clamp(Number(p.target_l2_abs ?? d.target_l2_abs), 0.5, 100)),
     target_l3_abs: round1(clamp(Number(p.target_l3_abs ?? d.target_l3_abs), 0.5, 100)),
