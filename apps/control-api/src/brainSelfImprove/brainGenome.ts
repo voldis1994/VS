@@ -80,6 +80,15 @@ export type BrainGenome = {
   regime_persist_stay: number;
   /** Persistence for pullback classify */
   regime_persist_pullback: number;
+  /**
+   * Positive RANGE chop — |persistence| ≤ this (factory 0.25).
+   * Not "inRange default": RANGE only when chop is proven.
+   */
+  regime_range_chop_persist_max: number;
+  /** Positive RANGE — |zoneTrek|/width ≤ this (factory 0.32) for sideway */
+  regime_range_trek_share_max: number;
+  /** Positive RANGE — trek efficiency ≤ this (factory 0.45); high = directional */
+  regime_range_trek_eff_max: number;
   /** Soft regime switch dwell (10s bars) */
   regime_min_dwell_bars: number;
   /** Cross-family confirm bars after dwell */
@@ -140,6 +149,9 @@ const DEFAULT_GENOME: BrainGenome = {
   regime_persist_enter: 0.5,
   regime_persist_stay: 0.3,
   regime_persist_pullback: 0.2,
+  regime_range_chop_persist_max: 0.25,
+  regime_range_trek_share_max: 0.32,
+  regime_range_trek_eff_max: 0.45,
   regime_min_dwell_bars: 5,
   regime_confirm_bars: 3,
   regime_mom_bars: 8,
@@ -374,6 +386,32 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       0.05,
       0.6
     ),
+    regime_range_chop_persist_max:
+      Math.round(
+        clamp(
+          Number(
+            p.regime_range_chop_persist_max ?? DEFAULT_GENOME.regime_range_chop_persist_max
+          ),
+          0.08,
+          0.55
+        ) * 100
+      ) / 100,
+    regime_range_trek_share_max:
+      Math.round(
+        clamp(
+          Number(p.regime_range_trek_share_max ?? DEFAULT_GENOME.regime_range_trek_share_max),
+          0.12,
+          0.55
+        ) * 100
+      ) / 100,
+    regime_range_trek_eff_max:
+      Math.round(
+        clamp(
+          Number(p.regime_range_trek_eff_max ?? DEFAULT_GENOME.regime_range_trek_eff_max),
+          0.15,
+          0.7
+        ) * 100
+      ) / 100,
     regime_min_dwell_bars: Math.max(
       2,
       Math.min(12, Math.floor(Number(p.regime_min_dwell_bars) || DEFAULT_GENOME.regime_min_dwell_bars))
@@ -504,6 +542,9 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_persist_enter',
   'regime_persist_stay',
   'regime_persist_pullback',
+  'regime_range_chop_persist_max',
+  'regime_range_trek_share_max',
+  'regime_range_trek_eff_max',
   'regime_min_dwell_bars',
   'regime_confirm_bars',
   'regime_mom_bars',
@@ -539,6 +580,9 @@ export const TRADING_INTEL_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_persist_enter',
   'regime_persist_stay',
   'regime_persist_pullback',
+  'regime_range_chop_persist_max',
+  'regime_range_trek_share_max',
+  'regime_range_trek_eff_max',
   'regime_min_dwell_bars',
   'regime_confirm_bars',
   'regime_mom_bars',

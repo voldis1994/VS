@@ -196,10 +196,27 @@ export function pickEntryPlaybook(input: {
     };
   }
 
+  // Uncertain HTF/story — do NOT invent RANGE fade. Keep live chop only;
+  // sticky TREND/EXPANSION stays; UNKNOWN waits (ne false RANGE).
+  if (CHOP.has(live)) {
+    return {
+      lane: 'RANGE_FADE',
+      regime: live === 'TRANSITION' || live === 'COMPRESSION' ? live : 'RANGE',
+      why_lv: 'RANGE smadzenes · live chop · nav skaidra HTF/stāsta',
+    };
+  }
+  if (live === 'UNKNOWN' || live === 'TRANSITION') {
+    return {
+      lane: 'LIVE',
+      regime: 'UNKNOWN',
+      why_lv: 'WAIT · nav skaidra HTF/stāsta · ne RANGE fade',
+    };
+  }
+  // Exhaustive early returns above — never invent RANGE on leftover live
   return {
-    lane: 'RANGE_FADE',
-    regime: CHOP.has(live) ? live : 'RANGE',
-    why_lv: 'RANGE smadzenes · nav skaidra HTF/stāsta',
+    lane: 'LIVE',
+    regime: live,
+    why_lv: `promote live ${live} · nav skaidra HTF/stāsta · ne false RANGE`,
   };
 }
 

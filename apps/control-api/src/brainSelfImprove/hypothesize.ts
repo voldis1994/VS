@@ -401,6 +401,9 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.25, 0.85, dir);
   const persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.1, 0.7, dir);
   const persistPull = bounceNum(g.regime_persist_pullback, 0.05, 0.05, 0.6, dir);
+  const rangePersist = bounceNum(g.regime_range_chop_persist_max, 0.03, 0.08, 0.55, dir);
+  const rangeShare = bounceNum(g.regime_range_trek_share_max, 0.03, 0.12, 0.55, dir);
+  const rangeEff = bounceNum(g.regime_range_trek_eff_max, 0.03, 0.15, 0.7, dir);
   const pullback = bounceFrac(g.regime_pullback, 0.00005, 0.0003, 0.0012, dir);
   const expandAbs = bounceFrac(g.regime_expand_abs, 0.00008, 0.0003, 0.002, dir);
   const compressAbs = bounceFrac(g.regime_compress_abs, 0.000008, 0.00002, 0.00012, dir);
@@ -625,6 +628,32 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('regime_persist_stay', persistStay, `explore persist_stay ${persistStay}`),
         genomePatch('regime_persist_pullback', persistPull, `explore persist_pull ${persistPull}`),
         genomePatch('explore_step', nextStep + 12, `explore_step ${nextStep + 12}`),
+      ],
+    },
+    {
+      title: `Explore RANGE chop→${rangePersist}/${rangeShare}/${rangeEff} (step #${nextStep + 15})`,
+      rationale: 'Evolve positive RANGE gates — RANGE only when proven chop.',
+      task: `range_persist≤${rangePersist} trek_share≤${rangeShare} trek_eff≤${rangeEff}`,
+      genome_delta: {
+        regime_range_chop_persist_max: rangePersist,
+        regime_range_trek_share_max: rangeShare,
+        regime_range_trek_eff_max: rangeEff,
+        explore_step: nextStep + 15,
+        last_lesson: `Explore RANGE chop gates`,
+      },
+      patches: [
+        genomePatch(
+          'regime_range_chop_persist_max',
+          rangePersist,
+          `explore range_persist ${rangePersist}`
+        ),
+        genomePatch(
+          'regime_range_trek_share_max',
+          rangeShare,
+          `explore range_trek_share ${rangeShare}`
+        ),
+        genomePatch('regime_range_trek_eff_max', rangeEff, `explore range_trek_eff ${rangeEff}`),
+        genomePatch('explore_step', nextStep + 15, `explore_step ${nextStep + 15}`),
       ],
     },
     {

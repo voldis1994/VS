@@ -82,4 +82,26 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     expect(lo.lane).toBe('RANGE_FADE');
     expect(lo.regime).toBe('COMPRESSION');
   });
+
+  it('unclear HTF/story on UNKNOWN waits — not RANGE fade', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'UNKNOWN',
+      story: { allow: 'NONE', chapter: 'SEEDING' },
+      htf: { tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT' },
+    });
+    expect(p.lane).toBe('LIVE');
+    expect(p.regime).toBe('UNKNOWN');
+    expect(p.why_lv).toMatch(/WAIT|ne RANGE/i);
+  });
+
+  it('unclear story does not invent RANGE when live is TREND', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'TREND_DOWN',
+      story: { allow: 'BOTH', chapter: 'SEEDING' },
+      htf: { tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT' },
+    });
+    expect(p.lane).toBe('TREND_PULLBACK');
+    expect(p.regime).toBe('TREND_DOWN');
+    expect(p.lane).not.toBe('RANGE_FADE');
+  });
 });

@@ -138,6 +138,37 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(tight)).toBe('COMPRESSION');
   });
 
+  it('directional grind inside wide zone is TREND — not inRange default RANGE', () => {
+    // Steady down leg: must not fall through to RANGE just because close is still in 30m box
+    const prices: number[] = [];
+    let p = 100;
+    for (let i = 0; i < 40; i++) {
+      p -= 0.08;
+      prices.push(p);
+    }
+    expect(run(prices)).toBe('TREND_DOWN');
+  });
+
+  it('sticky TREND prior kept when tip in zone but not proven chop (no invent RANGE)', () => {
+    // After TREND_DOWN: mixed tip with enough persistence that chop gate fails → sticky prior
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      bars.push(bar(100, 100.8, 99.2, 100, i));
+    }
+    // persistence ≈ -0.5 (more than RANGE_CHOP_PERSIST_MAX 0.25) but below TREND stay
+    const seq = [-1, -1, -1, 1, -1, -1];
+    let px = 100;
+    for (const s of seq) {
+      const o = px;
+      const c = o + s * 0.03;
+      bars.push(bar(o, Math.max(o, c) + 0.02, Math.min(o, c) - 0.02, c, bars.length));
+      px = c;
+    }
+    const r = classifyRegime(bars, 'TREND_DOWN');
+    expect(r).not.toBe('RANGE');
+    expect(r).toBe('TREND_DOWN');
+  });
+
   it('BREAKOUT_UP when expanding close leaves the prior range', () => {
     const bars = padBars([
       bar(100, 100.3, 99.8, 100.1, 0),

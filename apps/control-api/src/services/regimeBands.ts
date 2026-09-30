@@ -35,6 +35,12 @@ export const COMPRESS_AVG_MULT = 0.35;
 export const EXPAND_AVG_MULT = 1.65;
 export const NEAR_ZONE_MID = 0.28;
 export const CLEAR_BREAK_FRAC = 0.25;
+/** Positive RANGE — |persistence| ≤ this (not inRange default) */
+export const RANGE_CHOP_PERSIST_MAX = 0.25;
+/** Positive RANGE — |zoneTrek|/width ≤ this */
+export const RANGE_CHOP_TREK_SHARE_MAX = 0.32;
+/** Positive RANGE — trek efficiency ≤ this (high = directional leg) */
+export const RANGE_CHOP_TREK_EFF_MAX = 0.45;
 
 export const PERSIST_ENTER = 0.5;
 export const PERSIST_STAY = 0.3;
@@ -57,6 +63,9 @@ export type ActiveRegimeBands = {
   EXPAND_AVG_MULT: number;
   NEAR_ZONE_MID: number;
   CLEAR_BREAK_FRAC: number;
+  RANGE_CHOP_PERSIST_MAX: number;
+  RANGE_CHOP_TREK_SHARE_MAX: number;
+  RANGE_CHOP_TREK_EFF_MAX: number;
   PERSIST_ENTER: number;
   PERSIST_STAY: number;
   PERSIST_PULLBACK: number;
@@ -84,6 +93,9 @@ export function getActiveRegimeBands(): ActiveRegimeBands {
     EXPAND_AVG_MULT: g.regime_expand_avg_mult,
     NEAR_ZONE_MID: g.regime_near_zone_mid,
     CLEAR_BREAK_FRAC: g.regime_clear_break_frac,
+    RANGE_CHOP_PERSIST_MAX: g.regime_range_chop_persist_max,
+    RANGE_CHOP_TREK_SHARE_MAX: g.regime_range_trek_share_max,
+    RANGE_CHOP_TREK_EFF_MAX: g.regime_range_trek_eff_max,
     PERSIST_ENTER: g.regime_persist_enter,
     PERSIST_STAY: g.regime_persist_stay,
     PERSIST_PULLBACK: g.regime_persist_pullback,
