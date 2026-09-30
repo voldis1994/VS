@@ -10,6 +10,8 @@ import {
   decideBestOutcomeExit,
   layeredHardInvDistance,
   hardInvStopDistance,
+  activeSoftStopDistance,
+  effectivePeakKeep,
 } from './exitManage.js';
 import {
   defaultDeskCalibration,
@@ -50,6 +52,23 @@ describe('Soft/Target 3-layer ladder', () => {
     expect(l1.dist).toBeLessThan(l3.dist);
     // Legacy hardInvStopDistance = L3 (broker / sizing)
     expect(hardInvStopDistance(entry, 'TREND_UP')).toBeCloseTo(l3.dist, 5);
+  });
+
+  it('activeSoftStopDistance = live Soft layer — Peak/MindBank Soft× not L3 CAP', () => {
+    const entry = 2000;
+    const early = activeSoftStopDistance(entry, 0.5, 'TREND_UP');
+    const late = activeSoftStopDistance(entry, 5, 'TREND_UP');
+    const l3Cap = hardInvStopDistance(entry, 'TREND_UP');
+    expect(early).toBeLessThan(l3Cap);
+    expect(late).toBeCloseTo(l3Cap, 5);
+    // Soft×1.35 of early Soft arms Peak before Soft L3 Soft×1.35
+    expect(early * 1.35).toBeLessThan(l3Cap * 1.35);
+  });
+
+  it('effectivePeakKeep — desk + genome share one Keep (MindBank = Peak trail)', () => {
+    expect(effectivePeakKeep(0.72, 0.75)).toBe(0.75);
+    expect(effectivePeakKeep(0.8, 0.75)).toBe(0.8);
+    expect(effectivePeakKeep(0, 0)).toBe(0.72);
   });
 
   it('Target L1/L2 bank when MFE never stretched to fat L3', () => {

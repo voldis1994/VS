@@ -13,12 +13,17 @@ import { fileURLToPath } from 'node:url';
 export type BrainGenome = {
   version: number;
   updated_at: string;
-  /** Peak Keep fraction (0.65–0.88) */
+  /** Peak Keep fraction (0.10–0.95 — sanitize range; Brain may explore full band) */
   peak_keep: number;
   /** Soft-sized MFE mult before Peak trail arms (factory 1.35 — Soft×1 was Soft ceiling) */
   peak_arm_soft_mult: number;
   /** Cap Peak trail floor vs Soft (factory 1.75 — blocks Gold-scaled ~9.6 starve) */
   peak_trail_soft_cap_mult: number;
+  /**
+   * Peak Soft× arm when 30m story fights open side (factory 1.0 — Soft×1 before Soft eats).
+   * Was hardcoded 1.0 in robotDesk — Brain may evolve.
+   */
+  story_fight_peak_arm_soft_mult: number;
   /** Soft+ giveback bank threshold (0.55–0.85) */
   soft_plus_giveback: number;
   /** Continue Soft+ bank needs MFE ≥ Soft × this (factory 1.5 runner) */
@@ -125,6 +130,7 @@ const DEFAULT_GENOME: BrainGenome = {
   peak_keep: 0.75,
   peak_arm_soft_mult: 1.35,
   peak_trail_soft_cap_mult: 1.75,
+  story_fight_peak_arm_soft_mult: 1.0,
   soft_plus_giveback: 0.75,
   soft_plus_runner_mult: 1.5,
   soft_plus_leg_mult: 1.35,
@@ -266,6 +272,17 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
           Number(p.peak_trail_soft_cap_mult ?? DEFAULT_GENOME.peak_trail_soft_cap_mult),
           1.2,
           2.5
+        ) * 100
+      ) / 100,
+    story_fight_peak_arm_soft_mult:
+      Math.round(
+        clamp(
+          Number(
+            p.story_fight_peak_arm_soft_mult ??
+              DEFAULT_GENOME.story_fight_peak_arm_soft_mult
+          ),
+          0.5,
+          1.35
         ) * 100
       ) / 100,
     soft_plus_giveback:
@@ -527,6 +544,7 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'peak_keep',
   'peak_arm_soft_mult',
   'peak_trail_soft_cap_mult',
+  'story_fight_peak_arm_soft_mult',
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',
@@ -613,6 +631,7 @@ export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'peak_keep',
   'peak_arm_soft_mult',
   'peak_trail_soft_cap_mult',
+  'story_fight_peak_arm_soft_mult',
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',

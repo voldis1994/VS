@@ -167,9 +167,9 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
 }
 
 function bankGreenVariants(g: BrainGenome, left: number, e: number): Variant[] {
-  const nextKeep = Math.min(0.85, Math.max(0.72, g.peak_keep + 0.03));
+  const nextKeep = Math.min(0.95, Math.max(0.1, g.peak_keep + 0.03));
   const nextGb = Math.min(0.82, Math.max(0.7, g.soft_plus_giveback + 0.03));
-  const nextKeep2 = Math.min(0.88, g.peak_keep + 0.05);
+  const nextKeep2 = Math.min(0.95, g.peak_keep + 0.05);
   const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.08).toFixed(2)));
   return [
     {
@@ -386,7 +386,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const step = 0.02 + (rejectedN % 3) * 0.01;
   const dir: 1 | -1 = rejectedN % 2 === 0 ? 1 : -1;
   const nextStep = (g.explore_step || 0) + 1;
-  const keep = bounceNum(g.peak_keep, step, 0.65, 0.88, dir);
+  const keep = bounceNum(g.peak_keep, step, 0.1, 0.95, dir);
   const gb = bounceNum(g.soft_plus_giveback, step, 0.55, 0.85, dir);
   const arm = bounceNum(g.peak_arm_soft_mult, step, 0.5, 2.0, dir === 1 ? -1 : 1);
   const pause = bounceInt(g.soft_same_side_pause_closes, 1, 1, 12, dir);
@@ -721,7 +721,7 @@ function forceExploreHypothesis(
   for (let i = 0; i < 64; i++) {
     const nextStep = baseStep + tried.size + i;
     const dir: 1 | -1 = nextStep % 2 === 0 ? 1 : -1;
-    const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, dir);
+    const keep = bounceNum(g.peak_keep, 0.01, 0.1, 0.95, dir);
     const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, dir === 1 ? -1 : 1);
     const rev = bounceFrac(g.regime_reversal, 0.0001, 0.0008, 0.004, dir);
     const mom = bounceInt(g.regime_mom_bars, 1, 4, 16, dir);

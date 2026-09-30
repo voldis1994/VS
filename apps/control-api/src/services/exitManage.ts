@@ -69,6 +69,21 @@ export const PEAK_MFE_RETENTION = 0.72;
 export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
+ * Single Peak Keep for Peak trail + MindBank Soft+ belt.
+ * Desk + genome share one Keep — never two Soft× dialects of "Keep".
+ */
+export function effectivePeakKeep(
+  deskRetention: number,
+  genomeKeep: number
+): number {
+  let peakRet = deskRetention > 0 ? deskRetention : PEAK_MFE_RETENTION;
+  if (genomeKeep > 0) {
+    peakRet = Math.max(peakRet, genomeKeep);
+  }
+  return peakRet;
+}
+
+/**
  * Gold-scale factory defaults (reference).
  * Live Soft/Peak/Target follow desk calibration — auto-cal may move below these
  * floors when Soft-heavy losses or ease intent require it. Abs floor only
@@ -359,13 +374,28 @@ export function scaleDeskAbs(refAbsPts: number, entry: number): number {
  * Soft HardInv distance in price pts.
  * Base CAP/floor at REF, then × regime exit profile (entry thesis).
  * Without MFE → Soft L3 CAP (broker safety / sizing). Live manage uses
- * {@link layeredHardInvDistance} so L1/L2 unlock with proven MFE.
+ * {@link layeredHardInvDistance} / {@link activeSoftStopDistance} so L1/L2
+ * unlock with proven MFE — Peak/MindBank Soft× must NOT use L3 blindly.
  */
 export function hardInvStopDistance(
   entry: number,
   regime?: string | null
 ): number {
   return layeredHardInvDistance(entry, /* mfe */ Number.POSITIVE_INFINITY, regime).dist;
+}
+
+/**
+ * Active Soft HardInv for live manage — Soft× Peak / MindBank Soft+ / story-fight.
+ * Soft reference tracks the Soft layer Soft HardInv would cut at NOW (by MFE),
+ * not day-one Soft L3 CAP. Soft×1 of L3 while Soft cuts at L1 = Soft eats Soft+.
+ */
+export function activeSoftStopDistance(
+  entry: number,
+  mfe: number,
+  regime?: string | null
+): number {
+  return layeredHardInvDistance(entry, Math.max(0, Number.isFinite(mfe) ? mfe : 0), regime)
+    .dist;
 }
 
 /**
@@ -485,13 +515,9 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const genome = getBrainGenome();
-  let peakRet =
-    cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
-  // Autonomous brain genome may tighten Keep % (cut sooner) — never loosen below desk
-  if (genome.peak_keep > 0) {
-    peakRet = Math.max(peakRet, genome.peak_keep);
-  }
-  // Regime profile may only tighten Keep % (cut sooner) — never undercut desk knob
+  // Single Peak Keep source: desk + genome (effectivePeakKeep) — MindBank must match
+  let peakRet = effectivePeakKeep(cal.peak_retention, genome.peak_keep);
+  // Regime profile may only tighten Keep % (cut sooner) — never undercut desk/genome
   if (profile.peak_retention != null && profile.peak_retention > 0) {
     peakRet = Math.max(peakRet, profile.peak_retention);
   }

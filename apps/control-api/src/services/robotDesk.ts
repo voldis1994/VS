@@ -36,9 +36,11 @@ import {
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
+  effectivePeakKeep,
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  activeSoftStopDistance,
   minProfitBank,
   peakMfeFromCandles,
   peakTrailMfeFloor,
@@ -2574,24 +2576,30 @@ function decideOpenManageExit(
   }
 
   // Soft+ MFE → arm Peak trail (genome peak_arm_soft_mult — Soft×1 was Soft ceiling).
-  // Exception: 30m story fights open side → Soft×1 arm so Soft+ winners are not Soft-eaten
-  // (Funds: Soft 2.6 · MFE 3.1 < Soft×1.35 · Peak 3.3 while stāsts tikai SELL).
-  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult (factory 1.0).
+  // Soft reference = ACTIVE Soft layer (by MFE), not Soft L3 CAP — Soft× of L3 while Soft
+  // cuts at L1 lets Soft eat Soft+ before Peak/MindBank fire.
+  // Exception: 30m story fights → genome story_fight_peak_arm_soft_mult (factory Soft×1).
+  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult.
   if (
     !s.peak_protect_armed &&
     s.open_side &&
     s.entry_price != null &&
     quote.mid != null
   ) {
-    const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+    const softSl = activeSoftStopDistance(
+      s.entry_price,
+      s.mfe,
+      s.entry_regime || s.regime
+    );
     const liveSnap = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
     const storyFight = storyFightsSide(liveSnap.story?.allow, s.open_side);
     const epActive = Boolean(s.pullback_episode_active);
+    const gArm = getBrainGenome();
     const armMult = epActive
       ? gEp.pullback_episode_peak_arm_soft_mult
       : storyFight
-        ? 1.0
-        : getBrainGenome().peak_arm_soft_mult;
+        ? gArm.story_fight_peak_arm_soft_mult
+        : gArm.peak_arm_soft_mult;
     const armNeed = softSl * Math.max(0.5, armMult);
     // Episode: also require min Soft× MFE so reverse alone with zero green does not arm
     const epMinOk =
@@ -2607,27 +2615,34 @@ function decideOpenManageExit(
         detail: epActive
           ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (pullback episode) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
           : storyFight
-            ? `PeakProtect ARMED · Soft×1.00 MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
-            : `PeakProtect ARMED · Soft×${getBrainGenome().peak_arm_soft_mult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
+            ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
+            : `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
       });
     }
   }
 
   // ★ Mega brain — 30m zone/story/pressure/feed + expectancy → HOLD/TRAIL/CUT/BANK
   const cal = getDeskCalibration(s.client_id);
-  const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+  const softSlNow = activeSoftStopDistance(
+    s.entry_price,
+    s.mfe,
+    s.entry_regime || s.regime
+  );
   const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
   const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak.
-  // Story fights / pullback episode → Soft×1 (or episode Soft×) floor so Peak Keep can bank Soft+.
+  // Story fights / pullback episode → genome Soft× floor so Peak Keep can bank Soft+.
   const storyFightsOpen = storyFightsSide(liveMarket.story?.allow, s.open_side!);
   const epFloor = Boolean(s.pullback_episode_active);
+  const gFloor = getBrainGenome();
   const peakFloorNow =
     epFloor || storyFightsOpen
       ? softSlNow *
         Math.max(
           0.5,
-          epFloor ? gEp.pullback_episode_peak_arm_soft_mult : 1.0
+          epFloor
+            ? gEp.pullback_episode_peak_arm_soft_mult
+            : gFloor.story_fight_peak_arm_soft_mult
         )
       : peakTrailMfeFloor(
           Math.max(
@@ -2719,15 +2734,16 @@ function decideOpenManageExit(
   }
 
   // Belt: Soft+ giveback — genome runner/leg mults (Brain may ease; Soft×1 was Soft ceiling).
-  // Story fights → Soft×1 Soft+ bank (Funds BUY vs stāsts SELL · MFE Soft×1.2 never hit Soft×1.35).
-  const keepCfg = cal.peak_retention > 0 ? cal.peak_retention : 0.75;
+  // Soft reference = active Soft layer (same Soft Soft HardInv / Peak Soft× use).
+  // Keep = effectivePeakKeep(desk, genome) — same Keep Peak trail uses.
+  const gBank = getBrainGenome();
+  const keepCfg = effectivePeakKeep(cal.peak_retention, gBank.peak_keep);
   const retNow =
     s.peak_retention != null
       ? s.peak_retention
       : s.mfe > 0
         ? Math.max(0, favNowBrain / s.mfe)
         : 1;
-  const gBank = getBrainGenome();
   const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
   const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
   const deepGiveback = retNow < keepCfg - 0.12;

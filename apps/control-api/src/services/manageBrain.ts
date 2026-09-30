@@ -280,10 +280,11 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   if (action === 'BANK') {
     soft_gate_override = true;
     force_peak_arm = true;
-    peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.8), 0.72, 0.88);
+    // Respect desk/genome Keep 0.10–0.95 — do NOT force 0.72–0.88 Mind hardcode
+    peak_retention_override = clamp(input.peak_retention_cfg, 0.1, 0.95);
   } else if (action === 'CUT') {
     force_peak_arm = true;
-    peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.78), 0.72, 0.88);
+    peak_retention_override = clamp(input.peak_retention_cfg, 0.1, 0.95);
     peak_mfe_floor_override = Math.max(soft, input.peak_mfe_floor * 0.85);
   } else if (action === 'HOLD') {
     soft_gate_override = false;
