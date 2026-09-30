@@ -156,12 +156,20 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     input.minute_policy === 'reverse' ||
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     (mkt != null && storyFightsSide(mkt.story?.allow, input.open_side));
-
-  if (
-    genome.mind_bank_on_turn &&
+  // Soft-sized mild giveback on CONTINUE banked every Gold winner at Soft £0.50
+  // (Funds "ceiling"). On continue: need runner MFE (Soft×1.5+) or Soft×1.35 + deep giveback.
+  // On reverse / story fight: Soft+ bank stays (protect plus before Soft eats it).
+  const runnerMfe = mfe >= soft * 1.5;
+  const softPlusLeg = mfe >= soft * 1.35;
+  const deepGiveback = retention < keep - 0.12;
+  const softPlusBankOk =
     greenSoft &&
-    (marketChanged || againstUs || givingBack)
-  ) {
+    (marketChanged ||
+      againstUs ||
+      (givingBack && runnerMfe) ||
+      (givingBack && softPlusLeg && deepGiveback));
+
+  if (genome.mind_bank_on_turn && softPlusBankOk) {
     decision = 'BANK';
     why = givingBack
       ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'

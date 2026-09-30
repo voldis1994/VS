@@ -7,6 +7,7 @@ import {
   favorableMove,
   hardInvStopDistance,
   peakMfeFromCandles,
+  peakTrailMfeFloor,
   safetyTakeProfitDistance,
   safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
@@ -90,7 +91,23 @@ describe('closed1mProfitPolicy', () => {
   });
 });
 
-describe('positive R:R Soft HardInv', () => {
+describe('peakTrailMfeFloor — Soft ceiling vs inflated Gold floor', () => {
+  it('arms above Soft×1.0 so Soft-sized winners are not Peak-banked at Soft £0.50', () => {
+    const soft = 3.3;
+    const floor = peakTrailMfeFloor(soft, soft, soft);
+    expect(floor).toBeCloseTo(soft * 1.35, 5);
+    expect(floor).toBeGreaterThan(soft);
+  });
+
+  it('caps inflated Gold peak_mfe_abs (~9.6) at Soft×1.75 so Peak Keep still fires', () => {
+    const soft = 3.44;
+    const inflated = 9.6;
+    const floor = peakTrailMfeFloor(inflated, soft, soft);
+    expect(floor).toBeCloseTo(soft * 1.75, 5);
+    expect(floor).toBeLessThan(inflated);
+  });
+});
+
   it('caps Soft HardInv near ~2.2 on Gold (not 4–6pt % runaway)', () => {
     const trend = hardInvStopDistance(2650, 'TREND_UP');
     const range = hardInvStopDistance(2650, 'RANGE');
@@ -396,9 +413,9 @@ describe('decideBestOutcomeExit', () => {
     expect(enough.reason).toMatch(/PeakProtection/);
   });
 
-  it('Gold Peak Keep 75% trails after Soft-sized MFE (not inflated peak_mfe_abs floor)', () => {
-    // Live bug: peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 → 8pt SELL never Peak-cut
-    // while UI showed Keep 75% and MFE ~8 / UPL ~4 (retention ~50%).
+  it('Gold Peak Keep 75% trails after Soft×1.35 MFE (not Soft×1.0 ceiling, not inflated 9.6 floor)', () => {
+    // Soft×1.0 banked every Gold winner at Soft £0.50; Soft×1.35 lets runners breathe.
+    // Inflated peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 must not starve Peak Keep.
     setDeskCalibration({
       ...defaultDeskCalibration(),
       peak_retention: 0.75,

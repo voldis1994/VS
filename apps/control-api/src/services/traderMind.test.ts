@@ -77,7 +77,37 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/^PRĀTS HOLD/);
   });
 
-  it('BANKs Soft+ giveback even on 1m continue — plus before Soft eats it', () => {
+  it('BANKs Soft+ giveback on continue only for runners (Soft×1.5) — not Soft ceiling', () => {
+    // Soft-sized mild giveback on CONTINUE used to bank every Gold winner at Soft £0.50
+    const ceiling = thinkLikeTrader(
+      base({
+        minute_policy: 'continue',
+        unrealized: 3.4,
+        mfe: 3.8, // only Soft×1.09 — not a runner
+        soft_sl: 3.5,
+        peak_retention: 0.55,
+        next_entry_side: 'BUY',
+      })
+    );
+    expect(ceiling.decision).not.toBe('BANK');
+    expect(['HOLD', 'TRAIL']).toContain(ceiling.decision);
+
+    // Runner Soft×1.5+ giving back on continue — still protect plus
+    const runner = thinkLikeTrader(
+      base({
+        minute_policy: 'continue',
+        unrealized: 4,
+        mfe: 6, // Soft×1.71
+        soft_sl: 3.5,
+        peak_retention: 0.55,
+        next_entry_side: 'BUY',
+      })
+    );
+    expect(runner.decision).toBe('BANK');
+    expect(runner.why).toMatch(/plus|bankoju|Soft\+/i);
+  });
+
+  it('BANKs Soft+ giveback even on 1m continue when runner Soft×1.5 — plus before Soft eats it', () => {
     // Was: continue → HOLD forever → Soft later closed the winner as a minus
     const t = thinkLikeTrader(
       base({

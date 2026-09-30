@@ -2628,8 +2628,8 @@ function decideOpenManageExit(
     return `${mindExit.tag} · ${brain.reason} · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)}`;
   }
 
-  // Belt: Soft+ green giving back under Keep % — take the PLUS even if mind said HOLD
-  // (1m continue used to HOLD forever → Soft ate the winner as a minus)
+  // Belt: Soft+ green giving back — only after Peak armed, runner MFE, or deep giveback.
+  // Soft-sized mild giveback alone was the Funds Soft ceiling (lot 0.15 · ±£0.50 every trade).
   const keepCfg = cal.peak_retention > 0 ? cal.peak_retention : 0.75;
   const retNow =
     s.peak_retention != null
@@ -2637,10 +2637,13 @@ function decideOpenManageExit(
       : s.mfe > 0
         ? Math.max(0, favNowBrain / s.mfe)
         : 1;
+  const runnerMfe = s.mfe >= softSlNow * 1.5;
+  const deepGiveback = retNow < keepCfg - 0.12;
   if (
     execNow >= softSlNow &&
-    s.mfe >= softSlNow &&
-    retNow < keepCfg
+    s.mfe >= softSlNow * 1.35 &&
+    retNow < keepCfg &&
+    (s.peak_protect_armed || runnerMfe || deepGiveback)
   ) {
     s.last_brain_action = 'BANK';
     return `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;

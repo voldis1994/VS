@@ -293,16 +293,20 @@ function peakShouldCut(
 }
 
 /**
- * Peak trail floor once Soft-sized MFE exists.
+ * Peak trail floor once a real Soft+ leg exists.
  *
- * Gold (~4300) scales peak_mfe_abs 4.45 → ~9.5 via scaleDeskAbs — then a real
- * 8pt winner never Peak-cuts while UI shows "Peak floor 4.45 / Keep 75%".
- * Soft-sized MFE is enough to trail retention; do not wait for a higher scaled floor.
+ * Soft×1.0 used to Peak-bank every Gold winner at Soft £0.50 (lot 0.15) —
+ * Funds looked like a Soft ceiling. Soft×1.35 lets runners breathe toward Target
+ * while still Peak-cutting before Soft eats a Soft+ giveback.
+ * Cap Soft×1.75 so inflated scaleDeskAbs peak_mfe_abs (~9–10 on Gold) cannot
+ * starve Peak Keep forever (live bug: peak_mfe_abs 4.45 → ~9.6).
  */
 export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: number): number {
   const softSized = Math.max(softSl, minBank);
-  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return softSized;
-  return Math.min(mfeFloor, softSized);
+  const lo = softSized * 1.35;
+  const hi = softSized * 1.75;
+  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return lo;
+  return Math.min(hi, Math.max(lo, mfeFloor));
 }
 
 /**
