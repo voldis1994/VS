@@ -108,6 +108,7 @@ describe('peakTrailMfeFloor — Soft ceiling vs inflated Gold floor', () => {
   });
 });
 
+describe('positive R:R Soft HardInv', () => {
   it('caps Soft HardInv near ~2.2 on Gold (not 4–6pt % runaway)', () => {
     const trend = hardInvStopDistance(2650, 'TREND_UP');
     const range = hardInvStopDistance(2650, 'RANGE');
