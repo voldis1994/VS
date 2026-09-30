@@ -162,7 +162,15 @@ export type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+  /**
+   * Canonical thesis for UI / manage / board (playbook).
+   * When flat: entry_watch thesis; when open: frozen entry_regime.
+   */
   regime: RegimeName;
+  /** Live classifyRegime sticky label (may differ from thesis) */
+  live_regime?: RegimeName;
+  /** Frozen playbook thesis at fill — exit/learn; null when flat */
+  entry_regime?: RegimeName | null;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -442,6 +450,13 @@ function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
   if (s.ticks.length > MAX_TICKS) s.ticks.length = MAX_TICKS;
 }
 
+/** One thesis for logs/UI: frozen fill thesis when open, else playbook from watch. */
+function sessionThesis(s: Internal): RegimeName {
+  if (s.open_side && s.entry_regime) return s.entry_regime;
+  if (s.entry_watch?.regime) return s.entry_watch.regime;
+  return s.regime;
+}
+
 function refreshEntryWatch(
   s: Internal,
   opts?: { cooldown_left_s?: number; status_override?: EntryWatch['status'] | null; last_reason?: string }
@@ -511,8 +526,13 @@ function publicSession(s: Internal): RobotSession {
     lastActivityAt = tickMs >= quoteMs ? lastTickAt : s.last_quote_at;
   } else if (Number.isFinite(tickMs)) lastActivityAt = lastTickAt;
   else if (Number.isFinite(quoteMs)) lastActivityAt = s.last_quote_at;
+  const thesis = sessionThesis(s);
   return {
     ...rest,
+    /** Public regime = thesis (one truth). Live classify stays on live_regime. */
+    regime: thesis,
+    live_regime: s.regime,
+    entry_regime: s.entry_regime,
     closed_at_ms: s.closed_at_ms,
     entry_watch: s.entry_watch,
     ohlc_10s: publicOhlc10s(s.ohlcState),
@@ -521,7 +541,7 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
-    decision_chain: buildDecisionChain(s),
+    decision_chain: buildDecisionChain(s, thesis),
     /** Desk health — UI: warn vs STUCK thresholds (see CYCLE_BUSY_* exports) */
     cycle_busy: s.cycle_busy,
     cycle_busy_age_ms: busyAge,
@@ -530,7 +550,10 @@ function publicSession(s: Internal): RobotSession {
   };
 }
 
-function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
+function buildDecisionChain(
+  s: Internal,
+  thesis: RegimeName
+): NonNullable<RobotSession['decision_chain']> {
   const ohlc = publicOhlc10s(s.ohlcState);
   const ohlcLine =
     ohlc.last_c != null
@@ -559,7 +582,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: s.regime || 'UNKNOWN',
+    regime: thesis || 'UNKNOWN',
     setup: w?.setup ?? null,
     action,
   };
@@ -1900,7 +1923,7 @@ async function exitTrade(
       market: s.epic,
       display_name: s.display_name,
       side: s.open_side,
-      trade_type: mapTradeType(s.open_side, null, s.regime),
+      trade_type: mapTradeType(s.open_side, null, s.entry_regime || s.regime),
       lot_size: s.lot_size,
       reason,
     });
@@ -2203,7 +2226,11 @@ async function enterTradeLocked(
   s.entry_zone = z
     ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
     : null;
-  s.entry_market = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
+  s.entry_market = buildMarketContext(
+    s.closedBars,
+    s.entry_regime || s.regime,
+    s.multiFeed
+  );
   s.structure_breach_since_ms = 0;
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
@@ -2296,7 +2323,7 @@ async function enterTradeLocked(
       market: s.epic,
       display_name: s.display_name,
       side: direction,
-      trade_type: mapTradeType(direction, setupType, s.regime),
+      trade_type: mapTradeType(direction, setupType, s.entry_regime || s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
     });
@@ -3030,7 +3057,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+    detail: `ONE TRADE · manage ${s.open_side} · ${sessionThesis(s)} · UPL ${
       s.unrealized != null ? s.unrealized.toFixed(5) : '—'
     } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
       s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -3403,7 +3430,7 @@ async function robotCycleLocked(s: Internal) {
       mid: quote.mid,
       detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · mode=${s.mode} · side=${
         s.open_side || 'FLAT'
-      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · regime=${s.regime}`,
+      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · regime=${sessionThesis(s)}`,
     });
     if (s.open_side) {
       refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
@@ -3419,7 +3446,7 @@ async function robotCycleLocked(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${s.regime}`,
+        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${sessionThesis(s)}`,
       });
       return null;
     }
@@ -3463,7 +3490,7 @@ async function robotCycleLocked(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${sessionThesis(s)} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -3584,7 +3611,7 @@ async function robotCycleLocked(s: Internal) {
         : bar;
     const ohlc = s.ohlc_10s;
     const ohlcLine = entryBar
-      ? `10s O=${entryBar.open.toFixed(2)} H=${entryBar.high.toFixed(2)} L=${entryBar.low.toFixed(2)} C=${entryBar.close.toFixed(2)} ${s.regime} · feeds ${
+      ? `10s O=${entryBar.open.toFixed(2)} H=${entryBar.high.toFixed(2)} L=${entryBar.low.toFixed(2)} C=${entryBar.close.toFixed(2)} ${sessionThesis(s)} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;

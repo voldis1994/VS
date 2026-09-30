@@ -1,4 +1,7 @@
-import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
+import {
+  _setTradeOpenAtStartForTests,
+  _setEntryFilterLevelForTests,
+} from './tradeOpenPolicy.js';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
@@ -10,6 +13,7 @@ import {
   minuteTrendBias,
   structureGate,
   structureStartEntry,
+  tipChaseBlocksEntry,
   zoneGeometry,
 } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -661,5 +665,86 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN/);
     void book;
     void trigger;
+  });
+});
+
+describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', () => {
+  afterEach(() => {
+    _setEntryFilterLevelForTests(null);
+    _setTradeOpenAtStartForTests(null);
+  });
+
+  it('tipChaseBlocksEntry: false RANGE + TREND_PULLBACK still blocks RALLY BUY at HI tip', () => {
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'RANGE',
+        lane: 'TREND_PULLBACK',
+        chapter: 'RALLY',
+        side: 'BUY',
+        zpos: 0.85,
+        barSign: 1,
+      })
+    ).toBe(true);
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'RANGE',
+        lane: 'TREND_PULLBACK',
+        chapter: 'SELLOFF',
+        side: 'SELL',
+        zpos: 0.12,
+        barSign: -1,
+      })
+    ).toBe(true);
+  });
+
+  it('tipChaseBlocksEntry: true live TREND_PULLBACK does not use chop tip knife', () => {
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'TREND_UP',
+        lane: 'TREND_PULLBACK',
+        chapter: 'RALLY',
+        side: 'BUY',
+        zpos: 0.85,
+        barSign: 1,
+      })
+    ).toBe(false);
+  });
+
+  it('tipChaseBlocksEntry: REVERSAL lane never stolen by RANGE tip rules', () => {
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'REVERSAL_CANDIDATE',
+        lane: 'REVERSAL',
+        chapter: 'RALLY',
+        side: 'BUY',
+        zpos: 0.85,
+        barSign: 1,
+      })
+    ).toBe(false);
+  });
+
+  it('L0 + live RANGE + HTF UP + RALLY at HI tip → no BUY arm (thesis tip safety)', () => {
+    _setEntryFilterLevelForTests(0);
+    _setTradeOpenAtStartForTests(true);
+    // Zone HI tip ~0.85 — last close near hi
+    const book = zoneBook({ lo: 4153.7, hi: 4159.48, lastClose: 4158.9, lastOpen: 4157.5 });
+    const entry = book[book.length - 1]!;
+    const z = zoneGeometry(book, entry)!;
+    expect(z.pos).toBeGreaterThanOrEqual(0.8);
+    const sig = decideEntryWithStructure({
+      bar: entry,
+      regime: 'RANGE',
+      closedBars: book,
+      capital_m1_dir: 'DOWN',
+      capital_tf5_dir: 'UP',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
+    });
+    // Promote would be PULLBACK_UPTREND; tip knife must still block BUY at HI RALLY
+    if (sig) {
+      expect(sig.direction).not.toBe('BUY');
+    } else {
+      expect(sig).toBeNull();
+    }
   });
 });

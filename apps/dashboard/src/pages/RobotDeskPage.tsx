@@ -70,6 +70,8 @@ type DataSender = {
 
 type EntryWatch = {
   regime: string;
+  live_regime?: string;
+  lane?: string;
   regime_enabled: boolean;
   enabled_regimes: string[];
   status: string;
@@ -130,7 +132,10 @@ type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+  /** Canonical entry thesis (playbook) — same as trade path */
   regime?: string;
+  live_regime?: string;
+  entry_regime?: string | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -631,7 +636,13 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
-                <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div className="robot-mini-regime mono">
+                  {(s.regime || 'UNKNOWN').toUpperCase()}
+                  {s.live_regime &&
+                  s.live_regime !== s.regime
+                    ? ` · live ${s.live_regime}`
+                    : ''}
+                </div>
                 {s.entry_watch && s.running && !s.open_side && (
                   <div className={`robot-mini-watch ${s.entry_watch.armed ? 'armed' : ''}`}>
                     <div className="mono">{s.entry_watch.status}</div>
@@ -773,6 +784,11 @@ export function RobotDeskPage() {
                         : ''}
                     </div>
                     <div>REGIME · {focused.entry_watch.regime}
+                      {focused.entry_watch.lane ? ` · ${focused.entry_watch.lane}` : ''}
+                      {focused.entry_watch.live_regime &&
+                      focused.entry_watch.live_regime !== focused.entry_watch.regime
+                        ? ` · live ${focused.entry_watch.live_regime}`
+                        : ''}
                       {focused.entry_watch.regime_enabled ? ' · ON' : ' · OFF kalibrācijā'}
                     </div>
                     <div className="robot-entry-watch-look">
