@@ -26,6 +26,11 @@ export type BrainGenome = {
   /** Soft+ leg for deep-giveback / desk belt (factory 1.35) */
   soft_plus_leg_mult: number;
   /**
+   * Soft L2/L3 unlock — MFE must reach soft_l{n} × this to widen HardInv room.
+   * Factory 1.0: earn Soft L1 MFE before L2 room, Soft L2 MFE before L3.
+   */
+  soft_layer_unlock_mult: number;
+  /**
    * Manage pullback-episode detect ON — adverse bounce/dip vs TREND thesis.
    * Soft× Peak arm drops so Soft HardInv does not eat small greens on V-bounce.
    */
@@ -123,6 +128,7 @@ const DEFAULT_GENOME: BrainGenome = {
   soft_plus_giveback: 0.75,
   soft_plus_runner_mult: 1.5,
   soft_plus_leg_mult: 1.35,
+  soft_layer_unlock_mult: 1.0,
   pullback_episode_enabled: true,
   pullback_episode_peak_arm_soft_mult: 1.0,
   pullback_episode_min_mfe_soft_mult: 0.5,
@@ -277,6 +283,14 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     soft_plus_leg_mult:
       Math.round(
         clamp(Number(p.soft_plus_leg_mult ?? DEFAULT_GENOME.soft_plus_leg_mult), 1.0, 2.0) * 100
+      ) / 100,
+    soft_layer_unlock_mult:
+      Math.round(
+        clamp(
+          Number(p.soft_layer_unlock_mult ?? DEFAULT_GENOME.soft_layer_unlock_mult),
+          0.5,
+          1.5
+        ) * 100
       ) / 100,
     pullback_episode_enabled: p.pullback_episode_enabled !== false,
     pullback_episode_peak_arm_soft_mult:
@@ -516,6 +530,7 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',
+  'soft_layer_unlock_mult',
   'pullback_episode_enabled',
   'pullback_episode_peak_arm_soft_mult',
   'pullback_episode_min_mfe_soft_mult',
@@ -601,6 +616,7 @@ export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',
+  'soft_layer_unlock_mult',
   'pullback_episode_enabled',
   'pullback_episode_peak_arm_soft_mult',
   'pullback_episode_min_mfe_soft_mult',
