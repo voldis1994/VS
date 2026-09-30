@@ -2,6 +2,7 @@
 import { getDeskCalibration } from './deskCalibration.js';
 import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import {
+  genomeTimedecayMinHoldMs,
   regimeExitProfile,
   structureInvalidationReason,
   type ExitZoneSnap,
@@ -283,6 +284,16 @@ function genomeTimedecayMinFavAbs(): number {
   return n > 0 ? n : TIMEDECAY_MIN_FAV_ABS;
 }
 
+function genomeMaxMfeGiveback(): number {
+  const n = getBrainGenome().max_mfe_giveback;
+  return n > 0 ? n : MAX_MFE_GIVEBACK;
+}
+
+function genomeHardinvAbsCap(): number {
+  const n = getBrainGenome().hardinv_abs_cap;
+  return n > 0 ? n : HARDINV_ABS_CAP;
+}
+
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
 }
@@ -480,7 +491,8 @@ export function layeredHardInvDistance(
   const pct = absEntry * cal.hardinv_pct;
   const floorAbs = Math.min(genomeHardinvAbsFloor(), abs);
   const floor = scaleDeskAbs(floorAbs, absEntry);
-  const cap = scaleDeskAbs(abs, absEntry);
+  const capAbs = Math.min(abs, genomeHardinvAbsCap());
+  const cap = scaleDeskAbs(capAbs, absEntry);
   // Rich instruments: pct may exceed L1 abs — still capped by active layer
   let sl = Math.min(Math.max(pct * (layer / 3), floor), cap);
   const profile = regimeExitProfile(regime);
@@ -595,6 +607,8 @@ export function decideBestOutcomeExit(
   const genome = getBrainGenome();
   // Single Peak Keep source: desk + genome (effectivePeakKeep) — MindBank must match
   let peakRet = effectivePeakKeep(cal.peak_retention, genome.peak_keep);
+  // Genome max giveback floor — never allow more than max_mfe_giveback fraction lost
+  peakRet = Math.max(peakRet, 1 - genomeMaxMfeGiveback());
   // Regime profile may only tighten Keep % (cut sooner) — never undercut desk/genome
   if (profile.peak_retention != null && profile.peak_retention > 0) {
     peakRet = Math.max(peakRet, profile.peak_retention);
@@ -776,7 +790,10 @@ export function decideBestOutcomeExit(
         minBank,
         scaleDeskAbs(cal.target_abs || genomeTargetAbsFloor(), absEntry) * 0.4
       ) * profile.timedecay_min_fav_mult;
-    const holdNeed = profile.timedecay_hold_ms;
+    const holdNeed =
+      profile.timedecay_hold_ms > 0
+        ? profile.timedecay_hold_ms
+        : genomeTimedecayMinHoldMs(genome);
     if (
       heldMs > holdNeed &&
       fav >= minFav &&

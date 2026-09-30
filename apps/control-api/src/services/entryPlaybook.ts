@@ -12,6 +12,7 @@
  * - REVERSAL     — violent flip playbook
  * - LIVE         — EXPANSION / FAILED stand as-is
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { normalizeRegime, type RegimeName } from './regimes.js';
 import type { MarketStory } from './marketStory.js';
 
@@ -165,19 +166,22 @@ export function pickEntryPlaybook(input: {
       why_lv: `RANGE · ${ch} tip · gaida reject (ne fade knife / ne fake TREND)`,
     };
   }
-  if (ch === 'RALLY' || ch === 'EXHAUST_HI' || allow === 'BUY') {
-    return {
-      lane: 'TREND_PULLBACK',
-      regime: 'TREND_UP',
-      why_lv: 'TREND smadzenes · stāsts BUY/RALLY',
-    };
-  }
-  if (ch === 'SELLOFF' || ch === 'EXHAUST_LO' || allow === 'SELL') {
-    return {
-      lane: 'TREND_PULLBACK',
-      regime: 'TREND_DOWN',
-      why_lv: 'TREND smadzenes · stāsts SELL/SELLOFF',
-    };
+  const unifyPromote = getBrainGenome().playbook_promote_vs_live_unify !== false;
+  if (unifyPromote || !CHOP.has(live)) {
+    if (ch === 'RALLY' || ch === 'EXHAUST_HI' || allow === 'BUY') {
+      return {
+        lane: 'TREND_PULLBACK',
+        regime: 'TREND_UP',
+        why_lv: 'TREND smadzenes · stāsts BUY/RALLY',
+      };
+    }
+    if (ch === 'SELLOFF' || ch === 'EXHAUST_LO' || allow === 'SELL') {
+      return {
+        lane: 'TREND_PULLBACK',
+        regime: 'TREND_DOWN',
+        why_lv: 'TREND smadzenes · stāsts SELL/SELLOFF',
+      };
+    }
   }
 
   if (

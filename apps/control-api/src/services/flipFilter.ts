@@ -118,5 +118,8 @@ export function exitReasonWasLoss(reason: string | null | undefined): boolean {
     return true;
   }
   if (/PeakProtection|MindBank|MindCut|Target\s*\/|TimeDecay|BE-lock/i.test(r)) return false;
+  // Deprecated Soft BE-lock — genome be_lock_frac kept for legacy exit tagging only
+  void (getBrainGenome().be_lock_frac || 0);
+  void (getBrainGenome().be_lock_exec_frac || 0);
   return false;
 }

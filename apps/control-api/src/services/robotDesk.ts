@@ -819,7 +819,7 @@ async function persistClosedTradeLedger(
     holdMs < 90_000 &&
     pnlPts != null &&
     Number.isFinite(pnlPts) &&
-    Math.abs(pnlPts) < soft * 0.5
+    Math.abs(pnlPts) < soft * (getBrainGenome().scratch_soft_mfe_frac || 0.5)
   ) {
     exitReason = `EXTERNAL · SCRATCH ${Math.round(holdMs / 1000)}s · |UPL| ${pnlPts.toFixed(
       2
@@ -1262,7 +1262,11 @@ function safetyStopLevel(
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const floorHi = g.safety_abs_floor_hi || 0.5;
+  const floorMid = g.safety_abs_floor_mid || 0.25;
+  const floorLo = g.safety_abs_floor_lo || 0.05;
+  const floor =
+    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
     Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
     Math.max(loosen, 1);

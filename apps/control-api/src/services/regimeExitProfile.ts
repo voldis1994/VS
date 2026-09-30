@@ -93,6 +93,12 @@ function familyProfile(
   };
 }
 
+/** Genome default TimeDecay min hold when a profile leaves hold ms unset. */
+export function genomeTimedecayMinHoldMs(g: BrainGenome = getBrainGenome()): number {
+  const n = g.timedecay_min_hold_ms;
+  return Number.isFinite(n) && n > 0 ? n : 12 * 60_000;
+}
+
 /** Build live exit profiles for all families from active BrainGenome. */
 export function exitProfilesFromGenome(
   g: BrainGenome = getBrainGenome()

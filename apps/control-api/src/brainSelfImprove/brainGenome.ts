@@ -606,6 +606,12 @@ export type BrainGenome = {
   entry_zone_hi_bin: number;
   /** WAIT reward boost mult on update */
   entry_learner_wait_boost: number;
+  /** EntryLearner additive BUY prior before softmax (#180) */
+  entry_learner_prior_buy: number;
+  /** EntryLearner additive SELL prior before softmax (#180) */
+  entry_learner_prior_sell: number;
+  /** EntryLearner additive WAIT prior before softmax (#180) */
+  entry_learner_prior_wait: number;
   /** Auto-cal SAFETY TP RR cap */
   auto_cal_max_safety_tp_rr: number;
   /** Auto-cal Target abs cap */
@@ -1003,6 +1009,9 @@ const DEFAULT_GENOME: BrainGenome = {
   entry_zone_lo_bin: 0.35,
   entry_zone_hi_bin: 0.65,
   entry_learner_wait_boost: 0.35,
+  entry_learner_prior_buy: 0,
+  entry_learner_prior_sell: 0,
+  entry_learner_prior_wait: 0.1,
   auto_cal_max_safety_tp_rr: 3,
   auto_cal_max_target_abs: 12,
   auto_cal_max_peak_mfe_abs: 8,
@@ -1545,6 +1554,9 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     entry_zone_lo_bin: round2(clamp(Number(p.entry_zone_lo_bin ?? d.entry_zone_lo_bin), 0.1, 0.5)),
     entry_zone_hi_bin: round2(clamp(Number(p.entry_zone_hi_bin ?? d.entry_zone_hi_bin), 0.5, 0.9)),
     entry_learner_wait_boost: round2(clamp(Number(p.entry_learner_wait_boost ?? d.entry_learner_wait_boost), 0.05, 1.0)),
+    entry_learner_prior_buy: round2(clamp(Number(p.entry_learner_prior_buy ?? d.entry_learner_prior_buy), -2, 2)),
+    entry_learner_prior_sell: round2(clamp(Number(p.entry_learner_prior_sell ?? d.entry_learner_prior_sell), -2, 2)),
+    entry_learner_prior_wait: round2(clamp(Number(p.entry_learner_prior_wait ?? d.entry_learner_prior_wait), -2, 2)),
     auto_cal_max_safety_tp_rr: round2(clamp(Number(p.auto_cal_max_safety_tp_rr ?? d.auto_cal_max_safety_tp_rr), 1.5, 5.0)),
     auto_cal_max_target_abs: round1(clamp(Number(p.auto_cal_max_target_abs ?? d.auto_cal_max_target_abs), 2, 50)),
     auto_cal_max_peak_mfe_abs: round1(clamp(Number(p.auto_cal_max_peak_mfe_abs ?? d.auto_cal_max_peak_mfe_abs), 1, 30)),
@@ -1992,6 +2004,9 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'entry_zone_lo_bin',
   'entry_zone_hi_bin',
   'entry_learner_wait_boost',
+  'entry_learner_prior_buy',
+  'entry_learner_prior_sell',
+  'entry_learner_prior_wait',
   'auto_cal_max_safety_tp_rr',
   'auto_cal_max_target_abs',
   'auto_cal_max_peak_mfe_abs',

@@ -753,13 +753,16 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const { extremeHi, extremeLo } = structKnobs();
   const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
   const tipLo = getBrainGenome().exhaust_pos_lo || 0.2;
+  const exhaustTipBlock = getBrainGenome().exhaust_tip_chase_block !== false;
   if (playbook.lane === 'RANGE_FADE') {
     if (ch === 'BREAK_UP' || ch === 'BREAK_DOWN') return null;
-    if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
-    if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
-    // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
-    if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
-    if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
+    if (exhaustTipBlock) {
+      if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
+      if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
+      // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
+      if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
+      if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
+    }
     // Chase with the tip: BUY into HI after rally / SELL into LO after selloff
     if (ch === 'RALLY' && side === 'BUY' && zpos != null && zpos >= tipHi) return null;
     if (ch === 'SELLOFF' && side === 'SELL' && zpos != null && zpos <= tipLo) return null;

@@ -75,6 +75,10 @@ const MAX_W = 4;
 const WAIT_BOOST = 0.35;
 const ZONE_LO_BIN = 0.35;
 const ZONE_HI_BIN = 0.65;
+/** Additive action priors before softmax (#180 — genome entry_learner_prior_*). */
+const PRIOR_BUY = 0;
+const PRIOR_SELL = 0;
+const PRIOR_WAIT = 0.1;
 
 function learnerHyper() {
   const g = getBrainGenome();
@@ -87,6 +91,9 @@ function learnerHyper() {
     waitBoost: g.entry_learner_wait_boost || WAIT_BOOST,
     zoneLo: g.entry_zone_lo_bin || ZONE_LO_BIN,
     zoneHi: g.entry_zone_hi_bin || ZONE_HI_BIN,
+    priorBuy: g.entry_learner_prior_buy ?? PRIOR_BUY,
+    priorSell: g.entry_learner_prior_sell ?? PRIOR_SELL,
+    priorWait: g.entry_learner_prior_wait ?? PRIOR_WAIT,
   };
 }
 
@@ -306,7 +313,12 @@ function softmaxScores(
   weights: ActionWeights,
   features: EntryFeatures
 ): Record<EntryLearnerAction, number> {
-  const { temp } = learnerHyper();
+  const { temp, priorBuy, priorSell, priorWait } = learnerHyper();
+  const priors: Record<EntryLearnerAction, number> = {
+    BUY: priorBuy,
+    SELL: priorSell,
+    WAIT: priorWait,
+  };
   const logits: Record<EntryLearnerAction, number> = {
     BUY: 0,
     SELL: 0,
@@ -316,7 +328,7 @@ function softmaxScores(
     let s = 0;
     const w = weights[a];
     for (let i = 0; i < features.length; i++) s += w[i]! * features[i]!;
-    logits[a] = s / temp;
+    logits[a] = (s + priors[a]) / temp;
   }
   const maxL = Math.max(logits.BUY, logits.SELL, logits.WAIT);
   const exps: Record<EntryLearnerAction, number> = { BUY: 0, SELL: 0, WAIT: 0 };

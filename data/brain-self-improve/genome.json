@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-30T20:09:01.571Z",
+  "updated_at": "2026-09-30T20:19:53.583Z",
   "peak_keep": 0.75,
   "peak_arm_soft_mult": 1.35,
   "peak_trail_soft_cap_mult": 1.75,
@@ -332,6 +332,9 @@
   "entry_zone_lo_bin": 0.35,
   "entry_zone_hi_bin": 0.65,
   "entry_learner_wait_boost": 0.35,
+  "entry_learner_prior_buy": 0,
+  "entry_learner_prior_sell": 0,
+  "entry_learner_prior_wait": 0.1,
   "auto_cal_max_safety_tp_rr": 3,
   "auto_cal_max_target_abs": 12,
   "auto_cal_max_peak_mfe_abs": 8,

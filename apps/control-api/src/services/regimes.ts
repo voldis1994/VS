@@ -238,8 +238,10 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 
   // Thin book ≠ 30m zone — avoid false RANGE/BREAKOUT on a few SECOND/MINUTE seeds
   if (bars.length < minBarsForZone) {
-    if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
-    return 'UNKNOWN';
+    if (genome.sticky_prior_enabled !== false) {
+      if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+    }
+    return genome.transition_detect_enabled ? 'TRANSITION' : 'UNKNOWN';
   }
 
   const {
@@ -417,7 +419,13 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   )
     return 'TREND_DOWN';
 
-  if (expanding) return 'EXPANSION';
+  if (expanding) {
+    if (!genome.expansion_before_trend) {
+      if (trendingUp) return 'TREND_UP';
+      if (trendingDown) return 'TREND_DOWN';
+    }
+    return 'EXPANSION';
+  }
 
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
@@ -505,8 +513,10 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (inRange && quietMid && chopTrek && previous === 'UNKNOWN') return 'RANGE';
 
   // Sticky prior instead of inventing RANGE / dead TRANSITION
-  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
-  return 'UNKNOWN';
+  if (genome.sticky_prior_enabled !== false) {
+    if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+  }
+  return genome.transition_detect_enabled ? 'TRANSITION' : 'UNKNOWN';
 }
 
 /**
