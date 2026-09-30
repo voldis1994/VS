@@ -6,17 +6,20 @@ import {
   setDeskCalibration,
   _resetDeskCalibrationCacheForTests,
 } from './deskCalibration.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 
 describe('deskCalibration', () => {
   beforeEach(() => {
     _resetDeskCalibrationCacheForTests();
+    _resetBrainGenomeForTests();
     setDeskCalibration(defaultDeskCalibration());
   });
 
-  it('isolates calibration per client_id', () => {
+  it('isolates calibration per client_id on disk; genome SoT shares Soft/Target', () => {
     setDeskCalibration({ target_abs: 5 }, 1);
     setDeskCalibration({ target_abs: 9 }, 2);
-    expect(getDeskCalibration(1).target_abs).toBe(5);
+    // Genome wins Soft/Peak/Target — last synced write is SoT for all clients
+    expect(getDeskCalibration(1).target_abs).toBe(9);
     expect(getDeskCalibration(2).target_abs).toBe(9);
   });
 
@@ -61,5 +64,14 @@ describe('deskCalibration', () => {
 
   it('defaults soft_off_regimes empty', () => {
     expect(getDeskCalibration().soft_off_regimes).toEqual([]);
+  });
+
+  it('genome Soft L1 overrides desk file on getDeskCalibration', () => {
+    _resetBrainGenomeForTests({ soft_l1_abs: 0.9, soft_l2_abs: 1.4, soft_l3_abs: 2.0 });
+    _resetDeskCalibrationCacheForTests();
+    const c = getDeskCalibration();
+    expect(c.soft_l1_abs).toBe(0.9);
+    expect(c.soft_l2_abs).toBe(1.4);
+    expect(c.hardinv_abs).toBe(2.0);
   });
 });

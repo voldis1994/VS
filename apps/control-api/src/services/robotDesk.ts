@@ -1226,6 +1226,7 @@ async function waitCycleIdle(s: Internal, maxMs = 30_000): Promise<void> {
  * SAFETY SL as a true cushion — NOT dealing-rules minimum.
  * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
  * so noise does not stop every trade (slightly tighter than 0.25%).
+ * Live cushion / ×broker / ×spread from BrainGenome (factory = prior hardcode).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1252,14 +1253,19 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
+  const g = getBrainGenome();
+  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
+  const spreadMult = Math.max(1, g.safety_sl_spread_mult || 8);
+  const pctCushion = abs * cushionFrac;
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
   const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
+    Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -1275,12 +1281,15 @@ function safetyStopDistancePts(
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
-  let fromPct = minPts * 2.5;
+  const g = getBrainGenome();
+  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
+  const pct = abs * cushionFrac;
+  let fromPct = minPts * brokerMult;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * brokerMult, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
