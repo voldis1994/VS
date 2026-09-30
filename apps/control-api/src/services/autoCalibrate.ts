@@ -706,6 +706,97 @@ function proposeGenomePatch(
   const changes: string[] = [];
   if (!g) return { patch, changes };
 
+  const fracToBp = (frac: number) =>
+    Math.round((Math.max(0, Number(frac) || 0) / 1e-4) * 10) / 10;
+
+  // PRIMARY: desk Soft/Peak/Target/pct/SAFETY/regimes → genome SoT (not a parallel brain)
+  const syncNum = (
+    key: keyof BrainGenome,
+    deskVal: number,
+    label: string,
+    why: string
+  ) => {
+    const cur = Number(g[key]);
+    if (!Number.isFinite(deskVal) || !Number.isFinite(cur)) return;
+    if (Math.abs(cur - deskVal) < 1e-9) return;
+    (patch as Record<string, unknown>)[key] = deskVal;
+    changes.push(
+      autotuneLog(`genome ${label} ${cur}→${deskVal}`, why)
+    );
+  };
+
+  syncNum('soft_l1_abs', roundAbs(next.soft_l1_abs), 'soft_l1_abs', 'desk Soft L1 → genome SoT');
+  syncNum('soft_l2_abs', roundAbs(next.soft_l2_abs), 'soft_l2_abs', 'desk Soft L2 → genome SoT');
+  syncNum('soft_l3_abs', roundAbs(next.soft_l3_abs), 'soft_l3_abs', 'desk Soft L3 CAP → genome SoT');
+  syncNum('peak_mfe_abs', roundAbs(next.peak_mfe_abs), 'peak_mfe_abs', 'desk Peak MFE → genome SoT');
+  syncNum(
+    'peak_retention',
+    roundRet(next.peak_retention),
+    'peak_retention',
+    'desk Peak retention → genome SoT'
+  );
+  syncNum(
+    'peak_min_giveback_abs',
+    roundAbs(next.peak_min_giveback_abs),
+    'peak_min_giveback_abs',
+    'desk Peak giveback → genome SoT'
+  );
+  syncNum('target_l1_abs', roundAbs(next.target_l1_abs), 'target_l1_abs', 'desk Target L1 → genome SoT');
+  syncNum('target_l2_abs', roundAbs(next.target_l2_abs), 'target_l2_abs', 'desk Target L2 → genome SoT');
+  syncNum('target_l3_abs', roundAbs(next.target_l3_abs), 'target_l3_abs', 'desk Target L3 → genome SoT');
+  syncNum('safety_tp_rr', roundRr(next.safety_tp_rr), 'safety_tp_rr', 'desk SAFETY RR → genome SoT');
+  syncNum(
+    'hardinv_pct_bp',
+    fracToBp(next.hardinv_pct),
+    'hardinv_pct_bp',
+    'desk Soft pct → genome bp SoT'
+  );
+  syncNum(
+    'peak_mfe_pct_bp',
+    fracToBp(next.peak_mfe_pct),
+    'peak_mfe_pct_bp',
+    'desk Peak pct → genome bp SoT'
+  );
+  syncNum(
+    'target_pct_bp',
+    fracToBp(next.target_pct),
+    'target_pct_bp',
+    'desk Target pct → genome bp SoT'
+  );
+  if (next.entry_filter_level !== g.entry_filter_level) {
+    patch.entry_filter_level = next.entry_filter_level;
+    changes.push(
+      autotuneLog(
+        `genome entry_filter_level ${g.entry_filter_level}→${next.entry_filter_level}`,
+        'desk entry filter → genome SoT'
+      )
+    );
+  }
+  {
+    const ra = [...g.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+    const rb = [...next.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+    if (ra.join(',') !== rb.join(',')) {
+      patch.enabled_regimes = [...next.enabled_regimes];
+      changes.push(
+        autotuneLog(
+          `genome enabled_regimes n=${ra.length}→${rb.length}`,
+          'desk regimes ON → genome SoT'
+        )
+      );
+    }
+    const sa = [...(g.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
+    const sb = [...(next.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
+    if (sa.join(',') !== sb.join(',')) {
+      patch.soft_off_regimes = [...(next.soft_off_regimes || [])];
+      changes.push(
+        autotuneLog(
+          `genome soft_off_regimes n=${sa.length}→${sb.length}`,
+          'desk Soft OFF → genome SoT'
+        )
+      );
+    }
+  }
+
   // Sync Peak Keep with desk retention (genome follows 10%…95%)
   const keepTarget = roundRet(
     Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(AUTO_CAL_MIN_PEAK_RETENTION, next.peak_retention))
