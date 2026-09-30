@@ -11,10 +11,13 @@ import {
   styleFromClassification,
   currentRegime,
   MIN_BARS_FOR_ZONE,
+  getZoneBars,
+  getMinBarsForZone,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { formatTradeLabel } from './tradePresentation.js';
+import { _resetBrainGenomeForTests, getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 function bar(open: number, high: number, low: number, close: number, i = 0): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
@@ -321,6 +324,25 @@ describe('classifyRegime from 10s OHLC', () => {
 });
 
 describe('stabilizeRegime — no flicker inside 1m', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
+  it('factory zone/trek residual knobs match prior hardcodes', () => {
+    const g = getBrainGenome();
+    expect(getZoneBars()).toBe(180);
+    expect(getMinBarsForZone()).toBe(90);
+    expect(g.switch_gap_bars).toBe(2);
+    expect(g.trek_full_enter_mult).toBe(4);
+    expect(g.trek_share_min).toBe(0.35);
+    expect(g.trek_eff_min).toBe(0.4);
+    expect(g.trek_recent_enter_mult).toBe(2);
+    expect(g.trek_recent_share_min).toBe(0.25);
+    expect(g.soft_move_trek_pullback_shortcut).toBe(true);
+    expect(g.chop_to_trend_confirm_bars).toBe(1);
+    expect(g.local_breakout_frac_floor).toBe(0.12);
+  });
+
   it('holds TREND_UP through noisy 10s bars until dwell + confirm', () => {
     const book = {
       current: 'TREND_UP' as RegimeName,

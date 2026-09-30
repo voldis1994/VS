@@ -128,7 +128,7 @@ describe('manageBrain + market context', () => {
 });
 
 describe('autoCalibrate human outcome review', () => {
-  it('writes PRĀTS/MĀCĪBA and keeps filters OPEN — Peak protect-sooner on knife Soft', () => {
+  it('writes PRĀTS/MĀCĪBA and tightens filters on knife Soft (FLIP/structure free)', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
       {
@@ -217,9 +217,10 @@ describe('autoCalibrate human outcome review', () => {
         },
       },
     ]);
-    expect(r.next.entry_filter_level).toBe(0);
+    expect(r.next.entry_filter_level).toBeGreaterThanOrEqual(1);
     expect(r.changes.some((c) => c.includes('PRĀTS'))).toBe(true);
     expect(r.changes.some((c) => c.includes('MĀCĪBA'))).toBe(true);
+    expect(r.changes.some((c) => c.includes('entry_filter_level'))).toBe(true);
     expect(r.changes.some((c) => /adverse story|DIVERGENT losses/.test(c))).toBe(false);
   });
 });

@@ -90,7 +90,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     const bars = [...quiet, flip];
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
     setBrainGenome({ regime_reversal: 0.0035 });
-    expect(getBrainGenome().regime_reversal).toBeCloseTo(0.0035, 6);
+    expect(getBrainGenome().regime_reversal).toBeCloseTo(35, 5);
     expect(classifyRegime(bars, 'TREND_UP')).not.toBe('REVERSAL_CANDIDATE');
   });
 
@@ -122,7 +122,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
       )
     );
     reloadBrainGenome();
-    expect(getBrainGenome().regime_reversal).toBeCloseTo(0.0016, 6);
+    expect(getBrainGenome().regime_reversal).toBeCloseTo(16, 5);
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
   });
 
@@ -251,7 +251,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
       { open: 2650.6, high: 2650.7, low: 2650.4, close: 2650.5 }, // forming
     ];
     _resetBrainGenomeForTests();
-    expect(getBrainGenome().mtf_trek_flat_frac).toBeCloseTo(0.0004, 6);
+    expect(getBrainGenome().mtf_trek_flat_frac).toBeCloseTo(4, 5);
     expect(capitalTfTrekDir(candles, 4)).toBe('UP');
     expect(trekBiasFromCandles(candles, 4)).toBe('UP');
   });
@@ -367,7 +367,8 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     }
   });
 
-  it('robotDesk live Capital higher TF path consumes capitalTfTrekDir (not tip capitalCandleDir)', () => {
+  it('robotDesk live Capital higher TF path uses tip candle via capitalHigherTfDir (not trek average)', () => {
+    // Product: Capital chart last closed candle open vs close — trek average lied (5m↑ while tip red).
     const src = fs.readFileSync(
       path.join(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -378,12 +379,15 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf5_candles\)/);
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf15_candles\)/);
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf30_candles\)/);
-    expect(src).toMatch(/capitalTfTrekDir/);
+    expect(src).toMatch(/function capitalHigherTfDir/);
+    expect(src).toMatch(/Do NOT invent direction from a 4-candle/);
     expect(src).not.toMatch(/capital_tf5_dir:\s*capitalCandleDir/);
     expect(src).not.toMatch(/capital_tf15_dir:\s*capitalCandleDir/);
     expect(src).not.toMatch(/capital_tf30_dir:\s*capitalCandleDir/);
     // 1m trigger stays tip-candle (not trek)
     expect(src).toMatch(/capital_m1_dir:\s*capitalCandleDir/);
+    // Trek helper remains for intel/eval probes — not the live desk path
+    expect(src).not.toMatch(/capitalTfTrekDir\(/);
   });
 
   it('raising regime_move changes FAILED_BREAKOUT_UP classify', () => {
@@ -401,7 +405,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
 
     setBrainGenome({ regime_move: 0.0002 });
     reloadBrainGenome();
-    expect(getBrainGenome().regime_move).toBeCloseTo(0.0002, 6);
+    expect(getBrainGenome().regime_move).toBeCloseTo(2, 5);
     expect(classifyRegime(bars, 'BREAKOUT_UP')).not.toBe('FAILED_BREAKOUT_UP');
   });
 
@@ -478,7 +482,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
 
     setBrainGenome({ regime_move_range: 0.0002, regime_trend_stay: 0.00022 });
     reloadBrainGenome();
-    expect(getBrainGenome().regime_move_range).toBeCloseTo(0.0002, 6);
+    expect(getBrainGenome().regime_move_range).toBeCloseTo(2, 5);
     expect(isMoving10s(quietish)).toBe(false);
   });
 

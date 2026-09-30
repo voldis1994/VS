@@ -36,9 +36,11 @@ import {
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
+  effectivePeakKeep,
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
+  activeSoftStopDistance,
   minProfitBank,
   peakMfeFromCandles,
   peakTrailMfeFloor,
@@ -817,7 +819,7 @@ async function persistClosedTradeLedger(
     holdMs < 90_000 &&
     pnlPts != null &&
     Number.isFinite(pnlPts) &&
-    Math.abs(pnlPts) < soft * 0.5
+    Math.abs(pnlPts) < soft * (getBrainGenome().scratch_soft_mfe_frac || 0.5)
   ) {
     exitReason = `EXTERNAL · SCRATCH ${Math.round(holdMs / 1000)}s · |UPL| ${pnlPts.toFixed(
       2
@@ -1224,6 +1226,7 @@ async function waitCycleIdle(s: Internal, maxMs = 30_000): Promise<void> {
  * SAFETY SL as a true cushion — NOT dealing-rules minimum.
  * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
  * so noise does not stop every trade (slightly tighter than 0.25%).
+ * Live cushion / ×broker / ×spread from BrainGenome (factory = prior hardcode).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1250,14 +1253,23 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
+  const g = getBrainGenome();
+  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
+  const spreadMult = Math.max(1, g.safety_sl_spread_mult || 8);
+  const pctCushion = abs * cushionFrac;
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const floorHi = g.safety_abs_floor_hi || 0.5;
+  const floorMid = g.safety_abs_floor_mid || 0.25;
+  const floorLo = g.safety_abs_floor_lo || 0.05;
+  const floor =
+    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
+    Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -1273,12 +1285,15 @@ function safetyStopDistancePts(
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
-  let fromPct = minPts * 2.5;
+  const g = getBrainGenome();
+  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
+  const pct = abs * cushionFrac;
+  let fromPct = minPts * brokerMult;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * brokerMult, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -2574,24 +2589,30 @@ function decideOpenManageExit(
   }
 
   // Soft+ MFE → arm Peak trail (genome peak_arm_soft_mult — Soft×1 was Soft ceiling).
-  // Exception: 30m story fights open side → Soft×1 arm so Soft+ winners are not Soft-eaten
-  // (Funds: Soft 2.6 · MFE 3.1 < Soft×1.35 · Peak 3.3 while stāsts tikai SELL).
-  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult (factory 1.0).
+  // Soft reference = ACTIVE Soft layer (by MFE), not Soft L3 CAP — Soft× of L3 while Soft
+  // cuts at L1 lets Soft eat Soft+ before Peak/MindBank fire.
+  // Exception: 30m story fights → genome story_fight_peak_arm_soft_mult (factory Soft×1).
+  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult.
   if (
     !s.peak_protect_armed &&
     s.open_side &&
     s.entry_price != null &&
     quote.mid != null
   ) {
-    const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+    const softSl = activeSoftStopDistance(
+      s.entry_price,
+      s.mfe,
+      s.entry_regime || s.regime
+    );
     const liveSnap = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
     const storyFight = storyFightsSide(liveSnap.story?.allow, s.open_side);
     const epActive = Boolean(s.pullback_episode_active);
+    const gArm = getBrainGenome();
     const armMult = epActive
       ? gEp.pullback_episode_peak_arm_soft_mult
       : storyFight
-        ? 1.0
-        : getBrainGenome().peak_arm_soft_mult;
+        ? gArm.story_fight_peak_arm_soft_mult
+        : gArm.peak_arm_soft_mult;
     const armNeed = softSl * Math.max(0.5, armMult);
     // Episode: also require min Soft× MFE so reverse alone with zero green does not arm
     const epMinOk =
@@ -2607,27 +2628,34 @@ function decideOpenManageExit(
         detail: epActive
           ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (pullback episode) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
           : storyFight
-            ? `PeakProtect ARMED · Soft×1.00 MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
-            : `PeakProtect ARMED · Soft×${getBrainGenome().peak_arm_soft_mult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
+            ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
+            : `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
       });
     }
   }
 
   // ★ Mega brain — 30m zone/story/pressure/feed + expectancy → HOLD/TRAIL/CUT/BANK
   const cal = getDeskCalibration(s.client_id);
-  const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+  const softSlNow = activeSoftStopDistance(
+    s.entry_price,
+    s.mfe,
+    s.entry_regime || s.regime
+  );
   const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
   const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak.
-  // Story fights / pullback episode → Soft×1 (or episode Soft×) floor so Peak Keep can bank Soft+.
+  // Story fights / pullback episode → genome Soft× floor so Peak Keep can bank Soft+.
   const storyFightsOpen = storyFightsSide(liveMarket.story?.allow, s.open_side!);
   const epFloor = Boolean(s.pullback_episode_active);
+  const gFloor = getBrainGenome();
   const peakFloorNow =
     epFloor || storyFightsOpen
       ? softSlNow *
         Math.max(
           0.5,
-          epFloor ? gEp.pullback_episode_peak_arm_soft_mult : 1.0
+          epFloor
+            ? gEp.pullback_episode_peak_arm_soft_mult
+            : gFloor.story_fight_peak_arm_soft_mult
         )
       : peakTrailMfeFloor(
           Math.max(
@@ -2719,15 +2747,16 @@ function decideOpenManageExit(
   }
 
   // Belt: Soft+ giveback — genome runner/leg mults (Brain may ease; Soft×1 was Soft ceiling).
-  // Story fights → Soft×1 Soft+ bank (Funds BUY vs stāsts SELL · MFE Soft×1.2 never hit Soft×1.35).
-  const keepCfg = cal.peak_retention > 0 ? cal.peak_retention : 0.75;
+  // Soft reference = active Soft layer (same Soft Soft HardInv / Peak Soft× use).
+  // Keep = effectivePeakKeep(desk, genome) — same Keep Peak trail uses.
+  const gBank = getBrainGenome();
+  const keepCfg = effectivePeakKeep(cal.peak_retention, gBank.peak_keep);
   const retNow =
     s.peak_retention != null
       ? s.peak_retention
       : s.mfe > 0
         ? Math.max(0, favNowBrain / s.mfe)
         : 1;
-  const gBank = getBrainGenome();
   const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
   const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
   const deepGiveback = retNow < keepCfg - 0.12;

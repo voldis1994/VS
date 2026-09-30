@@ -55,6 +55,44 @@ export const AUTO_CAL_MIN_PEAK_MFE_PCT = 0.0002;
 export const AUTO_CAL_MAX_PEAK_MFE_PCT = 0.006;
 /** After this many consecutive "raise winners" cycles with still-bad E → pull back. */
 export const AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK = 2;
+/** Soft CAP tighten/ease step (abs) — genome soft_tighten_step factory fallback. */
+export const SOFT_TIGHTEN_STEP = 0.3;
+/** Peak MFE ease step (abs) on pullback. */
+export const PEAK_EASE_ABS_STEP = 0.5;
+/** Peak retention ease/tighten step on pullback. */
+export const PEAK_EASE_RETENTION_STEP = 0.05;
+/** Peak min-giveback ease step on pullback. */
+export const PEAK_EASE_GIVEBACK_STEP = 0.15;
+/** SAFETY TP RR raise step when letting winners run. */
+export const SAFETY_TP_RR_STEP = 0.15;
+/** SAFETY TP RR pullback step when targets overreached. */
+export const SAFETY_TP_RR_PULLBACK_STEP = 0.25;
+/** Soft-sized loss count before Soft-heavy path arms. */
+export const SOFT_SIZED_LOSS_DETECT_MIN = 2;
+
+/** Live auto-cal bounds from BrainGenome (factory consts as fallbacks). */
+function calBounds() {
+  const g = getBrainGenome();
+  return {
+    maxSafetyRr: g.auto_cal_max_safety_tp_rr || AUTO_CAL_MAX_SAFETY_TP_RR,
+    maxTargetAbs: g.auto_cal_max_target_abs || AUTO_CAL_MAX_TARGET_ABS,
+    maxPeakMfeAbs: g.auto_cal_max_peak_mfe_abs || AUTO_CAL_MAX_PEAK_MFE_ABS,
+    maxPeakRetention: g.auto_cal_max_peak_retention || AUTO_CAL_MAX_PEAK_RETENTION,
+    minPeakRetention: g.auto_cal_min_peak_retention || AUTO_CAL_MIN_PEAK_RETENTION,
+    minHardinvAbs: g.auto_cal_min_hardinv_abs || AUTO_CAL_MIN_HARDINV_ABS,
+    maxHardinvAbs: g.auto_cal_max_hardinv_abs || AUTO_CAL_MAX_HARDINV_ABS,
+    softTightenStep: g.soft_tighten_step || SOFT_TIGHTEN_STEP,
+    peakEaseAbsStep: g.peak_ease_abs_step || PEAK_EASE_ABS_STEP,
+    peakEaseRetentionStep: g.peak_ease_retention_step || PEAK_EASE_RETENTION_STEP,
+    peakEaseGivebackStep: g.peak_ease_giveback_step || PEAK_EASE_GIVEBACK_STEP,
+    safetyTpRrStep: g.safety_tp_rr_step || SAFETY_TP_RR_STEP,
+    safetyTpRrPullbackStep: g.safety_tp_rr_pullback_step || SAFETY_TP_RR_PULLBACK_STEP,
+    minEnabledRegimes: g.min_enabled_regimes || MIN_ENABLED_REGIMES,
+    raiseStreakBeforePullback:
+      g.raise_streak_before_pullback || AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK,
+    softSizedLossDetectMin: g.soft_sized_loss_detect_min || SOFT_SIZED_LOSS_DETECT_MIN,
+  };
+}
 
 /**
  * Preferred liquid regimes at factory open. May demote when consistently losing;
@@ -72,7 +110,10 @@ export const CORE_ALWAYS_ON_REGIMES: readonly string[] = [
 ] as const;
 
 export function isCoreAlwaysOnRegime(regime: string): boolean {
-  return CORE_ALWAYS_ON_REGIMES.includes(String(regime || '').toUpperCase());
+  const g = getBrainGenome();
+  const core =
+    g.core_always_on_regimes?.length ? g.core_always_on_regimes : CORE_ALWAYS_ON_REGIMES;
+  return core.includes(String(regime || '').toUpperCase());
 }
 
 /** Structured WHAT/WHY log for GUI + LIVE LOG. */
@@ -103,7 +144,9 @@ function roundPct(n: number): number {
  */
 export const SOFT_PCT_REF_MID = 2750;
 export function softPctFromAbs(hardinvAbs: number): number {
-  const raw = Math.max(0, Number(hardinvAbs) || 0) / SOFT_PCT_REF_MID;
+  const g = getBrainGenome();
+  const refMid = g.soft_pct_ref_mid || SOFT_PCT_REF_MID;
+  const raw = Math.max(0, Number(hardinvAbs) || 0) / refMid;
   return Math.round(raw * 1e4) / 1e4;
 }
 
@@ -361,14 +404,15 @@ function ensureCoreRegimesOn(clientId?: number | null): void {
 /** Snap already-overreached knobs back to caps (live sessions that climbed too far). */
 function clampOverreachKnobs(clientId?: number | null): void {
   const id = resolveDeskClientId(clientId);
+  const bounds = calBounds();
   try {
     const cur = getDeskCalibration(id);
     const patch: Partial<typeof cur> = {};
-    if (cur.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) patch.safety_tp_rr = AUTO_CAL_MAX_SAFETY_TP_RR;
-    if (cur.target_abs > AUTO_CAL_MAX_TARGET_ABS) patch.target_abs = AUTO_CAL_MAX_TARGET_ABS;
-    if (cur.peak_mfe_abs > AUTO_CAL_MAX_PEAK_MFE_ABS) patch.peak_mfe_abs = AUTO_CAL_MAX_PEAK_MFE_ABS;
-    if (cur.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
-      patch.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
+    if (cur.safety_tp_rr > bounds.maxSafetyRr) patch.safety_tp_rr = bounds.maxSafetyRr;
+    if (cur.target_abs > bounds.maxTargetAbs) patch.target_abs = bounds.maxTargetAbs;
+    if (cur.peak_mfe_abs > bounds.maxPeakMfeAbs) patch.peak_mfe_abs = bounds.maxPeakMfeAbs;
+    if (cur.peak_retention > bounds.maxPeakRetention) {
+      patch.peak_retention = bounds.maxPeakRetention;
     }
     // entry_filter_level 0–3 is free — do not snap L3 back to OPEN
     if (Object.keys(patch).length) setDeskCalibration(patch, id);
@@ -706,9 +750,101 @@ function proposeGenomePatch(
   const changes: string[] = [];
   if (!g) return { patch, changes };
 
+  const fracToBp = (frac: number) =>
+    Math.round((Math.max(0, Number(frac) || 0) / 1e-4) * 10) / 10;
+
+  // PRIMARY: desk Soft/Peak/Target/pct/SAFETY/regimes → genome SoT (not a parallel brain)
+  const syncNum = (
+    key: keyof BrainGenome,
+    deskVal: number,
+    label: string,
+    why: string
+  ) => {
+    const cur = Number(g[key]);
+    if (!Number.isFinite(deskVal) || !Number.isFinite(cur)) return;
+    if (Math.abs(cur - deskVal) < 1e-9) return;
+    (patch as Record<string, unknown>)[key] = deskVal;
+    changes.push(
+      autotuneLog(`genome ${label} ${cur}→${deskVal}`, why)
+    );
+  };
+
+  syncNum('soft_l1_abs', roundAbs(next.soft_l1_abs), 'soft_l1_abs', 'desk Soft L1 → genome SoT');
+  syncNum('soft_l2_abs', roundAbs(next.soft_l2_abs), 'soft_l2_abs', 'desk Soft L2 → genome SoT');
+  syncNum('soft_l3_abs', roundAbs(next.soft_l3_abs), 'soft_l3_abs', 'desk Soft L3 CAP → genome SoT');
+  syncNum('peak_mfe_abs', roundAbs(next.peak_mfe_abs), 'peak_mfe_abs', 'desk Peak MFE → genome SoT');
+  syncNum(
+    'peak_retention',
+    roundRet(next.peak_retention),
+    'peak_retention',
+    'desk Peak retention → genome SoT'
+  );
+  syncNum(
+    'peak_min_giveback_abs',
+    roundAbs(next.peak_min_giveback_abs),
+    'peak_min_giveback_abs',
+    'desk Peak giveback → genome SoT'
+  );
+  syncNum('target_l1_abs', roundAbs(next.target_l1_abs), 'target_l1_abs', 'desk Target L1 → genome SoT');
+  syncNum('target_l2_abs', roundAbs(next.target_l2_abs), 'target_l2_abs', 'desk Target L2 → genome SoT');
+  syncNum('target_l3_abs', roundAbs(next.target_l3_abs), 'target_l3_abs', 'desk Target L3 → genome SoT');
+  syncNum('safety_tp_rr', roundRr(next.safety_tp_rr), 'safety_tp_rr', 'desk SAFETY RR → genome SoT');
+  syncNum(
+    'hardinv_pct_bp',
+    fracToBp(next.hardinv_pct),
+    'hardinv_pct_bp',
+    'desk Soft pct → genome bp SoT'
+  );
+  syncNum(
+    'peak_mfe_pct_bp',
+    fracToBp(next.peak_mfe_pct),
+    'peak_mfe_pct_bp',
+    'desk Peak pct → genome bp SoT'
+  );
+  syncNum(
+    'target_pct_bp',
+    fracToBp(next.target_pct),
+    'target_pct_bp',
+    'desk Target pct → genome bp SoT'
+  );
+  if (next.entry_filter_level !== g.entry_filter_level) {
+    patch.entry_filter_level = next.entry_filter_level;
+    changes.push(
+      autotuneLog(
+        `genome entry_filter_level ${g.entry_filter_level}→${next.entry_filter_level}`,
+        'desk entry filter → genome SoT'
+      )
+    );
+  }
+  {
+    const ra = [...g.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+    const rb = [...next.enabled_regimes].map((r) => String(r).toUpperCase()).sort();
+    if (ra.join(',') !== rb.join(',')) {
+      patch.enabled_regimes = [...next.enabled_regimes];
+      changes.push(
+        autotuneLog(
+          `genome enabled_regimes n=${ra.length}→${rb.length}`,
+          'desk regimes ON → genome SoT'
+        )
+      );
+    }
+    const sa = [...(g.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
+    const sb = [...(next.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
+    if (sa.join(',') !== sb.join(',')) {
+      patch.soft_off_regimes = [...(next.soft_off_regimes || [])];
+      changes.push(
+        autotuneLog(
+          `genome soft_off_regimes n=${sa.length}→${sb.length}`,
+          'desk Soft OFF → genome SoT'
+        )
+      );
+    }
+  }
+
   // Sync Peak Keep with desk retention (genome follows 10%…95%)
+  const calB = calBounds();
   const keepTarget = roundRet(
-    Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(AUTO_CAL_MIN_PEAK_RETENTION, next.peak_retention))
+    Math.min(calB.maxPeakRetention, Math.max(calB.minPeakRetention, next.peak_retention))
   );
   if (Math.abs(g.peak_keep - keepTarget) >= 0.01) {
     patch.peak_keep = keepTarget;
@@ -945,12 +1081,14 @@ function proposeGenomePatch(
     return midShare && !ctx.expanding;
   }).length;
   if (choppyCtx >= 2 && expectancy < 0.1) {
-    const trek = roundPct(Math.min(0.0012, Math.max(0.00015, g.mtf_trek_flat_frac * 1.08)));
-    if (Math.abs(trek - roundPct(g.mtf_trek_flat_frac)) > 1e-7) {
+    // Trek flat is bp (min 0.1) — step 0.1, never 0.00008 dust
+    const trek =
+      Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
+    if (Math.abs(trek - g.mtf_trek_flat_frac) > 0.05) {
       patch.mtf_trek_flat_frac = trek;
       changes.push(
         autotuneLog(
-          `genome mtf_trek_flat_frac ${roundPct(g.mtf_trek_flat_frac).toFixed(5)}→${trek.toFixed(5)}`,
+          `genome mtf_trek_flat_frac ${g.mtf_trek_flat_frac.toFixed(1)}→${trek.toFixed(1)} bp`,
           `choppy pressure ×${choppyCtx} — wider FLAT trek`
         )
       );
@@ -1027,6 +1165,7 @@ export function proposeAutoCalibration(
   opts?: { raise_streak?: number; genome?: BrainGenome | null }
 ): AutoCalibrateProposeResult {
   const raiseStreak = Math.max(0, Number(opts?.raise_streak) || 0);
+  const bounds = calBounds();
   const changes: string[] = [];
   if (!windowTrades.length) {
     return {
@@ -1083,30 +1222,31 @@ export function proposeAutoCalibration(
 
   const rrNow = next.safety_tp_rr || 1.5;
   const alreadyTall =
-    rrNow >= AUTO_CAL_MAX_SAFETY_TP_RR - 0.01 ||
-    next.target_abs >= AUTO_CAL_MAX_TARGET_ABS - 0.01 ||
-    next.peak_mfe_abs >= AUTO_CAL_MAX_PEAK_MFE_ABS - 0.01 ||
+    rrNow >= bounds.maxSafetyRr - 0.01 ||
+    next.target_abs >= bounds.maxTargetAbs - 0.01 ||
+    next.peak_mfe_abs >= bounds.maxPeakMfeAbs - 0.01 ||
     next.target_abs >= next.hardinv_abs * 2.8;
 
   const asymmetryBad =
     avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.85 && microWins >= 2;
 
+  const softLossMin = bounds.softSizedLossDetectMin;
   const softDominates =
     expectancy < 0.05 &&
     avgLossAbs >= 1.0 &&
     (wins.length === 0 || avgWin < avgLossAbs * 0.75) &&
-    (softLosses >= 2 ||
-      softSizedLosses >= 2 ||
+    (softLosses >= softLossMin ||
+      softSizedLosses >= softLossMin ||
       (losses.length >= 3 && avgLossAbs >= current.hardinv_abs * 0.7));
 
   const needPullBack =
     human.intent === 'ease_peak_target' ||
     softDominates ||
     (expectancy < 0.05 &&
-      (raiseStreak >= AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK ||
+      (raiseStreak >= bounds.raiseStreakBeforePullback ||
         alreadyTall ||
         leftWinnerOnTable ||
-        (asymmetryBad && (softLosses >= 2 || softSizedLosses >= 2))));
+        (asymmetryBad && (softLosses >= softLossMin || softSizedLosses >= softLossMin))));
 
   const needProtectSooner =
     human.intent === 'protect_sooner' || human.intent === 'tighten_filters';
@@ -1120,14 +1260,14 @@ export function proposeAutoCalibration(
     !needProtectSooner &&
     human.intent === 'let_winners_run' &&
     !alreadyTall &&
-    raiseStreak < AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK;
+    raiseStreak < bounds.raiseStreakBeforePullback;
 
   const needBiggerWinnersLegacy =
     !needPullBack &&
     !needProtectSooner &&
     human.intent === 'hold_course' &&
     !alreadyTall &&
-    raiseStreak < AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK &&
+    raiseStreak < bounds.raiseStreakBeforePullback &&
     (expectancy < 0.15 ||
       (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
       microWins >= 2);
@@ -1146,8 +1286,8 @@ export function proposeAutoCalibration(
     // Soft-heavy — tighten Soft CAP + pct so Soft chops cost less (live Soft follows both)
     if (softDominates) {
       const softBefore = next.hardinv_abs;
-      next.hardinv_abs = Math.max(AUTO_CAL_MIN_HARDINV_ABS, roundAbs(softBefore - 0.2));
-      next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, next.hardinv_abs);
+      next.hardinv_abs = Math.max(bounds.minHardinvAbs, roundAbs(softBefore - bounds.softTightenStep));
+      next.hardinv_abs = Math.min(bounds.maxHardinvAbs, next.hardinv_abs);
       next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
       if (next.hardinv_abs !== softBefore) {
         const mkt = windowTrades
@@ -1167,7 +1307,7 @@ export function proposeAutoCalibration(
     }
 
     const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.max(1.5, roundRr(rrBefore - 0.25));
+    next.safety_tp_rr = Math.max(1.5, roundRr(rrBefore - bounds.safetyTpRrPullbackStep));
     if (next.safety_tp_rr !== rrBefore) {
       changes.push(
         autotuneLog(
@@ -1179,19 +1319,21 @@ export function proposeAutoCalibration(
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    const easedPeak = roundAbs(next.peak_mfe_abs - 0.5);
+    const easedPeak = roundAbs(next.peak_mfe_abs - bounds.peakEaseAbsStep);
     const peakFloor = roundAbs(next.hardinv_abs + 0.5);
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
     if (softDominates) {
       next.peak_retention = roundRet(
-        Math.min(AUTO_CAL_MAX_PEAK_RETENTION, Math.max(retBefore, retBefore + 0.04))
+        Math.min(bounds.maxPeakRetention, Math.max(retBefore, retBefore + bounds.peakEaseRetentionStep))
       );
     } else {
       next.peak_retention = roundRet(
-        Math.max(AUTO_CAL_MIN_PEAK_RETENTION, next.peak_retention - 0.05)
+        Math.max(bounds.minPeakRetention, next.peak_retention - bounds.peakEaseRetentionStep)
       );
     }
-    next.peak_min_giveback_abs = roundAbs(Math.max(0.5, next.peak_min_giveback_abs - 0.15));
+    next.peak_min_giveback_abs = roundAbs(
+      Math.max(0.5, next.peak_min_giveback_abs - bounds.peakEaseGivebackStep)
+    );
     const easedTgt = roundAbs(next.target_abs - 1.2);
     const tgtFloor = roundAbs(next.hardinv_abs + 1.5);
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
@@ -1227,7 +1369,7 @@ export function proposeAutoCalibration(
     const retBefore = next.peak_retention;
     // Protect sooner = keep MORE of MFE (higher Keep), free within 10%…95%
     next.peak_retention = roundRet(
-      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.05)
+      Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
     );
     if (next.peak_retention !== retBefore) {
       changes.push(
@@ -1241,7 +1383,7 @@ export function proposeAutoCalibration(
     // Soft may ease slightly so winners have room (Soft+HardInv free)
     if (softTooTight || human.intent === 'let_winners_run') {
       const softBefore = next.hardinv_abs;
-      next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
+      next.hardinv_abs = Math.min(bounds.maxHardinvAbs, roundAbs(softBefore + bounds.softTightenStep));
       next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
       if (next.hardinv_abs !== softBefore) {
         changes.push(
@@ -1253,7 +1395,7 @@ export function proposeAutoCalibration(
       }
     }
     const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.min(AUTO_CAL_MAX_SAFETY_TP_RR, roundRr(rrBefore + 0.15));
+    next.safety_tp_rr = Math.min(bounds.maxSafetyRr, roundRr(rrBefore + bounds.safetyTpRrStep));
     if (next.safety_tp_rr !== rrBefore) {
       changes.push(
         autotuneLog(
@@ -1265,12 +1407,12 @@ export function proposeAutoCalibration(
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, roundAbs(next.peak_mfe_abs + 0.4));
+    next.peak_mfe_abs = Math.min(bounds.maxPeakMfeAbs, roundAbs(next.peak_mfe_abs + 0.4));
     next.peak_retention = roundRet(
-      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.03)
+      Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
     );
     next.peak_min_giveback_abs = roundAbs(Math.min(2.0, next.peak_min_giveback_abs + 0.1));
-    next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, roundAbs(next.target_abs + 0.8));
+    next.target_abs = Math.min(bounds.maxTargetAbs, roundAbs(next.target_abs + 0.8));
     next.target_pct = roundPct(Math.min(AUTO_CAL_MAX_TARGET_PCT, next.target_pct * 1.06));
     next.peak_mfe_pct = roundPct(Math.min(AUTO_CAL_MAX_PEAK_MFE_PCT, next.peak_mfe_pct * 1.05));
     if (next.peak_mfe_abs !== peakBefore) {
@@ -1303,7 +1445,7 @@ export function proposeAutoCalibration(
   // Soft ease when too tight even without full raise path
   if (!needPullBack && !doRaise && softTooTight) {
     const softBefore = next.hardinv_abs;
-    next.hardinv_abs = Math.min(AUTO_CAL_MAX_HARDINV_ABS, roundAbs(softBefore + 0.2));
+    next.hardinv_abs = Math.min(bounds.maxHardinvAbs, roundAbs(softBefore + bounds.softTightenStep));
     next.hardinv_pct = softPctFromAbs(next.hardinv_abs);
     if (next.hardinv_abs !== softBefore) {
       changes.push(
@@ -1326,7 +1468,7 @@ export function proposeAutoCalibration(
   ) {
     const retBefore = next.peak_retention;
     next.peak_retention = roundRet(
-      Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.01)
+      Math.min(bounds.maxPeakRetention, next.peak_retention + 0.01)
     );
     if (next.peak_retention !== retBefore) {
       changes.push(
@@ -1342,7 +1484,7 @@ export function proposeAutoCalibration(
   if (!needPullBack) {
     if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
       const b = next.peak_mfe_abs;
-      next.peak_mfe_abs = Math.min(AUTO_CAL_MAX_PEAK_MFE_ABS, roundAbs(next.hardinv_abs + 1.5));
+      next.peak_mfe_abs = Math.min(bounds.maxPeakMfeAbs, roundAbs(next.hardinv_abs + 1.5));
       if (next.peak_mfe_abs !== b) {
         changes.push(
           autotuneLog(
@@ -1354,7 +1496,7 @@ export function proposeAutoCalibration(
     }
     if (next.target_abs <= next.hardinv_abs + 1) {
       const b = next.target_abs;
-      next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, roundAbs(next.hardinv_abs + 3));
+      next.target_abs = Math.min(bounds.maxTargetAbs, roundAbs(next.hardinv_abs + 3));
       if (next.target_abs !== b) {
         changes.push(
           autotuneLog(
@@ -1367,9 +1509,9 @@ export function proposeAutoCalibration(
   }
 
   // Clamp overshoot
-  if (next.safety_tp_rr > AUTO_CAL_MAX_SAFETY_TP_RR) {
+  if (next.safety_tp_rr > bounds.maxSafetyRr) {
     const b = next.safety_tp_rr;
-    next.safety_tp_rr = AUTO_CAL_MAX_SAFETY_TP_RR;
+    next.safety_tp_rr = bounds.maxSafetyRr;
     changes.push(
       autotuneLog(
         `safety_tp_rr ${b.toFixed(2)}→${next.safety_tp_rr.toFixed(2)} cap`,
@@ -1377,23 +1519,23 @@ export function proposeAutoCalibration(
       )
     );
   }
-  if (next.target_abs > AUTO_CAL_MAX_TARGET_ABS) {
+  if (next.target_abs > bounds.maxTargetAbs) {
     const b = next.target_abs;
-    next.target_abs = AUTO_CAL_MAX_TARGET_ABS;
+    next.target_abs = bounds.maxTargetAbs;
     changes.push(
       autotuneLog(`target_abs ${b.toFixed(1)}→${next.target_abs.toFixed(1)} cap`, 'auto-cal max Target')
     );
   }
-  if (next.peak_mfe_abs > AUTO_CAL_MAX_PEAK_MFE_ABS) {
+  if (next.peak_mfe_abs > bounds.maxPeakMfeAbs) {
     const b = next.peak_mfe_abs;
-    next.peak_mfe_abs = AUTO_CAL_MAX_PEAK_MFE_ABS;
+    next.peak_mfe_abs = bounds.maxPeakMfeAbs;
     changes.push(
       autotuneLog(`peak_mfe_abs ${b.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} cap`, 'auto-cal max Peak')
     );
   }
-  if (next.peak_retention > AUTO_CAL_MAX_PEAK_RETENTION) {
+  if (next.peak_retention > bounds.maxPeakRetention) {
     const b = next.peak_retention;
-    next.peak_retention = AUTO_CAL_MAX_PEAK_RETENTION;
+    next.peak_retention = bounds.maxPeakRetention;
     changes.push(
       autotuneLog(
         `peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} cap`,
@@ -1401,9 +1543,9 @@ export function proposeAutoCalibration(
       )
     );
   }
-  if (next.peak_retention < AUTO_CAL_MIN_PEAK_RETENTION) {
+  if (next.peak_retention < bounds.minPeakRetention) {
     const b = next.peak_retention;
-    next.peak_retention = AUTO_CAL_MIN_PEAK_RETENTION;
+    next.peak_retention = bounds.minPeakRetention;
     changes.push(
       autotuneLog(
         `peak_retention ${b.toFixed(2)}→${next.peak_retention.toFixed(2)} floor`,
@@ -1412,8 +1554,8 @@ export function proposeAutoCalibration(
     );
   }
   next.hardinv_abs = Math.min(
-    AUTO_CAL_MAX_HARDINV_ABS,
-    Math.max(AUTO_CAL_MIN_HARDINV_ABS, next.hardinv_abs)
+    bounds.maxHardinvAbs,
+    Math.max(bounds.minHardinvAbs, next.hardinv_abs)
   );
   // Soft pct always follows Soft abs (clean 0.0001 steps) — never *1.05 dust
   next.hardinv_pct = Math.min(
@@ -1484,9 +1626,9 @@ export function proposeAutoCalibration(
       if (aCore !== bCore) return aCore - bCore;
       return a[1].sum - b[1].sum;
     });
-  if (offenders.length && enabled.size > MIN_ENABLED_REGIMES) {
+  if (offenders.length && enabled.size > bounds.minEnabledRegimes) {
     const worst = offenders[0]![0];
-    if (enabled.has(worst) && enabled.size - 1 >= MIN_ENABLED_REGIMES) {
+    if (enabled.has(worst) && enabled.size - 1 >= bounds.minEnabledRegimes) {
       enabled.delete(worst);
       demotedSession.add(worst);
       demotedThisCycle = worst;
@@ -1514,9 +1656,9 @@ export function proposeAutoCalibration(
   }
 
   // Floor: never starve — refill from tradable defaults
-  if (enabled.size < MIN_ENABLED_REGIMES) {
+  if (enabled.size < bounds.minEnabledRegimes) {
     for (const r of tradableDefaultRegimes()) {
-      if (enabled.size >= MIN_ENABLED_REGIMES) break;
+      if (enabled.size >= bounds.minEnabledRegimes) break;
       if (!enabled.has(r)) {
         enabled.add(r);
         softOff.delete(r);

@@ -28,6 +28,7 @@ import {
   type EffectiveRegimeHtf,
   type TfBiasDir,
 } from './entryPlaybook.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 export type { EffectiveRegimeHtf, TfBiasDir } from './entryPlaybook.js';
 export { capitalHtfBias, pickEntryPlaybook, setupAllowedOnLane } from './entryPlaybook.js';
@@ -89,24 +90,58 @@ export type StructuredEntry = RegimeEntry & {
   entry_mind?: string;
 };
 
-/** Lower / upper half — realistic for Gold 30m zones */
-const HALF_LO = 0.5;
-const HALF_HI = 0.5;
+/** Lower / upper half — realistic for Gold 30m zones (factory = genome struct_half_*) */
+export const HALF_LO = 0.5;
+export const HALF_HI = 0.5;
 /** Only reject with-trend chase in the extreme 15% of the zone */
-const EXTREME_HI = 0.85;
-const EXTREME_LO = 0.15;
+export const EXTREME_HI = 0.85;
+export const EXTREME_LO = 0.15;
 /**
  * Structure-start: prefer nearer half, but allow mid so a fresh 10s leg
  * is not starved until price is already mid-zone.
  */
-const START_LO = 0.65;
-const START_HI = 0.35;
+export const START_LO = 0.65;
+export const START_HI = 0.35;
+/** BREAKOUT pierce zone pos (factory = genome breakout_pierce_*) */
+export const BREAKOUT_PIERCE_HI = 0.92;
+export const BREAKOUT_PIERCE_LO = 0.08;
+/** FAILED_BREAK reclaim band (factory = genome failed_break_reclaim_*) */
+export const FAILED_BREAK_RECLAIM_LO = 0.35;
+export const FAILED_BREAK_RECLAIM_HI = 0.65;
+/** COMPRESSION entry band (factory = genome compression_entry_* = half 0.5) */
+export const COMPRESSION_ENTRY_LO = 0.5;
+export const COMPRESSION_ENTRY_HI = 0.5;
+/** Trek min-path as frac (7bp ≡ 0.0007) — factory = genome minute_trend_bias_trek_min_path_bp */
+export const TREK_MIN_PATH_FRAC = 0.0007;
+
+function structKnobs() {
+  const g = getBrainGenome();
+  return {
+    halfLo: g.struct_half_lo || HALF_LO,
+    halfHi: g.struct_half_hi || HALF_HI,
+    extremeHi: g.struct_extreme_hi || EXTREME_HI,
+    extremeLo: g.struct_extreme_lo || EXTREME_LO,
+    startLo: g.struct_start_lo || START_LO,
+    startHi: g.struct_start_hi || START_HI,
+    pierceHi: g.breakout_pierce_pos_hi || BREAKOUT_PIERCE_HI,
+    pierceLo: g.breakout_pierce_pos_lo || BREAKOUT_PIERCE_LO,
+    failLo: g.failed_break_reclaim_pos_lo || FAILED_BREAK_RECLAIM_LO,
+    failHi: g.failed_break_reclaim_pos_hi || FAILED_BREAK_RECLAIM_HI,
+    compressLo: g.compression_entry_pos_lo || COMPRESSION_ENTRY_LO,
+    compressHi: g.compression_entry_pos_hi || COMPRESSION_ENTRY_HI,
+  };
+}
 
 function bandOf(pos: number): ZoneBand {
-  if (pos <= 0.2) return 'LO';
-  if (pos <= 0.4) return 'MID_LO';
-  if (pos <= 0.6) return 'MID';
-  if (pos <= 0.8) return 'MID_HI';
+  const g = getBrainGenome();
+  const lo = g.zone_band_cut_lo || 0.2;
+  const midLo = g.zone_band_cut_mid_lo || 0.4;
+  const midHi = g.zone_band_cut_mid_hi || 0.6;
+  const hi = g.zone_band_cut_hi || 0.8;
+  if (pos <= lo) return 'LO';
+  if (pos <= midLo) return 'MID_LO';
+  if (pos <= midHi) return 'MID';
+  if (pos <= hi) return 'MID_HI';
   return 'HI';
 }
 
@@ -167,15 +202,31 @@ export function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
 }
 
 /**
+ * Forming bucket = max(tape last bar, wall clock).
+ * - Live / past-only books: wall clock drops the current forming minute.
+ * - Synthetic/future tape (tests/replay): tape leads so selloff minutes are not dropped.
+ */
+function tapeBucketMs(bars: TenSecBar[], bucketMs: number): number {
+  let max = 0;
+  for (const b of bars) {
+    if (Number.isFinite(b.open_time_ms) && b.open_time_ms > max) max = b.open_time_ms;
+  }
+  const tape = max > 0 ? Math.floor(max / bucketMs) * bucketMs : 0;
+  const wall = Math.floor(Date.now() / bucketMs) * bucketMs;
+  return Math.max(tape, wall);
+}
+
+/**
  * Last closed 1m from 10s.
  * Prefer complete minutes; accept ≥3×10s (30s) so live books are not starved.
- * Drop only the wall-clock forming minute.
+ * Drop only the forming minute on the tape (last bar's minute).
  */
 export function lastClosed1mFromTenSec(bars: TenSecBar[]): MinuteBar | null {
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return null;
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
-  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= 3);
+  const lastBucket = tapeBucketMs(bars, 60_000);
+  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
+  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
   return closed.length ? closed[closed.length - 1]! : null;
 }
 
@@ -196,13 +247,16 @@ export function minuteDir(m: MinuteBar | null | undefined): 'UP' | 'DOWN' | 'FLA
  */
 export function minuteTrendBias(
   bars: TenSecBar[],
-  lookback = 5
+  lookback?: number
 ): 'UP' | 'DOWN' | 'FLAT' {
+  const g = getBrainGenome();
+  const lb = lookback ?? g.minute_trend_bias_lookback ?? 5;
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return 'FLAT';
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
-  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= 3);
-  const window = closed.slice(-Math.max(3, lookback));
+  const lastBucket = tapeBucketMs(bars, 60_000);
+  const minBars = Math.max(1, g.m1_aggregate_min_bars || 3);
+  const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
+  const window = closed.slice(-Math.max(3, lb));
   if (window.length < 3) return 'FLAT';
 
   let up = 0;
@@ -217,7 +271,9 @@ export function minuteTrendBias(
   const trek =
     Math.max(...window.map((m) => m.high)) - Math.min(...window.map((m) => m.low));
   const midPx = Math.abs(last.close) || 1;
-  const minPath = Math.max(3, midPx * 0.0007);
+  const trekFrac =
+    Math.max(0.1, g.minute_trend_bias_trek_min_path_bp || 7) * 1e-4 || TREK_MIN_PATH_FRAC;
+  const minPath = Math.max(3, midPx * trekFrac);
   if (trek < minPath) return 'FLAT';
 
   // Color majority + real trek wins even when net≈0 (dump→bounce)
@@ -254,7 +310,7 @@ export function higherTfDir(
     list.push(b);
   }
   const keys = [...map.keys()].sort((a, b) => a - b);
-  const lastBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const lastBucket = tapeBucketMs(bars, bucketMs);
   const closedKeys = keys.filter((k) => k < lastBucket);
   if (!closedKeys.length) return 'FLAT';
   const k = closedKeys[closedKeys.length - 1]!;
@@ -296,6 +352,7 @@ export function structureStartEntry(
   if (!zone || !isMoving10s(bar)) return null;
   const md = minuteDir(m1);
   const candle = `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${tag(zone, md, bias)}`;
+  const { startLo, startHi } = structKnobs();
 
   switch (regime) {
     case 'UNKNOWN':
@@ -308,7 +365,7 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_DOWN':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (zone.pos <= START_LO && rally(bar)) {
+      if (zone.pos <= startLo && rally(bar)) {
         return {
           direction: 'BUY',
           setup: 'CONTINUATION',
@@ -328,7 +385,7 @@ export function structureStartEntry(
     case 'FAILED_BREAKOUT_UP':
     case 'RANGE':
     case 'REVERSAL_CANDIDATE':
-      if (zone.pos >= START_HI && dip(bar)) {
+      if (zone.pos >= startHi && dip(bar)) {
         return {
           direction: 'SELL',
           setup: 'CONTINUATION',
@@ -365,6 +422,21 @@ export function structureGate(
   }
   const md = minuteDir(m1);
   const posTag = tag(zone, md, bias);
+  const {
+    halfLo,
+    halfHi,
+    extremeHi,
+    extremeLo,
+    pierceHi,
+    pierceLo,
+    failLo,
+    failHi,
+    compressLo,
+    compressHi,
+  } = structKnobs();
+  const g = getBrainGenome();
+  const bandLo = g.zone_band_cut_lo || 0.2;
+  const bandHi = g.zone_band_cut_hi || 0.8;
 
   // Level <2: no structure soft-blocks — mind already chose the side
   if (!entryStructureEnabled()) {
@@ -376,29 +448,51 @@ export function structureGate(
     case 'UNKNOWN':
       return { ok: false, reason: 'UNKNOWN · no entry' };
 
-    case 'COMPRESSION':
+    case 'COMPRESSION': {
+      // COMPRESSION entry band from genome compression_entry_* (factory = half)
+      if (sig.direction === 'BUY' && zone.pos > compressLo) {
+        return { ok: false, reason: `${regime} BUY not in lower half (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos < compressHi) {
+        return { ok: false, reason: `${regime} SELL not in upper half (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos >= extremeHi && rally(bar)) {
+        return { ok: false, reason: `${regime} SELL tip-chase HI (${posTag})` };
+      }
+      if (sig.direction === 'BUY' && zone.pos <= extremeLo && dip(bar)) {
+        return { ok: false, reason: `${regime} BUY tip-chase LO (${posTag})` };
+      }
+      if (sig.direction === 'BUY' && zone.pos >= extremeHi && rally(bar)) {
+        return { ok: false, reason: `${regime} BUY tip-chase HI (${posTag})` };
+      }
+      if (sig.direction === 'SELL' && zone.pos <= extremeLo && dip(bar)) {
+        return { ok: false, reason: `${regime} SELL tip-chase LO (${posTag})` };
+      }
+      return { ok: true, tag: `${regime} half-OK · ${posTag}` };
+    }
+
     case 'TRANSITION':
     case 'RANGE': {
       // Fade only in the correct half — never tip-chase (breakout / fake-break lookalike)
-      if (sig.direction === 'BUY' && zone.pos > HALF_LO) {
+      if (sig.direction === 'BUY' && zone.pos > halfLo) {
         return { ok: false, reason: `${regime} BUY not in lower half (${posTag})` };
       }
-      if (sig.direction === 'SELL' && zone.pos < HALF_HI) {
+      if (sig.direction === 'SELL' && zone.pos < halfHi) {
         return { ok: false, reason: `${regime} SELL not in upper half (${posTag})` };
       }
       // Extreme tip + WITH the move = breakout / fake-break lookalike (not fade reject)
       // SELL into HI green = selling the tip; BUY into LO red = buying the tip
-      if (sig.direction === 'SELL' && zone.pos >= EXTREME_HI && rally(bar)) {
+      if (sig.direction === 'SELL' && zone.pos >= extremeHi && rally(bar)) {
         return { ok: false, reason: `${regime} SELL tip-chase HI (${posTag})` };
       }
-      if (sig.direction === 'BUY' && zone.pos <= EXTREME_LO && dip(bar)) {
+      if (sig.direction === 'BUY' && zone.pos <= extremeLo && dip(bar)) {
         return { ok: false, reason: `${regime} BUY tip-chase LO (${posTag})` };
       }
       // Wrong-side knife at extreme still blocked
-      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && rally(bar)) {
+      if (sig.direction === 'BUY' && zone.pos >= extremeHi && rally(bar)) {
         return { ok: false, reason: `${regime} BUY tip-chase HI (${posTag})` };
       }
-      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && dip(bar)) {
+      if (sig.direction === 'SELL' && zone.pos <= extremeLo && dip(bar)) {
         return { ok: false, reason: `${regime} SELL tip-chase LO (${posTag})` };
       }
       return { ok: true, tag: `${regime} half-OK · ${posTag}` };
@@ -409,7 +503,7 @@ export function structureGate(
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `TREND_UP only BUY (${posTag})` };
       }
-      if (zone.pos >= EXTREME_HI && md === 'UP' && sig.setup !== 'PULLBACK') {
+      if (zone.pos >= extremeHi && md === 'UP' && sig.setup !== 'PULLBACK') {
         return { ok: false, reason: `TREND_UP chase HI (${posTag})` };
       }
       return { ok: true, tag: `TREND_UP OK · ${posTag}` };
@@ -418,7 +512,7 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `TREND_DOWN only SELL (${posTag})` };
       }
-      if (zone.pos <= EXTREME_LO && md === 'DOWN' && sig.setup !== 'PULLBACK') {
+      if (zone.pos <= extremeLo && md === 'DOWN' && sig.setup !== 'PULLBACK') {
         return { ok: false, reason: `TREND_DOWN chase LO (${posTag})` };
       }
       return { ok: true, tag: `TREND_DOWN OK · ${posTag}` };
@@ -428,7 +522,7 @@ export function structureGate(
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `PULLBACK_UPTREND only BUY (${posTag})` };
       }
-      if (zone.pos >= EXTREME_HI && !rally(bar)) {
+      if (zone.pos >= extremeHi && !rally(bar)) {
         return { ok: false, reason: `PULLBACK_UPTREND late HI (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_UPTREND OK · ${posTag}` };
@@ -437,7 +531,7 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `PULLBACK_DOWNTREND only SELL (${posTag})` };
       }
-      if (zone.pos <= EXTREME_LO && !dip(bar)) {
+      if (zone.pos <= extremeLo && !dip(bar)) {
         return { ok: false, reason: `PULLBACK_DOWNTREND late LO (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_DOWNTREND OK · ${posTag}` };
@@ -447,7 +541,7 @@ export function structureGate(
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `BREAKOUT_UP only BUY (${posTag})` };
       }
-      if (bar.close >= zone.hi || zone.pos >= 0.92) {
+      if (bar.close >= zone.hi || zone.pos >= pierceHi) {
         return { ok: true, tag: `BREAKOUT_UP pierce · ${posTag}` };
       }
       return { ok: false, reason: `BREAKOUT_UP not at/through hi (${posTag})` };
@@ -456,7 +550,7 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `BREAKOUT_DOWN only SELL (${posTag})` };
       }
-      if (bar.close <= zone.lo || zone.pos <= 0.08) {
+      if (bar.close <= zone.lo || zone.pos <= pierceLo) {
         return { ok: true, tag: `BREAKOUT_DOWN pierce · ${posTag}` };
       }
       return { ok: false, reason: `BREAKOUT_DOWN not at/through lo (${posTag})` };
@@ -465,7 +559,7 @@ export function structureGate(
       // Follow impulse from the start of the leg — not only after mid-zone
       if (sig.direction === 'BUY') {
         if (rally(bar) || bar.close >= zone.hi) {
-          if (zone.pos >= 0.2 || bar.close >= zone.hi) {
+          if (zone.pos >= bandLo || bar.close >= zone.hi) {
             return { ok: true, tag: `EXPANSION BUY · ${posTag}` };
           }
         }
@@ -473,7 +567,7 @@ export function structureGate(
       }
       if (sig.direction === 'SELL') {
         if (dip(bar) || bar.close <= zone.lo) {
-          if (zone.pos <= 0.8 || bar.close <= zone.lo) {
+          if (zone.pos <= bandHi || bar.close <= zone.lo) {
             return { ok: true, tag: `EXPANSION SELL · ${posTag}` };
           }
         }
@@ -486,7 +580,7 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `FAILED_BREAKOUT_UP only SELL (${posTag})` };
       }
-      if (zone.pos < 0.35) {
+      if (zone.pos < failLo) {
         return { ok: false, reason: `FAILED_BREAKOUT_UP too far from hi (${posTag})` };
       }
       return { ok: true, tag: `FAILED_BREAKOUT_UP OK · ${posTag}` };
@@ -495,17 +589,17 @@ export function structureGate(
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `FAILED_BREAKOUT_DOWN only BUY (${posTag})` };
       }
-      if (zone.pos > 0.65) {
+      if (zone.pos > failHi) {
         return { ok: false, reason: `FAILED_BREAKOUT_DOWN too far from lo (${posTag})` };
       }
       return { ok: true, tag: `FAILED_BREAKOUT_DOWN OK · ${posTag}` };
 
     case 'REVERSAL_CANDIDATE':
       // Violent bar — allow; only block buying extreme HI / selling extreme LO with-trend
-      if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && md === 'UP') {
+      if (sig.direction === 'BUY' && zone.pos >= extremeHi && md === 'UP') {
         return { ok: false, reason: `REVERSAL BUY chase HI (${posTag})` };
       }
-      if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && md === 'DOWN') {
+      if (sig.direction === 'SELL' && zone.pos <= extremeLo && md === 'DOWN') {
         return { ok: false, reason: `REVERSAL SELL chase LO (${posTag})` };
       }
       return { ok: true, tag: `REVERSAL OK · ${posTag}` };
@@ -609,12 +703,32 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   );
   const learnerReady =
     learned.updates >= 20 &&
-    learned.confidence >= thought.confidence + 0.08 &&
+    learned.confidence >=
+      thought.confidence +
+        (getBrainGenome().entry_learner_override_margin || 0.08) &&
     !learned.explored;
+  // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
+  const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);
+  const raw =
+    rawAll && setupAllowedOnLane(playbook.lane, rawAll.setup) ? rawAll : null;
+
   // Mind leads. Learner may reinforce the same side — never knife opposite.
+  // Exception: raw 10s setup on LIVE/TREND lanes may lead when mind WAIT on thin
+  // story (SEEDING / allow NONE) — setup → trade now (no scalp GAIDI hunt).
   let side = thought.choice;
   if (learnerReady && learned.action === thought.choice) {
     side = learned.action;
+  }
+  const chEarly = String(story.chapter || '').toUpperCase();
+  const rawFillsThinStory =
+    side === 'WAIT' &&
+    raw != null &&
+    playbook.lane !== 'RANGE_FADE' &&
+    chEarly !== 'BOUNCE_IN_SELL' &&
+    chEarly !== 'DIP_IN_RALLY' &&
+    (chEarly === 'SEEDING' || story.allow === 'NONE' || story.allow === 'BOTH');
+  if (rawFillsThinStory) {
+    side = raw!.direction;
   }
 
   const mindDetail =
@@ -629,27 +743,34 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // Belt-and-suspenders: story allow veto (mind already enforces; structure must too)
   if (story.allow === 'BUY' && side === 'SELL') return null;
   if (story.allow === 'SELL' && side === 'BUY') return null;
-  if (story.allow === 'NONE') return null;
+  // allow NONE: block mind-invented sides; raw SETUP NOW on non-RANGE lanes may proceed
+  if (story.allow === 'NONE' && !rawFillsThinStory) return null;
 
   // RANGE fade must NOT knife the tip of a move (looks like breakout / fake-breakout chase).
   // EXHAUST_HI → only SELL fade after reject; EXHAUST_LO → only BUY; never both-way tip spam.
-  const ch = String(story.chapter || '').toUpperCase();
+  const ch = chEarly;
   const zpos = zone?.pos ?? story.zone_pos;
+  const { extremeHi, extremeLo } = structKnobs();
+  const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
+  const tipLo = getBrainGenome().exhaust_pos_lo || 0.2;
+  const exhaustTipBlock = getBrainGenome().exhaust_tip_chase_block !== false;
   if (playbook.lane === 'RANGE_FADE') {
     if (ch === 'BREAK_UP' || ch === 'BREAK_DOWN') return null;
-    if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
-    if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
-    // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
-    if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
-    if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
+    if (exhaustTipBlock) {
+      if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
+      if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
+      // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
+      if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
+      if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
+    }
     // Chase with the tip: BUY into HI after rally / SELL into LO after selloff
-    if (ch === 'RALLY' && side === 'BUY' && zpos != null && zpos >= 0.8) return null;
-    if (ch === 'SELLOFF' && side === 'SELL' && zpos != null && zpos <= 0.2) return null;
+    if (ch === 'RALLY' && side === 'BUY' && zpos != null && zpos >= tipHi) return null;
+    if (ch === 'SELLOFF' && side === 'SELL' && zpos != null && zpos <= tipLo) return null;
     // With-move tip = breakout / fake-break lookalike (SELL HI green / BUY LO red)
     if (
       zpos != null &&
-      ((side === 'SELL' && zpos >= 0.85 && barSign > 0) ||
-        (side === 'BUY' && zpos <= 0.15 && barSign < 0))
+      ((side === 'SELL' && zpos >= extremeHi && barSign > 0) ||
+        (side === 'BUY' && zpos <= extremeLo && barSign < 0))
     ) {
       return null;
     }
@@ -664,10 +785,6 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     }
   }
 
-  // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
-  const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);
-  const raw =
-    rawAll && setupAllowedOnLane(playbook.lane, rawAll.setup) ? rawAll : null;
   const startedAll = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
   const started =
     startedAll && setupAllowedOnLane(playbook.lane, startedAll.setup) ? startedAll : null;
@@ -695,6 +812,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   });
 
   if (!entryStructureEnabled()) {
+    // L0 OPEN still tags raw 10s setup as SETUP NOW (desk: setup → trade, no scalp hunt)
+    if (matched === raw && raw) {
+      return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
+    }
     return withMind(
       matched
         ? `${gate.tag} · OPEN · ${story.summary_lv}`
@@ -702,12 +823,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     );
   }
 
-  // SETUP NOW must NOT skip scalp on FADE / post-dump bounce — that was the
+  // SETUP NOW must NOT skip scalp on RANGE FADE / post-dump bounce — that was the
   // Gold 17:45 "RANGE SELL" on the first green after a sell breakout (too early;
-  // could still be bias change). Breakout/trend continuation may fire now.
+  // could still be bias change). FAILED_BREAKOUT / TREND / BREAKOUT raw may fire now.
   const setupNeedsConfirm =
     !raw ||
-    raw.setup === 'FADE' ||
+    (raw.setup === 'FADE' && playbook.lane === 'RANGE_FADE') ||
     story.chapter === 'BOUNCE_IN_SELL' ||
     story.chapter === 'DIP_IN_RALLY' ||
     story.chapter === 'EXHAUST_LO' ||
@@ -716,6 +837,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     gateRegime === 'COMPRESSION' ||
     gateRegime === 'TRANSITION';
   if (matched === raw && raw && !setupNeedsConfirm) {
+    return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
+  }
+  // Thin story + raw on LIVE lane: still SETUP NOW (e241eaac — stop scalp GAIDI hunts)
+  if (rawFillsThinStory && matched === raw && raw) {
     return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
   }
 

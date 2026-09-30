@@ -118,7 +118,27 @@ describe('manageBrain', () => {
     );
     expect(['CUT', 'BANK']).toContain(r.action);
     expect(r.force_peak_arm).toBe(true);
-    expect(r.peak_retention_override).toBeGreaterThanOrEqual(0.72);
+    // Keep override respects desk/genome cfg — no Mind 0.72–0.88 hardcode
+    expect(r.peak_retention_override).toBe(0.72);
+  });
+
+  it('BANK/CUT Keep override respects desk cfg outside old 0.72–0.88 band', () => {
+    const bank = scoreManageAction(
+      base({
+        minute_policy: 'reverse',
+        soft_gate_allow: true,
+        next_entry_side: 'SELL',
+        mfe: 5,
+        unrealized: 4.2,
+        soft_sl: 3.5,
+        session_expectancy_pts: -0.4,
+        closes_in_session: 5,
+        live_regime: 'TREND_DOWN',
+        peak_retention_cfg: 0.55,
+      })
+    );
+    expect(bank.action).toBe('BANK');
+    expect(bank.peak_retention_override).toBe(0.55);
   });
 
   it('TRAILs by default when Soft MFE and no clear market change', () => {

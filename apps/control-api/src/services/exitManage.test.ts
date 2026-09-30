@@ -33,9 +33,8 @@ import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js
 import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 
 beforeEach(() => {
-  setDeskCalibration(defaultDeskCalibration());
-  // Pin factory genome — live BRAIN self-improve must not break Keep 75% unit contracts
   _resetBrainGenomeForTests();
+  setDeskCalibration(defaultDeskCalibration());
 });
 
 function snap(

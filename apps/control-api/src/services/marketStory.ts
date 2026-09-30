@@ -8,6 +8,7 @@
 import { ZONE_BARS, MIN_BARS_FOR_ZONE } from './regimes.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 import { getActiveRegimeBands } from './regimeBands.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 export type StoryChapter =
   | 'SEEDING'
@@ -47,12 +48,37 @@ export type MarketStory = {
   last_1m: MinuteBar | null;
 };
 
-/** Min |net| over ~30m to treat path as tradeable (Gold ~0.07% ≈ 3pt @ 4300). */
+/** Min |net| over ~30m to treat path as tradeable (Gold ~0.07% ≈ 3pt @ 4300). Factory = story_min_path_bp. */
 export const STORY_MIN_PATH_PCT = 0.0007;
 /** Prefer not to chase only the last ~12% of the zone (was 25% — starved move starts) */
-const CHASE_EDGE = 0.12;
+export const CHASE_EDGE = 0.12;
 /** Soft confidence floor — early legs often sit ~0.45–0.55 */
-const STORY_CONF_MIN = 0.4;
+export const STORY_CONF_MIN = 0.4;
+/** Firm trek = minPath × this */
+export const TREK_FIRM_MULT = 1.5;
+
+function storyKnobs() {
+  const g = getBrainGenome();
+  const minPathBp = Math.max(0.1, g.story_min_path_bp || 7);
+  return {
+    minPathFrac: minPathBp * 1e-4 || STORY_MIN_PATH_PCT,
+    chaseEdge: g.chase_edge || CHASE_EDGE,
+    confMin: g.story_conf_min || STORY_CONF_MIN,
+    trekFirmMult: g.trek_firm_mult || TREK_FIRM_MULT,
+    sellStructPos: g.story_sell_struct_pos || 0.45,
+    buyStructPos: g.story_buy_struct_pos || 0.55,
+    colorDelta: Math.max(1, g.bounce_dip_color_delta || 2),
+    exhaustLo: g.exhaust_pos_lo || 0.2,
+    exhaustHi: g.exhaust_pos_hi || 0.8,
+    confBreak: g.story_conf_break || 0.8,
+    confBounceDip: g.story_conf_bounce_dip || 0.85,
+    confStruct: g.story_conf_struct || 0.75,
+    confRecent: g.story_conf_recent || 0.7,
+    confChopThin: g.story_conf_chop_thin || 0.35,
+    confChop: g.story_conf_chop || 0.4,
+    scalpWick: g.scalp_wick_confirm !== false,
+  };
+}
 
 function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   if (!bars.length) return [];
@@ -86,10 +112,25 @@ function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   return out;
 }
 
+/**
+ * Forming-minute cut = max(tape last bar, wall clock).
+ * Wall clock keeps past-only books honest; tape-ahead keeps replay/tests coherent.
+ */
+function tapeMinuteBucketMs(bars: TenSecBar[]): number {
+  let max = 0;
+  for (const b of bars) {
+    if (Number.isFinite(b.open_time_ms) && b.open_time_ms > max) max = b.open_time_ms;
+  }
+  const tape = max > 0 ? Math.floor(max / 60_000) * 60_000 : 0;
+  const wall = Math.floor(Date.now() / 60_000) * 60_000;
+  return Math.max(tape, wall);
+}
+
 function closedMinutes(bars: TenSecBar[]): MinuteBar[] {
   const mins = aggregateTenSecToMinutes(bars);
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
-  return mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= 3);
+  const lastBucket = tapeMinuteBucketMs(bars);
+  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
+  return mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
 }
 
 function storyWindow(bars: TenSecBar[]): MinuteBar[] {
@@ -111,8 +152,21 @@ function zonePos(
   const lo = Math.min(...structure.map((b) => b.low));
   const width = Math.max(hi - lo, 1e-9);
   const pos = Math.min(1, Math.max(0, (entryBar.close - lo) / width));
+  const g = getBrainGenome();
+  const cutLo = g.zone_band_cut_lo || 0.2;
+  const cutMidLo = g.zone_band_cut_mid_lo || 0.4;
+  const cutMidHi = g.zone_band_cut_mid_hi || 0.6;
+  const cutHi = g.zone_band_cut_hi || 0.8;
   const band =
-    pos <= 0.2 ? 'LO' : pos <= 0.4 ? 'MID_LO' : pos <= 0.6 ? 'MID' : pos <= 0.8 ? 'MID_HI' : 'HI';
+    pos <= cutLo
+      ? 'LO'
+      : pos <= cutMidLo
+        ? 'MID_LO'
+        : pos <= cutMidHi
+          ? 'MID'
+          : pos <= cutHi
+            ? 'MID_HI'
+            : 'HI';
   return { hi, lo, pos, band };
 }
 
@@ -202,7 +256,8 @@ export function readMarketStory(
   const windowLo = Math.min(...mins.map((m) => m.low));
   const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
   const midPx = Math.abs(last.close) || 1;
-  const minPath = Math.max(3, midPx * STORY_MIN_PATH_PCT);
+  const knobs = storyKnobs();
+  const minPath = Math.max(3, midPx * knobs.minPathFrac);
   const midZone = (windowHi + windowLo) / 2;
 
   const recentSell = recentNet < 0 && redR >= 3;
@@ -210,17 +265,18 @@ export function readMarketStory(
 
   // Require firm trek for ALL directional calls — ±1.5pt sine / HH_HL noise ≠ RALLY/EXHAUST.
   // minPath alone (~3pt) still lets thin mid-zone chop look like HH_HL → fake EXHAUST_HI.
-  const trekFirm = trek >= minPath * 1.5;
+  const trekFirm = trek >= minPath * knobs.trekFirmMult;
+  const d = knobs.colorDelta;
   const sellStruct =
     (trekFirm && swing === 'LL_LH') ||
-    (trekFirm && net < 0 && red >= green + 2) ||
+    (trekFirm && net < 0 && red >= green + d) ||
     (trekFirm && recentSell && last.close <= midZone) ||
-    (trekFirm && red >= green + 2 && pos <= 0.45);
+    (trekFirm && red >= green + d && pos <= knobs.sellStructPos);
   const buyStruct =
     (trekFirm && swing === 'HH_HL') ||
-    (trekFirm && net > 0 && green >= red + 2) ||
+    (trekFirm && net > 0 && green >= red + d) ||
     (trekFirm && recentBuy && last.close >= midZone) ||
-    (trekFirm && green >= red + 2 && pos >= 0.55);
+    (trekFirm && green >= red + d && pos >= knobs.buyStructPos);
 
   const bounceInSell =
     sellStruct && !brokeUp && greenR >= 1 && greenR <= 2 && redR >= 2 && recentNet >= 0;
@@ -237,58 +293,58 @@ export function readMarketStory(
     chapter = 'BREAK_UP';
     allow = 'BUY';
     summary_lv = 'STĀSTS · 30m BREAK UP virs zonas · sekot gariem (ne fade)';
-    confidence = 0.8;
+    confidence = knobs.confBreak;
   } else if (brokeDown && (sellStruct || recentSell || last.close < first.open)) {
     chapter = 'BREAK_DOWN';
     allow = 'SELL';
     summary_lv = 'STĀSTS · 30m BREAK DOWN zem zonas · sekot īsiem (nepirkt)';
-    confidence = 0.8;
+    confidence = knobs.confBreak;
   } else if (bounceInSell) {
     chapter = 'BOUNCE_IN_SELL';
     allow = 'SELL';
     summary_lv = 'STĀSTS · īss atspēriens selloffā · NEPIRKT bounce · meklē SELL';
-    confidence = 0.85;
+    confidence = knobs.confBounceDip;
   } else if (dipInRally) {
     chapter = 'DIP_IN_RALLY';
     allow = 'BUY';
     summary_lv = 'STĀSTS · īss dip rallijā · NEPĀRDOT · meklē BUY pullback';
-    confidence = 0.85;
+    confidence = knobs.confBounceDip;
   } else if (sellStruct) {
-    chapter = pos <= 0.2 ? 'EXHAUST_LO' : 'SELLOFF';
+    chapter = pos <= knobs.exhaustLo ? 'EXHAUST_LO' : 'SELLOFF';
     allow = 'SELL';
     summary_lv =
       chapter === 'EXHAUST_LO'
         ? 'STĀSTS · selloff pie zonas grīdas · meklē SELL · BUY tikai failed-break / reversal'
         : `STĀSTS · 30m selloff · trek ${trek.toFixed(1)}pt · tikai SELL · nepirkt`;
-    confidence = 0.75;
+    confidence = knobs.confStruct;
   } else if (buyStruct) {
-    chapter = pos >= 0.8 ? 'EXHAUST_HI' : 'RALLY';
+    chapter = pos >= knobs.exhaustHi ? 'EXHAUST_HI' : 'RALLY';
     allow = 'BUY';
     summary_lv =
       chapter === 'EXHAUST_HI'
         ? 'STĀSTS · rally pie zonas griestiem · meklē BUY · SELL tikai failed-break / reversal'
         : `STĀSTS · 30m rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
-    confidence = 0.75;
+    confidence = knobs.confStruct;
   } else if (recentSell && trekFirm) {
     chapter = 'SELLOFF';
     allow = 'SELL';
     summary_lv = `STĀSTS · pēdējās 1m sarkanas · trek ${trek.toFixed(1)}pt · tikai SELL`;
-    confidence = 0.7;
+    confidence = knobs.confRecent;
   } else if (recentBuy && trekFirm) {
     chapter = 'RALLY';
     allow = 'BUY';
     summary_lv = `STĀSTS · pēdējās 1m zaļas · trek ${trek.toFixed(1)}pt · tikai BUY`;
-    confidence = 0.7;
+    confidence = knobs.confRecent;
   } else if (trek < minPath) {
     chapter = 'RANGE_CHOP';
     allow = 'NONE';
     summary_lv = `STĀSTS · 30m trek < ${minPath.toFixed(1)}pt · 1m scalp GAIDI (šaurs)`;
-    confidence = 0.35;
+    confidence = knobs.confChopThin;
   } else {
     chapter = 'RANGE_CHOP';
     allow = 'NONE';
     summary_lv = 'STĀSTS · 30m chop · 1m scalp GAIDI (nav skaidras puses)';
-    confidence = 0.4;
+    confidence = knobs.confChop;
   }
 
   const detail = [
@@ -430,6 +486,9 @@ export function scalpStoryConfirms(
   const sideOk = storyAllowsDirection(story, direction, regime);
   if (!sideOk.ok) return sideOk;
 
+  const knobs = storyKnobs();
+  const chaseEdge = knobs.chaseEdge;
+
   if (story.chapter === 'SEEDING') {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
@@ -441,7 +500,7 @@ export function scalpStoryConfirms(
   if (story.chapter === 'RANGE_CHOP' && !isBreakoutRegime(regime) && !isTrendPullbackRegime(regime)) {
     return { ok: false, reason: `${story.summary_lv} · 1m scalp GAIDI` };
   }
-  if (story.confidence < STORY_CONF_MIN && !isBreakoutRegime(regime)) {
+  if (story.confidence < knobs.confMin && !isBreakoutRegime(regime)) {
     return { ok: false, reason: `STĀSTS vājš conf=${story.confidence.toFixed(2)} · GAIDI` };
   }
 
@@ -457,13 +516,13 @@ export function scalpStoryConfirms(
   const chaseBuy =
     direction === 'BUY' &&
     pos != null &&
-    pos >= 1 - CHASE_EDGE &&
+    pos >= 1 - chaseEdge &&
     story.chapter !== 'BREAK_UP' &&
     !isBreakoutRegime(regime);
   const chaseSell =
     direction === 'SELL' &&
     pos != null &&
-    pos <= CHASE_EDGE &&
+    pos <= chaseEdge &&
     story.chapter !== 'BREAK_DOWN' &&
     !isBreakoutRegime(regime);
   if (
@@ -531,7 +590,7 @@ export function scalpStoryConfirms(
       direction === 'BUY' &&
       d1 === 'DOWN' &&
       (story.chapter === 'RALLY' || story.chapter === 'DIP_IN_RALLY') &&
-      (pos == null || pos < 1 - CHASE_EDGE)
+      (pos == null || pos < 1 - chaseEdge)
     ) {
       return { ok: true, tag: `1m DIP OK · ${story.chapter} · pullback` };
     }
@@ -539,21 +598,21 @@ export function scalpStoryConfirms(
       direction === 'SELL' &&
       d1 === 'UP' &&
       (story.chapter === 'SELLOFF' || story.chapter === 'BOUNCE_IN_SELL') &&
-      (pos == null || pos > CHASE_EDGE)
+      (pos == null || pos > chaseEdge)
     ) {
       return { ok: true, tag: `1m RALLY OK · ${story.chapter} · pullback` };
     }
   }
 
   // Don't chase extreme edge — need 1m rejection wick; bare 10s trig at HI/LO = Funds scratches
-  if (direction === 'SELL' && pos != null && pos <= CHASE_EDGE && story.chapter !== 'BREAK_DOWN') {
+  if (direction === 'SELL' && pos != null && pos <= chaseEdge && story.chapter !== 'BREAK_DOWN') {
     if (story.chapter === 'EXHAUST_LO') {
       return {
         ok: false,
         reason: `1m scalp · EXHAUST_LO · gaida bounce-reject · ne chase grīdu`,
       };
     }
-    if (rejection1m(m1, 'SELL')) {
+    if (!knobs.scalpWick || rejection1m(m1, 'SELL')) {
       return { ok: true, tag: `1m REJECT at LO-zone · ${story.chapter}` };
     }
     return {
@@ -561,14 +620,14 @@ export function scalpStoryConfirms(
       reason: `1m scalp · selloff pie LO · gaida bounce-reject vai jaunu sarkanu 1m`,
     };
   }
-  if (direction === 'BUY' && pos != null && pos >= 1 - CHASE_EDGE && story.chapter !== 'BREAK_UP') {
+  if (direction === 'BUY' && pos != null && pos >= 1 - chaseEdge && story.chapter !== 'BREAK_UP') {
     if (story.chapter === 'EXHAUST_HI') {
       return {
         ok: false,
         reason: `1m scalp · EXHAUST_HI · gaida dip-reject · ne chase griestus`,
       };
     }
-    if (rejection1m(m1, 'BUY')) {
+    if (!knobs.scalpWick || rejection1m(m1, 'BUY')) {
       return { ok: true, tag: `1m REJECT at HI-zone · ${story.chapter}` };
     }
     return {

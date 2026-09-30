@@ -401,6 +401,27 @@ function intelKeyProbes(): Array<{
       bars: clearBreakBars(),
     },
     {
+      key: 'regime_range_chop_persist_max',
+      id: 'p_rchop',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
+      key: 'regime_range_trek_share_max',
+      id: 'p_rshare',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
+      key: 'regime_range_trek_eff_max',
+      id: 'p_reff',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
       key: 'regime_persist_enter',
       id: 'p_penter',
       previous: 'UNKNOWN',
@@ -542,6 +563,46 @@ function scoreMtfIntelProbes(): Record<string, { hit: number; n: number }> {
       tf30_dir: 'FLAT',
     });
     out.entry_story_conf_min = { hit: thought.choice !== 'SELL' ? 1 : 0, n: 1 };
+  }
+
+  // mtf_htf_veto — factory true: SELL vs UP 30/15 must WAIT
+  {
+    const thought = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.8,
+      red_1m: 14,
+      green_1m: 6,
+      zone_pos: 0.55,
+      bar_body_sign: -1,
+      m1_dir: 'FLAT',
+      bias: 'UP',
+      tf5_dir: 'FLAT',
+      tf15_dir: 'UP',
+      tf30_dir: 'UP',
+    });
+    out.mtf_htf_veto = { hit: thought.choice !== 'SELL' ? 1 : 0, n: 1 };
+  }
+
+  // entry_chop_conf_max — factory 0.45: conf 0.40 on RANGE_CHOP → WAIT
+  {
+    const thought = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'RANGE_CHOP',
+      allow: 'NONE',
+      story_conf: 0.4,
+      red_1m: 10,
+      green_1m: 10,
+      zone_pos: 0.5,
+      bar_body_sign: 0,
+      m1_dir: 'FLAT',
+      bias: 'FLAT',
+      tf5_dir: 'FLAT',
+      tf15_dir: 'FLAT',
+      tf30_dir: 'FLAT',
+    });
+    out.entry_chop_conf_max = { hit: thought.choice === 'WAIT' ? 1 : 0, n: 1 };
   }
 
   return out;

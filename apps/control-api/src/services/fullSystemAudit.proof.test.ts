@@ -219,11 +219,17 @@ describe('PROOF: flip lock is real (win + after-loss)', () => {
     );
   });
 
-  it('after Soft loss still blocks same side at 5 minutes', () => {
-    const closedAt = Date.now() - 5 * 60_000;
+  it('after Soft loss still blocks same side inside 90s lock (not fake 5–12m wait)', () => {
+    const closedAt = Date.now() - 30_000;
     expect(
       sameDirectionBlocked('SELL', 'SELL', closedAt, Date.now(), { wasLoss: true })
     ).toBe(true);
+    // After lock expires — same side allowed again (genome same_dir_lock_after_loss_ms)
+    expect(
+      sameDirectionBlocked('SELL', 'SELL', Date.now() - 90_001, Date.now(), {
+        wasLoss: true,
+      })
+    ).toBe(false);
   });
 
   it('allows same side after win lock expires', () => {

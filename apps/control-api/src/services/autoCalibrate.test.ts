@@ -255,8 +255,8 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 0, exit_reason: 'Scratch' }),
     ]);
     expect(r.applied).toBe(true);
-    expect(r.next.hardinv_abs).toBe(2.0);
-    expect(r.next.hardinv_pct).toBe(softPctFromAbs(2.0));
+    expect(r.next.hardinv_abs).toBe(1.9);
+    expect(r.next.hardinv_pct).toBe(softPctFromAbs(1.9));
     expect(r.next.peak_mfe_abs).toBeLessThan(base.peak_mfe_abs);
     expect(r.next.target_abs).toBeLessThan(base.target_abs);
     expect(r.changes.some((c) => c.includes('hardinv_abs') && c.includes('Soft tighten'))).toBe(
@@ -280,7 +280,7 @@ describe('autoCalibrate', () => {
       new Set(),
       { raise_streak: 3 }
     );
-    expect(r.next.hardinv_abs).toBe(1.2);
+    expect(r.next.hardinv_abs).toBe(1.1);
     expect(Number.isInteger(r.next.hardinv_abs * 10)).toBe(true);
     expect(String(r.next.hardinv_abs)).not.toMatch(/\.\d{3,}/);
     // Peak/Target/retention also clean — no float dust

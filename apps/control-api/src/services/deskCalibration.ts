@@ -1,6 +1,10 @@
 /** Desk calibration — HardInv / Peak / Target + which regimes may enter. */
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  deskKnobsFromGenome,
+  setBrainGenome,
+} from '../brainSelfImprove/brainGenome.js';
 import { REGIME_NAMES, type RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
 
@@ -296,7 +300,23 @@ export function getDeskCalibration(clientId?: number | null): DeskCalibration {
     cached = loadFromDisk(id);
     cacheByClient.set(id, cached);
   }
-  return cached;
+  // Genome wins Soft/Peak/Target/SAFETY + regime gates; desk file still persists.
+  return mergeGenomeOverDesk(cached);
+}
+
+/**
+ * Overlay BrainGenome trading knobs onto a desk snapshot.
+ * Soft L1–L3, Target L1–L3, peak_*, pct, safety_tp_rr, filters, regimes.
+ */
+function mergeGenomeOverDesk(desk: DeskCalibration): DeskCalibration {
+  const knobs = deskKnobsFromGenome();
+  return sanitize({
+    ...desk,
+    ...knobs,
+    enabled_regimes: knobs.enabled_regimes as RegimeName[],
+    soft_off_regimes: knobs.soft_off_regimes as RegimeName[],
+    updated_at: desk.updated_at,
+  });
 }
 
 export function setDeskCalibration(
@@ -304,10 +324,76 @@ export function setDeskCalibration(
   clientId?: number | null
 ): DeskCalibration {
   const id = resolveDeskClientId(clientId);
-  const next = sanitize({ ...getDeskCalibration(id), ...partial });
+  // Merge onto raw desk (not genome-overlaid) so operator/auto-cal writes persist.
+  let raw = cacheByClient.get(id);
+  if (!raw) {
+    raw = loadFromDisk(id);
+    cacheByClient.set(id, raw);
+  }
+  const next = sanitize({ ...raw, ...partial });
   cacheByClient.set(id, next);
   saveToDisk(id, next);
-  return next;
+  // Keep BrainGenome in sync — genome is SoT on subsequent reads.
+  syncDeskKnobsToGenome(next, partial);
+  return mergeGenomeOverDesk(next);
+}
+
+/** Push desk trading knobs into genome when setDeskCalibration touches them. */
+function syncDeskKnobsToGenome(
+  next: DeskCalibration,
+  partial: Partial<DeskCalibration>
+): void {
+  const keys = Object.keys(partial);
+  if (!keys.length) return;
+  const touch =
+    keys.some((k) =>
+      [
+        'hardinv_abs',
+        'soft_l1_abs',
+        'soft_l2_abs',
+        'soft_l3_abs',
+        'peak_mfe_abs',
+        'peak_retention',
+        'peak_min_giveback_abs',
+        'target_abs',
+        'target_l1_abs',
+        'target_l2_abs',
+        'target_l3_abs',
+        'safety_tp_rr',
+        'hardinv_pct',
+        'target_pct',
+        'peak_mfe_pct',
+        'entry_filter_level',
+        'enabled_regimes',
+        'soft_off_regimes',
+      ].includes(k)
+    );
+  if (!touch) return;
+  const fracToBp = (frac: number) =>
+    Math.round((Math.max(0, Number(frac) || 0) / 1e-4) * 10) / 10;
+  try {
+    setBrainGenome({
+      soft_l1_abs: next.soft_l1_abs,
+      soft_l2_abs: next.soft_l2_abs,
+      soft_l3_abs: next.soft_l3_abs,
+      hardinv_abs_cap: next.hardinv_abs,
+      hardinv_pct_bp: fracToBp(next.hardinv_pct),
+      peak_mfe_abs: next.peak_mfe_abs,
+      peak_mfe_pct_bp: fracToBp(next.peak_mfe_pct),
+      peak_retention: next.peak_retention,
+      peak_min_giveback_abs: next.peak_min_giveback_abs,
+      target_l1_abs: next.target_l1_abs,
+      target_l2_abs: next.target_l2_abs,
+      target_l3_abs: next.target_l3_abs,
+      target_pct_bp: fracToBp(next.target_pct),
+      safety_tp_rr: next.safety_tp_rr,
+      entry_filter_level: next.entry_filter_level,
+      enabled_regimes: [...next.enabled_regimes],
+      soft_off_regimes: [...next.soft_off_regimes],
+    });
+  } catch {
+    /* genome write best-effort — desk file still saved */
+  }
 }
 
 /** True when this regime is fully ON (enabled list). */

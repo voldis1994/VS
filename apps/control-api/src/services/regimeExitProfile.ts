@@ -6,7 +6,9 @@
  * targets, Peak arming, and structure invalidation.
  *
  * Abs mults apply AFTER scaleDeskAbs (same % language on every market).
+ * Live values come from BrainGenome exit_* family knobs (factory = prior consts).
  */
+import { getBrainGenome, type BrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { normalizeRegime, type RegimeName } from './regimes.js';
 
 export type RegimeExitFamily =
@@ -47,7 +49,7 @@ export type RegimeExitProfile = {
   peak_mfe_mult: number;
   /** Peak min-giveback multiplier */
   peak_giveback_mult: number;
-  /** Peak retention override (null = desk calibration) */
+  /** Peak retention override (null = desk/genome Keep) */
   peak_retention: number | null;
   /** Target distance multiplier */
   target_mult: number;
@@ -58,135 +60,189 @@ export type RegimeExitProfile = {
   structure: StructureInvalidation;
 };
 
-const TREND: RegimeExitProfile = {
-  family: 'trend',
-  hardinv_mult: 1.0,
-  peak_arm: 'reverse_1m',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: null,
-  target_mult: 1.15,
-  timedecay_hold_ms: 14 * 60_000,
-  timedecay_min_fav_mult: 1.0,
-  structure: 'none',
+/** Genome peak_retention 0 → null (use desk/genome Keep). */
+export function peakRetentionFromGenome(raw: number): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function familyProfile(
+  family: RegimeExitFamily,
+  hardinv_mult: number,
+  peak_arm: PeakArmMode,
+  peak_mfe_mult: number,
+  peak_giveback_mult: number,
+  peak_retention_raw: number,
+  target_mult: number,
+  timedecay_hold_ms: number,
+  timedecay_min_fav_mult: number,
+  structure: StructureInvalidation
+): RegimeExitProfile {
+  return {
+    family,
+    hardinv_mult,
+    peak_arm,
+    peak_mfe_mult,
+    peak_giveback_mult,
+    peak_retention: peakRetentionFromGenome(peak_retention_raw),
+    target_mult,
+    timedecay_hold_ms,
+    timedecay_min_fav_mult,
+    structure,
+  };
+}
+
+/** Genome default TimeDecay min hold when a profile leaves hold ms unset. */
+export function genomeTimedecayMinHoldMs(g: BrainGenome = getBrainGenome()): number {
+  const n = g.timedecay_min_hold_ms;
+  return Number.isFinite(n) && n > 0 ? n : 12 * 60_000;
+}
+
+/** Build live exit profiles for all families from active BrainGenome. */
+export function exitProfilesFromGenome(
+  g: BrainGenome = getBrainGenome()
+): Record<RegimeExitFamily, RegimeExitProfile> {
+  return {
+    trend: familyProfile(
+      'trend',
+      g.exit_trend_hardinv_mult,
+      g.exit_trend_peak_arm,
+      g.exit_trend_peak_mfe_mult,
+      g.exit_trend_peak_giveback_mult,
+      g.exit_trend_peak_retention,
+      g.exit_trend_target_mult,
+      g.exit_trend_timedecay_hold_ms,
+      g.exit_trend_timedecay_min_fav_mult,
+      g.exit_trend_structure
+    ),
+    pullback: familyProfile(
+      'pullback',
+      g.exit_pullback_hardinv_mult,
+      g.exit_pullback_peak_arm,
+      g.exit_pullback_peak_mfe_mult,
+      g.exit_pullback_peak_giveback_mult,
+      g.exit_pullback_peak_retention,
+      g.exit_pullback_target_mult,
+      g.exit_pullback_timedecay_hold_ms,
+      g.exit_pullback_timedecay_min_fav_mult,
+      g.exit_pullback_structure
+    ),
+    break: familyProfile(
+      'break',
+      g.exit_break_hardinv_mult,
+      g.exit_break_peak_arm,
+      g.exit_break_peak_mfe_mult,
+      g.exit_break_peak_giveback_mult,
+      g.exit_break_peak_retention,
+      g.exit_break_target_mult,
+      g.exit_break_timedecay_hold_ms,
+      g.exit_break_timedecay_min_fav_mult,
+      g.exit_break_structure
+    ),
+    break_fail: familyProfile(
+      'break_fail',
+      g.exit_break_fail_hardinv_mult,
+      g.exit_break_fail_peak_arm,
+      g.exit_break_fail_peak_mfe_mult,
+      g.exit_break_fail_peak_giveback_mult,
+      g.exit_break_fail_peak_retention,
+      g.exit_break_fail_target_mult,
+      g.exit_break_fail_timedecay_hold_ms,
+      g.exit_break_fail_timedecay_min_fav_mult,
+      g.exit_break_fail_structure
+    ),
+    fade: familyProfile(
+      'fade',
+      g.exit_fade_hardinv_mult,
+      g.exit_fade_peak_arm,
+      g.exit_fade_peak_mfe_mult,
+      g.exit_fade_peak_giveback_mult,
+      g.exit_fade_peak_retention,
+      g.exit_fade_target_mult,
+      g.exit_fade_timedecay_hold_ms,
+      g.exit_fade_timedecay_min_fav_mult,
+      g.exit_fade_structure
+    ),
+    expansion: familyProfile(
+      'expansion',
+      g.exit_expansion_hardinv_mult,
+      g.exit_expansion_peak_arm,
+      g.exit_expansion_peak_mfe_mult,
+      g.exit_expansion_peak_giveback_mult,
+      g.exit_expansion_peak_retention,
+      g.exit_expansion_target_mult,
+      g.exit_expansion_timedecay_hold_ms,
+      g.exit_expansion_timedecay_min_fav_mult,
+      g.exit_expansion_structure
+    ),
+    reversal: familyProfile(
+      'reversal',
+      g.exit_reversal_hardinv_mult,
+      g.exit_reversal_peak_arm,
+      g.exit_reversal_peak_mfe_mult,
+      g.exit_reversal_peak_giveback_mult,
+      g.exit_reversal_peak_retention,
+      g.exit_reversal_target_mult,
+      g.exit_reversal_timedecay_hold_ms,
+      g.exit_reversal_timedecay_min_fav_mult,
+      g.exit_reversal_structure
+    ),
+    chop: familyProfile(
+      'chop',
+      g.exit_chop_hardinv_mult,
+      g.exit_chop_peak_arm,
+      g.exit_chop_peak_mfe_mult,
+      g.exit_chop_peak_giveback_mult,
+      g.exit_chop_peak_retention,
+      g.exit_chop_target_mult,
+      g.exit_chop_timedecay_hold_ms,
+      g.exit_chop_timedecay_min_fav_mult,
+      g.exit_chop_structure
+    ),
+  };
+}
+
+/**
+ * Regime → exit family mapping (stable; profile numbers come from genome).
+ * Kept as BY_REGIME-compatible shape via regimeExitProfile().
+ */
+export const REGIME_EXIT_FAMILY: Record<RegimeName, RegimeExitFamily> = {
+  UNKNOWN: 'chop',
+  RANGE: 'fade',
+  TREND_UP: 'trend',
+  TREND_DOWN: 'trend',
+  PULLBACK_UPTREND: 'pullback',
+  PULLBACK_DOWNTREND: 'pullback',
+  COMPRESSION: 'chop',
+  EXPANSION: 'expansion',
+  BREAKOUT_UP: 'break',
+  BREAKOUT_DOWN: 'break',
+  FAILED_BREAKOUT_UP: 'break_fail',
+  FAILED_BREAKOUT_DOWN: 'break_fail',
+  REVERSAL_CANDIDATE: 'reversal',
+  TRANSITION: 'chop',
 };
 
-const PULLBACK: RegimeExitProfile = {
-  family: 'pullback',
-  hardinv_mult: 0.9,
-  peak_arm: 'reverse_1m',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: null,
-  target_mult: 1.05,
-  timedecay_hold_ms: 11 * 60_000,
-  timedecay_min_fav_mult: 0.95,
-  structure: 'none',
-};
-
-const BREAKOUT: RegimeExitProfile = {
-  family: 'break',
-  hardinv_mult: 0.85,
-  peak_arm: 'reverse_1m',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: null,
-  target_mult: 1.2,
-  timedecay_hold_ms: 12 * 60_000,
-  timedecay_min_fav_mult: 1.0,
-  structure: 'back_in_range',
-};
-
-const FAILED_BREAK: RegimeExitProfile = {
-  family: 'break_fail',
-  hardinv_mult: 0.95,
-  peak_arm: 'reverse_or_mid',
-  // Never shrink Peak/Target below Soft — old 0.55/0.7 = tiny wins vs Soft loss
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: 0.7,
-  target_mult: 1.0,
-  timedecay_hold_ms: 7 * 60_000,
-  timedecay_min_fav_mult: 0.85,
-  structure: 'failed_edge_reclaim',
-};
-
-const RANGE_FADE: RegimeExitProfile = {
-  family: 'fade',
-  // Soft must not widen while Target shrinks (was 1.15 Soft / 0.55 Target)
-  hardinv_mult: 1.0,
-  peak_arm: 'reverse_or_mid',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: 0.7,
-  target_mult: 1.05,
-  timedecay_hold_ms: 7 * 60_000,
-  timedecay_min_fav_mult: 0.85,
-  structure: 'through_mid',
-};
-
-const EXPANSION: RegimeExitProfile = {
-  family: 'expansion',
-  hardinv_mult: 1.0,
-  peak_arm: 'reverse_1m',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: null,
-  target_mult: 1.1,
-  timedecay_hold_ms: 9 * 60_000,
-  timedecay_min_fav_mult: 0.9,
-  structure: 'none',
-};
-
-const REVERSAL: RegimeExitProfile = {
-  family: 'reversal',
-  hardinv_mult: 0.8,
-  peak_arm: 'fast',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: 0.7,
-  target_mult: 1.05,
-  timedecay_hold_ms: 5 * 60_000,
-  timedecay_min_fav_mult: 0.85,
-  structure: 'none',
-};
-
-const CHOP: RegimeExitProfile = {
-  family: 'chop',
-  hardinv_mult: 0.95,
-  peak_arm: 'fast',
-  peak_mfe_mult: 1.0,
-  peak_giveback_mult: 1.0,
-  peak_retention: 0.7,
-  target_mult: 1.0,
-  timedecay_hold_ms: 5 * 60_000,
-  timedecay_min_fav_mult: 0.85,
-  structure: 'none',
-};
-
-const BY_REGIME: Record<RegimeName, RegimeExitProfile> = {
-  UNKNOWN: CHOP,
-  RANGE: RANGE_FADE,
-  TREND_UP: TREND,
-  TREND_DOWN: TREND,
-  PULLBACK_UPTREND: PULLBACK,
-  PULLBACK_DOWNTREND: PULLBACK,
-  COMPRESSION: CHOP,
-  EXPANSION,
-  BREAKOUT_UP: BREAKOUT,
-  BREAKOUT_DOWN: BREAKOUT,
-  FAILED_BREAKOUT_UP: FAILED_BREAK,
-  FAILED_BREAKOUT_DOWN: FAILED_BREAK,
-  REVERSAL_CANDIDATE: REVERSAL,
-  TRANSITION: CHOP,
-};
+/** Live BY_REGIME table from genome (factory defaults = prior hardcoded consts). */
+export function byRegimeExitProfiles(
+  g: BrainGenome = getBrainGenome()
+): Record<RegimeName, RegimeExitProfile> {
+  const fam = exitProfilesFromGenome(g);
+  const out = {} as Record<RegimeName, RegimeExitProfile>;
+  for (const r of Object.keys(REGIME_EXIT_FAMILY) as RegimeName[]) {
+    out[r] = fam[REGIME_EXIT_FAMILY[r]];
+  }
+  return out;
+}
 
 export function regimeExitProfile(regime?: string | null): RegimeExitProfile {
-  return BY_REGIME[normalizeRegime(regime)];
+  const family = REGIME_EXIT_FAMILY[normalizeRegime(regime)];
+  return exitProfilesFromGenome()[family];
 }
 
 export function regimeExitFamily(regime?: string | null): RegimeExitFamily {
-  return regimeExitProfile(regime).family;
+  return REGIME_EXIT_FAMILY[normalizeRegime(regime)];
 }
 
 export type ExitZoneSnap = {
@@ -211,6 +267,8 @@ export function structureInvalidationReason(
   const r = normalizeRegime(regime);
   const { hi, lo, mid: zMid, width } = zone;
   if (!(width > 0) || !(hi > lo)) return null;
+  const slack =
+    width * Math.max(0, getBrainGenome().exit_range_through_mid_slack || 0.05);
 
   switch (profile.structure) {
     case 'back_in_range': {
@@ -225,10 +283,10 @@ export function structureInvalidationReason(
     }
     case 'through_mid': {
       // RANGE fade BUY from LO — dead once price holds through mid toward HI
-      if (side === 'BUY' && mid > zMid + width * 0.05) {
+      if (side === 'BUY' && mid > zMid + slack) {
         return `StructureInvalidation · RANGE fade BUY through mid ${zMid.toFixed(2)}`;
       }
-      if (side === 'SELL' && mid < zMid - width * 0.05) {
+      if (side === 'SELL' && mid < zMid - slack) {
         return `StructureInvalidation · RANGE fade SELL through mid ${zMid.toFixed(2)}`;
       }
       return null;
