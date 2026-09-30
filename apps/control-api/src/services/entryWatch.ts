@@ -8,12 +8,12 @@ import {
 import type { RegimeEntry } from './entryFromRegime.js';
 import {
   decideEntryWithStructure,
-  effectiveEntryRegime,
   higherTfDir,
   minuteTrendBias,
   lastClosed1mFromTenSec,
   minuteDir,
 } from './structureEntry.js';
+import { pickEntryPlaybook } from './entryPlaybook.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import {
   regimeAllowedForEntry,
@@ -58,7 +58,12 @@ export type EntryWatchStatus =
   | 'ENTERING';
 
 export type EntryWatch = {
+  /** Canonical entry thesis (playbook) — UI / arm / Soft OFF share this */
   regime: RegimeName;
+  /** Live classifier label (may differ from thesis on false RANGE) */
+  live_regime: RegimeName;
+  /** Playbook lane owning this bar */
+  lane: string;
   regime_enabled: boolean;
   enabled_regimes: RegimeName[];
   status: EntryWatchStatus;
@@ -368,8 +373,7 @@ export function multiTfWatchLine(input: {
 }
 
 export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
-  const regime = normalizeRegime(input.regime);
-  const recipe = watchRecipe(regime);
+  const liveRegime = normalizeRegime(input.regime);
   const enabled = getDeskCalibration().enabled_regimes;
   const bars = input.closed_bars?.length
     ? input.closed_bars
@@ -380,13 +384,20 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     input.last_closed && bars.length
       ? readMarketStory(bars, input.last_closed)
       : null;
-  // RANGE fade only when truly chop — Capital HTF (not 10s) promotes off false RANGE
-  const entryRegime = effectiveEntryRegime(regime, storySnap, {
+  // One thesis: Capital HTF + story playbook (not live RANGE label alone)
+  const htfSnap = {
     tf30: input.capital_tf30_dir,
     tf15: input.capital_tf15_dir,
     tf5: input.capital_tf5_dir,
     m1: input.capital_m1_dir,
+  };
+  const playbook = pickEntryPlaybook({
+    liveRegime,
+    story: storySnap,
+    htf: htfSnap,
   });
+  const entryRegime = playbook.regime;
+  const recipe = watchRecipe(entryRegime);
   const regimeOn = regimeAllowedForEntry(entryRegime);
   const softOff = regimeIsSoftOff(entryRegime);
   const zone = zoneBarProgress(input.closed_bar_count ?? 0);
@@ -415,7 +426,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const rawSig = mayEvalEntry
     ? decideEntryWithStructure({
         bar,
-        regime,
+        regime: liveRegime,
         closedBars: bars,
         last_closed_side: lastClosedSide,
         last_close_was_loss: wasLoss,
@@ -476,13 +487,13 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
       last_reason = softOff
-        ? entryRegime !== regime
-          ? `${regime}→${entryRegime} Soft OFF · gaida strong signal`
-          : `${regime} Soft OFF · gaida strong signal`
-        : entryRegime !== regime
-          ? `${regime}→${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
-          : `${regime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
-    else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
+        ? entryRegime !== liveRegime
+          ? `${liveRegime}→${entryRegime} Soft OFF · gaida strong signal`
+          : `${entryRegime} Soft OFF · gaida strong signal`
+        : entryRegime !== liveRegime
+          ? `${liveRegime}→${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
+          : `${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
+    else if (status === 'WAITING_TRIGGER') last_reason = `${entryRegime} · ${vs}`;
     else if (status === 'MANAGE') last_reason = `Pozīcija ${input.open_side} — manage`;
     else if (status === 'MANAGE_ONLY') last_reason = 'Entry smadzenes OFF (manage-only)';
     else if (status === 'COOLDOWN')
@@ -520,14 +531,18 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     tfLine.mind === 'WAIT'
       ? `PRĀTS WAIT · ${tfLine.summary}`
       : `PRĀTS ${tfLine.mind} · ${tfLine.summary}`;
-  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
+  const promoteNote =
+    entryRegime !== liveRegime ? ` · thesis ${liveRegime}→${entryRegime}` : '';
+  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${promoteNote}${flipNote}`;
 
   return {
-    regime,
+    regime: entryRegime,
+    live_regime: liveRegime,
+    lane: playbook.lane,
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: lookingForWithZone(lookBase, zone, regime),
+    looking_for: lookingForWithZone(lookBase, zone, entryRegime),
     bar_vs_trigger: vs,
     market_story: `${tfLine.summary} · ${story.summary_lv}`,
     story_chapter: story.chapter,
