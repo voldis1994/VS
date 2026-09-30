@@ -57,6 +57,35 @@ describe('manageBrain', () => {
     expect(r.soft_gate_override).toBe(false);
   });
 
+  it('HOLD does not force Peak arm at Soft×1 — genome Soft× arm (no hidden Soft ceiling)', () => {
+    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35 });
+    const softOnly = scoreManageAction(
+      base({
+        minute_policy: 'continue',
+        mfe: 3.5, // Soft×1.0
+        unrealized: 3.4,
+        soft_sl: 3.5,
+        soft_gate_allow: false,
+        peak_protect_armed: false,
+      })
+    );
+    expect(softOnly.action).toBe('HOLD');
+    expect(softOnly.force_peak_arm).toBe(false);
+
+    const runner = scoreManageAction(
+      base({
+        minute_policy: 'continue',
+        mfe: 4.8, // Soft×1.37
+        unrealized: 4.5,
+        soft_sl: 3.5,
+        soft_gate_allow: false,
+        peak_protect_armed: false,
+      })
+    );
+    expect(runner.action).toBe('HOLD');
+    expect(runner.force_peak_arm).toBe(true);
+  });
+
   it('BANKs when reverse + Soft-green + weak session E', () => {
     const r = scoreManageAction(
       base({

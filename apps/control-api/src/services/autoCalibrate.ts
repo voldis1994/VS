@@ -712,7 +712,7 @@ function proposeGenomePatch(
         )
       );
     }
-    const arm = roundRet(Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult - 0.05)));
+    const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult - 0.05)));
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
       changes.push(
@@ -733,13 +733,33 @@ function proposeGenomePatch(
       );
     }
   } else if (intent === 'let_winners_run' || expectancy > 0.25) {
-    const arm = roundRet(Math.min(1.2, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
+    const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
       changes.push(
         autotuneLog(
           `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
           'let winners run — Peak arms later'
+        )
+      );
+    }
+    const runner = roundRet(Math.min(2.0, Math.max(1.0, g.soft_plus_runner_mult + 0.05)));
+    if (runner !== roundRet(g.soft_plus_runner_mult)) {
+      patch.soft_plus_runner_mult = runner;
+      changes.push(
+        autotuneLog(
+          `genome soft_plus_runner_mult ${roundRet(g.soft_plus_runner_mult).toFixed(2)}→${runner.toFixed(2)}`,
+          'Soft+ bank later — runners breathe'
+        )
+      );
+    }
+    const leg = roundRet(Math.min(2.0, Math.max(1.0, g.soft_plus_leg_mult + 0.05)));
+    if (leg !== roundRet(g.soft_plus_leg_mult)) {
+      patch.soft_plus_leg_mult = leg;
+      changes.push(
+        autotuneLog(
+          `genome soft_plus_leg_mult ${roundRet(g.soft_plus_leg_mult).toFixed(2)}→${leg.toFixed(2)}`,
+          'Soft+ leg later — no Soft×1 ceiling'
         )
       );
     }

@@ -377,27 +377,32 @@ export function structureGate(
       return { ok: false, reason: 'UNKNOWN · no entry' };
 
     case 'COMPRESSION':
-      return { ok: true, tag: `COMPRESSION open · ${posTag}` };
-
     case 'TRANSITION':
-      return { ok: true, tag: `TRANSITION open · ${posTag}` };
-
-    case 'RANGE':
+    case 'RANGE': {
       // Fade only in the correct half — never tip-chase (breakout / fake-break lookalike)
       if (sig.direction === 'BUY' && zone.pos > HALF_LO) {
-        return { ok: false, reason: `RANGE BUY not in lower half (${posTag})` };
+        return { ok: false, reason: `${regime} BUY not in lower half (${posTag})` };
       }
       if (sig.direction === 'SELL' && zone.pos < HALF_HI) {
-        return { ok: false, reason: `RANGE SELL not in upper half (${posTag})` };
+        return { ok: false, reason: `${regime} SELL not in upper half (${posTag})` };
       }
-      // Extreme tip + with-trend 10s = breakout chase, not fade
+      // Extreme tip + WITH the move = breakout / fake-break lookalike (not fade reject)
+      // SELL into HI green = selling the tip; BUY into LO red = buying the tip
+      if (sig.direction === 'SELL' && zone.pos >= EXTREME_HI && rally(bar)) {
+        return { ok: false, reason: `${regime} SELL tip-chase HI (${posTag})` };
+      }
+      if (sig.direction === 'BUY' && zone.pos <= EXTREME_LO && dip(bar)) {
+        return { ok: false, reason: `${regime} BUY tip-chase LO (${posTag})` };
+      }
+      // Wrong-side knife at extreme still blocked
       if (sig.direction === 'BUY' && zone.pos >= EXTREME_HI && rally(bar)) {
-        return { ok: false, reason: `RANGE BUY tip-chase HI (${posTag})` };
+        return { ok: false, reason: `${regime} BUY tip-chase HI (${posTag})` };
       }
       if (sig.direction === 'SELL' && zone.pos <= EXTREME_LO && dip(bar)) {
-        return { ok: false, reason: `RANGE SELL tip-chase LO (${posTag})` };
+        return { ok: false, reason: `${regime} SELL tip-chase LO (${posTag})` };
       }
-      return { ok: true, tag: `RANGE half-OK · ${posTag}` };
+      return { ok: true, tag: `${regime} half-OK · ${posTag}` };
+    }
 
     case 'TREND_UP':
       // Dip-buy: allow anywhere except extreme HI chase without a real dip context
@@ -634,9 +639,20 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     if (ch === 'BREAK_UP' || ch === 'BREAK_DOWN') return null;
     if (ch === 'EXHAUST_HI' && side === 'BUY') return null;
     if (ch === 'EXHAUST_LO' && side === 'SELL') return null;
+    // Still melting into tip — wait reject (dip at HI / rally at LO), else looks like breakout
+    if (ch === 'EXHAUST_HI' && side === 'SELL' && barSign > 0) return null;
+    if (ch === 'EXHAUST_LO' && side === 'BUY' && barSign < 0) return null;
     // Chase with the tip: BUY into HI after rally / SELL into LO after selloff
     if (ch === 'RALLY' && side === 'BUY' && zpos != null && zpos >= 0.8) return null;
     if (ch === 'SELLOFF' && side === 'SELL' && zpos != null && zpos <= 0.2) return null;
+    // With-move tip = breakout / fake-break lookalike (SELL HI green / BUY LO red)
+    if (
+      zpos != null &&
+      ((side === 'SELL' && zpos >= 0.85 && barSign > 0) ||
+        (side === 'BUY' && zpos <= 0.15 && barSign < 0))
+    ) {
+      return null;
+    }
     // Mid-zone RANGE_CHOP tip after a one-way 10s expansion — treat as break tip, not fade
     if (
       (ch === 'RANGE_CHOP' || ch === 'MIXED' || !ch) &&

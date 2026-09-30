@@ -62,6 +62,102 @@ describe('RANGE must not tip-chase breakout / fake-breakout', () => {
     expect(g.reason).toMatch(/tip-chase|not in lower half/i);
   });
 
+  it('structureGate blocks RANGE SELL tip-chase at HI with green bar (breakout lookalike)', () => {
+    const last = bar(4338, 4339.5, Date.now());
+    const zone = {
+      hi: 4340,
+      lo: 4320,
+      mid: 4330,
+      width: 20,
+      pos: 0.95,
+      band: 'HI' as const,
+    };
+    const g = structureGate(
+      { direction: 'SELL', setup: 'FADE', reason: 'tip fade' },
+      'RANGE',
+      last,
+      zone,
+      null
+    );
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/tip-chase HI/i);
+  });
+
+  it('structureGate blocks RANGE BUY tip-chase at LO with red bar (breakdown lookalike)', () => {
+    const last = bar(4322, 4320.5, Date.now());
+    const zone = {
+      hi: 4340,
+      lo: 4320,
+      mid: 4330,
+      width: 20,
+      pos: 0.05,
+      band: 'LO' as const,
+    };
+    const g = structureGate(
+      { direction: 'BUY', setup: 'FADE', reason: 'tip fade' },
+      'RANGE',
+      last,
+      zone,
+      null
+    );
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/tip-chase LO/i);
+  });
+
+  it('structureGate blocks COMPRESSION/TRANSITION tip-chase same as RANGE', () => {
+    const hiBar = bar(4338, 4339.5, Date.now());
+    const loBar = bar(4322, 4320.5, Date.now());
+    const hiZ = {
+      hi: 4340,
+      lo: 4320,
+      mid: 4330,
+      width: 20,
+      pos: 0.95,
+      band: 'HI' as const,
+    };
+    const loZ = { ...hiZ, pos: 0.05, band: 'LO' as const };
+    for (const regime of ['COMPRESSION', 'TRANSITION'] as const) {
+      expect(
+        structureGate(
+          { direction: 'SELL', setup: 'FADE', reason: 'tip' },
+          regime,
+          hiBar,
+          hiZ,
+          null
+        ).ok
+      ).toBe(false);
+      expect(
+        structureGate(
+          { direction: 'BUY', setup: 'FADE', reason: 'tip' },
+          regime,
+          loBar,
+          loZ,
+          null
+        ).ok
+      ).toBe(false);
+    }
+  });
+
+  it('structureGate allows RANGE SELL fade at HI after reject dip (not tip-chase)', () => {
+    const last = bar(4339, 4337.5, Date.now()); // red reject at HI
+    const zone = {
+      hi: 4340,
+      lo: 4320,
+      mid: 4330,
+      width: 20,
+      pos: 0.9,
+      band: 'HI' as const,
+    };
+    const g = structureGate(
+      { direction: 'SELL', setup: 'FADE', reason: 'reject' },
+      'RANGE',
+      last,
+      zone,
+      null
+    );
+    expect(g.ok).toBe(true);
+  });
+
   it('structureGate blocks RANGE SELL tip-chase at LO with red bar', () => {
     const book = zoneBook(4320, 4340, 4322, 4320.5);
     const last = book[book.length - 1]!;
