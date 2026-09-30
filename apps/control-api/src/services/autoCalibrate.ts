@@ -332,7 +332,10 @@ function ensureTradeAllRegimesOn(clientId?: number | null): void {
       }
     }
     if (changed) {
-      setDeskCalibration({ enabled_regimes: [...have] as never }, id);
+      setDeskCalibration(
+        { enabled_regimes: [...have] as never, soft_off_regimes: [] },
+        id
+      );
     }
   } catch {
     /* ignore */
@@ -647,7 +650,11 @@ export function noteClosedTradeForAutoCalibrate(
 
   const saved = deskApplied ? setDeskCalibration(proposed.next, id) : current;
   for (const ch of proposed.changes) {
-    const m = /^WHAT · regime OFF (.+?) ·/.exec(ch) || /^regime OFF (.+)$/.exec(ch);
+    const m =
+      /^WHAT · regime Soft OFF (.+?) ·/.exec(ch) ||
+      /^WHAT · regime OFF (.+?) ·/.exec(ch) ||
+      /^regime Soft OFF (.+)$/.exec(ch) ||
+      /^regime OFF (.+)$/.exec(ch);
     if (m) state.demoted.add(m[1]!.split(' ')[0]!);
     const p = /^WHAT · regime ON (.+?) ·/.exec(ch) || /^regime ON (.+)$/.exec(ch);
     if (p) state.demoted.delete(p[1]!.split(' ')[0]!);
@@ -906,6 +913,7 @@ export function proposeAutoCalibration(
   const next: DeskCalibration = {
     ...current,
     enabled_regimes: [...current.enabled_regimes],
+    soft_off_regimes: [...(current.soft_off_regimes || [])],
   };
 
   const rrNow = next.safety_tp_rr || 1.5;
@@ -1284,10 +1292,14 @@ export function proposeAutoCalibration(
   }
 
   let enabled = new Set(next.enabled_regimes.map((r) => String(r).toUpperCase()));
+  let softOff = new Set(
+    (next.soft_off_regimes || []).map((r) => String(r).toUpperCase())
+  );
 
   for (const [r, st] of byRegime) {
     if (st.n >= 1 && st.sum > 0.4 && !enabled.has(r)) {
       enabled.add(r);
+      softOff.delete(r);
       demotedSession.delete(r);
       changes.push(autotuneLog(`regime ON ${r}`, `winner sum=${st.sum.toFixed(1)} n=${st.n}`));
     }
@@ -1313,11 +1325,12 @@ export function proposeAutoCalibration(
       enabled.delete(worst);
       demotedSession.add(worst);
       demotedThisCycle = worst;
+      softOff.add(worst);
       const coreNote = isCoreAlwaysOnRegime(worst) ? ' (was preferred)' : '';
       changes.push(
         autotuneLog(
-          `regime OFF ${worst}${coreNote}`,
-          `loser sum=${byRegime.get(worst)!.sum.toFixed(1)} n=${byRegime.get(worst)!.n}`
+          `regime Soft OFF ${worst}${coreNote}`,
+          `loser sum=${byRegime.get(worst)!.sum.toFixed(1)} n=${byRegime.get(worst)!.n} · strong signal may still enter`
         )
       );
     }
@@ -1327,6 +1340,7 @@ export function proposeAutoCalibration(
     const candidate = [...demotedSession].find((r) => r !== demotedThisCycle);
     if (candidate && !enabled.has(candidate)) {
       enabled.add(candidate);
+      softOff.delete(candidate);
       demotedSession.delete(candidate);
       changes.push(
         autotuneLog(`regime ON ${candidate}`, 're-promote after positive/flat cycle')
@@ -1340,12 +1354,17 @@ export function proposeAutoCalibration(
       if (enabled.size >= MIN_ENABLED_REGIMES) break;
       if (!enabled.has(r)) {
         enabled.add(r);
+        softOff.delete(r);
         changes.push(autotuneLog(`regime ON ${r}`, 'floor — keep trading possible'));
       }
     }
   }
 
+  // Soft OFF cannot overlap ON
+  for (const r of enabled) softOff.delete(r);
+
   next.enabled_regimes = [...enabled] as RegimeName[];
+  next.soft_off_regimes = [...softOff] as RegimeName[];
 
   // Snap all numeric knobs to clean decimals — real steps, no float dust
   next.hardinv_abs = roundAbs(next.hardinv_abs);

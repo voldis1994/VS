@@ -37,6 +37,12 @@ export type DeskCalibration = {
    * Empty → none (operator must pick). UNKNOWN never trades.
    */
   enabled_regimes: RegimeName[];
+  /**
+   * Soft OFF — auto-cal demoted after Soft knife/chop.
+   * Weak signals blocked; strong playbook+story+HTF may still enter.
+   * Hard OFF = not in enabled and not here (operator kill / UNKNOWN).
+   */
+  soft_off_regimes: RegimeName[];
   updated_at: string;
 };
 
@@ -66,6 +72,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     peak_mfe_pct: 0.0009,
     entry_filter_level: 0,
     enabled_regimes: [...TRADABLE_DEFAULT],
+    soft_off_regimes: [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -91,20 +98,31 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
+function sanitizeRegimes(raw: unknown): RegimeName[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return [
+    ...new Set(
+      list
+        .map((r) => String(r || '').trim().toUpperCase())
+        .filter(
+          (r): r is RegimeName =>
+            (REGIME_NAMES as readonly string[]).includes(r) &&
+            !NEVER_ENTRY_REGIMES.has(r as RegimeName)
+        )
+    ),
+  ] as RegimeName[];
+}
+
 function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCalibration {
   const base = defaultDeskCalibration();
   const p = partial || {};
-  const regimesRaw = Array.isArray(p.enabled_regimes) ? p.enabled_regimes : base.enabled_regimes;
-  const enabled = [
-    ...new Set(
-      regimesRaw
-        .map((r) => String(r || '').trim().toUpperCase())
-        .filter(
-        (r): r is RegimeName =>
-          (REGIME_NAMES as readonly string[]).includes(r) && !NEVER_ENTRY_REGIMES.has(r as RegimeName)
-      )
-    ),
-  ] as RegimeName[];
+  const enabled = sanitizeRegimes(
+    Array.isArray(p.enabled_regimes) ? p.enabled_regimes : base.enabled_regimes
+  );
+  // Soft OFF cannot overlap ON — promoting clears Soft OFF
+  const softOff = sanitizeRegimes(
+    Array.isArray(p.soft_off_regimes) ? p.soft_off_regimes : base.soft_off_regimes
+  ).filter((r) => !enabled.includes(r));
 
   return {
     hardinv_abs: Math.round(clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50) * 10) / 10,
@@ -127,6 +145,7 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
       clamp(Number(p.entry_filter_level ?? base.entry_filter_level), 0, 3)
     ),
     enabled_regimes: enabled,
+    soft_off_regimes: softOff,
     updated_at: new Date().toISOString(),
   };
 }
@@ -202,7 +221,7 @@ export function setDeskCalibration(
   return next;
 }
 
-/** True when this regime is allowed to open a new entry. */
+/** True when this regime is fully ON (enabled list). */
 export function regimeAllowedForEntry(
   regime?: string | null,
   clientId?: number | null
@@ -214,6 +233,34 @@ export function regimeAllowedForEntry(
   const cfg = getDeskCalibration(clientId);
   if (!cfg.enabled_regimes.length) return false;
   return cfg.enabled_regimes.includes(r as RegimeName);
+}
+
+/** Soft OFF — auto-cal demoted; strong signal may still enter. */
+export function regimeIsSoftOff(
+  regime?: string | null,
+  clientId?: number | null
+): boolean {
+  const r = String(regime || '')
+    .trim()
+    .toUpperCase();
+  if (!r || r === 'UNKNOWN') return false;
+  if (regimeAllowedForEntry(r, clientId)) return false;
+  const cfg = getDeskCalibration(clientId);
+  return cfg.soft_off_regimes.includes(r as RegimeName);
+}
+
+/**
+ * Entry gate: ON → allow; Soft OFF + strong → allow; Hard OFF → block.
+ * Pass strong=true only after isStrongEntrySignal confirmed.
+ */
+export function regimeEntryPermitted(
+  regime?: string | null,
+  opts?: { strong?: boolean; clientId?: number | null }
+): boolean {
+  const clientId = opts?.clientId;
+  if (regimeAllowedForEntry(regime, clientId)) return true;
+  if (opts?.strong && regimeIsSoftOff(regime, clientId)) return true;
+  return false;
 }
 
 /** Test helper — clear all client caches. */
@@ -239,6 +286,7 @@ export function deskCalibrationCatalog() {
       'safety_tp_rr',
       'entry_filter_level',
       'enabled_regimes',
+      'soft_off_regimes',
     ],
   };
 }
