@@ -1,4 +1,5 @@
 import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 /**
  * After close: block same direction for a while.
  * After Soft/SL loss: longer same-dir block — but do NOT force opposite
@@ -7,7 +8,7 @@ import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 
 export type TradeSide = 'BUY' | 'SELL';
 
-/** Same-direction lock after a green / scratch close (L≥1 only). */
+/** Same-direction lock after a green / scratch close (L≥1 only). Factory = genome. */
 export const SAME_DIR_LOCK_MS = 90_000;
 
 /**
@@ -18,7 +19,10 @@ export const SAME_DIR_LOCK_MS = 90_000;
 export const SAME_DIR_LOCK_AFTER_LOSS_MS = 90_000;
 
 export function sameDirLockMs(wasLoss?: boolean | null): number {
-  return wasLoss ? SAME_DIR_LOCK_AFTER_LOSS_MS : SAME_DIR_LOCK_MS;
+  const g = getBrainGenome();
+  return wasLoss
+    ? g.same_dir_lock_after_loss_ms || SAME_DIR_LOCK_AFTER_LOSS_MS
+    : g.same_dir_lock_ms || SAME_DIR_LOCK_MS;
 }
 
 export function sameDirLockActive(
@@ -95,18 +99,24 @@ export function flipFilterReason(
   leftSec: number,
   wasLoss?: boolean | null
 ): string {
+  const lockMs = sameDirLockMs(wasLoss);
   if (wasLoss) {
-    return `SAME-DIR LOCK after Soft ${Math.ceil(SAME_DIR_LOCK_AFTER_LOSS_MS / 60_000)}m · last ${lastClosedSide} · ${leftSec}s · blocked ${signal} · gaida next-move (ne auto-flip)`;
+    return `SAME-DIR LOCK after Soft ${Math.ceil(lockMs / 60_000)}m · last ${lastClosedSide} · ${leftSec}s · blocked ${signal} · gaida next-move (ne auto-flip)`;
   }
   const need = lastClosedSide === 'BUY' ? 'SELL' : 'BUY';
-  return `FLIP LOCK ${Math.ceil(SAME_DIR_LOCK_MS / 1000)}s · last ${lastClosedSide} · ${leftSec}s left · blocked ${signal} · need ${need}`;
+  return `FLIP LOCK ${Math.ceil(lockMs / 1000)}s · last ${lastClosedSide} · ${leftSec}s left · blocked ${signal} · need ${need}`;
 }
 
 /** Exit reasons that mean Soft/structure loss — block same-dir longer. */
 export function exitReasonWasLoss(reason: string | null | undefined): boolean {
+  const g = getBrainGenome();
   const r = String(reason || '');
   if (/StructureInvalidation|ThesisFailure/i.test(r)) return true;
-  if (/HardInvalidation/i.test(r) && !/BE-lock/i.test(r)) return true;
+  if (/HardInvalidation/i.test(r)) {
+    if (!g.exit_loss_include_hardinv) return false;
+    if (g.exit_loss_exclude_be_lock && /BE-lock/i.test(r)) return false;
+    return true;
+  }
   if (/PeakProtection|MindBank|MindCut|Target\s*\/|TimeDecay|BE-lock/i.test(r)) return false;
   return false;
 }

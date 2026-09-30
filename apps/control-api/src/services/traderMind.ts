@@ -58,6 +58,15 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   const mae = Math.max(0, input.mae);
   const upl = input.unrealized;
   const mkt = input.market;
+  const genome = getBrainGenome();
+  const cutSoftMult = genome.mind_cut_soft_mult || 0.75;
+  const cutRetention = genome.mind_cut_retention || 0.55;
+  const greenSoftArm = genome.green_soft_arm_mult || 0.95;
+  const againstHi = genome.against_us_soft_mult_hi || 0.75;
+  const againstLo = genome.against_us_soft_mult_lo || 0.5;
+  const sessionECut = genome.session_expectancy_cut ?? -0.2;
+  const confBase = genome.mind_entry_conf_base || 0.55;
+  const deepGiveOffset = genome.deep_giveback_offset || 0.12;
   const retention =
     input.peak_retention != null && Number.isFinite(input.peak_retention)
       ? input.peak_retention
@@ -101,7 +110,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   let thesis: string;
   if (input.minute_policy === 'continue' && withUs) {
     thesis = `Kustība vēl iet manā virzienā — 1m continue un stāsts ${chapter} man līdzās. Ļauju peļņai strādāt.`;
-  } else if (againstUs && mfe >= soft * 0.75) {
+  } else if (againstUs && mfe >= soft * againstHi) {
     thesis = `Tirgus mainās pret mani (stāsts/pressure/1m). Man jau bija labs MFE — sāku domāt kā aizstāvēt peļņu, necerēt uz brīnumu.`;
   } else if (againstUs) {
     thesis = `Attēls pagriežas pret manu ${input.open_side}. Bez liela MFE esmu piesardzīgs — Soft ir mana pēdējā līnija.`;
@@ -113,7 +122,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
 
   // 3) Risk — what can hurt me
   const risks: string[] = [];
-  if (mfe > soft && retention < 0.55 && upl > 0) {
+  if (mfe > soft && retention < cutRetention && upl > 0) {
     risks.push(`peļņa jau atdota (~${((1 - retention) * 100).toFixed(0)}% no MFE)`);
   }
   if (mkt && storyFightsSide(mkt.story?.allow, input.open_side)) {
@@ -125,7 +134,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   if (mkt?.feed?.agreement === 'DIVERGENT') {
     risks.push('feedi nesakrīt — cena var būt maldīga');
   }
-  if (input.session_expectancy_pts < -0.2 && input.closes_in_session >= 3) {
+  if (input.session_expectancy_pts < sessionECut && input.closes_in_session >= 3) {
     risks.push(`šodien E=${input.session_expectancy_pts.toFixed(2)} — sesija vāja`);
   }
   if (
@@ -146,10 +155,9 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   // Soft knows "minus". Mind must know "plus": Soft+ green at risk → BANK/CUT now.
   let decision: ManageBrainAction = 'TRAIL';
   let why: string;
-  let confidence = 0.55;
+  let confidence = confBase;
 
-  const greenSoft = upl >= soft * 0.95 && mfe >= soft;
-  const genome = getBrainGenome();
+  const greenSoft = upl >= soft * greenSoftArm && mfe >= soft;
   const keep = genome.soft_plus_giveback;
   const givingBack = retention < keep && mfe >= soft && upl > 0;
   const marketChanged =
@@ -159,7 +167,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   // Soft+ bank thresholds are genome-owned (Brain may ease/tighten — no hard Soft ceiling).
   const runnerMfe = mfe >= soft * genome.soft_plus_runner_mult;
   const softPlusLeg = mfe >= soft * genome.soft_plus_leg_mult;
-  const deepGiveback = retention < keep - 0.12;
+  const deepGiveback = retention < keep - deepGiveOffset;
   const softPlusBankOk =
     greenSoft &&
     (marketChanged ||
@@ -173,7 +181,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
       ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'
       : 'Man ir Soft izmēra peļņa un tirgus jau pagriežas. Bankoju plusu — Soft ir tikai mīnusiem.';
     confidence = 0.88;
-  } else if (mfe >= soft * 0.75 && upl > 0 && (againstUs || retention < 0.55)) {
+  } else if (mfe >= soft * cutSoftMult && upl > 0 && (againstUs || retention < cutRetention)) {
     decision = 'CUT';
     why =
       'Biju plusā, tagad atdodu — ciešākais cut, lai plus nepaliek mīnusā.';
@@ -183,7 +191,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     why =
       'Svece vēl iet manā virzienā un peļņa nav atdota — turu; Peak trail gatavs.';
     confidence = 0.8;
-  } else if (againstUs && mfe < soft * 0.5) {
+  } else if (againstUs && mfe < soft * againstLo) {
     decision = 'HOLD';
     why =
       'Attēls slikts, bet vēl nav Soft+ ko bankot. Soft nogriezīs īsto mīnusu — es negriežu panikā.';
@@ -517,17 +525,20 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   }
 
   // Never fire PRĀTS into a fighting 1m (SELL on green 1m / BUY on red 1m → Soft)
-  if (choice === 'SELL' && m1 === 'UP') {
-    choice = 'WAIT';
-    thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
-    why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
-    confidence = 0.4;
-  }
-  if (choice === 'BUY' && m1 === 'DOWN') {
-    choice = 'WAIT';
-    thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
-    why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
-    confidence = 0.4;
+  // Genome: wait_on_1m_fight — don't take side against live 1m (factory true)
+  if (genome.wait_on_1m_fight) {
+    if (choice === 'SELL' && m1 === 'UP') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
+      why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
+      confidence = 0.4;
+    }
+    if (choice === 'BUY' && m1 === 'DOWN') {
+      choice = 'WAIT';
+      thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
+      why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
+      confidence = 0.4;
+    }
   }
 
   // After Soft same-side loss — no immediate re-spam (L0 flip lock is OFF by design)
@@ -602,6 +613,10 @@ export function reviewSessionLikeHuman(
 
   const sum = trades.reduce((a, t) => a + t.pnl_pts, 0);
   const e = sum / trades.length;
+  const genome = getBrainGenome();
+  const sessionEHi = genome.session_e_bank_hi || 0.25;
+  const softSizedFrac = genome.soft_sized_loss_frac || 0.65;
+  const leftOnTableMin = Math.max(1, genome.left_on_table_peak_tiny_min || 2);
   const softLosses = trades.filter((t) =>
     /HardInvalidation|HardInv/i.test(String(t.exit_reason || ''))
   );
@@ -612,7 +627,7 @@ export function reviewSessionLikeHuman(
       t.pnl_pts > 0 &&
       t.pnl_pts < t.mfe * 0.35
   );
-  const leftOnTable = peakTiny.length >= 2;
+  const leftOnTable = peakTiny.length >= leftOnTableMin;
   const knifeSoft =
     softLosses.filter((t) => {
       const ch = String(t.entry_ctx?.chapter || '').toUpperCase();
@@ -635,7 +650,7 @@ export function reviewSessionLikeHuman(
     };
   }
 
-  if (leftOnTable && e < 0.25) {
+  if (leftOnTable && e < sessionEHi) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. ${peakTiny.length}× Peak/Target bankoja sīku daļu no MFE — plusi tika nogriezti pārāk agri vai pārāk tālu mērķi.`,
       lesson:
@@ -656,7 +671,7 @@ export function reviewSessionLikeHuman(
   // Soft-sized losses without HardInv tag (MindCut/Structure/EXTERNAL) — still Soft R:R invert
   const softCap = 2.2; // diagnosis only; auto-cal owns live Soft abs
   const softSized = trades.filter(
-    (t) => t.pnl_pts < -1e-9 && Math.abs(t.pnl_pts) >= softCap * 0.65
+    (t) => t.pnl_pts < -1e-9 && Math.abs(t.pnl_pts) >= softCap * softSizedFrac
   ).length;
   if (e < 0 && softSized >= 2 && softLosses.length < 2) {
     return {
@@ -667,7 +682,7 @@ export function reviewSessionLikeHuman(
     };
   }
 
-  if (e >= 0.25) {
+  if (e >= sessionEHi) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)} pozitīvs — pieeja strādā.`,
       lesson:

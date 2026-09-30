@@ -6,21 +6,49 @@
  * Soft+ can bank before Soft eats the win. Genome-calibrated.
  */
 import type { RegimeName } from './regimes.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 export type PullbackEpisodeMinutePolicy = 'continue' | 'reverse' | 'wait';
 
-const TREND_THESIS = new Set([
+/** Factory residual sets (= prior hardcode) */
+export const TREND_THESIS = [
   'TREND_UP',
   'TREND_DOWN',
   'PULLBACK_UPTREND',
   'PULLBACK_DOWNTREND',
-]);
+] as const;
+
+export const ADVERSE_CHAPTERS_SELL = [
+  'BOUNCE_IN_SELL',
+  'EXHAUST_LO',
+  'RALLY',
+  'BREAK_UP',
+] as const;
+
+export const ADVERSE_CHAPTERS_BUY = [
+  'DIP_IN_RALLY',
+  'EXHAUST_HI',
+  'SELLOFF',
+  'BREAK_DOWN',
+] as const;
+
+export const RESUME_CHAPTERS_SELL = ['SELLOFF', 'BREAK_DOWN'] as const;
+export const RESUME_CHAPTERS_BUY = ['RALLY', 'BREAK_UP'] as const;
+
+export const SOFTPLUS_PULLBACK_STORY_EXEC_MULT = 0.95;
+
+function chapterSet(list: string[] | readonly string[] | undefined, fallback: readonly string[]): Set<string> {
+  const src = list?.length ? list : fallback;
+  return new Set(src.map((x) => String(x).toUpperCase()));
+}
 
 export function isTrendFamilyThesis(regime?: string | null): boolean {
+  const g = getBrainGenome();
+  const set = chapterSet(g.trend_thesis_regimes, TREND_THESIS);
   const r = String(regime || '')
     .trim()
     .toUpperCase();
-  return TREND_THESIS.has(r);
+  return set.has(r);
 }
 
 /** Adverse chapter vs open side — bounce against SELL / dip against BUY. */
@@ -28,13 +56,14 @@ export function adversePullbackChapter(
   openSide: 'BUY' | 'SELL',
   chapter?: string | null
 ): boolean {
+  const g = getBrainGenome();
   const ch = String(chapter || '')
     .trim()
     .toUpperCase();
   if (openSide === 'SELL') {
-    return ch === 'BOUNCE_IN_SELL' || ch === 'EXHAUST_LO' || ch === 'RALLY' || ch === 'BREAK_UP';
+    return chapterSet(g.adverse_chapters_sell, ADVERSE_CHAPTERS_SELL).has(ch);
   }
-  return ch === 'DIP_IN_RALLY' || ch === 'EXHAUST_HI' || ch === 'SELLOFF' || ch === 'BREAK_DOWN';
+  return chapterSet(g.adverse_chapters_buy, ADVERSE_CHAPTERS_BUY).has(ch);
 }
 
 /** Resume chapter with open side — selloff continues / rally continues. */
@@ -42,13 +71,14 @@ export function resumeTrendChapter(
   openSide: 'BUY' | 'SELL',
   chapter?: string | null
 ): boolean {
+  const g = getBrainGenome();
   const ch = String(chapter || '')
     .trim()
     .toUpperCase();
   if (openSide === 'SELL') {
-    return ch === 'SELLOFF' || ch === 'BREAK_DOWN';
+    return chapterSet(g.resume_chapters_sell, RESUME_CHAPTERS_SELL).has(ch);
   }
-  return ch === 'RALLY' || ch === 'BREAK_UP';
+  return chapterSet(g.resume_chapters_buy, RESUME_CHAPTERS_BUY).has(ch);
 }
 
 /** Live regime flipped against open TREND side. */
@@ -109,12 +139,14 @@ export function detectPullbackEpisode(input: PullbackEpisodeDetectInput): {
   ended: boolean;
   why: string;
 } {
-  if (!input.enabled || !isTrendFamilyThesis(input.entryRegime)) {
+  const g = getBrainGenome();
+  const enabled = input.enabled && g.pullback_episode_enabled !== false;
+  if (!enabled || !isTrendFamilyThesis(input.entryRegime)) {
     return {
       active: false,
       started: false,
       ended: input.active,
-      why: !input.enabled ? 'episode OFF' : 'ne TREND thesis',
+      why: !enabled ? 'episode OFF' : 'ne TREND thesis',
     };
   }
 
@@ -143,11 +175,12 @@ export function detectPullbackEpisode(input: PullbackEpisodeDetectInput): {
   const resumeCh = resumeTrendChapter(input.openSide, input.storyChapter);
   const withLive = liveRegimeWithSide(input.openSide, input.liveRegime);
   const continue1m = input.minutePolicy === 'continue';
+  const endOnContinue = g.episode_end_on_continue !== false;
   // End only on clear resume — not on wait/doji while still adverse
   const wantEnd =
-    (continue1m && (resumeCh || withLive || !adverseCh)) ||
+    (endOnContinue && continue1m && (resumeCh || withLive || !adverseCh)) ||
     (resumeCh && withLive) ||
-    (continue1m && !adverseCh && !againstLive);
+    (endOnContinue && continue1m && !adverseCh && !againstLive);
 
   if (wantEnd) {
     const bits: string[] = [];
@@ -186,9 +219,14 @@ export function softPlusPullbackEpisodeShouldBank(opts: {
 }): boolean {
   if (!opts.episodeActive) return false;
   const soft = Math.max(opts.softSl, 1e-9);
+  const g = getBrainGenome();
   const need = soft * Math.max(0.25, opts.minMfeSoftMult);
   if (!(opts.mfe >= need)) return false;
+  const execMult =
+    g.softplus_pullback_story_exec_mult ||
+    g.episode_softplus_bank_mult ||
+    SOFTPLUS_PULLBACK_STORY_EXEC_MULT;
   // Bank while still Soft-green (or nearly Soft) — not micro pennies
-  if (!(opts.execFav >= soft * 0.95)) return false;
+  if (!(opts.execFav >= soft * execMult)) return false;
   return opts.retention < opts.keep;
 }

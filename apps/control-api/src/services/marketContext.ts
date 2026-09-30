@@ -15,7 +15,16 @@ import {
   type TenSecBar,
 } from './tenSecondOhlc.js';
 import type { MultiFeedPrice } from './robotReader.js';
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
+/** Expand/compress range mults — factory = prior hardcode */
+export const EXPANDING_RANGE_MULT = 1.35;
+export const COMPRESSED_RANGE_MULT = 0.65;
+export const VELOCITY_LOOKBACK = 12;
+export const PRESSURE_FIGHT_GREEN_BUY = 0.38;
+export const PRESSURE_FIGHT_GREEN_SELL = 0.62;
+export const SOFTPLUS_STORYFIGHT_EXEC_FAV_MULT = 0.95;
+export const SOFTPLUS_STORYFIGHT_MIN_MFE_MULT = 1;
 export type MarketContextSnapshot = {
   at_ms: number;
   regime: string | null;
@@ -107,13 +116,17 @@ export function buildMarketContext(
   const greenShare = colored > 0 ? green / colored : 0.5;
 
   const lastBody = last ? bodyPct(last) : 0;
-  const recent = bars.slice(-12);
+  const g = getBrainGenome();
+  const lookback = Math.max(4, g.velocity_lookback || VELOCITY_LOOKBACK);
+  const expandMult = g.expanding_range_mult || EXPANDING_RANGE_MULT;
+  const compressMult = g.compressed_range_mult || COMPRESSED_RANGE_MULT;
+  const recent = bars.slice(-lookback);
   const ranges = recent.map((b) => Math.abs(rangePct(b))).filter((x) => Number.isFinite(x));
   const avgRange =
     ranges.length > 0 ? ranges.reduce((a, b) => a + b, 0) / ranges.length : 0;
   const lastRange = last ? Math.abs(rangePct(last)) : 0;
-  const expanding = avgRange > 0 && lastRange > avgRange * 1.35;
-  const compressed = avgRange > 0 && lastRange < avgRange * 0.65;
+  const expanding = avgRange > 0 && lastRange > avgRange * expandMult;
+  const compressed = avgRange > 0 && lastRange < avgRange * compressMult;
 
   const feed =
     multiFeed != null
@@ -195,8 +208,12 @@ export function softPlusStoryFightShouldBank(opts: {
 }): boolean {
   if (!storyFightsSide(opts.storyAllow, opts.openSide)) return false;
   const soft = Math.max(opts.softSl, 1e-9);
-  if (!(opts.mfe >= soft)) return false;
-  if (!(opts.execFav >= soft * 0.95)) return false;
+  const g = getBrainGenome();
+  const mfeMult = g.softplus_storyfight_min_mfe_mult || SOFTPLUS_STORYFIGHT_MIN_MFE_MULT;
+  const execMult =
+    g.softplus_storyfight_exec_fav_mult || SOFTPLUS_STORYFIGHT_EXEC_FAV_MULT;
+  if (!(opts.mfe >= soft * mfeMult)) return false;
+  if (!(opts.execFav >= soft * execMult)) return false;
   return opts.retention < opts.keep;
 }
 
@@ -205,6 +222,9 @@ export function pressureFightsSide(
   greenShare: number,
   openSide: 'BUY' | 'SELL'
 ): boolean {
-  if (openSide === 'BUY') return greenShare < 0.38;
-  return greenShare > 0.62;
+  const g = getBrainGenome();
+  const buyCut = g.pressure_fight_green_buy || PRESSURE_FIGHT_GREEN_BUY;
+  const sellCut = g.pressure_fight_green_sell || PRESSURE_FIGHT_GREEN_SELL;
+  if (openSide === 'BUY') return greenShare < buyCut;
+  return greenShare > sellCut;
 }

@@ -2,11 +2,17 @@
  * Strong-signal gate for Soft OFF regimes.
  * Soft OFF blocks knife/chop; strong playbook+story+HTF may still enter.
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
+
 export type StrongEntryHtf = {
   tf30?: string | null;
   tf15?: string | null;
   tf5?: string | null;
 };
+
+/** Factory = prior hardcode */
+export const STRONG_HTF_ALIGNED_MIN = 2;
+export const STRONG_CONF_MIN = 0.7;
 
 export function isStrongEntrySignal(opts: {
   direction: 'BUY' | 'SELL';
@@ -16,6 +22,10 @@ export function isStrongEntrySignal(opts: {
   storyConf?: number | null;
   htf?: StrongEntryHtf | null;
 }): boolean {
+  const g = getBrainGenome();
+  const htfMin = Math.max(1, g.strong_htf_aligned_min || STRONG_HTF_ALIGNED_MIN);
+  const confMin = g.strong_conf_min || STRONG_CONF_MIN;
+
   const dir = opts.direction;
   const allow = String(opts.storyAllow || '').toUpperCase();
   if (allow !== dir && allow !== 'BOTH') return false;
@@ -27,6 +37,9 @@ export function isStrongEntrySignal(opts: {
   const setup = String(opts.setup || '').toUpperCase();
   const ch = String(opts.storyChapter || '').toUpperCase();
   const conf = Number(opts.storyConf) || 0;
+  const fadeOk = new Set(
+    (g.fade_allowed_chapters || []).map((x) => String(x).toUpperCase())
+  );
 
   // Structure break / fail — strong even with 1 HTF agree
   if (
@@ -36,23 +49,24 @@ export function isStrongEntrySignal(opts: {
     return true;
   }
   // Trend resume / pullback — need HTF stack
-  if ((setup === 'PULLBACK' || setup === 'CONTINUATION') && aligned >= 2) {
+  if ((setup === 'PULLBACK' || setup === 'CONTINUATION') && aligned >= htfMin) {
     return true;
   }
   // Fade only after reject / failed break + HTF (not tip-chase chop)
   if (
     setup === 'FADE' &&
-    (ch === 'EXHAUST_HI' ||
+    (fadeOk.has(ch) ||
+      ch === 'EXHAUST_HI' ||
       ch === 'EXHAUST_LO' ||
       ch.startsWith('FAILED') ||
       ch === 'BOUNCE_IN_SELL' ||
       ch === 'DIP_IN_RALLY') &&
-    aligned >= 2
+    aligned >= htfMin
   ) {
     return true;
   }
   // High-confidence story + HTF, non-fade
-  if (conf >= 0.7 && aligned >= 2 && setup !== 'FADE') {
+  if (conf >= confMin && aligned >= htfMin && setup !== 'FADE') {
     return true;
   }
   return false;
