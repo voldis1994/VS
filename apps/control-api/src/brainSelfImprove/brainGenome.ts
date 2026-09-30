@@ -25,6 +25,15 @@ export type BrainGenome = {
   soft_plus_runner_mult: number;
   /** Soft+ leg for deep-giveback / desk belt (factory 1.35) */
   soft_plus_leg_mult: number;
+  /**
+   * Manage pullback-episode detect ON — adverse bounce/dip vs TREND thesis.
+   * Soft× Peak arm drops so Soft HardInv does not eat small greens on V-bounce.
+   */
+  pullback_episode_enabled: boolean;
+  /** Peak Soft× arm while episode active (factory 1.0 — Soft×1 before Soft) */
+  pullback_episode_peak_arm_soft_mult: number;
+  /** Min Soft× MFE before Soft+ bank / Peak Soft×1 in episode (factory 0.5) */
+  pullback_episode_min_mfe_soft_mult: number;
   /** Require 1m agree with bias before PRĀTS entry */
   require_1m_trigger: boolean;
   /** After Soft same-side loss, pause that side for N closes */
@@ -105,6 +114,9 @@ const DEFAULT_GENOME: BrainGenome = {
   soft_plus_giveback: 0.75,
   soft_plus_runner_mult: 1.5,
   soft_plus_leg_mult: 1.35,
+  pullback_episode_enabled: true,
+  pullback_episode_peak_arm_soft_mult: 1.0,
+  pullback_episode_min_mfe_soft_mult: 0.5,
   require_1m_trigger: true,
   soft_same_side_pause_closes: 4,
   soft_same_side_pause_min: 2,
@@ -253,6 +265,29 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     soft_plus_leg_mult:
       Math.round(
         clamp(Number(p.soft_plus_leg_mult ?? DEFAULT_GENOME.soft_plus_leg_mult), 1.0, 2.0) * 100
+      ) / 100,
+    pullback_episode_enabled: p.pullback_episode_enabled !== false,
+    pullback_episode_peak_arm_soft_mult:
+      Math.round(
+        clamp(
+          Number(
+            p.pullback_episode_peak_arm_soft_mult ??
+              DEFAULT_GENOME.pullback_episode_peak_arm_soft_mult
+          ),
+          0.5,
+          1.35
+        ) * 100
+      ) / 100,
+    pullback_episode_min_mfe_soft_mult:
+      Math.round(
+        clamp(
+          Number(
+            p.pullback_episode_min_mfe_soft_mult ??
+              DEFAULT_GENOME.pullback_episode_min_mfe_soft_mult
+          ),
+          0.25,
+          1.0
+        ) * 100
       ) / 100,
     require_1m_trigger: p.require_1m_trigger !== false,
     soft_same_side_pause_closes: Math.max(
@@ -443,6 +478,9 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',
+  'pullback_episode_enabled',
+  'pullback_episode_peak_arm_soft_mult',
+  'pullback_episode_min_mfe_soft_mult',
   'require_1m_trigger',
   'soft_same_side_pause_closes',
   'soft_same_side_pause_min',
@@ -519,6 +557,9 @@ export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'soft_plus_giveback',
   'soft_plus_runner_mult',
   'soft_plus_leg_mult',
+  'pullback_episode_enabled',
+  'pullback_episode_peak_arm_soft_mult',
+  'pullback_episode_min_mfe_soft_mult',
   'require_1m_trigger',
   'soft_same_side_pause_closes',
   'soft_same_side_pause_min',

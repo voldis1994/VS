@@ -22,6 +22,10 @@ import {
   setDeskCalibration,
   _resetDeskCalibrationCacheForTests,
 } from './deskCalibration.js';
+import {
+  getBrainGenome,
+  _resetBrainGenomeForTests,
+} from '../brainSelfImprove/brainGenome.js';
 
 function trade(partial: {
   pnl_pts: number;
@@ -494,5 +498,49 @@ describe('autoCalibrate', () => {
     ]);
     // One step toward OPEN per cycle (not hard-reset to 0)
     expect(r.next.entry_filter_level).toBe(1);
+  });
+
+  it('Soft TREND bounce window tightens pullback_episode Soft× knobs', () => {
+    _resetBrainGenomeForTests({
+      pullback_episode_enabled: true,
+      pullback_episode_peak_arm_soft_mult: 1.0,
+      pullback_episode_min_mfe_soft_mult: 0.5,
+    });
+    const base = defaultDeskCalibration();
+    const r = proposeAutoCalibration(
+      base,
+      [
+        trade({
+          pnl_pts: -2.2,
+          regime: 'TREND_DOWN',
+          exit_reason: 'HardInvalidation',
+          entry_ctx: { chapter: 'BOUNCE_IN_SELL' },
+          mfe: 1.2,
+        }),
+        trade({
+          pnl_pts: -2.0,
+          regime: 'TREND_DOWN',
+          exit_reason: 'HardInvalidation',
+          entry_ctx: { chapter: 'BOUNCE_IN_SELL' },
+          mfe: 0.9,
+        }),
+        trade({ pnl_pts: 0.3, regime: 'TREND_UP', exit_reason: 'PeakProtection', mfe: 2.5 }),
+        trade({
+          pnl_pts: -1.8,
+          regime: 'TREND_DOWN',
+          exit_reason: 'HardInvalidation',
+          entry_ctx: { chapter: 'EXHAUST_LO' },
+          mfe: 1.0,
+        }),
+        trade({ pnl_pts: 0.2, regime: 'RANGE', exit_reason: 'PeakProtection', mfe: 2.0 }),
+      ],
+      new Set(),
+      { genome: getBrainGenome() }
+    );
+    expect(r.genome_patch?.pullback_episode_peak_arm_soft_mult).toBe(0.95);
+    expect(r.genome_patch?.pullback_episode_min_mfe_soft_mult).toBe(0.45);
+    expect(
+      (r.genome_changes || []).some((c) => c.includes('pullback_episode_peak_arm_soft_mult'))
+    ).toBe(true);
   });
 });

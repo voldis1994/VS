@@ -56,6 +56,10 @@ import {
   storyFightsSide,
   type MarketContextSnapshot,
 } from './marketContext.js';
+import {
+  detectPullbackEpisode,
+  softPlusPullbackEpisodeShouldBank,
+} from './pullbackEpisode.js';
 import { learnerLearnFromClose, type LearnerFeatures } from './deskLearner.js';
 import {
   entryLearnerLearnFromClose,
@@ -237,6 +241,11 @@ type Internal = RobotSession & {
   last_multi_tf_fetch_ms: number;
   /** After reverse Capital 1m: PeakProtect 25% giveback trails live */
   peak_protect_armed: boolean;
+  /**
+   * Manage pullback-episode active — adverse bounce/dip vs TREND thesis.
+   * Peak Soft× drops; Soft+ may bank Soft×1 before Soft HardInv.
+   */
+  pullback_episode_active: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
   last_1m_profit_exit_key: string;
   /** Cached live entry watch for board UI */
@@ -1001,6 +1010,7 @@ function clearTradeState(s: Internal) {
   s.safety_tp = null;
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
+  s.pullback_episode_active = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
   s.broker_flat_streak = 0;
@@ -2182,6 +2192,7 @@ async function enterTradeLocked(
   s.structure_breach_since_ms = 0;
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
+  s.pullback_episode_active = false;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
@@ -2417,6 +2428,46 @@ function decideOpenManageExit(
     prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
   });
 
+  // Pullback episode — TREND thesis + adverse bounce/dip (V-bottom Soft eat)
+  const gEp = getBrainGenome();
+  const liveSnapEp = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
+  const epMinute: 'continue' | 'reverse' | 'wait' =
+    softGate.minute_policy === 'continue' ||
+    softGate.minute_policy === 'reverse' ||
+    softGate.minute_policy === 'wait'
+      ? softGate.minute_policy
+      : 'wait';
+  const ep = detectPullbackEpisode({
+    enabled: gEp.pullback_episode_enabled,
+    openSide: s.open_side!,
+    entryRegime: s.entry_regime || s.regime,
+    liveRegime: s.regime,
+    storyChapter: liveSnapEp.story?.chapter,
+    minutePolicy: epMinute,
+    active: Boolean(s.pullback_episode_active),
+  });
+  if (ep.started) {
+    s.pullback_episode_active = true;
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Pullback episode · ${ep.why} · Peak Soft×${gEp.pullback_episode_peak_arm_soft_mult.toFixed(2)}`,
+    });
+  } else if (ep.ended) {
+    s.pullback_episode_active = false;
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Pullback episode · ${ep.why}`,
+    });
+  } else {
+    s.pullback_episode_active = ep.active;
+  }
+
   // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
   if (closed1m && s.open_side && s.entry_price != null) {
     const key = capitalMinuteCandleKey(closed1m, prev1m);
@@ -2525,6 +2576,7 @@ function decideOpenManageExit(
   // Soft+ MFE → arm Peak trail (genome peak_arm_soft_mult — Soft×1 was Soft ceiling).
   // Exception: 30m story fights open side → Soft×1 arm so Soft+ winners are not Soft-eaten
   // (Funds: Soft 2.6 · MFE 3.1 < Soft×1.35 · Peak 3.3 while stāsts tikai SELL).
+  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult (factory 1.0).
   if (
     !s.peak_protect_armed &&
     s.open_side &&
@@ -2534,18 +2586,29 @@ function decideOpenManageExit(
     const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
     const liveSnap = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
     const storyFight = storyFightsSide(liveSnap.story?.allow, s.open_side);
-    const armMult = storyFight ? 1.0 : getBrainGenome().peak_arm_soft_mult;
+    const epActive = Boolean(s.pullback_episode_active);
+    const armMult = epActive
+      ? gEp.pullback_episode_peak_arm_soft_mult
+      : storyFight
+        ? 1.0
+        : getBrainGenome().peak_arm_soft_mult;
     const armNeed = softSl * Math.max(0.5, armMult);
-    if (s.mfe >= armNeed) {
+    // Episode: also require min Soft× MFE so reverse alone with zero green does not arm
+    const epMinOk =
+      !epActive ||
+      s.mfe >= softSl * Math.max(0.25, gEp.pullback_episode_min_mfe_soft_mult);
+    if (s.mfe >= armNeed && epMinOk) {
       s.peak_protect_armed = true;
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: storyFight
-          ? `PeakProtect ARMED · Soft×1.00 MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
-          : `PeakProtect ARMED · Soft×${getBrainGenome().peak_arm_soft_mult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
+        detail: epActive
+          ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (pullback episode) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
+          : storyFight
+            ? `PeakProtect ARMED · Soft×1.00 MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
+            : `PeakProtect ARMED · Soft×${getBrainGenome().peak_arm_soft_mult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
       });
     }
   }
@@ -2556,18 +2619,24 @@ function decideOpenManageExit(
   const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
   const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak.
-  // Story fights open side → Soft×1 floor so Peak Keep can bank Soft+ (not wait Soft×1.35).
+  // Story fights / pullback episode → Soft×1 (or episode Soft×) floor so Peak Keep can bank Soft+.
   const storyFightsOpen = storyFightsSide(liveMarket.story?.allow, s.open_side!);
-  const peakFloorNow = storyFightsOpen
-    ? softSlNow
-    : peakTrailMfeFloor(
+  const epFloor = Boolean(s.pullback_episode_active);
+  const peakFloorNow =
+    epFloor || storyFightsOpen
+      ? softSlNow *
         Math.max(
-          Math.abs(s.entry_price) * cal.peak_mfe_pct,
-          scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
-        ),
-        softSlNow,
-        minProfitBank(softSlNow)
-      );
+          0.5,
+          epFloor ? gEp.pullback_episode_peak_arm_soft_mult : 1.0
+        )
+      : peakTrailMfeFloor(
+          Math.max(
+            Math.abs(s.entry_price) * cal.peak_mfe_pct,
+            scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
+          ),
+          softSlNow,
+          minProfitBank(softSlNow)
+        );
   const targetNow = targetTakeProfitDistance(s.entry_price, s.entry_regime || s.regime);
   const autoSt = getAutoCalibrateStatus(undefined, s.client_id);
   const brain = scoreManageAction({
@@ -2671,17 +2740,29 @@ function decideOpenManageExit(
     storyAllow: liveMarket.story?.allow,
     openSide: s.open_side!,
   });
+  const epBank = softPlusPullbackEpisodeShouldBank({
+    episodeActive: Boolean(s.pullback_episode_active),
+    mfe: s.mfe,
+    softSl: softSlNow,
+    execFav: execNow,
+    retention: retNow,
+    keep: keepCfg,
+    minMfeSoftMult: gBank.pullback_episode_min_mfe_soft_mult,
+  });
   if (
     storyFightBank ||
+    epBank ||
     (execNow >= softSlNow &&
       softPlusLeg &&
       retNow < keepCfg &&
       (s.peak_protect_armed || runnerMfe || deepGiveback))
   ) {
     s.last_brain_action = 'BANK';
-    return storyFightBank
-      ? `MindBank · Soft+ vs stāsts · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} · Soft+ pirms Soft apēd`
-      : `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;
+    return epBank
+      ? `MindBank · Soft+ pullback episode · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} · Soft+ pirms Soft apēd`
+      : storyFightBank
+        ? `MindBank · Soft+ vs stāsts · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} · Soft+ pirms Soft apēd`
+        : `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;
   }
 
   const peakOverrides: ExitDecideOverrides | null =
@@ -4030,6 +4111,7 @@ export async function startRobotSession(input: {
     last_manage_minute_fetch_ms: 0,
     last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
+    pullback_episode_active: false,
     last_1m_profit_exit_key: '',
     entry_watch: null,
     exit_deal_fails: 0,

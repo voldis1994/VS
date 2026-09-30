@@ -183,6 +183,7 @@ export type AutoCalibrateStatus = {
     enabled_regimes: number;
     genome_peak_keep: number;
     genome_soft_giveback: number;
+    genome_pullback_episode_arm: number;
   };
 };
 
@@ -539,6 +540,7 @@ export function getAutoCalibrateStatus(
       enabled_regimes: cal.enabled_regimes.length,
       genome_peak_keep: genome?.peak_keep ?? 0.75,
       genome_soft_giveback: genome?.soft_plus_giveback ?? 0.75,
+      genome_pullback_episode_arm: genome?.pullback_episode_peak_arm_soft_mult ?? 1.0,
     },
   };
 }
@@ -729,6 +731,56 @@ function proposeGenomePatch(
         )
       );
     }
+    // Soft HardInv after TREND + bounce/dip chapter → tighten pullback-episode Soft×
+    const pbSoft = windowTrades.filter((t) => {
+      const er = String(t.exit_reason || '');
+      if (!/HardInvalidation/i.test(er) && !(Number(t.pnl_pts) < 0)) return false;
+      const ch = String(t.exit_ctx?.chapter || t.entry_ctx?.chapter || '').toUpperCase();
+      const reg = String(t.regime || '').toUpperCase();
+      const bounce =
+        ch === 'BOUNCE_IN_SELL' ||
+        ch === 'DIP_IN_RALLY' ||
+        ch === 'EXHAUST_LO' ||
+        ch === 'EXHAUST_HI';
+      const trendish =
+        reg.includes('TREND') || reg.includes('PULLBACK');
+      return bounce || trendish;
+    }).length;
+    if (pbSoft >= 2) {
+      if (!g.pullback_episode_enabled) {
+        patch.pullback_episode_enabled = true;
+        changes.push(
+          autotuneLog(
+            'genome pullback_episode_enabled false→true',
+            `Soft×${pbSoft} TREND/bounce Soft — enable pullback episode`
+          )
+        );
+      }
+      const epArm = roundRet(
+        Math.min(1.35, Math.max(0.5, g.pullback_episode_peak_arm_soft_mult - 0.05))
+      );
+      if (epArm !== roundRet(g.pullback_episode_peak_arm_soft_mult)) {
+        patch.pullback_episode_peak_arm_soft_mult = epArm;
+        changes.push(
+          autotuneLog(
+            `genome pullback_episode_peak_arm_soft_mult ${roundRet(g.pullback_episode_peak_arm_soft_mult).toFixed(2)}→${epArm.toFixed(2)}`,
+            `Soft×${pbSoft} bounce Soft — Peak Soft× earlier in episode`
+          )
+        );
+      }
+      const epMin = roundRet(
+        Math.min(1.0, Math.max(0.25, g.pullback_episode_min_mfe_soft_mult - 0.05))
+      );
+      if (epMin !== roundRet(g.pullback_episode_min_mfe_soft_mult)) {
+        patch.pullback_episode_min_mfe_soft_mult = epMin;
+        changes.push(
+          autotuneLog(
+            `genome pullback_episode_min_mfe_soft_mult ${roundRet(g.pullback_episode_min_mfe_soft_mult).toFixed(2)}→${epMin.toFixed(2)}`,
+            'sooner Soft+ bank in pullback episode'
+          )
+        );
+      }
+    }
     const pause = Math.min(12, g.soft_same_side_pause_closes + 1);
     if (pause !== g.soft_same_side_pause_closes && softLosses >= 2) {
       patch.soft_same_side_pause_closes = pause;
@@ -747,6 +799,22 @@ function proposeGenomePatch(
         autotuneLog(
           `genome peak_arm_soft_mult ${roundRet(g.peak_arm_soft_mult).toFixed(2)}→${arm.toFixed(2)}`,
           'let winners run — Peak arms later'
+        )
+      );
+    }
+    const epArmUp = roundRet(
+      Math.min(1.35, Math.max(0.5, g.pullback_episode_peak_arm_soft_mult + 0.05))
+    );
+    if (
+      g.pullback_episode_enabled &&
+      epArmUp !== roundRet(g.pullback_episode_peak_arm_soft_mult) &&
+      epArmUp <= roundRet(g.peak_arm_soft_mult)
+    ) {
+      patch.pullback_episode_peak_arm_soft_mult = epArmUp;
+      changes.push(
+        autotuneLog(
+          `genome pullback_episode_peak_arm_soft_mult ${roundRet(g.pullback_episode_peak_arm_soft_mult).toFixed(2)}→${epArmUp.toFixed(2)}`,
+          'winners — episode Peak Soft× a bit later'
         )
       );
     }
