@@ -239,6 +239,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     PERSIST_PULLBACK,
     MOM_BARS,
     PERSIST_WINDOW,
+    RANGE_CHOP_PERSIST_MAX,
+    RANGE_CHOP_TREK_SHARE_MAX,
+    RANGE_CHOP_TREK_EFF_MAX,
   } = getActiveRegimeBands();
 
   const zone = bars.slice(-ZONE_BARS);
@@ -448,9 +451,21 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 
   // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
-  if (inRange) return 'RANGE';
 
-  // Sticky prior instead of dead TRANSITION
+  // Positive RANGE — proven chop inside the box. NOT "inRange ⇒ RANGE".
+  // Violent spike/dump that still sits in a wide 30m hi/lo must NOT become fade.
+  // Genome: regime_range_chop_persist_max / trek_share_max / trek_eff_max.
+  const absPersist = Math.abs(persistence);
+  const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
+  const chopTrek =
+    trekShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    recentShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    trekEfficiency <= RANGE_CHOP_TREK_EFF_MAX;
+  const quietMid =
+    nearZoneMid && !expanding && Math.abs(lastVel) < TREND_ENTER;
+  if (inRange && chopPersist && (chopTrek || quietMid)) return 'RANGE';
+
+  // Sticky prior instead of inventing RANGE / dead TRANSITION
   if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
   return 'UNKNOWN';
 }

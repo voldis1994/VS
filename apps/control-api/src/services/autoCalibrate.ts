@@ -781,6 +781,50 @@ function proposeGenomePatch(
         );
       }
     }
+    // False RANGE Soft knives — tighten positive RANGE chop gates (harder to call RANGE)
+    const rangeSoft = windowTrades.filter((t) => {
+      const reg = String(t.regime || '').toUpperCase();
+      if (reg !== 'RANGE' && reg !== 'COMPRESSION' && reg !== 'TRANSITION') return false;
+      return t.pnl_pts < -1e-9;
+    }).length;
+    if (rangeSoft >= 2) {
+      const persist = roundRet(
+        Math.min(0.55, Math.max(0.08, g.regime_range_chop_persist_max - 0.03))
+      );
+      if (persist !== roundRet(g.regime_range_chop_persist_max)) {
+        patch.regime_range_chop_persist_max = persist;
+        changes.push(
+          autotuneLog(
+            `genome regime_range_chop_persist_max ${roundRet(g.regime_range_chop_persist_max).toFixed(2)}→${persist.toFixed(2)}`,
+            `RANGE Soft×${rangeSoft} — RANGE only tighter chop`
+          )
+        );
+      }
+      const share = roundRet(
+        Math.min(0.55, Math.max(0.12, g.regime_range_trek_share_max - 0.03))
+      );
+      if (share !== roundRet(g.regime_range_trek_share_max)) {
+        patch.regime_range_trek_share_max = share;
+        changes.push(
+          autotuneLog(
+            `genome regime_range_trek_share_max ${roundRet(g.regime_range_trek_share_max).toFixed(2)}→${share.toFixed(2)}`,
+            'false RANGE Soft — narrower sideway trek for RANGE'
+          )
+        );
+      }
+      const eff = roundRet(
+        Math.min(0.7, Math.max(0.15, g.regime_range_trek_eff_max - 0.03))
+      );
+      if (eff !== roundRet(g.regime_range_trek_eff_max)) {
+        patch.regime_range_trek_eff_max = eff;
+        changes.push(
+          autotuneLog(
+            `genome regime_range_trek_eff_max ${roundRet(g.regime_range_trek_eff_max).toFixed(2)}→${eff.toFixed(2)}`,
+            'false RANGE Soft — lower trek-eff ceiling for RANGE'
+          )
+        );
+      }
+    }
     const pause = Math.min(12, g.soft_same_side_pause_closes + 1);
     if (pause !== g.soft_same_side_pause_closes && softLosses >= 2) {
       patch.soft_same_side_pause_closes = pause;
@@ -817,6 +861,29 @@ function proposeGenomePatch(
           'winners — episode Peak Soft× a bit later'
         )
       );
+    }
+    // Winning RANGE fades — ease positive RANGE gates slightly (more true chop OK)
+    const rangeWins = windowTrades.filter((t) => {
+      const reg = String(t.regime || '').toUpperCase();
+      return (
+        (reg === 'RANGE' || reg === 'COMPRESSION') &&
+        t.pnl_pts > 1e-9 &&
+        /PeakProtection|MindBank|Target|TimeDecay/i.test(String(t.exit_reason || ''))
+      );
+    }).length;
+    if (rangeWins >= 2) {
+      const persist = roundRet(
+        Math.min(0.55, Math.max(0.08, g.regime_range_chop_persist_max + 0.02))
+      );
+      if (persist !== roundRet(g.regime_range_chop_persist_max)) {
+        patch.regime_range_chop_persist_max = persist;
+        changes.push(
+          autotuneLog(
+            `genome regime_range_chop_persist_max ${roundRet(g.regime_range_chop_persist_max).toFixed(2)}→${persist.toFixed(2)}`,
+            `RANGE wins×${rangeWins} — ease chop gate`
+          )
+        );
+      }
     }
     const runner = roundRet(Math.min(2.0, Math.max(1.0, g.soft_plus_runner_mult + 0.05)));
     if (runner !== roundRet(g.soft_plus_runner_mult)) {

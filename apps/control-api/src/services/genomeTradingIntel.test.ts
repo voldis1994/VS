@@ -538,7 +538,7 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     setBrainGenome({ regime_persist_stay: 0.7, regime_persist_enter: 0.85 });
     reloadBrainGenome();
     expect(getBrainGenome().regime_persist_stay).toBeCloseTo(0.7, 5);
-    // In-family stay fails; tip still in wide zone → RANGE (not sticky TREND_DOWN)
-    expect(classifyRegime(bars, 'TREND_DOWN')).toBe('RANGE');
+    // In-family stay fails; tip still in wide zone — sticky prior TREND, NOT invent RANGE
+    expect(classifyRegime(bars, 'TREND_DOWN')).toBe('TREND_DOWN');
   });
 });
