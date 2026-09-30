@@ -179,6 +179,27 @@ export function storyFightsSide(
   return a === 'BUY';
 }
 
+/**
+ * Soft+ still Soft-green but story fights — bank Soft×1 before Soft eats the win.
+ * Soft×1.35 runner ceiling does NOT apply when stāsts already says opposite side
+ * (Funds BUY · Soft 2.6 · MFE 3.1 · stāsts tikai SELL → Soft minus).
+ */
+export function softPlusStoryFightShouldBank(opts: {
+  mfe: number;
+  softSl: number;
+  execFav: number;
+  retention: number;
+  keep: number;
+  storyAllow: string | null | undefined;
+  openSide: 'BUY' | 'SELL';
+}): boolean {
+  if (!storyFightsSide(opts.storyAllow, opts.openSide)) return false;
+  const soft = Math.max(opts.softSl, 1e-9);
+  if (!(opts.mfe >= soft)) return false;
+  if (!(opts.execFav >= soft * 0.95)) return false;
+  return opts.retention < opts.keep;
+}
+
 /** True when pressure (green share) fights open side. */
 export function pressureFightsSide(
   greenShare: number,
