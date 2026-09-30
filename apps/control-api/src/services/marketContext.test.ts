@@ -3,6 +3,7 @@ import {
   buildMarketContext,
   compactMarketContext,
   pressureFightsSide,
+  softPlusStoryFightShouldBank,
   storyFightsSide,
 } from './marketContext.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -220,5 +221,50 @@ describe('autoCalibrate human outcome review', () => {
     expect(r.changes.some((c) => c.includes('PRĀTS'))).toBe(true);
     expect(r.changes.some((c) => c.includes('MĀCĪBA'))).toBe(true);
     expect(r.changes.some((c) => /adverse story|DIVERGENT losses/.test(c))).toBe(false);
+  });
+});
+
+describe('softPlusStoryFightShouldBank — Soft×1 before Soft eats fight', () => {
+  it('BANKs Soft×1.2 Soft+ when stāsts fights (Funds BUY vs SELL)', () => {
+    // Soft 2.6 · MFE 3.1 · exec Soft-green · retention under Keep — Peak floor 3.3 was too high
+    expect(
+      softPlusStoryFightShouldBank({
+        mfe: 3.1,
+        softSl: 2.6,
+        execFav: 2.55,
+        retention: 0.7,
+        keep: 0.83,
+        storyAllow: 'SELL',
+        openSide: 'BUY',
+      })
+    ).toBe(true);
+  });
+
+  it('does NOT Soft×1 Soft-ceiling bank when story agrees (runners breathe Soft×1.35)', () => {
+    expect(
+      softPlusStoryFightShouldBank({
+        mfe: 3.1,
+        softSl: 2.6,
+        execFav: 2.55,
+        retention: 0.7,
+        keep: 0.83,
+        storyAllow: 'BUY',
+        openSide: 'BUY',
+      })
+    ).toBe(false);
+  });
+
+  it('skips when already Soft-red (Soft HardInv owns loser)', () => {
+    expect(
+      softPlusStoryFightShouldBank({
+        mfe: 3.1,
+        softSl: 2.6,
+        execFav: -0.72,
+        retention: 0,
+        keep: 0.83,
+        storyAllow: 'SELL',
+        openSide: 'BUY',
+      })
+    ).toBe(false);
   });
 });
