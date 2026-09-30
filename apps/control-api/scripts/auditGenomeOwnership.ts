@@ -303,7 +303,11 @@ const MAP: Record<number, string[]> = {
     'entry_learner_max_w',
   ],
   179: ['entry_zone_lo_bin', 'entry_zone_hi_bin'],
-  180: [], // prior_feature_weights — intentional code constant unless genome key exists
+  180: [
+    'entry_learner_prior_buy',
+    'entry_learner_prior_sell',
+    'entry_learner_prior_wait',
+  ],
   181: ['entry_learner_wait_boost'],
   182: [
     'auto_cal_max_hardinv_abs',

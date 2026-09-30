@@ -702,6 +702,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     STRUCTURE_CYCLE
   );
   const exitMidSlack = bounceNum(g.exit_range_through_mid_slack, 0.02, 0.01, 0.2, dir);
+  const beLockFrac = bounceNum(g.be_lock_frac, 0.05, 0.1, 0.95, dir);
+  const beLockExec = bounceNum(g.be_lock_exec_frac, 0.05, 0.1, 0.95, dir);
   const flipSoftExit1m = !g.soft_exit_require_1m_change;
   const flipSoftExitBlock = !g.soft_exit_block_same_next_entry;
   const flipExitLossHard = !g.exit_loss_include_hardinv;
@@ -1501,13 +1503,15 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     },
     {
       title: `Explore soft-exit gates + mid slack (step #${nextStep + 29})`,
-      rationale: 'Toggle soft-exit gates, exit-loss flags, range-through-mid slack.',
-      task: `soft_exit=${flipSoftExit1m}/${flipSoftExitBlock} exit_loss=${flipExitLossHard}/${flipExitLossBe} slack=${exitMidSlack}`,
+      rationale: 'Toggle soft-exit gates, exit-loss flags, deprecated BE-lock fracs, mid slack.',
+      task: `soft_exit=${flipSoftExit1m}/${flipSoftExitBlock} exit_loss=${flipExitLossHard}/${flipExitLossBe} beLock=${beLockFrac}/${beLockExec} slack=${exitMidSlack}`,
       genome_delta: {
         soft_exit_require_1m_change: flipSoftExit1m,
         soft_exit_block_same_next_entry: flipSoftExitBlock,
         exit_loss_include_hardinv: flipExitLossHard,
         exit_loss_exclude_be_lock: flipExitLossBe,
+        be_lock_frac: beLockFrac,
+        be_lock_exec_frac: beLockExec,
         exit_range_through_mid_slack: exitMidSlack,
         explore_step: nextStep + 29,
         last_lesson: `Explore soft-exit gates slack=${exitMidSlack}`,
@@ -1525,6 +1529,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           `flip exit_loss_hard ${flipExitLossHard}`
         ),
         genomePatch('exit_loss_exclude_be_lock', flipExitLossBe, `flip exit_loss_be ${flipExitLossBe}`),
+        genomePatch('be_lock_frac', beLockFrac, `explore be_lock_frac ${beLockFrac}`),
+        genomePatch('be_lock_exec_frac', beLockExec, `explore be_lock_exec ${beLockExec}`),
         genomePatch('exit_range_through_mid_slack', exitMidSlack, `explore mid_slack ${exitMidSlack}`),
         genomePatch('explore_step', nextStep + 29, `explore_step ${nextStep + 29}`),
       ],
