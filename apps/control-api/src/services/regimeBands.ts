@@ -134,16 +134,58 @@ export function assertRegimeBandsCoherent(): void {
   if (!(EXPAND_ABS - COMPRESS_ABS >= 0.00035)) {
     throw new Error('compress→expand dead zone too thin (< 0.035%)');
   }
+  if (!(TREND_STAY - MOVE >= 0.0001)) {
+    throw new Error('move→stay gap too thin (< 0.010%)');
+  }
   if (!(TREND_ENTER - TREND_STAY >= 0.0001)) {
     throw new Error('stay→enter gap too thin (< 0.010%)');
   }
   if (!(PULLBACK - TREND_ENTER >= 0.0001)) {
     throw new Error('enter→pullback gap too thin (< 0.010%)');
   }
+  if (!(REVERSAL - PULLBACK >= 0.0005)) {
+    throw new Error('pullback→reversal gap too thin (< 0.050%)');
+  }
   if (Math.abs(ENTRY_DIP) !== MOVE || ENTRY_RALLY !== MOVE) {
     throw new Error('ENTRY_DIP/RALLY must equal ±MOVE');
   }
 }
 
+/**
+ * Live genome ladder — same atstarpes as factory. Brain mutations are repaired
+ * in sanitizeGenome; this catches regressions if someone bypasses sanitize.
+ */
+export function assertActiveRegimeBandsCoherent(): void {
+  const b = getActiveRegimeBands();
+  if (!(b.COMPRESS_ABS < b.MOVE)) {
+    throw new Error(`live COMPRESS_ABS ${b.COMPRESS_ABS} must be < MOVE ${b.MOVE}`);
+  }
+  if (!(b.TREND_STAY - b.MOVE >= 0.0001 - 1e-12)) {
+    throw new Error('live move→stay gap too thin');
+  }
+  if (!(b.TREND_ENTER - b.TREND_STAY >= 0.0001 - 1e-12)) {
+    throw new Error('live stay→enter gap too thin');
+  }
+  if (!(b.PULLBACK - b.TREND_ENTER >= 0.0001 - 1e-12)) {
+    throw new Error('live enter→pullback gap too thin');
+  }
+  if (!(b.REVERSAL - b.PULLBACK >= 0.0005 - 1e-12)) {
+    throw new Error('live pullback→reversal gap too thin');
+  }
+  if (!(b.EXPAND_ABS > b.TREND_ENTER)) {
+    throw new Error(`live EXPAND_ABS ${b.EXPAND_ABS} must be > TREND_ENTER`);
+  }
+  if (!(b.EXPAND_ABS - b.COMPRESS_ABS >= 0.00035)) {
+    throw new Error('live compress→expand dead zone too thin');
+  }
+  if (!(b.MOVE <= b.MOVE_RANGE && b.MOVE_RANGE <= b.TREND_STAY)) {
+    throw new Error('live MOVE_RANGE must sit in [MOVE, TREND_STAY]');
+  }
+  if (!(b.PERSIST_ENTER - b.PERSIST_STAY >= 0.05)) {
+    throw new Error('live persist stay→enter gap too thin');
+  }
+}
+
 // Fail fast at module load in tests/runtime if someone breaks the ladder
 assertRegimeBandsCoherent();
+assertActiveRegimeBandsCoherent();

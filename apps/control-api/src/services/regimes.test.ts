@@ -350,6 +350,36 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     }
   });
 
+  it('post-switch gap: opposite TREND cannot chain on the next 10s bar', () => {
+    const book = {
+      current: 'RANGE' as RegimeName,
+      previous: 'UNKNOWN' as RegimeName,
+      bars_in_current: 8,
+      pending: null as RegimeName | null,
+      pending_count: 0,
+      since: new Date().toISOString(),
+    };
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
+    expect(book.bars_in_current).toBe(1);
+    // Immediate opposite family would be “viena svece visi režīmi”
+    expect(stabilizeRegime(book, 'TREND_DOWN')).toBe('TREND_UP');
+    expect(book.bars_in_current).toBe(2);
+    // After 2×10s gap, strong opposite may flip
+    expect(stabilizeRegime(book, 'TREND_DOWN')).toBe('TREND_DOWN');
+  });
+
+  it('BREAKOUT still pierces post-switch gap (structure)', () => {
+    const book = {
+      current: 'TREND_UP' as RegimeName,
+      previous: 'RANGE' as RegimeName,
+      bars_in_current: 1,
+      pending: null as RegimeName | null,
+      pending_count: 0,
+      since: new Date().toISOString(),
+    };
+    expect(stabilizeRegime(book, 'BREAKOUT_UP')).toBe('BREAKOUT_UP');
+  });
+
   it('observeClosedBars does not visit every regime in one minute of 10s bars', () => {
     resetRegimeBook();
     const seed = withZoneFloor([100, 100.5, 101.2, 101.9, 102.7, 103.4]).map((p, i, arr) =>

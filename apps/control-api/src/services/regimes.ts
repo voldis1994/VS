@@ -182,6 +182,31 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
   return false;
 }
 
+/** Structure pierce / fail — may flip even inside the post-switch gap. */
+function isStructureFlip(to: RegimeName): boolean {
+  return (
+    to === 'BREAKOUT_UP' ||
+    to === 'BREAKOUT_DOWN' ||
+    to === 'FAILED_BREAKOUT_UP' ||
+    to === 'FAILED_BREAKOUT_DOWN' ||
+    to === 'REVERSAL_CANDIDATE'
+  );
+}
+
+/**
+ * Chop→trend may skip dwell (right moment) even with short bars_in_current.
+ * Other strong flips need a short gap so one candle does not walk every regime.
+ */
+function isChopToTrend(from: RegimeName, to: RegimeName): boolean {
+  return (
+    (from === 'RANGE' || from === 'COMPRESSION') &&
+    (to === 'TREND_UP' ||
+      to === 'TREND_DOWN' ||
+      to === 'PULLBACK_UPTREND' ||
+      to === 'PULLBACK_DOWNTREND')
+  );
+}
+
 /**
  * Classify from closed 10s OHLC using a 30m structure zone + short momentum.
  * Raw candidate only — live path must run through stabilizeRegime (dwell + confirm).
@@ -437,6 +462,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
  * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar after dwell
  * - Strong (opposite family / breakout) may switch before dwell completes
  * - Same-family (TREND↔PULLBACK) no longer bypasses dwell — that caused 10s recipe flicker
+ * - Post-switch gap (2×10s): no rapid chain of regimes on consecutive bars
+ *   (except structure BREAKOUT/FAILED and first chop→trend)
  */
 export function stabilizeRegime(
   book: {
@@ -467,11 +494,20 @@ export function stabilizeRegime(
   const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
   const strong = isStrongSwitch(book.current, candidate);
   const { MIN_DWELL_BARS, CONFIRM_BARS } = getActiveRegimeBands();
+  /** ≥2×10s between flips — stops “viena svece visi režīmi” chains */
+  const SWITCH_GAP_BARS = 2;
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   const need = sameFamily || strong ? 1 : CONFIRM_BARS;
   // sameFamily must still wait for dwell — only strong structure breaks skip it
-  const canSwitch = (dwellOk || strong) && book.pending_count >= need;
+  const spacingOk =
+    book.current === 'UNKNOWN' ||
+    book.current === 'TRANSITION' ||
+    book.bars_in_current >= SWITCH_GAP_BARS ||
+    isStructureFlip(candidate) ||
+    isChopToTrend(book.current, candidate);
+  const canSwitch =
+    (dwellOk || strong) && book.pending_count >= need && spacingOk;
 
   if (canSwitch) {
     book.previous = book.current;
