@@ -5,6 +5,8 @@ Politika: **viss treidings → smadzenes**.
 
 SAFETY SL cushion un SAFETY TP R:R **iet uz smadzenēm** (treidinga riska forma, ne infra).
 
+**Skalas likums:** genome skaitļiem min solis **0.1** (kā Keep/persist). Body/trek = **bp** (1 bp = 0.0001 frac) — nekad `0.00008` (round→0). Live: `regimeBpToFrac()`.
+
 ---
 
 ## 0. Smadzenes NEDRĪKST aiztikt (tikai šie)

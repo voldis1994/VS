@@ -401,6 +401,27 @@ function intelKeyProbes(): Array<{
       bars: clearBreakBars(),
     },
     {
+      key: 'regime_range_chop_persist_max',
+      id: 'p_rchop',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
+      key: 'regime_range_trek_share_max',
+      id: 'p_rshare',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
+      key: 'regime_range_trek_eff_max',
+      id: 'p_reff',
+      previous: 'UNKNOWN',
+      expected: 'RANGE',
+      bars: syntheticRangeBars({ n: 160, start: 100, wobble: 0.03 }),
+    },
+    {
       key: 'regime_persist_enter',
       id: 'p_penter',
       previous: 'UNKNOWN',

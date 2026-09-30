@@ -198,14 +198,15 @@ describe('brainSelfImprove genome', () => {
 
   it('fills missing trading-intel fields from factory (backward compatible)', () => {
     const g = sanitizeGenome({ peak_keep: 0.75 } as Partial<import('./brainGenome.js').BrainGenome>);
-    expect(g.regime_reversal).toBe(0.0016);
-    expect(g.regime_trend_enter).toBe(0.00038);
+    expect(g.regime_reversal).toBe(16); // bp
+    expect(g.regime_trend_enter).toBe(3.8);
     expect(g.regime_min_dwell_bars).toBe(5);
     expect(g.mtf_htf_veto).toBe(true);
     expect(g.entry_story_conf_min).toBe(0.55);
   });
 
   it('clamps regime bands and repairs ladder order', () => {
+    // Legacy fractions auto-migrate ×10000 → bp, then clamp + ladder
     const g = sanitizeGenome({
       regime_move: 0.002,
       regime_trend_stay: 0.0001,
@@ -213,7 +214,7 @@ describe('brainSelfImprove genome', () => {
       regime_pullback: 0.00004,
       regime_reversal: 0.00003,
     });
-    expect(g.regime_move).toBeLessThanOrEqual(0.0002);
+    expect(g.regime_move).toBeGreaterThanOrEqual(0.1);
     expect(g.regime_move).toBeLessThan(g.regime_trend_stay);
     expect(g.regime_trend_stay).toBeLessThan(g.regime_trend_enter);
     expect(g.regime_trend_enter).toBeLessThan(g.regime_pullback);
@@ -222,8 +223,8 @@ describe('brainSelfImprove genome', () => {
 
   it('repairs collapsed ladder with real atstarpes — not one-candle-all-regimes', () => {
     const g = sanitizeGenome({
-      regime_move: 0.0001,
-      regime_trend_stay: 0.000105, // tiny gap after move
+      regime_move: 0.0001, // legacy → 1.0 bp
+      regime_trend_stay: 0.000105,
       regime_trend_enter: 0.00011,
       regime_pullback: 0.000115,
       regime_reversal: 0.00012,
@@ -232,12 +233,24 @@ describe('brainSelfImprove genome', () => {
       regime_persist_enter: 0.5,
       regime_persist_stay: 0.49,
     });
-    expect(g.regime_trend_stay - g.regime_move).toBeGreaterThanOrEqual(0.000099);
-    expect(g.regime_trend_enter - g.regime_trend_stay).toBeGreaterThanOrEqual(0.000099);
-    expect(g.regime_pullback - g.regime_trend_enter).toBeGreaterThanOrEqual(0.000099);
-    expect(g.regime_reversal - g.regime_pullback).toBeGreaterThanOrEqual(0.0005);
-    expect(g.regime_expand_abs - g.regime_compress_abs).toBeGreaterThanOrEqual(0.00035);
+    // Gaps in bp — min 1.0 / 5.0 / 3.5 (never sub-0.1 dust)
+    expect(g.regime_trend_stay - g.regime_move).toBeGreaterThanOrEqual(0.99);
+    expect(g.regime_trend_enter - g.regime_trend_stay).toBeGreaterThanOrEqual(0.99);
+    expect(g.regime_pullback - g.regime_trend_enter).toBeGreaterThanOrEqual(0.99);
+    expect(g.regime_reversal - g.regime_pullback).toBeGreaterThanOrEqual(4.99);
+    expect(g.regime_expand_abs - g.regime_compress_abs).toBeGreaterThanOrEqual(3.49);
     expect(g.regime_persist_enter - g.regime_persist_stay).toBeGreaterThanOrEqual(0.049);
+  });
+
+  it('regime body knobs never store 0.000x — min 0.1 bp grid', () => {
+    const g = sanitizeGenome({
+      regime_move: 0.00008,
+      mtf_trek_flat_frac: 0.0004,
+    });
+    expect(g.regime_move).toBe(0.8);
+    expect(g.mtf_trek_flat_frac).toBe(4);
+    expect(String(g.regime_move)).not.toMatch(/0\.000/);
+    expect(g.regime_move).toBeGreaterThanOrEqual(0.1);
   });
 
   it('explore can mutate regime_reversal / multi-TF knobs', () => {

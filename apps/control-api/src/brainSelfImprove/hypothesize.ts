@@ -358,16 +358,10 @@ function bounceNum(cur: number, step: number, lo: number, hi: number, dir: 1 | -
   return Math.min(hi, Math.max(lo, next));
 }
 
-/** High-precision bounce for regime % fractions (0.00008 scale). */
-function bounceFrac(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
-  let next = Number((cur + dir * step).toFixed(8));
-  if (next > hi) next = Number((cur - step).toFixed(8));
-  if (next < lo) next = Number((cur + step).toFixed(8));
-  if (next === cur || !Number.isFinite(next)) {
-    next = Number((lo + ((cur - lo + step) % Math.max(step, hi - lo))).toFixed(8));
-    if (next === cur) next = cur >= (lo + hi) / 2 ? lo : hi;
-  }
-  return Math.min(hi, Math.max(lo, next));
+/** Bounce regime body/trek bp knobs — step ≥ 0.1, one decimal (no 0.00008 dust). */
+function bounceBp(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  const s = Math.max(0.1, step);
+  return bounceNum(cur, s, Math.max(0.1, lo), hi, dir);
 }
 
 function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
@@ -393,29 +387,30 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;
   const flipTrig = !g.require_1m_trigger;
-  const rev = bounceFrac(g.regime_reversal, 0.00015, 0.0008, 0.004, dir);
-  const trendEnter = bounceFrac(g.regime_trend_enter, 0.00004, 0.0002, 0.0008, dir);
-  const trendStay = bounceFrac(g.regime_trend_stay, 0.00002, 0.0001, 0.0005, dir);
-  const move = bounceFrac(g.regime_move, 0.00001, 0.00004, 0.0002, dir);
-  const moveRange = bounceFrac(g.regime_move_range, 0.000015, 0.00006, 0.0004, dir);
+  // Body/trek in bp — step ≥ 0.1 (never 0.00008 → round-to-0)
+  const rev = bounceBp(g.regime_reversal, 1.0, 8.0, 40.0, dir);
+  const trendEnter = bounceBp(g.regime_trend_enter, 0.4, 2.0, 8.0, dir);
+  const trendStay = bounceBp(g.regime_trend_stay, 0.2, 1.0, 5.0, dir);
+  const move = bounceBp(g.regime_move, 0.1, 0.4, 2.0, dir);
+  const moveRange = bounceBp(g.regime_move_range, 0.1, 0.6, 4.0, dir);
   const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.25, 0.85, dir);
   const persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.1, 0.7, dir);
-  const persistPull = bounceNum(g.regime_persist_pullback, 0.05, 0.05, 0.6, dir);
-  const rangePersist = bounceNum(g.regime_range_chop_persist_max, 0.03, 0.08, 0.55, dir);
-  const rangeShare = bounceNum(g.regime_range_trek_share_max, 0.03, 0.12, 0.55, dir);
-  const rangeEff = bounceNum(g.regime_range_trek_eff_max, 0.03, 0.15, 0.7, dir);
-  const pullback = bounceFrac(g.regime_pullback, 0.00005, 0.0003, 0.0012, dir);
-  const expandAbs = bounceFrac(g.regime_expand_abs, 0.00008, 0.0003, 0.002, dir);
-  const compressAbs = bounceFrac(g.regime_compress_abs, 0.000008, 0.00002, 0.00012, dir);
+  const persistPull = bounceNum(g.regime_persist_pullback, 0.05, 0.1, 0.6, dir);
+  const rangePersist = bounceNum(g.regime_range_chop_persist_max, 0.1, 0.1, 0.55, dir);
+  const rangeShare = bounceNum(g.regime_range_trek_share_max, 0.1, 0.12, 0.55, dir);
+  const rangeEff = bounceNum(g.regime_range_trek_eff_max, 0.1, 0.15, 0.7, dir);
+  const pullback = bounceBp(g.regime_pullback, 0.5, 3.0, 12.0, dir);
+  const expandAbs = bounceBp(g.regime_expand_abs, 0.5, 3.0, 20.0, dir);
+  const compressAbs = bounceBp(g.regime_compress_abs, 0.1, 0.2, 1.2, dir);
   const compressMult = bounceNum(g.regime_compress_avg_mult, 0.05, 0.15, 0.7, dir);
-  const expandMult = bounceNum(g.regime_expand_avg_mult, 0.08, 1.2, 2.5, dir);
-  const nearMid = bounceNum(g.regime_near_zone_mid, 0.03, 0.12, 0.45, dir);
-  const clearBreak = bounceNum(g.regime_clear_break_frac, 0.04, 0.1, 0.5, dir);
+  const expandMult = bounceNum(g.regime_expand_avg_mult, 0.1, 1.2, 2.5, dir);
+  const nearMid = bounceNum(g.regime_near_zone_mid, 0.1, 0.12, 0.45, dir);
+  const clearBreak = bounceNum(g.regime_clear_break_frac, 0.1, 0.1, 0.5, dir);
   const dwell = bounceInt(g.regime_min_dwell_bars, 1, 2, 12, dir);
   const confirm = bounceInt(g.regime_confirm_bars, 1, 1, 8, dir);
   const momBars = bounceInt(g.regime_mom_bars, 1, 4, 16, dir);
   const persistWin = bounceInt(g.regime_persist_window, 1, 3, 12, dir);
-  const trekFlat = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
+  const trekFlat = bounceBp(g.mtf_trek_flat_frac, 0.5, 1.5, 12.0, dir);
   const flipBlockHf = !g.mtf_block_higher_fight;
   const flipAligned = !g.mtf_require_aligned_side;
   const storyMin = bounceNum(g.entry_story_conf_min, 0.05, 0.35, 0.8, dir);
@@ -723,12 +718,12 @@ function forceExploreHypothesis(
     const dir: 1 | -1 = nextStep % 2 === 0 ? 1 : -1;
     const keep = bounceNum(g.peak_keep, 0.01, 0.1, 0.95, dir);
     const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, dir === 1 ? -1 : 1);
-    const rev = bounceFrac(g.regime_reversal, 0.0001, 0.0008, 0.004, dir);
+    const rev = bounceBp(g.regime_reversal, 1.0, 8.0, 40.0, dir);
     const mom = bounceInt(g.regime_mom_bars, 1, 4, 16, dir);
-    const compressAbs = bounceFrac(g.regime_compress_abs, 0.000008, 0.00002, 0.00012, dir);
-    const expandMult = bounceNum(g.regime_expand_avg_mult, 0.08, 1.2, 2.5, dir);
+    const compressAbs = bounceBp(g.regime_compress_abs, 0.1, 0.2, 1.2, dir);
+    const expandMult = bounceNum(g.regime_expand_avg_mult, 0.1, 1.2, 2.5, dir);
     const persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.1, 0.7, dir);
-    const trek = bounceFrac(g.mtf_trek_flat_frac, 0.00008, 0.00015, 0.0012, dir);
+    const trek = bounceBp(g.mtf_trek_flat_frac, 0.5, 1.5, 12.0, dir);
     const nonce = `${Date.now().toString(36)}_${i}`;
     const mode = nextStep % 4;
     let genome_delta: Record<string, unknown>;

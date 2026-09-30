@@ -11,7 +11,7 @@
  * Strict range order:
  *   COMPRESS_ABS < MOVE < MOVE_RANGE ≤ TREND_STAY < TREND_ENTER < EXPAND_ABS
  */
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
+import { getBrainGenome, regimeBpToFrac } from '../brainSelfImprove/brainGenome.js';
 
 /** Shared “real 10s move” floor — factory default (genome.regime_move). */
 export const MOVE = 0.00008;
@@ -80,15 +80,24 @@ export type ActiveRegimeBands = {
 /** Live ladder from active BrainGenome (factory when genome missing fields). */
 export function getActiveRegimeBands(): ActiveRegimeBands {
   const g = getBrainGenome();
+  // Genome body/range keys are bp (min 0.1) — classify needs price fraction
+  const MOVE = regimeBpToFrac(g.regime_move);
+  const TREND_STAY = regimeBpToFrac(g.regime_trend_stay);
+  const TREND_ENTER = regimeBpToFrac(g.regime_trend_enter);
+  const PULLBACK = regimeBpToFrac(g.regime_pullback);
+  const REVERSAL = regimeBpToFrac(g.regime_reversal);
+  const MOVE_RANGE = regimeBpToFrac(g.regime_move_range);
+  const COMPRESS_ABS = regimeBpToFrac(g.regime_compress_abs);
+  const EXPAND_ABS = regimeBpToFrac(g.regime_expand_abs);
   return {
-    MOVE: g.regime_move,
-    TREND_STAY: g.regime_trend_stay,
-    TREND_ENTER: g.regime_trend_enter,
-    PULLBACK: g.regime_pullback,
-    REVERSAL: g.regime_reversal,
-    MOVE_RANGE: g.regime_move_range,
-    COMPRESS_ABS: g.regime_compress_abs,
-    EXPAND_ABS: g.regime_expand_abs,
+    MOVE,
+    TREND_STAY,
+    TREND_ENTER,
+    PULLBACK,
+    REVERSAL,
+    MOVE_RANGE,
+    COMPRESS_ABS,
+    EXPAND_ABS,
     COMPRESS_AVG_MULT: g.regime_compress_avg_mult,
     EXPAND_AVG_MULT: g.regime_expand_avg_mult,
     NEAR_ZONE_MID: g.regime_near_zone_mid,
@@ -103,8 +112,8 @@ export function getActiveRegimeBands(): ActiveRegimeBands {
     CONFIRM_BARS: g.regime_confirm_bars,
     MOM_BARS: g.regime_mom_bars,
     PERSIST_WINDOW: g.regime_persist_window,
-    ENTRY_DIP: -g.regime_move,
-    ENTRY_RALLY: g.regime_move,
+    ENTRY_DIP: -MOVE,
+    ENTRY_RALLY: MOVE,
   };
 }
 

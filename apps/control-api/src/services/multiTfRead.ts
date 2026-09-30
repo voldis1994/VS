@@ -93,7 +93,9 @@ export function trekBiasFromCandles(
   const trek =
     Math.max(...window.map((c) => c.high)) - Math.min(...window.map((c) => c.low));
   const mid = Math.abs(last.close) || 1;
-  const trekFlat = getBrainGenome().mtf_trek_flat_frac;
+  // Genome stores trek flat in bp (min 0.1) — convert to price fraction
+  const trekFlatBp = getBrainGenome().mtf_trek_flat_frac;
+  const trekFlat = Math.max(0, trekFlatBp) * 1e-4;
   if (trek < Math.max(mid * trekFlat, 0.5)) return 'FLAT';
 
   let trekDir: TfDir = 'FLAT';

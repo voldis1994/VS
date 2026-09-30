@@ -8,16 +8,18 @@ Politika: viss treidings → smadzenes. Ārpusē: lot · dealing-rules · sistē
 
 ## A. Ko smadzenes PĀRVALDA (OWNED) — 22 knobs
 
-| # | Genome atslēga | Default | Loma |
-|---|---|---|---|
-| 1 | `regime_move` | 0.00008 | Persist / failed-break tick |
-| 2 | `regime_trend_stay` | 0.00022 | Palikt trend |
-| 3 | `regime_trend_enter` | 0.00038 | Jauns trend / breakout body |
-| 4 | `regime_pullback` | 0.00055 | Pret-trend pullback body |
-| 5 | `regime_reversal` | 0.0016 | Violent reverse |
-| 6 | `regime_move_range` | 0.00012 | isMoving range |
-| 7 | `regime_compress_abs` | 0.000055 | Compression abs |
-| 8 | `regime_expand_abs` | 0.0006 | Expansion abs |
+**Body/range/trek skalā = bp (1 bp = 0.0001 frac).** Min solis **0.1** — nekad `0.00008` (round→0). Live: `regimeBpToFrac()`.
+
+| # | Genome atslēga | Default (bp) | Live frac | Loma |
+|---|---|---|---|---|
+| 1 | `regime_move` | 0.8 | 0.00008 | Persist / failed-break tick |
+| 2 | `regime_trend_stay` | 2.2 | 0.00022 | Palikt trend |
+| 3 | `regime_trend_enter` | 3.8 | 0.00038 | Jauns trend / breakout body |
+| 4 | `regime_pullback` | 5.5 | 0.00055 | Pret-trend pullback body |
+| 5 | `regime_reversal` | 16 | 0.0016 | Violent reverse |
+| 6 | `regime_move_range` | 1.2 | 0.00012 | isMoving range |
+| 7 | `regime_compress_abs` | 0.6 | 0.00006 | Compression abs |
+| 8 | `regime_expand_abs` | 6 | 0.0006 | Expansion abs |
 | 9 | `regime_compress_avg_mult` | 0.35 | Compress vs avg |
 | 10 | `regime_expand_avg_mult` | 1.65 | Expand vs avg |
 | 11 | `regime_near_zone_mid` | 0.28 | Near mid |
@@ -33,7 +35,8 @@ Politika: viss treidings → smadzenes. Ārpusē: lot · dealing-rules · sistē
 | 21 | `regime_mom_bars` | 8 | Momentum window |
 | 22 | `regime_persist_window` | 6 | Persist window |
 
-Ladder atstarpes (genome sanitize): GAP_MOVE_STAY / STAY_ENTER / ENTER_PULLBACK = 0.0001; GAP_PULLBACK_REVERSAL = 0.0005.
+Ladder atstarpes (bp): GAP_MOVE_STAY / STAY_ENTER / ENTER_PULLBACK = **1.0**; GAP_PULLBACK_REVERSAL = **5.0**; GAP_COMPRESS_EXPAND = **3.5**.  
+Smadzeņu explore: `bounceBp` solis ≥ 0.1 (ne `bounceFrac` 0.00001).
 
 ---
 

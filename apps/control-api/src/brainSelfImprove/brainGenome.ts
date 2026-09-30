@@ -59,22 +59,24 @@ export type BrainGenome = {
   /** Extra note from last accepted cycle */
   last_lesson: string;
 
-  // ——— Regime body / range ladder (factory = prior regimeBands.ts constants) ———
-  /** Shared 10s move floor — persist vote / failed-breakout tick */
+  // ——— Regime body / range ladder ———
+  // Stored as **basis points of price** (1 bp = 0.0001 = 0.01% of mid).
+  // Min step 0.1 — NEVER 0.00008 fractions (round→0). Live classify uses regimeBpToFrac().
+  /** Shared 10s move floor bp — persist vote / failed-breakout tick (factory 0.8) */
   regime_move: number;
-  /** Stay in an existing trend (must be > regime_move) */
+  /** Stay in an existing trend bp (must be > regime_move) */
   regime_trend_stay: number;
-  /** Enter a fresh trend (must be > regime_trend_stay) */
+  /** Enter a fresh trend bp (must be > regime_trend_stay) */
   regime_trend_enter: number;
-  /** Against-trend pullback body (must be > regime_trend_enter) */
+  /** Against-trend pullback body bp (must be > regime_trend_enter) */
   regime_pullback: number;
-  /** Violent reversal body (must be > regime_pullback) */
+  /** Violent reversal body bp (must be > regime_pullback) */
   regime_reversal: number;
-  /** isMoving range floor */
+  /** isMoving range floor bp */
   regime_move_range: number;
-  /** Compression absolute range (must be < regime_move) */
+  /** Compression absolute range bp (must be < regime_move) */
   regime_compress_abs: number;
-  /** Expansion absolute range (must be > regime_trend_enter) */
+  /** Expansion absolute range bp (must be > regime_trend_enter) */
   regime_expand_abs: number;
   /** Compression vs prior avg range mult */
   regime_compress_avg_mult: number;
@@ -109,7 +111,7 @@ export type BrainGenome = {
   regime_persist_window: number;
 
   // ——— Multi-TF / entry interpretation stringency ———
-  /** Trek flat if range < mid * this (Capital candle trek) */
+  /** Trek flat if range < mid × (this bp → frac). Factory 4 bp = 0.0004. */
   mtf_trek_flat_frac: number;
   /** When true, 30m vs 15m fight clears working bias (WAIT) */
   mtf_block_higher_fight: boolean;
@@ -146,14 +148,15 @@ const DEFAULT_GENOME: BrainGenome = {
   explore_step: 0,
   last_lesson: 'factory genome',
 
-  regime_move: 0.00008,
-  regime_trend_stay: 0.00022,
-  regime_trend_enter: 0.00038,
-  regime_pullback: 0.00055,
-  regime_reversal: 0.0016,
-  regime_move_range: 0.00012,
-  regime_compress_abs: 0.000055,
-  regime_expand_abs: 0.0006,
+  // Body/range/trek in bp (×10000 vs old fraction) — min 0.1 like persist/Keep
+  regime_move: 0.8,
+  regime_trend_stay: 2.2,
+  regime_trend_enter: 3.8,
+  regime_pullback: 5.5,
+  regime_reversal: 16,
+  regime_move_range: 1.2,
+  regime_compress_abs: 0.6,
+  regime_expand_abs: 6,
   regime_compress_avg_mult: 0.35,
   regime_expand_avg_mult: 1.65,
   regime_near_zone_mid: 0.28,
@@ -169,7 +172,7 @@ const DEFAULT_GENOME: BrainGenome = {
   regime_mom_bars: 8,
   regime_persist_window: 6,
 
-  mtf_trek_flat_frac: 0.0004,
+  mtf_trek_flat_frac: 4,
   mtf_block_higher_fight: true,
   mtf_require_aligned_side: true,
   mtf_htf_veto: true,
@@ -194,21 +197,50 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
-/** Positive step when repairing ladder — rounded to avoid float collapse. */
+/**
+ * Genome body/range/trek unit: basis points of price.
+ * 1 bp = 0.0001 fraction = 0.01% of mid. Factory MOVE 0.8 bp ≡ old 0.00008.
+ * Live classify always converts via {@link regimeBpToFrac}.
+ */
+export const REGIME_BP = 1e-4;
+
+/** bp → price fraction for classify / isMoving / trek. */
+export function regimeBpToFrac(bp: number): number {
+  return Math.max(0, Number(bp) || 0) * REGIME_BP;
+}
+
+/** Round to 1 decimal — min human step 0.1 (no 0.00008 dust → round-to-0). */
+export function roundRegimeBp(n: number): number {
+  return Math.round(clamp(n, 0.1, 1e6) * 10) / 10;
+}
+
+/** Positive step when repairing ladder — 0.1 bp grid. */
 function bumpAbove(floor: number, gap: number): number {
-  return Math.round((floor + gap) * 1e8) / 1e8;
+  return roundRegimeBp(floor + gap);
 }
 
 /**
- * Min gaps between regime thresholds — without these, one 10s candle body
+ * Min gaps between regime thresholds (bp) — without these, one 10s candle
  * sits in MOVE≈STAY≈ENTER≈PULLBACK and every regime lights up.
- * Matches assertRegimeBandsCoherent mins (factory Gold ladder is wider).
+ * Min gap 1.0 bp (= old 0.0001 fraction); never sub-0.1 dust.
  */
-const GAP_MOVE_STAY = 0.0001;
-const GAP_STAY_ENTER = 0.0001;
-const GAP_ENTER_PULLBACK = 0.0001;
-const GAP_PULLBACK_REVERSAL = 0.0005;
-const GAP_COMPRESS_EXPAND = 0.00035;
+const GAP_MOVE_STAY = 1.0;
+const GAP_STAY_ENTER = 1.0;
+const GAP_ENTER_PULLBACK = 1.0;
+const GAP_PULLBACK_REVERSAL = 5.0;
+const GAP_COMPRESS_EXPAND = 3.5;
+
+/**
+ * Legacy genome.json used price fractions (0.00008). New scale is bp (0.8).
+ * Detect fraction payloads and ×10000 once.
+ */
+function coerceRegimeBp(raw: unknown, fallback: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  // Fraction era: all body keys were < 0.05; bp era starts at ≥ 0.1
+  if (n > 0 && n < 0.05) return roundRegimeBp(n * 10_000);
+  return roundRegimeBp(n);
+}
 
 /**
  * Keep body/range ladder coherent after independent clamps.
@@ -217,7 +249,7 @@ const GAP_COMPRESS_EXPAND = 0.00035;
  */
 function enforceRegimeLadder(g: BrainGenome): void {
   if (!(g.regime_compress_abs < g.regime_move)) {
-    g.regime_compress_abs = Math.min(g.regime_compress_abs, g.regime_move - 1e-7);
+    g.regime_compress_abs = roundRegimeBp(Math.min(g.regime_compress_abs, g.regime_move - 0.1));
   }
   if (g.regime_trend_stay < g.regime_move + GAP_MOVE_STAY) {
     g.regime_trend_stay = bumpAbove(g.regime_move, GAP_MOVE_STAY);
@@ -241,7 +273,7 @@ function enforceRegimeLadder(g: BrainGenome): void {
     g.regime_expand_abs = bumpAbove(g.regime_trend_enter, GAP_STAY_ENTER);
   }
   if (g.regime_expand_abs - g.regime_compress_abs < GAP_COMPRESS_EXPAND) {
-    g.regime_expand_abs = g.regime_compress_abs + GAP_COMPRESS_EXPAND;
+    g.regime_expand_abs = roundRegimeBp(g.regime_compress_abs + GAP_COMPRESS_EXPAND);
   }
   if (!(g.regime_persist_stay <= g.regime_persist_enter)) {
     g.regime_persist_stay = Math.min(g.regime_persist_stay, g.regime_persist_enter);
@@ -346,41 +378,42 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     explore_step: Math.max(0, Math.floor(Number(p.explore_step) || 0)),
     last_lesson: String(p.last_lesson || DEFAULT_GENOME.last_lesson).slice(0, 240),
 
-    regime_move: clamp(Number(p.regime_move ?? DEFAULT_GENOME.regime_move), 0.00004, 0.0002),
+    // Body/range — bp scale, min 0.1 (legacy fraction auto ×10000)
+    regime_move: clamp(coerceRegimeBp(p.regime_move, DEFAULT_GENOME.regime_move), 0.4, 2.0),
     regime_trend_stay: clamp(
-      Number(p.regime_trend_stay ?? DEFAULT_GENOME.regime_trend_stay),
-      0.0001,
-      0.0005
+      coerceRegimeBp(p.regime_trend_stay, DEFAULT_GENOME.regime_trend_stay),
+      1.0,
+      5.0
     ),
     regime_trend_enter: clamp(
-      Number(p.regime_trend_enter ?? DEFAULT_GENOME.regime_trend_enter),
-      0.0002,
-      0.0008
+      coerceRegimeBp(p.regime_trend_enter, DEFAULT_GENOME.regime_trend_enter),
+      2.0,
+      8.0
     ),
     regime_pullback: clamp(
-      Number(p.regime_pullback ?? DEFAULT_GENOME.regime_pullback),
-      0.0003,
-      0.0012
+      coerceRegimeBp(p.regime_pullback, DEFAULT_GENOME.regime_pullback),
+      3.0,
+      12.0
     ),
     regime_reversal: clamp(
-      Number(p.regime_reversal ?? DEFAULT_GENOME.regime_reversal),
-      0.0008,
-      0.004
+      coerceRegimeBp(p.regime_reversal, DEFAULT_GENOME.regime_reversal),
+      8.0,
+      40.0
     ),
     regime_move_range: clamp(
-      Number(p.regime_move_range ?? DEFAULT_GENOME.regime_move_range),
-      0.00006,
-      0.0004
+      coerceRegimeBp(p.regime_move_range, DEFAULT_GENOME.regime_move_range),
+      0.6,
+      4.0
     ),
     regime_compress_abs: clamp(
-      Number(p.regime_compress_abs ?? DEFAULT_GENOME.regime_compress_abs),
-      0.00002,
-      0.00012
+      coerceRegimeBp(p.regime_compress_abs, DEFAULT_GENOME.regime_compress_abs),
+      0.2,
+      1.2
     ),
     regime_expand_abs: clamp(
-      Number(p.regime_expand_abs ?? DEFAULT_GENOME.regime_expand_abs),
-      0.0003,
-      0.002
+      coerceRegimeBp(p.regime_expand_abs, DEFAULT_GENOME.regime_expand_abs),
+      3.0,
+      20.0
     ),
     regime_compress_avg_mult: clamp(
       Number(p.regime_compress_avg_mult ?? DEFAULT_GENOME.regime_compress_avg_mult),
@@ -414,7 +447,7 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     ),
     regime_persist_pullback: clamp(
       Number(p.regime_persist_pullback ?? DEFAULT_GENOME.regime_persist_pullback),
-      0.05,
+      0.1,
       0.6
     ),
     regime_range_chop_persist_max:
@@ -423,7 +456,7 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
           Number(
             p.regime_range_chop_persist_max ?? DEFAULT_GENOME.regime_range_chop_persist_max
           ),
-          0.08,
+          0.1,
           0.55
         ) * 100
       ) / 100,
@@ -460,11 +493,11 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       Math.min(12, Math.floor(Number(p.regime_persist_window) || DEFAULT_GENOME.regime_persist_window))
     ),
 
-    mtf_trek_flat_frac:
-      Math.round(
-        clamp(Number(p.mtf_trek_flat_frac ?? DEFAULT_GENOME.mtf_trek_flat_frac), 0.00015, 0.0012) *
-          1e5
-      ) / 1e5,
+    mtf_trek_flat_frac: clamp(
+      coerceRegimeBp(p.mtf_trek_flat_frac, DEFAULT_GENOME.mtf_trek_flat_frac),
+      1.5,
+      12.0
+    ),
     mtf_block_higher_fight: p.mtf_block_higher_fight !== false,
     mtf_require_aligned_side: p.mtf_require_aligned_side !== false,
     mtf_htf_veto: p.mtf_htf_veto !== false,

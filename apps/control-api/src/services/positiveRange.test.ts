@@ -45,11 +45,11 @@ describe('positive RANGE — genome-calibrated chop', () => {
   it('tightening chop persist max can deny RANGE (sticky/UNKNOWN instead of invent)', () => {
     const bars = quietChopBook();
     // Force tiny persist ceiling — only near-zero persistence counts as chop
-    setBrainGenome({ regime_range_chop_persist_max: 0.08 });
+    setBrainGenome({ regime_range_chop_persist_max: 0.1 });
     reloadBrainGenome();
-    expect(getBrainGenome().regime_range_chop_persist_max).toBe(0.08);
+    expect(getBrainGenome().regime_range_chop_persist_max).toBe(0.1);
     // Quiet book still near-zero persist → still RANGE; use sticky with prior TREND
-    // and a tip that has mild directional persist > 0.08
+    // and a tip that has mild directional persist > 0.1
     const tip: TenSecBar[] = [...bars];
     let px = 100;
     for (const s of [-1, -1, -1, 1, -1, -1]) {

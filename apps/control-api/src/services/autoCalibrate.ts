@@ -945,12 +945,14 @@ function proposeGenomePatch(
     return midShare && !ctx.expanding;
   }).length;
   if (choppyCtx >= 2 && expectancy < 0.1) {
-    const trek = roundPct(Math.min(0.0012, Math.max(0.00015, g.mtf_trek_flat_frac * 1.08)));
-    if (Math.abs(trek - roundPct(g.mtf_trek_flat_frac)) > 1e-7) {
+    // Trek flat is bp (min 0.1) — step 0.1, never 0.00008 dust
+    const trek =
+      Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
+    if (Math.abs(trek - g.mtf_trek_flat_frac) > 0.05) {
       patch.mtf_trek_flat_frac = trek;
       changes.push(
         autotuneLog(
-          `genome mtf_trek_flat_frac ${roundPct(g.mtf_trek_flat_frac).toFixed(5)}→${trek.toFixed(5)}`,
+          `genome mtf_trek_flat_frac ${g.mtf_trek_flat_frac.toFixed(1)}→${trek.toFixed(1)} bp`,
           `choppy pressure ×${choppyCtx} — wider FLAT trek`
         )
       );

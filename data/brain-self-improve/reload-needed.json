@@ -1,0 +1,9 @@
+{
+  "at": "2026-09-30T19:28:30.299Z",
+  "cycle_id": "cycle_muoi06h3_a048",
+  "reason": "Pause SELL spam after Soft chain + require 1m trigger",
+  "files": [
+    "apps/control-api/src/services/flipFilter.ts",
+    "apps/control-api/src/services/traderMind.ts"
+  ]
+}
