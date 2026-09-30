@@ -202,14 +202,29 @@ export function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
 }
 
 /**
+ * Forming bucket = max(tape last bar, wall clock).
+ * - Live / past-only books: wall clock drops the current forming minute.
+ * - Synthetic/future tape (tests/replay): tape leads so selloff minutes are not dropped.
+ */
+function tapeBucketMs(bars: TenSecBar[], bucketMs: number): number {
+  let max = 0;
+  for (const b of bars) {
+    if (Number.isFinite(b.open_time_ms) && b.open_time_ms > max) max = b.open_time_ms;
+  }
+  const tape = max > 0 ? Math.floor(max / bucketMs) * bucketMs : 0;
+  const wall = Math.floor(Date.now() / bucketMs) * bucketMs;
+  return Math.max(tape, wall);
+}
+
+/**
  * Last closed 1m from 10s.
  * Prefer complete minutes; accept ≥3×10s (30s) so live books are not starved.
- * Drop only the wall-clock forming minute.
+ * Drop only the forming minute on the tape (last bar's minute).
  */
 export function lastClosed1mFromTenSec(bars: TenSecBar[]): MinuteBar | null {
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return null;
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
+  const lastBucket = tapeBucketMs(bars, 60_000);
   const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
   const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
   return closed.length ? closed[closed.length - 1]! : null;
@@ -238,7 +253,7 @@ export function minuteTrendBias(
   const lb = lookback ?? g.minute_trend_bias_lookback ?? 5;
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return 'FLAT';
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
+  const lastBucket = tapeBucketMs(bars, 60_000);
   const minBars = Math.max(1, g.m1_aggregate_min_bars || 3);
   const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
   const window = closed.slice(-Math.max(3, lb));
@@ -295,7 +310,7 @@ export function higherTfDir(
     list.push(b);
   }
   const keys = [...map.keys()].sort((a, b) => a - b);
-  const lastBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const lastBucket = tapeBucketMs(bars, bucketMs);
   const closedKeys = keys.filter((k) => k < lastBucket);
   if (!closedKeys.length) return 'FLAT';
   const k = closedKeys[closedKeys.length - 1]!;
@@ -692,10 +707,28 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       thought.confidence +
         (getBrainGenome().entry_learner_override_margin || 0.08) &&
     !learned.explored;
+  // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
+  const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);
+  const raw =
+    rawAll && setupAllowedOnLane(playbook.lane, rawAll.setup) ? rawAll : null;
+
   // Mind leads. Learner may reinforce the same side — never knife opposite.
+  // Exception: raw 10s setup on LIVE/TREND lanes may lead when mind WAIT on thin
+  // story (SEEDING / allow NONE) — setup → trade now (no scalp GAIDI hunt).
   let side = thought.choice;
   if (learnerReady && learned.action === thought.choice) {
     side = learned.action;
+  }
+  const chEarly = String(story.chapter || '').toUpperCase();
+  const rawFillsThinStory =
+    side === 'WAIT' &&
+    raw != null &&
+    playbook.lane !== 'RANGE_FADE' &&
+    chEarly !== 'BOUNCE_IN_SELL' &&
+    chEarly !== 'DIP_IN_RALLY' &&
+    (chEarly === 'SEEDING' || story.allow === 'NONE' || story.allow === 'BOTH');
+  if (rawFillsThinStory) {
+    side = raw!.direction;
   }
 
   const mindDetail =
@@ -710,11 +743,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // Belt-and-suspenders: story allow veto (mind already enforces; structure must too)
   if (story.allow === 'BUY' && side === 'SELL') return null;
   if (story.allow === 'SELL' && side === 'BUY') return null;
-  if (story.allow === 'NONE') return null;
+  // allow NONE: block mind-invented sides; raw SETUP NOW on non-RANGE lanes may proceed
+  if (story.allow === 'NONE' && !rawFillsThinStory) return null;
 
   // RANGE fade must NOT knife the tip of a move (looks like breakout / fake-breakout chase).
   // EXHAUST_HI → only SELL fade after reject; EXHAUST_LO → only BUY; never both-way tip spam.
-  const ch = String(story.chapter || '').toUpperCase();
+  const ch = chEarly;
   const zpos = zone?.pos ?? story.zone_pos;
   const { extremeHi, extremeLo } = structKnobs();
   const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
@@ -748,10 +782,6 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     }
   }
 
-  // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
-  const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);
-  const raw =
-    rawAll && setupAllowedOnLane(playbook.lane, rawAll.setup) ? rawAll : null;
   const startedAll = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
   const started =
     startedAll && setupAllowedOnLane(playbook.lane, startedAll.setup) ? startedAll : null;
@@ -779,6 +809,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   });
 
   if (!entryStructureEnabled()) {
+    // L0 OPEN still tags raw 10s setup as SETUP NOW (desk: setup → trade, no scalp hunt)
+    if (matched === raw && raw) {
+      return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
+    }
     return withMind(
       matched
         ? `${gate.tag} · OPEN · ${story.summary_lv}`
@@ -786,12 +820,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     );
   }
 
-  // SETUP NOW must NOT skip scalp on FADE / post-dump bounce — that was the
+  // SETUP NOW must NOT skip scalp on RANGE FADE / post-dump bounce — that was the
   // Gold 17:45 "RANGE SELL" on the first green after a sell breakout (too early;
-  // could still be bias change). Breakout/trend continuation may fire now.
+  // could still be bias change). FAILED_BREAKOUT / TREND / BREAKOUT raw may fire now.
   const setupNeedsConfirm =
     !raw ||
-    raw.setup === 'FADE' ||
+    (raw.setup === 'FADE' && playbook.lane === 'RANGE_FADE') ||
     story.chapter === 'BOUNCE_IN_SELL' ||
     story.chapter === 'DIP_IN_RALLY' ||
     story.chapter === 'EXHAUST_LO' ||
@@ -800,6 +834,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     gateRegime === 'COMPRESSION' ||
     gateRegime === 'TRANSITION';
   if (matched === raw && raw && !setupNeedsConfirm) {
+    return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
+  }
+  // Thin story + raw on LIVE lane: still SETUP NOW (e241eaac — stop scalp GAIDI hunts)
+  if (rawFillsThinStory && matched === raw && raw) {
     return withMind(`${gate.tag} · ${playbook.lane} · SETUP NOW · ${story.summary_lv}`);
   }
 

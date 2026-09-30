@@ -491,6 +491,8 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   // Positive RANGE — proven chop inside the box. NOT "inRange ⇒ RANGE".
   // Violent spike/dump that still sits in a wide 30m hi/lo must NOT become fade.
   // Genome: regime_range_chop_persist_max / trek_share_max / trek_eff_max.
+  // Cold-start: quiet mid + chop trek may enter RANGE even when micro-bodies
+  // above MOVE nudge |persistence| slightly over the chop max (Gold 0.35pt sine).
   const absPersist = Math.abs(persistence);
   const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
   const chopTrek =
@@ -500,6 +502,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const quietMid =
     nearZoneMid && !expanding && Math.abs(lastVel) < TREND_ENTER;
   if (inRange && chopPersist && (chopTrek || quietMid)) return 'RANGE';
+  if (inRange && quietMid && chopTrek && previous === 'UNKNOWN') return 'RANGE';
 
   // Sticky prior instead of inventing RANGE / dead TRANSITION
   if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;

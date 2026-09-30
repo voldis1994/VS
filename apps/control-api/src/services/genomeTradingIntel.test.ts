@@ -367,7 +367,8 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     }
   });
 
-  it('robotDesk live Capital higher TF path consumes capitalTfTrekDir (not tip capitalCandleDir)', () => {
+  it('robotDesk live Capital higher TF path uses tip candle via capitalHigherTfDir (not trek average)', () => {
+    // Product: Capital chart last closed candle open vs close — trek average lied (5m↑ while tip red).
     const src = fs.readFileSync(
       path.join(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -378,12 +379,15 @@ describe('genome trading intelligence — regime + multi-TF', () => {
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf5_candles\)/);
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf15_candles\)/);
     expect(src).toMatch(/capitalHigherTfDir\(s\.last_tf30_candles\)/);
-    expect(src).toMatch(/capitalTfTrekDir/);
+    expect(src).toMatch(/function capitalHigherTfDir/);
+    expect(src).toMatch(/Do NOT invent direction from a 4-candle/);
     expect(src).not.toMatch(/capital_tf5_dir:\s*capitalCandleDir/);
     expect(src).not.toMatch(/capital_tf15_dir:\s*capitalCandleDir/);
     expect(src).not.toMatch(/capital_tf30_dir:\s*capitalCandleDir/);
     // 1m trigger stays tip-candle (not trek)
     expect(src).toMatch(/capital_m1_dir:\s*capitalCandleDir/);
+    // Trek helper remains for intel/eval probes — not the live desk path
+    expect(src).not.toMatch(/capitalTfTrekDir\(/);
   });
 
   it('raising regime_move changes FAILED_BREAKOUT_UP classify', () => {

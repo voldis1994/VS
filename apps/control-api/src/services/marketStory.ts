@@ -112,9 +112,23 @@ function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   return out;
 }
 
+/**
+ * Forming-minute cut = max(tape last bar, wall clock).
+ * Wall clock keeps past-only books honest; tape-ahead keeps replay/tests coherent.
+ */
+function tapeMinuteBucketMs(bars: TenSecBar[]): number {
+  let max = 0;
+  for (const b of bars) {
+    if (Number.isFinite(b.open_time_ms) && b.open_time_ms > max) max = b.open_time_ms;
+  }
+  const tape = max > 0 ? Math.floor(max / 60_000) * 60_000 : 0;
+  const wall = Math.floor(Date.now() / 60_000) * 60_000;
+  return Math.max(tape, wall);
+}
+
 function closedMinutes(bars: TenSecBar[]): MinuteBar[] {
   const mins = aggregateTenSecToMinutes(bars);
-  const lastBucket = Math.floor(Date.now() / 60_000) * 60_000;
+  const lastBucket = tapeMinuteBucketMs(bars);
   const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
   return mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
 }

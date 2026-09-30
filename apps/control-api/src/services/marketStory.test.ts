@@ -65,9 +65,17 @@ describe('30m market story — 1m scalp grade', () => {
       expect(sell.ok).toBe(true);
     }
 
-    expect(
-      decideEntryWithStructure({ bar: last, regime: 'RANGE', closedBars: book })
-    ).toBeNull();
+    // Live RANGE + selloff story: playbook may promote BREAKOUT/TREND SELL —
+    // never knife-BUY into the dump (old test expected null before playbook split).
+    const sig = decideEntryWithStructure({
+      bar: last,
+      regime: 'RANGE',
+      closedBars: book,
+    });
+    if (sig) {
+      expect(sig.direction).toBe('SELL');
+      expect(sig.reason).toMatch(/BREAK|SELLOFF|TREND|PRĀTS|SETUP/i);
+    }
   });
 
   it('green bounce in selloff does not allow BUY scalp', () => {
