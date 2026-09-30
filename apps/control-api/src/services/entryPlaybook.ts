@@ -152,7 +152,8 @@ export function pickEntryPlaybook(input: {
       why_lv: 'TREND smadzenes · BOUNCE_IN_SELL (gaida 1m confirm)',
     };
   }
-  // EXHAUST without Capital HTF is still chop-edge — RANGE fade brain, not fake TREND
+  // EXHAUST tip + flat HTF: stay chop book, but entry must WAIT reject (not fade knife /
+  // not fake TREND). decideEntryWithStructure blocks tip chase on this chapter.
   if (
     CHOP.has(live) &&
     (bias === 'FLAT' || bias === 'MIXED') &&
@@ -161,7 +162,7 @@ export function pickEntryPlaybook(input: {
     return {
       lane: 'RANGE_FADE',
       regime: live === 'TRANSITION' || live === 'COMPRESSION' ? live : 'RANGE',
-      why_lv: `RANGE smadzenes · ${ch} bez HTF (ne fake TREND)`,
+      why_lv: `RANGE · ${ch} tip · gaida reject (ne fade knife / ne fake TREND)`,
     };
   }
   if (ch === 'RALLY' || ch === 'EXHAUST_HI' || allow === 'BUY') {

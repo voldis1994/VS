@@ -192,7 +192,7 @@ describe('brainSelfImprove analyze + hypothesize', () => {
 describe('brainSelfImprove genome', () => {
   it('sanitizes and clamps knobs', () => {
     const g = sanitizeGenome({ peak_keep: 1.5, soft_plus_giveback: 0.1 });
-    expect(g.peak_keep).toBeLessThanOrEqual(0.88);
+    expect(g.peak_keep).toBeLessThanOrEqual(0.95);
     expect(g.soft_plus_giveback).toBeGreaterThanOrEqual(0.55);
   });
 

@@ -15,10 +15,16 @@ export type BrainGenome = {
   updated_at: string;
   /** Peak Keep fraction (0.65–0.88) */
   peak_keep: number;
-  /** Soft-sized MFE mult before Peak trail arms (0.5–1.2) */
+  /** Soft-sized MFE mult before Peak trail arms (factory 1.35 — Soft×1 was Soft ceiling) */
   peak_arm_soft_mult: number;
+  /** Cap Peak trail floor vs Soft (factory 1.75 — blocks Gold-scaled ~9.6 starve) */
+  peak_trail_soft_cap_mult: number;
   /** Soft+ giveback bank threshold (0.55–0.85) */
   soft_plus_giveback: number;
+  /** Continue Soft+ bank needs MFE ≥ Soft × this (factory 1.5 runner) */
+  soft_plus_runner_mult: number;
+  /** Soft+ leg for deep-giveback / desk belt (factory 1.35) */
+  soft_plus_leg_mult: number;
   /** Require 1m agree with bias before PRĀTS entry */
   require_1m_trigger: boolean;
   /** After Soft same-side loss, pause that side for N closes */
@@ -94,8 +100,11 @@ const DEFAULT_GENOME: BrainGenome = {
   version: 1,
   updated_at: new Date(0).toISOString(),
   peak_keep: 0.75,
-  peak_arm_soft_mult: 1.0,
+  peak_arm_soft_mult: 1.35,
+  peak_trail_soft_cap_mult: 1.75,
   soft_plus_giveback: 0.75,
+  soft_plus_runner_mult: 1.5,
+  soft_plus_leg_mult: 1.35,
   require_1m_trigger: true,
   soft_same_side_pause_closes: 4,
   soft_same_side_pause_min: 2,
@@ -200,11 +209,31 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     peak_keep: Math.round(clamp(Number(p.peak_keep ?? DEFAULT_GENOME.peak_keep), 0.1, 0.95) * 100) / 100,
     peak_arm_soft_mult:
       Math.round(
-        clamp(Number(p.peak_arm_soft_mult ?? DEFAULT_GENOME.peak_arm_soft_mult), 0.5, 1.2) * 100
+        clamp(Number(p.peak_arm_soft_mult ?? DEFAULT_GENOME.peak_arm_soft_mult), 0.5, 2.0) * 100
+      ) / 100,
+    peak_trail_soft_cap_mult:
+      Math.round(
+        clamp(
+          Number(p.peak_trail_soft_cap_mult ?? DEFAULT_GENOME.peak_trail_soft_cap_mult),
+          1.2,
+          2.5
+        ) * 100
       ) / 100,
     soft_plus_giveback:
       Math.round(
         clamp(Number(p.soft_plus_giveback ?? DEFAULT_GENOME.soft_plus_giveback), 0.55, 0.85) * 100
+      ) / 100,
+    soft_plus_runner_mult:
+      Math.round(
+        clamp(
+          Number(p.soft_plus_runner_mult ?? DEFAULT_GENOME.soft_plus_runner_mult),
+          1.1,
+          2.5
+        ) * 100
+      ) / 100,
+    soft_plus_leg_mult:
+      Math.round(
+        clamp(Number(p.soft_plus_leg_mult ?? DEFAULT_GENOME.soft_plus_leg_mult), 1.0, 2.0) * 100
       ) / 100,
     require_1m_trigger: p.require_1m_trigger !== false,
     soft_same_side_pause_closes: Math.max(
@@ -391,7 +420,10 @@ export function defaultBrainGenome(): BrainGenome {
 export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'peak_keep',
   'peak_arm_soft_mult',
+  'peak_trail_soft_cap_mult',
   'soft_plus_giveback',
+  'soft_plus_runner_mult',
+  'soft_plus_leg_mult',
   'require_1m_trigger',
   'soft_same_side_pause_closes',
   'soft_same_side_pause_min',
@@ -464,7 +496,10 @@ export const TRADING_INTEL_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
 export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'peak_keep',
   'peak_arm_soft_mult',
+  'peak_trail_soft_cap_mult',
   'soft_plus_giveback',
+  'soft_plus_runner_mult',
+  'soft_plus_leg_mult',
   'require_1m_trigger',
   'soft_same_side_pause_closes',
   'soft_same_side_pause_min',
@@ -475,18 +510,16 @@ export const PEAK_MEMORY_SAFE_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'last_lesson',
 ];
 
-/** Test helper — updates cache and disk when BRAIN_GENOME_PATH is set. */
+/** Test helper — pin genome cache + disk so getBrainGenome cannot reload a stale file. */
 export function _resetBrainGenomeForTests(g?: Partial<BrainGenome>): void {
   cache = sanitizeGenome({ ...DEFAULT_GENOME, ...g, updated_at: new Date().toISOString() });
-  cacheMtimeMs = Number.NaN;
-  const p = process.env.BRAIN_GENOME_PATH?.trim();
-  if (p) {
-    try {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, JSON.stringify(cache, null, 2) + '\n', 'utf8');
-      cacheMtimeMs = fs.statSync(p).mtimeMs;
-    } catch {
-      cacheMtimeMs = Number.NaN;
-    }
+  const p = genomePath();
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(cache, null, 2) + '\n', 'utf8');
+    cacheMtimeMs = fs.statSync(p).mtimeMs;
+  } catch {
+    // In-memory only — mark as "fresh" so getBrainGenome won't clobber from disk
+    cacheMtimeMs = Date.now();
   }
 }

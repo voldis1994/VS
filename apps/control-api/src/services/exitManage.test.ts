@@ -93,18 +93,26 @@ describe('closed1mProfitPolicy', () => {
 
 describe('peakTrailMfeFloor — Soft ceiling vs inflated Gold floor', () => {
   it('arms above Soft×1.0 so Soft-sized winners are not Peak-banked at Soft £0.50', () => {
+    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35, peak_trail_soft_cap_mult: 1.75 });
     const soft = 3.3;
     const floor = peakTrailMfeFloor(soft, soft, soft);
     expect(floor).toBeCloseTo(soft * 1.35, 5);
     expect(floor).toBeGreaterThan(soft);
   });
 
-  it('caps inflated Gold peak_mfe_abs (~9.6) at Soft×1.75 so Peak Keep still fires', () => {
+  it('caps inflated Gold peak_mfe_abs (~9.6) at Soft×cap so Peak Keep still fires', () => {
+    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35, peak_trail_soft_cap_mult: 1.75 });
     const soft = 3.44;
     const inflated = 9.6;
     const floor = peakTrailMfeFloor(inflated, soft, soft);
     expect(floor).toBeCloseTo(soft * 1.75, 5);
     expect(floor).toBeLessThan(inflated);
+  });
+
+  it('Brain may ease peak_arm_soft_mult toward Soft×1 (autotune freedom)', () => {
+    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.0, peak_trail_soft_cap_mult: 1.75 });
+    const soft = 3.3;
+    expect(peakTrailMfeFloor(soft, soft, soft)).toBeCloseTo(soft, 5);
   });
 });
 
