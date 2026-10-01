@@ -140,11 +140,10 @@ export function postImpulseTipBlocksEntry(input: {
   const lo = Math.min(...zonePrior.map((b) => b.low));
   const zoneWidth = Math.max(hi - lo, 1e-9);
   const third = Math.max(1, Math.floor(zonePrior.length / 3));
-  const mean = (xs: TenSecBar[]) =>
-    xs.reduce((s, b) => s + b.close, 0) / Math.max(1, xs.length);
-  const midMean = mean(zonePrior.slice(third, third * 2));
-  const lateMean = mean(zonePrior.slice(-third));
-  const recentLegPts = lateMean - midMean;
+  // Endpoints (not means) — V-recovery mid≈late mean would miss the finished leg
+  const midEnd = zonePrior[Math.min(third * 2, zonePrior.length) - 1]!.close;
+  const lateEnd = zonePrior[zonePrior.length - 1]!.close;
+  const recentLegPts = lateEnd - midEnd;
   const recentShare = Math.abs(recentLegPts) / zoneWidth;
   if (recentShare < shareMin) return false;
 

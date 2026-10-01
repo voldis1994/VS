@@ -629,7 +629,7 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
 
   it('raw TREND_DOWN rally-sell trades without 1m scalp GAIDI', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
-    // Build enough 1m red history so story is not empty, but scalp would still wait
+    // Dump then bounce into MID — tip knife blocks SELL@LO; pullback sells the bounce
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 12 * 60_000;
     const rich: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
@@ -649,9 +649,8 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
         rich.push(bar(o - k * 0.05, o - k * 0.05 - 0.04, start + k * 10_000));
       }
     }
-    const trigger = bar(4329, 4327.5, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
-    // Wait — TREND_DOWN needs rally-sell not dip. Use green bounce rally:
-    const rallyTrig = bar(4328, 4329.2, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
+    // Green bounce into ~mid zone (not LO tip) — classic TREND_DOWN rally-sell
+    const rallyTrig = bar(4331.5, 4333.2, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
     rich.push(rallyTrig);
     const sig = decideEntryWithStructure({
       bar: rallyTrig,
@@ -663,7 +662,6 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(sig!.setup).toBe('PULLBACK');
     expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN/);
     void book;
-    void trigger;
   });
 });
 
@@ -761,37 +759,39 @@ describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', 
   });
 
   it('postImpulseTipBlocksEntry: V-recovery into HI tip blocks BUY (kustība beigusies)', () => {
-    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 10 * 60_000;
+    // 180-bar zone: HI plateau → dump → V rally to tip (mid→late share large)
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 40 * 60_000;
     const book: TenSecBar[] = [];
-    // Early/mid: dump into lows
-    for (let i = 0; i < 40; i++) {
-      const px = 4340 - i * 0.35;
-      book.push(bar(px + 0.1, px, m0 + i * 10_000, 0.15));
+    for (let i = 0; i < 60; i++) {
+      book.push(bar(4340, 4339.6, m0 + i * 10_000, 0.25));
     }
-    // Late: sharp V rally to tip
-    for (let i = 0; i < 40; i++) {
-      const px = 4326 + i * 0.4;
-      book.push(bar(px - 0.1, px, m0 + (40 + i) * 10_000, 0.15));
+    for (let i = 0; i < 60; i++) {
+      const px = 4338 - i * 0.22;
+      book.push(bar(px + 0.12, px, m0 + (60 + i) * 10_000, 0.15));
     }
-    const tip = bar(4341.5, 4342.2, m0 + 80 * 10_000, 0.2);
+    for (let i = 0; i < 60; i++) {
+      const px = 4325 + i * 0.27;
+      book.push(bar(px - 0.1, px, m0 + (120 + i) * 10_000, 0.15));
+    }
+    const tip = bar(4340.8, 4341.4, m0 + 180 * 10_000, 0.2);
     book.push(tip);
     const z = zoneGeometry(book, tip)!;
-    expect(z.pos).toBeGreaterThanOrEqual(0.8);
+    expect(z).not.toBeNull();
+    expect(z!.pos).toBeGreaterThanOrEqual(0.8);
     expect(
       postImpulseTipBlocksEntry({
         closedBars: book,
         side: 'BUY',
-        zpos: z.pos,
+        zpos: z!.pos,
         lane: 'TREND_PULLBACK',
         barSign: 1,
       })
     ).toBe(true);
-    // BREAKOUT may still pierce
     expect(
       postImpulseTipBlocksEntry({
         closedBars: book,
         side: 'BUY',
-        zpos: z.pos,
+        zpos: z!.pos,
         lane: 'BREAKOUT',
         barSign: 1,
       })
