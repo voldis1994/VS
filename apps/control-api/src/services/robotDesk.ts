@@ -417,6 +417,7 @@ function publicSession(s: Internal): RobotSession {
     peak_protect_armed: _ppa,
     last_1m_profit_exit_key: _1m,
     exit_deal_fails: _edf,
+    broker_flat_streak: _bfs,
     cycle_busy: _busy,
     cycle_busy_since: _busySince,
     pending_entry: _pend,
