@@ -4,9 +4,14 @@ import {
   getDeskCalibration,
   regimeAllowedForEntry,
   setDeskCalibration,
+  stripBrainOwnedDeskKnobs,
+  BRAIN_OWNED_DESK_KEYS,
   _resetDeskCalibrationCacheForTests,
 } from './deskCalibration.js';
-import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
+import {
+  getBrainGenome,
+  _resetBrainGenomeForTests,
+} from '../brainSelfImprove/brainGenome.js';
 
 describe('deskCalibration', () => {
   beforeEach(() => {
@@ -21,6 +26,31 @@ describe('deskCalibration', () => {
     // Genome wins Soft/Peak/Target — last synced write is SoT for all clients
     expect(getDeskCalibration(1).target_abs).toBe(9);
     expect(getDeskCalibration(2).target_abs).toBe(9);
+  });
+
+  it('stripBrainOwnedDeskKnobs drops Soft/Peak/Target; keeps regimes', () => {
+    const stripped = stripBrainOwnedDeskKnobs({
+      hardinv_abs: 9.9,
+      peak_retention: 0.99,
+      target_abs: 99,
+      safety_tp_rr: 3.5,
+      entry_filter_level: 3,
+      enabled_regimes: ['TREND_UP'],
+      soft_off_regimes: ['RANGE'],
+      updated_at: '2020-01-01T00:00:00.000Z',
+    });
+    for (const k of BRAIN_OWNED_DESK_KEYS) {
+      expect(stripped).not.toHaveProperty(k);
+    }
+    expect(stripped.enabled_regimes).toEqual(['TREND_UP']);
+    expect(stripped.soft_off_regimes).toEqual(['RANGE']);
+    expect(stripped).not.toHaveProperty('updated_at');
+  });
+
+  it('manual-style Soft write via setDeskCalibration still syncs genome (AutoCal path)', () => {
+    setDeskCalibration({ soft_l1_abs: 0.8, soft_l2_abs: 1.1, soft_l3_abs: 1.6 });
+    expect(getBrainGenome().soft_l1_abs).toBe(0.8);
+    expect(getDeskCalibration().soft_l1_abs).toBe(0.8);
   });
 
   it('defaults positive R:R — HardInv CAP 2.2 / Peak MFE ≥3 / Target ≥5', () => {

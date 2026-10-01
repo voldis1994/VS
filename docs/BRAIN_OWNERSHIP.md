@@ -90,8 +90,10 @@ Labāk nekā jauns knob: **wire esošo** Genome key, ja kods joprojām lieto lit
 
 ### 3.5 Desk book → genome SoT
 
-- `enabled_regimes` / `soft_off_regimes` / `entry_filter_level`  
-- Auto-cal drīkst **ierakstīt** genome Soft/Peak/Target — bet bez 100 mutation meta-knobs
+- Soft / Peak / Target / SAFETY / `entry_filter_level` — **BrainGenome SoT**
+- Manual `PUT /api/desk/calibration` **strips** these knobs (`stripBrainOwnedDeskKnobs`) — UI read-only
+- Auto-cal drīkst **ierakstīt** genome Soft/Peak/Target caur `setDeskCalibration` — bet bez 100 mutation meta-knobs
+- Operator joprojām drīkst toggle `enabled_regimes` / `soft_off_regimes` (kill / reopen)
 
 ---
 
@@ -129,6 +131,20 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 | Procedūra | lane maps, thirds, priority tree | **NĒ** (kods) |
 | AutoCal meta | `*_mut_*` step/bounds, count≥N spam | **NĒ** |
 | Broker SAFETY ops | loosen[], TP±5%/80, buckets | **NĒ** |
-| Soft/Peak/Target forma | abs, Keep, Soft×, layers | **JĀ** |
+| Soft/Peak/Target forma | abs, Keep, Soft×, layers | **JĀ** (desk UI read-only) |
 | SAFETY forma | cushion bp, TP RR | **JĀ** (+ clamp) |
 | Regime/entry/story/mind/exit | ladder, tip flags, conf, scores | **JĀ** |
+
+---
+
+## 7. Kas vēl paliek (pēc desk dual-SoT noņemšanas)
+
+| # | Gaps | Status |
+|---|---|---|
+| 1 | Manual desk Soft/Peak/Target PUT | **NOŅEMTS** — strip + UI read-only |
+| 2 | Live Soft/Peak/Target read | Genome overlay caur `getDeskCalibration` |
+| 3 | `effectivePeakKeep` = max(desk, `peak_keep`) | Vēl divas Keep atslēgas — var vienkāršot uz vienu |
+| 4 | AutoCal joprojām raksta desk+genome | OK kā “ieteikums smadzenēm”; nav otrā manuālā SoT |
+| 5 | Dual-truth literāļi (piem. `struct_extreme_*` vs 0.85) | Wire esošo Genome key — ne jauns knob |
+| 6 | `deep_giveback_offset` robotDesk | **WIRED** (vairs ne hardcode 0.12) |
+| 7 | Mind Soft× / manage Soft× | Jau genome; turpināt dual-truth audit |
