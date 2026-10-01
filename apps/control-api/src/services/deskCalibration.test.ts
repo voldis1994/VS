@@ -56,7 +56,7 @@ describe('deskCalibration', () => {
   it('defaults positive R:R — HardInv CAP 2.2 / Peak MFE ≥3 / Target ≥5', () => {
     const c = getDeskCalibration();
     expect(c.hardinv_abs).toBe(2.2);
-    expect(c.peak_retention).toBe(0.72);
+    expect(c.peak_retention).toBe(0.75);
     expect(c.peak_mfe_abs).toBe(3.0);
     expect(c.peak_min_giveback_abs).toBeGreaterThanOrEqual(0.85);
     expect(c.target_abs).toBe(5.0);
@@ -103,5 +103,12 @@ describe('deskCalibration', () => {
     expect(c.soft_l1_abs).toBe(0.9);
     expect(c.soft_l2_abs).toBe(1.4);
     expect(c.hardinv_abs).toBe(2.0);
+  });
+
+  it('desk Peak Keep sync writes one Keep (peak_keep = peak_retention)', () => {
+    setDeskCalibration({ peak_retention: 0.81 });
+    expect(getBrainGenome().peak_keep).toBe(0.81);
+    expect(getBrainGenome().peak_retention).toBe(0.81);
+    expect(getDeskCalibration().peak_retention).toBe(0.81);
   });
 });

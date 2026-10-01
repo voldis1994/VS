@@ -103,8 +103,8 @@ export function tipChaseBlocksEntry(input: {
     lane === 'RANGE_FADE' &&
     (ch === 'RANGE_CHOP' || ch === 'MIXED' || !ch) &&
     zpos != null &&
-    ((input.side === 'BUY' && zpos >= 0.85 && input.barSign > 0) ||
-      (input.side === 'SELL' && zpos <= 0.15 && input.barSign < 0))
+    ((input.side === 'BUY' && zpos >= extremeHi && input.barSign > 0) ||
+      (input.side === 'SELL' && zpos <= extremeLo && input.barSign < 0))
   ) {
     return true;
   }

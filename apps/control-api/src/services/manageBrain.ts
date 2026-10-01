@@ -177,25 +177,27 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     }
   }
 
-  // --- Live path quality ---
+  // --- Live path quality (Soft× from genome near_target_lean_bank) ---
+  const deepGreenSoft = Math.max(0.5, Math.min(1, nearTarget));
+  const fadeSoft = Math.max(0.05, 1 - deepGreenSoft);
   if (mfe >= soft) {
     bits.push(`Soft-MFE ${mfe.toFixed(2)}`);
-    if (upl >= soft * 0.85) {
+    if (upl >= soft * deepGreenSoft) {
       score -= wPathGreen;
       bits.push('deep green');
     } else if (upl > 0 && retention < cutRetention) {
       score += wGiveback;
       bits.push(`giveback ret=${(retention * 100).toFixed(0)}%`);
-    } else if (upl <= soft * 0.15 && upl > 0) {
+    } else if (upl <= soft * fadeSoft && upl > 0) {
       score += 0.75;
       bits.push('green fading → Soft');
     }
-  } else if (mfe > soft * 0.4 && upl < soft * 0.15) {
+  } else if (mfe > soft * 0.4 && upl < soft * fadeSoft) {
     score += 0.2;
     bits.push('sub-Soft stall');
   }
 
-  if (mae >= soft * 0.85 && upl > 0) {
+  if (mae >= soft * deepGreenSoft && upl > 0) {
     score += 0.45;
     bits.push(`MAE ${mae.toFixed(2)} deep then green`);
   }

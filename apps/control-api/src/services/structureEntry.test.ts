@@ -748,6 +748,32 @@ describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', 
     ).toBe(false);
   });
 
+  it('tipChaseBlocksEntry RANGE_FADE chop uses genome struct_extreme_* (not hardcode 0.85)', () => {
+    _resetBrainGenomeForTests({ struct_extreme_hi: 0.9, struct_extreme_lo: 0.1 });
+    // Below new extreme → no block
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'RANGE',
+        lane: 'RANGE_FADE',
+        chapter: 'RANGE_CHOP',
+        side: 'BUY',
+        zpos: 0.86,
+        barSign: 1,
+      })
+    ).toBe(false);
+    // At/above extreme → block
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'RANGE',
+        lane: 'RANGE_FADE',
+        chapter: 'RANGE_CHOP',
+        side: 'BUY',
+        zpos: 0.91,
+        barSign: 1,
+      })
+    ).toBe(true);
+  });
+
   it('L0 + live RANGE + HTF UP + RALLY at HI tip → no BUY arm (thesis tip safety)', () => {
     _setEntryFilterLevelForTests(0);
     _setTradeOpenAtStartForTests(true);

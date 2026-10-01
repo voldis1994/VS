@@ -83,7 +83,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     soft_l2_abs: 1.8,
     soft_l3_abs: 2.2,
     peak_mfe_abs: 3.0,
-    peak_retention: 0.72,
+    peak_retention: 0.75,
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
     target_l1_abs: 2.5,
@@ -419,6 +419,8 @@ function syncDeskKnobsToGenome(
       hardinv_pct_bp: fracToBp(next.hardinv_pct),
       peak_mfe_abs: next.peak_mfe_abs,
       peak_mfe_pct_bp: fracToBp(next.peak_mfe_pct),
+      // One Keep — desk retention writes both aliases
+      peak_keep: next.peak_retention,
       peak_retention: next.peak_retention,
       peak_min_giveback_abs: next.peak_min_giveback_abs,
       target_l1_abs: next.target_l1_abs,

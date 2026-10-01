@@ -71,18 +71,18 @@ export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
  * Single Peak Keep for Peak trail + MindBank Soft+ belt.
- * Desk + genome share one Keep — never two Soft× dialects of "Keep".
+ * BrainGenome.peak_keep is SoT (peak_retention aliases it). No max(desk, genome).
  */
 export function effectivePeakKeep(
   deskRetention: number,
   genomeKeep: number
 ): number {
-  const fallback = getBrainGenome().peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
-  let peakRet = deskRetention > 0 ? deskRetention : fallback;
-  if (genomeKeep > 0) {
-    peakRet = Math.max(peakRet, genomeKeep);
-  }
-  return peakRet;
+  const g = getBrainGenome();
+  const fallback = g.peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
+  if (genomeKeep > 0) return genomeKeep;
+  if (g.peak_keep > 0) return g.peak_keep;
+  if (deskRetention > 0) return deskRetention;
+  return fallback;
 }
 
 /**

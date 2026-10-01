@@ -143,8 +143,8 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 |---|---|---|
 | 1 | Manual desk Soft/Peak/Target PUT | **NOŅEMTS** — strip + UI read-only |
 | 2 | Live Soft/Peak/Target read | Genome overlay caur `getDeskCalibration` |
-| 3 | `effectivePeakKeep` = max(desk, `peak_keep`) | Vēl divas Keep atslēgas — var vienkāršot uz vienu |
+| 3 | `effectivePeakKeep` / `peak_keep`↔`peak_retention` | **VIENS Keep** — `peak_keep` SoT, retention alias |
 | 4 | AutoCal joprojām raksta desk+genome | OK kā “ieteikums smadzenēm”; nav otrā manuālā SoT |
-| 5 | Dual-truth literāļi (piem. `struct_extreme_*` vs 0.85) | Wire esošo Genome key — ne jauns knob |
+| 5 | `struct_extreme_*` tipChase hardcode | **WIRED** — RANGE_FADE lieto extremeHi/Lo |
 | 6 | `deep_giveback_offset` robotDesk | **WIRED** (vairs ne hardcode 0.12) |
-| 7 | Mind Soft× / manage Soft× | Jau genome; turpināt dual-truth audit |
+| 7 | manage/mind deep-green Soft× `0.85` | **WIRED** → `near_target_lean_bank` |
