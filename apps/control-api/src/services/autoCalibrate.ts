@@ -1,19 +1,15 @@
 /**
- * Ultimate desk auto-calibrate — watches closes since robot START and
- * retunes Soft/HardInv (abs+pct), Peak/Target, genome Peak/Soft memory,
- * multi-TF/regime perception, and regime allowlist every N closes.
+ * AutoCal = BrainGenome self-update from closes (ONE brain — not a second SoT).
+ * Watches closes since robot START; retunes Soft/Peak/Target/regimes **only via
+ * setBrainGenome**. Desk file is never the trading SoT (getDeskCalibration reads genome).
  *
- * Freedom policy: Soft/HardInv/genome/regimes/entry filters may all move for
- * better expectancy. Start OPEN TRADE-ALL; self-correct from closes + market ctx.
- * Never empty allowlist below MIN_ENABLED_REGIMES. Lot untouched.
- * WHAT/WHY change logs for GUI + LIVE LOG.
+ * Lot untouched. WHAT/WHY logs for GUI + LIVE LOG.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import {
   defaultDeskCalibration,
   getDeskCalibration,
-  setDeskCalibration,
   tradableDefaultRegimes,
   type DeskCalibration,
 } from './deskCalibration.js';
@@ -376,13 +372,12 @@ function hydrateSession(clientId?: number | null): void {
   }
 }
 
-/** Factory open — ensure ALL tradable regimes ON (trade everything). */
-function ensureTradeAllRegimesOn(clientId?: number | null): void {
-  const id = resolveDeskClientId(clientId);
+/** Factory open — ensure ALL tradable regimes ON (genome SoT). */
+function ensureTradeAllRegimesOn(_clientId?: number | null): void {
   try {
-    const cur = getDeskCalibration(id);
+    const g = getBrainGenome();
     const want = tradableDefaultRegimes();
-    const have = new Set(cur.enabled_regimes.map((r) => String(r).toUpperCase()));
+    const have = new Set(g.enabled_regimes.map((r) => String(r).toUpperCase()));
     let changed = false;
     for (const r of want) {
       if (!have.has(r)) {
@@ -390,11 +385,11 @@ function ensureTradeAllRegimesOn(clientId?: number | null): void {
         changed = true;
       }
     }
-    if (changed) {
-      setDeskCalibration(
-        { enabled_regimes: [...have] as never, soft_off_regimes: [] },
-        id
-      );
+    if (changed || (g.soft_off_regimes || []).length) {
+      setBrainGenome({
+        enabled_regimes: [...have],
+        soft_off_regimes: [],
+      });
     }
   } catch {
     /* ignore */
@@ -406,21 +401,21 @@ function ensureCoreRegimesOn(clientId?: number | null): void {
   ensureTradeAllRegimesOn(clientId);
 }
 
-/** Snap already-overreached knobs back to caps (live sessions that climbed too far). */
-function clampOverreachKnobs(clientId?: number | null): void {
-  const id = resolveDeskClientId(clientId);
+/** Snap overreached knobs on genome (ONE brain — never desk file). */
+function clampOverreachKnobs(_clientId?: number | null): void {
   const bounds = calBounds();
   try {
-    const cur = getDeskCalibration(id);
-    const patch: Partial<typeof cur> = {};
-    if (cur.safety_tp_rr > bounds.maxSafetyRr) patch.safety_tp_rr = bounds.maxSafetyRr;
-    if (cur.target_abs > bounds.maxTargetAbs) patch.target_abs = bounds.maxTargetAbs;
-    if (cur.peak_mfe_abs > bounds.maxPeakMfeAbs) patch.peak_mfe_abs = bounds.maxPeakMfeAbs;
-    if (cur.peak_retention > bounds.maxPeakRetention) {
+    const g = getBrainGenome();
+    const patch: Partial<BrainGenome> = {};
+    if (g.safety_tp_rr > bounds.maxSafetyRr) patch.safety_tp_rr = bounds.maxSafetyRr;
+    if (g.target_l3_abs > bounds.maxTargetAbs) patch.target_l3_abs = bounds.maxTargetAbs;
+    if (g.peak_mfe_abs > bounds.maxPeakMfeAbs) patch.peak_mfe_abs = bounds.maxPeakMfeAbs;
+    if (g.peak_retention > bounds.maxPeakRetention) {
       patch.peak_retention = bounds.maxPeakRetention;
+      patch.peak_keep = bounds.maxPeakRetention;
     }
-    // entry_filter_level 0–3 is free — do not snap L3 back to OPEN
-    if (Object.keys(patch).length) setDeskCalibration(patch, id);
+    if (g.peak_keep > bounds.maxPeakRetention) patch.peak_keep = bounds.maxPeakRetention;
+    if (Object.keys(patch).length) setBrainGenome(patch);
   } catch {
     /* ignore */
   }
@@ -451,7 +446,8 @@ export function resetClientToOpenTradeAll(
 ): AutoCalibrateStatus {
   const id = resolveDeskClientId(clientId);
   try {
-    setDeskCalibration({ ...defaultDeskCalibration() }, id);
+    // ONE BRAIN — factory Soft/Peak/Target live in Genome
+    setBrainGenome(deskCalibrationToGenomePatch(defaultDeskCalibration()));
   } catch {
     /* ignore */
   }
@@ -473,8 +469,8 @@ export function beginAutoCalibrateSession(
   st.last_summary = `OPEN TRADE-ALL · client ${id} · ${reason} · Soft+HardInv+genome free · all regimes`;
   st.last_changes = [
     autotuneLog(
-      'factory open Soft 2.2/pct0.0008 · Peak 3 keep72% · Target 5 · TP RR 1.5 · filters 0 · all regimes',
-      'Sākt no jauna — trade everything, self-correct from closes'
+      'factory open Soft 2.2/pct0.0008 · Peak 3 keep75% · Target 5 · TP RR 1.5 · filters 0 · all regimes',
+      'Sākt no jauna — Genome SoT, self-correct from closes'
     ),
   ];
   st.demoted.clear();
@@ -483,7 +479,7 @@ export function beginAutoCalibrateSession(
   st.history = [];
   st.raise_streak = 0;
   try {
-    setDeskCalibration({ ...defaultDeskCalibration() }, id);
+    setBrainGenome(deskCalibrationToGenomePatch(defaultDeskCalibration()));
   } catch {
     /* ignore */
   }
@@ -676,12 +672,24 @@ export function noteClosedTradeForAutoCalibrate(
     (c) => /pullback|ease|tighten|Soft-heavy|protect/.test(c)
   );
 
+  // ONE BRAIN: proposal always lands in Genome. Never setDeskCalibration here.
+  const deskProposal = proposed.applied;
+  let genomePatch: Partial<BrainGenome> = {
+    ...(proposed.genome_patch || {}),
+  };
+  if (deskProposal) {
+    // Soft/Peak/Target/regimes from proposal → genome (even if genome_patch was thin)
+    genomePatch = {
+      ...deskCalibrationToGenomePatch(proposed.next),
+      ...genomePatch,
+    };
+  }
   const genomeApplied =
-    proposed.genome_patch && Object.keys(proposed.genome_patch).length > 0
+    Object.keys(genomePatch).length > 0
       ? (() => {
           try {
             setBrainGenome({
-              ...proposed.genome_patch,
+              ...genomePatch,
               explore_step: (genomeNow?.explore_step ?? 0) + 1,
               last_lesson: proposed.summary.slice(0, 200),
             });
@@ -692,8 +700,7 @@ export function noteClosedTradeForAutoCalibrate(
         })()
       : false;
 
-  const deskApplied = proposed.applied;
-  const anyApplied = deskApplied || genomeApplied;
+  const anyApplied = genomeApplied;
 
   if (!anyApplied) {
     state.cycles_run += 1;
@@ -709,7 +716,8 @@ export function noteClosedTradeForAutoCalibrate(
   else if (raisedWinners) state.raise_streak += 1;
   else state.raise_streak = Math.max(0, state.raise_streak - 1);
 
-  const saved = deskApplied ? setDeskCalibration(proposed.next, id) : current;
+  // Read-through genome overlay — desk file is not SoT
+  const saved = getDeskCalibration(id);
   for (const ch of proposed.changes) {
     const m =
       /^WHAT · regime Soft OFF (.+?) ·/.exec(ch) ||
@@ -723,9 +731,7 @@ export function noteClosedTradeForAutoCalibrate(
   state.cooldown_until_ms = Date.now() + AUTO_CALIBRATE_COOLDOWN_MS;
   state.cycles_run += 1;
   state.last_cycle_at = at;
-  const genomeNote = genomeApplied
-    ? ` · genome ${proposed.genome_changes?.length ?? 0}`
-    : '';
+  const genomeNote = ` · genome ${Object.keys(genomePatch).length}`;
   state.last_summary = `${proposed.summary}${genomeNote} · cal settle ${AUTO_CALIBRATE_COOLDOWN_MS / 60_000}m (entries OK)`;
   state.last_changes = [
     ...proposed.changes,
@@ -738,6 +744,33 @@ export function noteClosedTradeForAutoCalibrate(
     applied: true,
     next: saved,
     changes: state.last_changes,
+  };
+}
+
+/** Map desk-shaped Soft/Peak/Target/regimes → BrainGenome fields (one Keep). */
+function deskCalibrationToGenomePatch(next: DeskCalibration): Partial<BrainGenome> {
+  const fracToBp = (frac: number) =>
+    Math.round((Math.max(0, Number(frac) || 0) / 1e-4) * 10) / 10;
+  const keep = roundRet(next.peak_retention);
+  return {
+    soft_l1_abs: roundAbs(next.soft_l1_abs),
+    soft_l2_abs: roundAbs(next.soft_l2_abs),
+    soft_l3_abs: roundAbs(next.soft_l3_abs),
+    hardinv_abs_cap: roundAbs(next.hardinv_abs),
+    hardinv_pct_bp: fracToBp(next.hardinv_pct),
+    peak_mfe_abs: roundAbs(next.peak_mfe_abs),
+    peak_mfe_pct_bp: fracToBp(next.peak_mfe_pct),
+    peak_retention: keep,
+    peak_keep: keep,
+    peak_min_giveback_abs: roundAbs(next.peak_min_giveback_abs),
+    target_l1_abs: roundAbs(next.target_l1_abs),
+    target_l2_abs: roundAbs(next.target_l2_abs),
+    target_l3_abs: roundAbs(next.target_l3_abs),
+    target_pct_bp: fracToBp(next.target_pct),
+    safety_tp_rr: roundRr(next.safety_tp_rr),
+    entry_filter_level: next.entry_filter_level,
+    enabled_regimes: [...next.enabled_regimes],
+    soft_off_regimes: [...(next.soft_off_regimes || [])],
   };
 }
 
@@ -758,7 +791,7 @@ function proposeGenomePatch(
   const fracToBp = (frac: number) =>
     Math.round((Math.max(0, Number(frac) || 0) / 1e-4) * 10) / 10;
 
-  // PRIMARY: desk Soft/Peak/Target/pct/SAFETY/regimes → genome SoT (not a parallel brain)
+  // AutoCal proposal → Genome SoT (one brain self-update)
   const syncNum = (
     key: keyof BrainGenome,
     deskVal: number,
@@ -774,50 +807,50 @@ function proposeGenomePatch(
     );
   };
 
-  syncNum('soft_l1_abs', roundAbs(next.soft_l1_abs), 'soft_l1_abs', 'desk Soft L1 → genome SoT');
-  syncNum('soft_l2_abs', roundAbs(next.soft_l2_abs), 'soft_l2_abs', 'desk Soft L2 → genome SoT');
-  syncNum('soft_l3_abs', roundAbs(next.soft_l3_abs), 'soft_l3_abs', 'desk Soft L3 CAP → genome SoT');
-  syncNum('peak_mfe_abs', roundAbs(next.peak_mfe_abs), 'peak_mfe_abs', 'desk Peak MFE → genome SoT');
+  syncNum('soft_l1_abs', roundAbs(next.soft_l1_abs), 'soft_l1_abs', 'AutoCal → Genome Soft L1');
+  syncNum('soft_l2_abs', roundAbs(next.soft_l2_abs), 'soft_l2_abs', 'AutoCal → Genome Soft L2');
+  syncNum('soft_l3_abs', roundAbs(next.soft_l3_abs), 'soft_l3_abs', 'AutoCal → Genome Soft L3');
+  syncNum('peak_mfe_abs', roundAbs(next.peak_mfe_abs), 'peak_mfe_abs', 'AutoCal → Genome Peak MFE');
   syncNum(
     'peak_retention',
     roundRet(next.peak_retention),
     'peak_retention',
-    'desk Peak retention → genome SoT'
+    'AutoCal → Genome Peak Keep alias'
   );
   syncNum(
     'peak_min_giveback_abs',
     roundAbs(next.peak_min_giveback_abs),
     'peak_min_giveback_abs',
-    'desk Peak giveback → genome SoT'
+    'AutoCal → Genome Peak giveback'
   );
-  syncNum('target_l1_abs', roundAbs(next.target_l1_abs), 'target_l1_abs', 'desk Target L1 → genome SoT');
-  syncNum('target_l2_abs', roundAbs(next.target_l2_abs), 'target_l2_abs', 'desk Target L2 → genome SoT');
-  syncNum('target_l3_abs', roundAbs(next.target_l3_abs), 'target_l3_abs', 'desk Target L3 → genome SoT');
-  syncNum('safety_tp_rr', roundRr(next.safety_tp_rr), 'safety_tp_rr', 'desk SAFETY RR → genome SoT');
+  syncNum('target_l1_abs', roundAbs(next.target_l1_abs), 'target_l1_abs', 'AutoCal → Genome Target L1');
+  syncNum('target_l2_abs', roundAbs(next.target_l2_abs), 'target_l2_abs', 'AutoCal → Genome Target L2');
+  syncNum('target_l3_abs', roundAbs(next.target_l3_abs), 'target_l3_abs', 'AutoCal → Genome Target L3');
+  syncNum('safety_tp_rr', roundRr(next.safety_tp_rr), 'safety_tp_rr', 'AutoCal → Genome SAFETY RR');
   syncNum(
     'hardinv_pct_bp',
     fracToBp(next.hardinv_pct),
     'hardinv_pct_bp',
-    'desk Soft pct → genome bp SoT'
+    'AutoCal → Genome Soft pct'
   );
   syncNum(
     'peak_mfe_pct_bp',
     fracToBp(next.peak_mfe_pct),
     'peak_mfe_pct_bp',
-    'desk Peak pct → genome bp SoT'
+    'AutoCal → Genome Peak pct'
   );
   syncNum(
     'target_pct_bp',
     fracToBp(next.target_pct),
     'target_pct_bp',
-    'desk Target pct → genome bp SoT'
+    'AutoCal → Genome Target pct'
   );
   if (next.entry_filter_level !== g.entry_filter_level) {
     patch.entry_filter_level = next.entry_filter_level;
     changes.push(
       autotuneLog(
         `genome entry_filter_level ${g.entry_filter_level}→${next.entry_filter_level}`,
-        'desk entry filter → genome SoT'
+        'AutoCal → Genome entry filter'
       )
     );
   }
@@ -829,7 +862,7 @@ function proposeGenomePatch(
       changes.push(
         autotuneLog(
           `genome enabled_regimes n=${ra.length}→${rb.length}`,
-          'desk regimes ON → genome SoT'
+          'AutoCal → Genome regimes'
         )
       );
     }
@@ -840,13 +873,13 @@ function proposeGenomePatch(
       changes.push(
         autotuneLog(
           `genome soft_off_regimes n=${sa.length}→${sb.length}`,
-          'desk Soft OFF → genome SoT'
+          'AutoCal → Genome Soft OFF'
         )
       );
     }
   }
 
-  // Sync Peak Keep with desk retention (genome follows 10%…95%)
+  // One Peak Keep
   const calB = calBounds();
   const keepTarget = roundRet(
     Math.min(calB.maxPeakRetention, Math.max(calB.minPeakRetention, next.peak_retention))
@@ -856,7 +889,7 @@ function proposeGenomePatch(
     changes.push(
       autotuneLog(
         `genome peak_keep ${roundRet(g.peak_keep).toFixed(2)}→${keepTarget.toFixed(2)}`,
-        'sync with desk Peak retention'
+        'AutoCal → Genome one Keep'
       )
     );
   }

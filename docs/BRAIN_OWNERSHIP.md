@@ -88,12 +88,13 @@ Labāk nekā jauns knob: **wire esošo** Genome key, ja kods joprojām lieto lit
 - Soft-exit market gate, grace/confirm, TimeDecay floors (bp)  
 - Regime runner **trading** knobs (eligible, retain, deduct) — ne score-floor meta spam
 
-### 3.5 Desk book → genome SoT
+### 3.5 Viena smadze — BrainGenome dara visu treidingu
 
-- Soft / Peak / Target / SAFETY / `entry_filter_level` — **BrainGenome SoT**
-- Manual `PUT /api/desk/calibration` **strips** these knobs (`stripBrainOwnedDeskKnobs`) — UI read-only
-- Auto-cal drīkst **ierakstīt** genome Soft/Peak/Target caur `setDeskCalibration` — bet bez 100 mutation meta-knobs
-- Operator joprojām drīkst toggle `enabled_regimes` / `soft_off_regimes` (kill / reopen)
+- Soft / Peak / Target / SAFETY / regimes / filters — **tikai BrainGenome**
+- Manual desk PUT **strips** Soft/Peak/Target — UI read-only
+- **AutoCal** = Genome **self-update** no closes (`setBrainGenome` only — **nekad** desk SoT)
+- **Learner** **nelemj** manage action (Mind/Genome lemj; learner tikai features)
+- Nav “acis / rokas / otrā smadze” — viens Genome, viss treidings
 
 ---
 

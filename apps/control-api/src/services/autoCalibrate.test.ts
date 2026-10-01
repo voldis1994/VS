@@ -24,6 +24,7 @@ import {
 } from './deskCalibration.js';
 import {
   getBrainGenome,
+  setBrainGenome,
   _resetBrainGenomeForTests,
 } from '../brainSelfImprove/brainGenome.js';
 
@@ -474,6 +475,22 @@ describe('autoCalibrate', () => {
     expect(getDeskCalibration().entry_filter_level).toBe(0);
     expect(getDeskCalibration().hardinv_abs).toBe(2.2);
     expect(st.last_changes.some((c) => c.includes('factory open'))).toBe(true);
+  });
+
+  it('AutoCal cycle — live Soft/Peak = Genome overlay (one SoT)', () => {
+    beginAutoCalibrateSession('one-brain');
+    setBrainGenome({ soft_l3_abs: 4.0, hardinv_abs_cap: 4.0, peak_keep: 0.9, peak_retention: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      noteClosedTradeForAutoCalibrate(trade({ pnl_pts: -2.5, exit_reason: 'HardInvalidation Soft' }));
+    }
+    const cycle = noteClosedTradeForAutoCalibrate(
+      trade({ pnl_pts: -2.8, exit_reason: 'HardInvalidation Soft' })
+    );
+    expect(cycle).toBeTruthy();
+    const cal = getDeskCalibration();
+    const g = getBrainGenome();
+    expect(cal.hardinv_abs).toBe(g.soft_l3_abs);
+    expect(cal.peak_retention).toBe(g.peak_keep);
   });
 
   it('counts close even when pnl is 0 / scratch', () => {
