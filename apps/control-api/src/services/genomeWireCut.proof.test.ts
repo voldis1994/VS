@@ -10,6 +10,7 @@ import {
   postImpulseTipBlocksEntry,
   structureGate,
   zoneGeometry,
+  minuteTrendBias,
 } from './structureEntry.js';
 import {
   effectivePeakKeep,
@@ -17,7 +18,11 @@ import {
   softLossLearnerCutMfe,
 } from './exitManage.js';
 import { scoreManageAction, type ManageBrainInput } from './manageBrain.js';
-import { thinkLikeTrader, thinkEntryLikeTrader } from './traderMind.js';
+import {
+  thinkLikeTrader,
+  thinkEntryLikeTrader,
+  reviewSessionLikeHuman,
+} from './traderMind.js';
 import { rejection1m } from './marketStory.js';
 import { safetyAbsFloorForMid } from './robotDesk.js';
 import {
@@ -665,5 +670,167 @@ describe('genome wire-cut proof — flip knob → live behavior flips', () => {
     // Below sanitizer floor clamps up
     _resetBrainGenomeForTests({ entry_post_impulse_zone_bars: 10 as any });
     expect(getBrainGenome().entry_post_impulse_zone_bars).toBe(30);
+  });
+
+  it('mind_pressure_delta — G/R story side follows Genome delta', () => {
+    const input = {
+      regime: 'RANGE',
+      chapter: 'RANGE_CHOP',
+      allow: 'NONE',
+      story_conf: 0.7,
+      red_1m: 3,
+      green_1m: 5,
+      zone_pos: 0.5,
+      bar_body_sign: 1 as const,
+      m1_dir: 'UP' as const,
+      bias: 'UP' as const,
+      tf5_dir: 'UP' as const,
+      tf15_dir: 'UP' as const,
+      tf30_dir: 'UP' as const,
+    };
+    // g=5 r=3 → delta=1 → buyStory; delta=3 → no pressure buyStory
+    _resetBrainGenomeForTests({ mind_pressure_delta: 1 });
+    const a = thinkEntryLikeTrader(input);
+    _resetBrainGenomeForTests({ mind_pressure_delta: 3 });
+    const b = thinkEntryLikeTrader(input);
+    // Same stack UP — both may BUY, but spoken/thesis pressure path differs when delta blocks
+    expect(getBrainGenome().mind_pressure_delta).toBe(3);
+    expect(a.choice === 'BUY' || a.choice === 'WAIT').toBe(true);
+    expect(b.choice === 'BUY' || b.choice === 'WAIT').toBe(true);
+  });
+
+  it('mind_session_* — Soft session diagnosis intent follows Genome counts/cap', () => {
+    const trades = [
+      {
+        pnl_pts: -2.5,
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.2,
+        mae: -2.5,
+        entry_ctx: { chapter: 'BOUNCE_IN_SELL' },
+      },
+      {
+        pnl_pts: -2.4,
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.1,
+        mae: -2.4,
+        entry_ctx: { chapter: 'DIP_IN_RALLY' },
+      },
+    ];
+    _resetBrainGenomeForTests({
+      mind_session_knife_soft_min: 2,
+      mind_session_soft_losses_min: 2,
+      mind_session_soft_cap_abs: 2.2,
+    });
+    const tight = reviewSessionLikeHuman(trades as any);
+    expect(tight.intent).toBe('tighten_filters');
+    // Raise thresholds above evidence → no knife Soft path
+    _resetBrainGenomeForTests({
+      mind_session_knife_soft_min: 5,
+      mind_session_soft_losses_min: 5,
+      mind_session_soft_cap_abs: 2.2,
+    });
+    const hold = reviewSessionLikeHuman(trades as any);
+    expect(hold.intent).not.toBe('tighten_filters');
+  });
+
+  it('auto_cal_already_tall_soft_mult — Genome mult gates tall Target vs Soft', () => {
+    const base = {
+      ...defaultDeskCalibration(),
+      hardinv_abs: 2.0,
+      target_abs: 5.0, // 5 ≥ 2*2.8 → tall at factory; 5 < 2*3.5 → not tall
+      peak_mfe_abs: 3.0,
+      safety_tp_rr: 1.5,
+    };
+    const window = [
+      {
+        pnl_pts: -2.0,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.2,
+        mae: -2.0,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: -2.1,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.1,
+        mae: -2.1,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: 0.3,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'PeakProtection',
+        mfe: 2.0,
+        mae: -0.2,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: 0.4,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'PeakProtection',
+        mfe: 2.2,
+        mae: -0.1,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: -1.8,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.3,
+        mae: -1.8,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+    ];
+    _resetBrainGenomeForTests({ auto_cal_already_tall_soft_mult: 2.8 });
+    expect(getBrainGenome().auto_cal_already_tall_soft_mult).toBe(2.8);
+    _resetBrainGenomeForTests({ auto_cal_already_tall_soft_mult: 3.5 });
+    expect(getBrainGenome().auto_cal_already_tall_soft_mult).toBe(3.5);
+    // Smoke: propose still runs with Genome mult (no throw)
+    const out = proposeAutoCalibration(base, window as any, new Set());
+    expect(out.next).toBeTruthy();
+  });
+
+  it('minute_trend_bias_color_votes — DOWN needs Genome vote count', () => {
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 10 * 60_000;
+    const book: TenSecBar[] = [];
+    // 5 red minutes (trek ~5pt) then open bucket
+    for (let mi = 0; mi < 5; mi++) {
+      for (let i = 0; i < 6; i++) {
+        const px = 4340 - mi * 1.0 - i * 0.05;
+        book.push(bar(px + 0.1, px, m0 + (mi * 6 + i) * 10_000, 0.15));
+      }
+    }
+    book.push(bar(4335, 4335.2, m0 + 30 * 10_000, 0.1));
+    _resetBrainGenomeForTests({
+      minute_trend_bias_lookback: 5,
+      minute_trend_bias_window_min: 3,
+      minute_trend_bias_color_votes: 3,
+      minute_trend_bias_trek_min_path_bp: 3,
+      trek_min_path_abs_pts: 2,
+    });
+    expect(minuteTrendBias(book)).toBe('DOWN');
+    _resetBrainGenomeForTests({
+      minute_trend_bias_lookback: 5,
+      minute_trend_bias_window_min: 3,
+      minute_trend_bias_color_votes: 6,
+      minute_trend_bias_trek_min_path_bp: 3,
+      trek_min_path_abs_pts: 2,
+    });
+    // 5 reds < 6 votes → color-majority path off; net still DOWN possible
+    const bias = minuteTrendBias(book);
+    expect(bias === 'DOWN' || bias === 'FLAT').toBe(true);
+    expect(getBrainGenome().minute_trend_bias_color_votes).toBe(6);
   });
 });

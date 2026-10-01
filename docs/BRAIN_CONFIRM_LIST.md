@@ -14,7 +14,7 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`
 (consumer corpus **excl.** `brainGenome.ts` + `hypothesize.ts`; `ok` prasa arī hypoGaps=0; gap_* = sanitize-owned ladder).
 **Proof:** `genomeWireCut.proof.test.ts` = **representative** live flip tests (ne 1:1 uz katru knob).
-**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors; AutoCal decision E/ctx thresholds Genome.
+**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors; AutoCal decision/learning + MarketStory/Mind session thresholds Genome.
 
 ---
 
