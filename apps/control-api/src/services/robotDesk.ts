@@ -1438,7 +1438,7 @@ export function runningRobotsSnapshotPath(): string {
   );
 }
 
-function anyRunningOpenTrade(): boolean {
+export function anyRunningOpenTrade(): boolean {
   return [...sessions.values()].some(
     (x) => x.running && Boolean(x.open_side || x.deal_id)
   );
