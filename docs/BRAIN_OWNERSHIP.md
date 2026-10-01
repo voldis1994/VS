@@ -148,3 +148,18 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 | 5 | `struct_extreme_*` tipChase hardcode | **WIRED** — RANGE_FADE lieto extremeHi/Lo |
 | 6 | `deep_giveback_offset` robotDesk | **WIRED** (vairs ne hardcode 0.12) |
 | 7 | manage/mind deep-green Soft× `0.85` | **WIRED** → `near_target_lean_bank` |
+
+---
+
+## 8. LEARN FROM SCRATCH ( Capitals + klienti paliek )
+
+`SĀKT NO JAUNA` = tikai desk Soft/Peak + auto-cal watch.  
+**Pilnais wipe** (genome + learners + vēsture → factory):
+
+- UI COMMAND: **LEARN FROM SCRATCH** (apstiprina `LEARN_FROM_SCRATCH`)
+- API: `POST /api/system/factory-reset-learning` `{ "confirm": "LEARN_FROM_SCRATCH" }`
+- CLI: `cd apps/control-api && npx tsx scripts/factoryResetLearning.ts --yes`
+
+**KEEP:** clients, Capital credentials, broker accounts, capital_markets, lot.  
+**WIPE:** genome→DEFAULT, experience, Soft/Peak/Target, learners, auto-cal, trades/positions/audit.  
+Pirms tam: FLAT/close robotus (vai `force_open_trades: true`).
