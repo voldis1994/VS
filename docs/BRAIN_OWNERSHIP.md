@@ -156,6 +156,8 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 `SĀKT NO JAUNA` = tikai desk Soft/Peak + auto-cal watch.  
 **Pilnais wipe** (genome + learners + vēsture → factory):
 
+- Windows: dubultklikšķis **`LEARN_FROM_SCRATCH.bat`** (ieraksti `LEARN_FROM_SCRATCH`)
+  - open deal: `LEARN_FROM_SCRATCH.bat --force-open`
 - UI COMMAND: **LEARN FROM SCRATCH** (apstiprina `LEARN_FROM_SCRATCH`)
 - API: `POST /api/system/factory-reset-learning` `{ "confirm": "LEARN_FROM_SCRATCH" }`
 - CLI: `cd apps/control-api && npx tsx scripts/factoryResetLearning.ts --yes`
