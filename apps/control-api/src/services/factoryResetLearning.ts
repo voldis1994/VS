@@ -104,11 +104,31 @@ function listClientIdsFromDisk(): number[] {
   return [...ids].sort((a, b) => a - b);
 }
 
+/** Avoid infinite hang when Postgres is down (Windows bat without Docker). */
+async function withDbTimeout<T>(label: string, ms: number, fn: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`DB timeout ${ms}ms · ${label}`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function listClientIdsFromDb(): Promise<number[]> {
   try {
-    const r = await pool.query<{ id: number }>(`SELECT id FROM clients ORDER BY id`);
+    const r = await withDbTimeout('clients', 8_000, () =>
+      pool.query<{ id: number }>(`SELECT id FROM clients ORDER BY id`)
+    );
     return r.rows.map((x) => Number(x.id)).filter((n) => Number.isFinite(n) && n > 0);
-  } catch {
+  } catch (e) {
+    console.warn(
+      `[factory-reset] DB clients skip: ${e instanceof Error ? e.message : e}`
+    );
     return [];
   }
 }
@@ -129,14 +149,18 @@ async function wipeDbHistory(): Promise<string[]> {
   ];
   for (const t of tables) {
     try {
-      await pool.query(`TRUNCATE TABLE ${t} RESTART IDENTITY CASCADE`);
+      await withDbTimeout(`TRUNCATE ${t}`, 15_000, () =>
+        pool.query(`TRUNCATE TABLE ${t} RESTART IDENTITY CASCADE`)
+      );
       wiped.push(`db:${t}`);
     } catch {
       try {
-        await pool.query(`DELETE FROM ${t}`);
+        await withDbTimeout(`DELETE ${t}`, 15_000, () => pool.query(`DELETE FROM ${t}`));
         wiped.push(`db:${t}`);
-      } catch {
-        /* table may not exist yet */
+      } catch (e) {
+        console.warn(
+          `[factory-reset] DB ${t} skip: ${e instanceof Error ? e.message : e}`
+        );
       }
     }
   }

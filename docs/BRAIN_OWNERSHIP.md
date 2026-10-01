@@ -148,7 +148,6 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 | 5 | `struct_extreme_*` tipChase hardcode | **WIRED** — RANGE_FADE lieto extremeHi/Lo |
 | 6 | `deep_giveback_offset` robotDesk | **WIRED** (vairs ne hardcode 0.12) |
 | 7 | manage/mind deep-green Soft× `0.85` | **WIRED** → `near_target_lean_bank` |
-<<<<<<< HEAD
 
 ---
 
@@ -166,5 +165,3 @@ Mērķa politika (vecāka): `docs/BRAIN_OWNERSHIP_TARGET.md`.
 **KEEP:** clients, Capital credentials, broker accounts, capital_markets, lot.  
 **WIPE:** genome→DEFAULT, experience, Soft/Peak/Target, learners, auto-cal, trades/positions/audit.  
 Pirms tam: FLAT/close robotus (vai `force_open_trades: true`).
-=======
->>>>>>> origin/main
