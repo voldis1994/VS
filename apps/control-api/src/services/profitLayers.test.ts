@@ -65,9 +65,10 @@ describe('Soft/Target 3-layer ladder', () => {
     expect(early * 1.35).toBeLessThan(l3Cap * 1.35);
   });
 
-  it('effectivePeakKeep — desk + genome share one Keep (MindBank = Peak trail)', () => {
+  it('effectivePeakKeep — genome owns Keep (no desk Math.max floor)', () => {
+    // Factory peak_keep_genome_owns: genome wins even when desk higher
     expect(effectivePeakKeep(0.72, 0.75)).toBe(0.75);
-    expect(effectivePeakKeep(0.8, 0.75)).toBe(0.8);
+    expect(effectivePeakKeep(0.8, 0.75)).toBe(0.75);
     expect(effectivePeakKeep(0, 0)).toBe(0.72);
   });
 

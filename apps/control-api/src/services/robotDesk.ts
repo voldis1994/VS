@@ -46,6 +46,8 @@ import {
   peakTrailMfeFloor,
   scaleDeskAbs,
   shouldArmPeakProtect,
+  softLossLearnerCutMfe,
+  softPlusDeepGiveback,
   targetTakeProfitDistance,
   type ExitDecideOverrides,
   type ExitZoneSnap,
@@ -909,7 +911,10 @@ async function persistClosedTradeLedger(
       }
     } else if (/HardInvalidation|StructureInvalidation/i.test(exitReason) && ptsForCal < 0) {
       // Soft-sized loser — reinforce that HOLD was wrong only if we had green MFE we gave back
-      if (s.mfe >= soft * 0.75 && (learnAction === 'HOLD' || learnAction === 'TRAIL')) {
+      if (
+        softLossLearnerCutMfe(s.mfe, soft) &&
+        (learnAction === 'HOLD' || learnAction === 'TRAIL')
+      ) {
         learnAction = 'CUT';
       }
     }
@@ -2664,11 +2669,10 @@ function decideOpenManageExit(
       : storyFight
         ? gArm.story_fight_peak_arm_soft_mult
         : gArm.peak_arm_soft_mult;
-    const armNeed = softSl * Math.max(0.5, armMult);
-    // Episode: also require min Soft× MFE so reverse alone with zero green does not arm
+    // armMult / ep min Soft× — genome sanitize owns floors (no desk Math.max wire)
+    const armNeed = softSl * armMult;
     const epMinOk =
-      !epActive ||
-      s.mfe >= softSl * Math.max(0.25, gEp.pullback_episode_min_mfe_soft_mult);
+      !epActive || s.mfe >= softSl * gEp.pullback_episode_min_mfe_soft_mult;
     if (s.mfe >= armNeed && epMinOk) {
       s.peak_protect_armed = true;
       pushTick(s, {
@@ -2702,12 +2706,9 @@ function decideOpenManageExit(
   const peakFloorNow =
     epFloor || storyFightsOpen
       ? softSlNow *
-        Math.max(
-          0.5,
-          epFloor
-            ? gEp.pullback_episode_peak_arm_soft_mult
-            : gFloor.story_fight_peak_arm_soft_mult
-        )
+        (epFloor
+          ? gEp.pullback_episode_peak_arm_soft_mult
+          : gFloor.story_fight_peak_arm_soft_mult)
       : peakTrailMfeFloor(
           Math.max(
             Math.abs(s.entry_price) * cal.peak_mfe_pct,
@@ -2810,7 +2811,7 @@ function decideOpenManageExit(
         : 1;
   const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
   const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
-  const deepGiveback = retNow < keepCfg - 0.12;
+  const deepGiveback = softPlusDeepGiveback(retNow, keepCfg);
   const storyFightBank = softPlusStoryFightShouldBank({
     mfe: s.mfe,
     softSl: softSlNow,

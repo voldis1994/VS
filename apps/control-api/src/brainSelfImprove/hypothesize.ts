@@ -727,6 +727,12 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipExhaustTip = !g.exhaust_tip_chase_block;
   const flipPostImpulseTip = !g.entry_block_post_impulse_tip;
   const postImpulseShare = bounceNum(g.entry_post_impulse_share_min, 0.02, 0.1, 0.45, dir);
+  const postImpulseMinBars = bounceInt(g.entry_post_impulse_min_bars, 2, 6, 40, dir);
+  const postImpulseExempt = toggleInArray(g.entry_post_impulse_exempt_lanes, 'LIVE');
+  const flipTipChaseTrend = !g.entry_tip_chase_trend_pullback;
+  const flipTipFinished = !g.entry_tip_block_finished_move;
+  const flipTrendTipReject = !g.entry_trend_tip_require_reject;
+  const flipPeakKeepOwns = !g.peak_keep_genome_owns;
   const entryLearnerMargin = bounceNum(g.entry_learner_override_margin, 0.01, 0.02, 0.2, dir);
   // Story
   const storyPathBp = bounceBp(g.story_min_path_bp, 0.5, 3.0, 20.0, dir);
@@ -1578,9 +1584,15 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         exhaust_tip_chase_block: flipExhaustTip,
         entry_block_post_impulse_tip: flipPostImpulseTip,
         entry_post_impulse_share_min: postImpulseShare,
+        entry_post_impulse_min_bars: postImpulseMinBars,
+        entry_post_impulse_exempt_lanes: postImpulseExempt,
+        entry_tip_chase_trend_pullback: flipTipChaseTrend,
+        entry_tip_block_finished_move: flipTipFinished,
+        entry_trend_tip_require_reject: flipTrendTipReject,
+        peak_keep_genome_owns: flipPeakKeepOwns,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
-        last_lesson: `Explore structure half/zone post_impulse=${flipPostImpulseTip}`,
+        last_lesson: `Explore tip wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
       },
       patches: [
         genomePatch('struct_half_lo', halfLo, `explore half_lo ${halfLo}`),
@@ -1612,6 +1624,36 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           'entry_post_impulse_share_min',
           postImpulseShare,
           `explore post_impulse_share ${postImpulseShare}`
+        ),
+        genomePatch(
+          'entry_post_impulse_min_bars',
+          postImpulseMinBars,
+          `explore post_impulse_min_bars ${postImpulseMinBars}`
+        ),
+        genomeArrayPatch(
+          'entry_post_impulse_exempt_lanes',
+          postImpulseExempt,
+          `explore post_impulse_exempt toggle LIVE`
+        ),
+        genomePatch(
+          'entry_tip_chase_trend_pullback',
+          flipTipChaseTrend,
+          `flip tip_chase_trend ${flipTipChaseTrend}`
+        ),
+        genomePatch(
+          'entry_tip_block_finished_move',
+          flipTipFinished,
+          `flip tip_finished ${flipTipFinished}`
+        ),
+        genomePatch(
+          'entry_trend_tip_require_reject',
+          flipTrendTipReject,
+          `flip trend_tip_reject ${flipTrendTipReject}`
+        ),
+        genomePatch(
+          'peak_keep_genome_owns',
+          flipPeakKeepOwns,
+          `flip peak_keep_owns ${flipPeakKeepOwns}`
         ),
         genomePatch(
           'entry_learner_override_margin',

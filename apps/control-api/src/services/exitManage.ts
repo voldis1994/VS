@@ -71,18 +71,44 @@ export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
  * Single Peak Keep for Peak trail + MindBank Soft+ belt.
- * Desk + genome share one Keep — never two Soft× dialects of "Keep".
+ * Factory: peak_keep_genome_owns — genome Keep wins (no desk Math.max floor).
+ * Legacy: peak_keep_genome_owns=false → desk can only raise Keep.
  */
 export function effectivePeakKeep(
   deskRetention: number,
   genomeKeep: number
 ): number {
-  const fallback = getBrainGenome().peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
+  const g = getBrainGenome();
+  const fallback = g.peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
+  if (g.peak_keep_genome_owns !== false) {
+    if (genomeKeep > 0) return genomeKeep;
+    return deskRetention > 0 ? deskRetention : fallback;
+  }
   let peakRet = deskRetention > 0 ? deskRetention : fallback;
   if (genomeKeep > 0) {
     peakRet = Math.max(peakRet, genomeKeep);
   }
   return peakRet;
+}
+
+/** Soft+ deep giveback — genome deep_giveback_offset (not literal 0.12). */
+export function softPlusDeepGiveback(
+  retention: number,
+  keep: number,
+  offset = getBrainGenome().deep_giveback_offset
+): boolean {
+  const off = offset > 0 ? offset : 0.12;
+  return retention < keep - off;
+}
+
+/** Soft-loss learner CUT reinforce — genome mind_cut_soft_mult (not literal 0.75). */
+export function softLossLearnerCutMfe(
+  mfe: number,
+  soft: number,
+  mult = getBrainGenome().mind_cut_soft_mult
+): boolean {
+  const m = mult > 0 ? mult : 0.75;
+  return mfe >= soft * m;
 }
 
 /**
@@ -388,7 +414,8 @@ function peakShouldCut(
 export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: number): number {
   const softSized = Math.max(softSl, minBank);
   const g = getBrainGenome();
-  const lo = softSized * Math.max(0.5, g.peak_arm_soft_mult);
+  // peak_arm / trail_cap — genome sanitize owns floors (no Math.max wire)
+  const lo = softSized * g.peak_arm_soft_mult;
   const hi = softSized * Math.max(lo / softSized, g.peak_trail_soft_cap_mult);
   if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return lo;
   return Math.min(hi, Math.max(lo, mfeFloor));

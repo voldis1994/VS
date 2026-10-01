@@ -48,9 +48,8 @@ export function effectiveEntryRegime(
 const LIVE_CHOP = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
 
 /**
- * Tip-chase knife (genome exhaust_*).
- * Runs on RANGE_FADE, TREND_PULLBACK (incl. false-RANGE promote), and LIVE chop.
- * BREAKOUT lane still may pierce. Independent of L0 — thesis safety.
+ * Tip-chase knife — genome owns scope + thresholds (exhaust_* / entry_tip_* / struct_extreme_*).
+ * Independent of L0 — thesis safety. BREAKOUT lane still may pierce.
  */
 export function tipChaseBlocksEntry(input: {
   /** Raw classify (not thesis) — false-RANGE promote tip knife */
@@ -61,16 +60,18 @@ export function tipChaseBlocksEntry(input: {
   zpos: number | null | undefined;
   barSign: -1 | 0 | 1;
 }): boolean {
+  const g = getBrainGenome();
   const ch = String(input.chapter || '').toUpperCase();
   const { extremeHi, extremeLo } = structKnobs();
-  const tipHi = getBrainGenome().exhaust_pos_hi || 0.8;
-  const tipLo = getBrainGenome().exhaust_pos_lo || 0.2;
-  const exhaustTipBlock = getBrainGenome().exhaust_tip_chase_block !== false;
+  const tipHi = g.exhaust_pos_hi || 0.8;
+  const tipLo = g.exhaust_pos_lo || 0.2;
+  const exhaustTipBlock = g.exhaust_tip_chase_block !== false;
   const lane = input.lane;
   const live = input.liveRegime;
+  const tipChaseTrend = g.entry_tip_chase_trend_pullback !== false;
   const applies =
     lane === 'RANGE_FADE' ||
-    lane === 'TREND_PULLBACK' ||
+    (tipChaseTrend && lane === 'TREND_PULLBACK') ||
     (LIVE_CHOP.has(live) && lane === 'LIVE');
   if (!applies) return false;
   if (lane === 'RANGE_FADE' && (ch === 'BREAK_UP' || ch === 'BREAK_DOWN')) return true;
@@ -90,8 +91,9 @@ export function tipChaseBlocksEntry(input: {
   ) {
     return true;
   }
-  // Never arm tip knives with the finished move (BUY@HI / SELL@LO)
+  // Finished-move tip (BUY@HI / SELL@LO) — genome entry_tip_block_finished_move
   if (
+    g.entry_tip_block_finished_move !== false &&
     zpos != null &&
     ((input.side === 'BUY' && zpos >= tipHi) || (input.side === 'SELL' && zpos <= tipLo))
   ) {
@@ -101,8 +103,8 @@ export function tipChaseBlocksEntry(input: {
     lane === 'RANGE_FADE' &&
     (ch === 'RANGE_CHOP' || ch === 'MIXED' || !ch) &&
     zpos != null &&
-    ((input.side === 'BUY' && zpos >= 0.85 && input.barSign > 0) ||
-      (input.side === 'SELL' && zpos <= 0.15 && input.barSign < 0))
+    ((input.side === 'BUY' && zpos >= extremeHi && input.barSign > 0) ||
+      (input.side === 'SELL' && zpos <= extremeLo && input.barSign < 0))
   ) {
     return true;
   }
@@ -124,17 +126,21 @@ export function postImpulseTipBlocksEntry(input: {
 }): boolean {
   const g = getBrainGenome();
   if (g.entry_block_post_impulse_tip === false) return false;
-  if (input.lane === 'BREAKOUT' || input.lane === 'REVERSAL') return false;
+  const exempt = g.entry_post_impulse_exempt_lanes?.length
+    ? g.entry_post_impulse_exempt_lanes
+    : ['BREAKOUT', 'REVERSAL'];
+  if (exempt.includes(input.lane)) return false;
   const zpos = input.zpos;
   if (zpos == null || !input.closedBars.length) return false;
 
   const tipHi = g.exhaust_pos_hi || 0.8;
   const tipLo = g.exhaust_pos_lo || 0.2;
   const shareMin = g.entry_post_impulse_share_min || 0.22;
+  const minBars = g.entry_post_impulse_min_bars || 12;
   const zoneBars = getZoneBars();
   const zone = input.closedBars.slice(-zoneBars);
   const zonePrior = zone.length >= 3 ? zone.slice(0, -1) : zone;
-  if (zonePrior.length < 12) return false;
+  if (zonePrior.length < minBars) return false;
 
   const hi = Math.max(...zonePrior.map((b) => b.high));
   const lo = Math.min(...zonePrior.map((b) => b.low));
@@ -651,11 +657,15 @@ export function structureGate(
     }
 
     case 'TREND_UP':
-      // Dip-buy only — never BUY the HI tip after the leg already printed
+      // Dip-buy — tip reject gated by genome entry_trend_tip_require_reject
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `TREND_UP only BUY (${posTag})` };
       }
-      if (zone.pos >= extremeHi && !dip(bar)) {
+      if (
+        getBrainGenome().entry_trend_tip_require_reject !== false &&
+        zone.pos >= extremeHi &&
+        !dip(bar)
+      ) {
         return { ok: false, reason: `TREND_UP chase HI tip (${posTag})` };
       }
       return { ok: true, tag: `TREND_UP OK · ${posTag}` };
@@ -664,17 +674,25 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `TREND_DOWN only SELL (${posTag})` };
       }
-      if (zone.pos <= extremeLo && !rally(bar)) {
+      if (
+        getBrainGenome().entry_trend_tip_require_reject !== false &&
+        zone.pos <= extremeLo &&
+        !rally(bar)
+      ) {
         return { ok: false, reason: `TREND_DOWN chase LO tip (${posTag})` };
       }
       return { ok: true, tag: `TREND_DOWN OK · ${posTag}` };
 
     case 'PULLBACK_UPTREND':
-      // Resume long on dip — never BUY the HI tip after the rally already printed
+      // Resume long on dip — tip reject gated by genome entry_trend_tip_require_reject
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `PULLBACK_UPTREND only BUY (${posTag})` };
       }
-      if (zone.pos >= extremeHi && !dip(bar)) {
+      if (
+        getBrainGenome().entry_trend_tip_require_reject !== false &&
+        zone.pos >= extremeHi &&
+        !dip(bar)
+      ) {
         return { ok: false, reason: `PULLBACK_UPTREND chase HI tip (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_UPTREND OK · ${posTag}` };
@@ -683,7 +701,11 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `PULLBACK_DOWNTREND only SELL (${posTag})` };
       }
-      if (zone.pos <= extremeLo && !rally(bar)) {
+      if (
+        getBrainGenome().entry_trend_tip_require_reject !== false &&
+        zone.pos <= extremeLo &&
+        !rally(bar)
+      ) {
         return { ok: false, reason: `PULLBACK_DOWNTREND chase LO tip (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_DOWNTREND OK · ${posTag}` };

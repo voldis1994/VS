@@ -316,8 +316,8 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     Boolean(thesisFail);
 
-  // Soft× arm threshold is genome-owned (Soft×1 was a hidden Soft ceiling)
-  const armNeed = soft * Math.max(0.5, g.peak_arm_soft_mult);
+  // Soft× arm — genome sanitize owns floor (no desk Math.max wire)
+  const armNeed = soft * g.peak_arm_soft_mult;
   if (action === 'BANK') {
     soft_gate_override = true;
     force_peak_arm = true;

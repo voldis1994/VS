@@ -633,6 +633,21 @@ export type BrainGenome = {
   entry_block_post_impulse_tip: boolean;
   /** Min |mid→late| / zoneWidth to treat as impulse (factory 0.22) */
   entry_post_impulse_share_min: number;
+  /** Min zonePrior bars before post-impulse tip runs */
+  entry_post_impulse_min_bars: number;
+  /** Lanes exempt from post-impulse tip (pierce/flip own) */
+  entry_post_impulse_exempt_lanes: string[];
+  /** Tip-chase knife applies on TREND_PULLBACK lane */
+  entry_tip_chase_trend_pullback: boolean;
+  /** Block BUY@HI / SELL@LO (finished-move tip) on tip-chase lanes */
+  entry_tip_block_finished_move: boolean;
+  /** TREND/PULLBACK gate: tip only with dip/rally reject bar */
+  entry_trend_tip_require_reject: boolean;
+  /**
+   * Peak Keep: genome owns (no desk Math.max floor).
+   * false = legacy desk can only raise Keep.
+   */
+  peak_keep_genome_owns: boolean;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1081,6 +1096,12 @@ const DEFAULT_GENOME: BrainGenome = {
   ],
   entry_block_post_impulse_tip: true,
   entry_post_impulse_share_min: 0.22,
+  entry_post_impulse_min_bars: 12,
+  entry_post_impulse_exempt_lanes: ['BREAKOUT', 'REVERSAL'],
+  entry_tip_chase_trend_pullback: true,
+  entry_tip_block_finished_move: true,
+  entry_trend_tip_require_reject: true,
+  peak_keep_genome_owns: true,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1675,6 +1696,20 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     entry_post_impulse_share_min: round2(
       clamp(Number(p.entry_post_impulse_share_min ?? d.entry_post_impulse_share_min), 0.08, 0.55)
     ),
+    entry_post_impulse_min_bars: clampInt(
+      p.entry_post_impulse_min_bars,
+      d.entry_post_impulse_min_bars,
+      6,
+      60
+    ),
+    entry_post_impulse_exempt_lanes: sanitizeStringArray(
+      p.entry_post_impulse_exempt_lanes,
+      d.entry_post_impulse_exempt_lanes
+    ),
+    entry_tip_chase_trend_pullback: p.entry_tip_chase_trend_pullback !== false,
+    entry_tip_block_finished_move: p.entry_tip_block_finished_move !== false,
+    entry_trend_tip_require_reject: p.entry_trend_tip_require_reject !== false,
+    peak_keep_genome_owns: p.peak_keep_genome_owns !== false,
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2146,6 +2181,12 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_runner_eligible_regimes',
   'entry_block_post_impulse_tip',
   'entry_post_impulse_share_min',
+  'entry_post_impulse_min_bars',
+  'entry_post_impulse_exempt_lanes',
+  'entry_tip_chase_trend_pullback',
+  'entry_tip_block_finished_move',
+  'entry_trend_tip_require_reject',
+  'peak_keep_genome_owns',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **214/214** schema+wire+hypothesize (one-market 200–203 + regime runner 204–212 + post-impulse tip 213–214).
+**STATUS 2026-10-01:** **220/220** schema+wire+hypothesize (cut desk/tip wires 215–220; post-impulse 213–214; runner 204–212).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
@@ -280,6 +280,14 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 ### Post-impulse tip (nearmēt kad kustība jau beigusies)
 213. entry_block_post_impulse_tip — ON: mid→late leg + tip → block BUY@HI / SELL@LO
 214. entry_post_impulse_share_min — min |mid→late|/zoneWidth (factory 0.22)
+215. entry_post_impulse_min_bars — min zonePrior bars (factory 12)
+216. entry_post_impulse_exempt_lanes — BREAKOUT/REVERSAL (pierce/flip own)
+
+### Tip / Peak wires (vairs neciets kods)
+217. entry_tip_chase_trend_pullback — tip-chase uz TREND_PULLBACK
+218. entry_tip_block_finished_move — BUY@HI / SELL@LO finished-move
+219. entry_trend_tip_require_reject — TREND/PULLBACK tip tikai ar dip/rally
+220. peak_keep_genome_owns — Peak Keep = genome (nav desk Math.max floor)
 
 ---
 
