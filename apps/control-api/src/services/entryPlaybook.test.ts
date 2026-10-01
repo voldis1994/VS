@@ -120,4 +120,28 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     expect(p.regime).toBe('TREND_DOWN');
     expect(p.lane).not.toBe('RANGE_FADE');
   });
+
+  it('priority: REVERSAL live wins; BREAK story on chop; SIDE before HTF', () => {
+    expect(
+      pickEntryPlaybook({
+        liveRegime: 'REVERSAL_CANDIDATE',
+        story: { allow: 'BUY', chapter: 'RALLY' },
+        htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+      }).lane
+    ).toBe('REVERSAL');
+    expect(
+      pickEntryPlaybook({
+        liveRegime: 'RANGE',
+        story: { allow: 'SELL', chapter: 'BREAK_DOWN' },
+        htf: { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN' },
+      }).lane
+    ).toBe('BREAKOUT');
+    expect(
+      pickEntryPlaybook({
+        liveRegime: 'RANGE',
+        story: { allow: 'BUY', chapter: 'RALLY' },
+        htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+      }).lane
+    ).toBe('RANGE_FADE');
+  });
 });

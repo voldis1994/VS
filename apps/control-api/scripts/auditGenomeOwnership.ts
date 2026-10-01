@@ -433,7 +433,7 @@ console.log(
     : 'GAPS remain — see above'
 );
 console.log(
-  `hypothesize/auto-cal coverage: ${194 - hypoGaps.length}/194 items have ≥1 key explored`
+  `hypothesize/auto-cal coverage: ${MAX_ITEM - hypoGaps.length}/${MAX_ITEM} items have ≥1 key explored`
 );
 
 const report = {
