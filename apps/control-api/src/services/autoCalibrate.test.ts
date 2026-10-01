@@ -52,6 +52,7 @@ describe('autoCalibrate', () => {
   beforeEach(() => {
     _resetAutoCalibrateForTests();
     _resetDeskCalibrationCacheForTests();
+    _resetBrainGenomeForTests();
     setDeskCalibration(defaultDeskCalibration());
   });
 
@@ -62,27 +63,47 @@ describe('autoCalibrate', () => {
     expect(st.session_started_at).toBeTruthy();
   });
 
-  it('calibrates every 5 closes — raises Peak/Target when micro-wins vs Soft losses', () => {
+  it('calibrates every 5 closes — looks always; Soft-heavy may move Soft/Peak', () => {
     beginAutoCalibrateSession('test');
     const before = defaultDeskCalibration();
     // 4 closes — no cycle yet
     for (let i = 0; i < 4; i++) {
       const r = noteClosedTradeForAutoCalibrate(
-        trade({ pnl_pts: 0.4, exit_reason: 'PeakProtection' })
+        trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' })
       );
       expect(r).toBeNull();
     }
     expect(getAutoCalibrateStatus().closes_in_session).toBe(4);
 
-    // 5th — Soft losses + micro wins → let winners run
+    // 5th Soft-heavy close → clear evidence pullback (not legacy micro-win raise)
     const cycle = noteClosedTradeForAutoCalibrate(
       trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation · Soft', regime: 'RANGE' })
     );
     expect(cycle).toBeTruthy();
     expect(cycle!.changes.length).toBeGreaterThan(0);
-    expect(cycle!.next.peak_mfe_abs).toBeGreaterThan(before.peak_mfe_abs);
-    expect(cycle!.next.target_abs).toBeGreaterThanOrEqual(before.target_abs);
+    expect(cycle!.changes.some((c) => c.startsWith('PRĀTS'))).toBe(true);
+    // Soft-heavy → Soft tighten and/or Peak ease — not a silent Peak raise
+    expect(cycle!.next.hardinv_abs).toBeLessThanOrEqual(before.hardinv_abs);
+    expect(cycle!.next.peak_mfe_abs).toBeLessThanOrEqual(before.peak_mfe_abs + 0.01);
     expect(getAutoCalibrateStatus().cycles_run).toBe(1);
+  });
+
+  it('mixed +2/−2 noise — hold Soft/Peak/Keep (look every 5, rarely turn knobs)', () => {
+    const base = defaultDeskCalibration();
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: 1.2, exit_reason: 'PeakProtection', mfe: 1.5 }),
+      trade({ pnl_pts: -1.1, exit_reason: 'HardInvalidation' }),
+      trade({ pnl_pts: 0.9, exit_reason: 'PeakProtection', mfe: 1.2 }),
+      trade({ pnl_pts: -0.8, exit_reason: 'MindCut' }),
+      trade({ pnl_pts: 0.7, exit_reason: 'PeakProtection', mfe: 1.0 }),
+    ]);
+    expect(r.changes.some((c) => c.startsWith('PRĀTS'))).toBe(true);
+    expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
+    expect(r.next.peak_mfe_abs).toBe(base.peak_mfe_abs);
+    expect(r.next.peak_retention).toBe(base.peak_retention);
+    expect(r.next.target_abs).toBe(base.target_abs);
+    expect(r.next.safety_tp_rr).toBe(base.safety_tp_rr);
+    expect(r.summary).toMatch(/hold|tweaks/);
   });
 
   it('soft-demotes satellite regime; prefers satellites before cores', () => {
@@ -150,11 +171,13 @@ describe('autoCalibrate', () => {
     expect(r.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
   });
 
-  it('applied cycle starts 3m entry cooldown and records history', () => {
+  it('applied Soft-heavy cycle starts 3m cooldown and records history', () => {
     beginAutoCalibrateSession('test');
     expect(isAutoCalibrateCooldownActive()).toBe(false);
     for (let i = 0; i < 4; i++) {
-      noteClosedTradeForAutoCalibrate(trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection' }));
+      noteClosedTradeForAutoCalibrate(
+        trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation', regime: 'RANGE' })
+      );
     }
     const cycle = noteClosedTradeForAutoCalibrate(
       trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation', regime: 'RANGE' })
@@ -167,10 +190,10 @@ describe('autoCalibrate', () => {
     expect(st.cooldown_left_s).toBeLessThanOrEqual(AUTO_CALIBRATE_COOLDOWN_MS / 1000);
     expect(st.history.length).toBeGreaterThanOrEqual(1);
     expect(st.history[0]?.applied).toBe(true);
-    expect(st.knobs_now.peak_mfe_abs).toBeGreaterThan(3);
+    expect(st.knobs_now.hardinv_abs).toBeLessThan(2.2);
   });
 
-  it('raises broker SAFETY TP R:R when micro-wins vs modest Soft (not Soft-heavy dominate)', () => {
+  it('micro-wins vs modest Soft — hold exit knobs (no legacy raise on noise)', () => {
     const base = defaultDeskCalibration();
     const r = proposeAutoCalibration(base, [
       trade({ pnl_pts: 0.8, exit_reason: 'Target', mfe: 0.9 }),
@@ -179,13 +202,13 @@ describe('autoCalibrate', () => {
       trade({ pnl_pts: 0.6, exit_reason: 'PeakProtection', mfe: 0.7 }),
       trade({ pnl_pts: -0.9, exit_reason: 'HardInvalidation' }),
     ]);
-    expect(r.applied).toBe(true);
-    // Soft-sized bar is Soft*0.65≈1.43 — these losses stay under Soft-heavy
+    // Soft-sized bar Soft*0.65≈1.43 — losses under Soft-heavy; mixed → hold Soft/Peak/Keep/TP
     expect(r.next.hardinv_abs).toBe(base.hardinv_abs);
-    expect(r.next.safety_tp_rr).toBeGreaterThan(base.safety_tp_rr);
-    expect(r.next.safety_tp_rr).toBeLessThanOrEqual(AUTO_CAL_MAX_SAFETY_TP_RR);
-    expect(r.changes.some((c) => c.includes('safety_tp_rr'))).toBe(true);
-    expect(r.changes.some((c) => c.includes('WHAT ·') && c.includes('WHY ·'))).toBe(true);
+    expect(r.next.peak_mfe_abs).toBe(base.peak_mfe_abs);
+    expect(r.next.peak_retention).toBe(base.peak_retention);
+    expect(r.next.target_abs).toBe(base.target_abs);
+    expect(r.next.safety_tp_rr).toBe(base.safety_tp_rr);
+    expect(r.changes.some((c) => c.startsWith('PRĀTS'))).toBe(true);
   });
 
   it('Soft-heavy pullback tightens hardinv_abs and syncs hardinv_pct from abs', () => {

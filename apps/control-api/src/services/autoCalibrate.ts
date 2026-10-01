@@ -1029,7 +1029,7 @@ function proposeGenomePatch(
         )
       );
     }
-  } else if (intent === 'let_winners_run' || expectancy > 0.25) {
+  } else if (intent === 'let_winners_run') {
     const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
@@ -1111,85 +1111,83 @@ function proposeGenomePatch(
     }
   }
 
-  // Market context — choppy / mixed pressure → loosen trek / story bar slightly
+  // Market-context genome nudges only with clear exit intent — not on hold_course noise
   const choppyCtx = windowTrades.filter((t) => {
     const ctx = t.exit_ctx || t.entry_ctx;
     if (!ctx) return false;
     const midShare = ctx.green_share > 0.35 && ctx.green_share < 0.65;
     return midShare && !ctx.expanding;
   }).length;
-  if (choppyCtx >= 2 && expectancy < 0.1) {
-    // Trek flat is bp (min 0.1) — step 0.1, never 0.00008 dust
-    const trek =
-      Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
-    if (Math.abs(trek - g.mtf_trek_flat_frac) > 0.05) {
-      patch.mtf_trek_flat_frac = trek;
-      changes.push(
-        autotuneLog(
-          `genome mtf_trek_flat_frac ${g.mtf_trek_flat_frac.toFixed(1)}→${trek.toFixed(1)} bp`,
-          `choppy pressure ×${choppyCtx} — wider FLAT trek`
-        )
-      );
+  if (intent !== 'hold_course') {
+    if (choppyCtx >= 2 && expectancy < 0.1) {
+      const trek =
+        Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
+      if (Math.abs(trek - g.mtf_trek_flat_frac) > 0.05) {
+        patch.mtf_trek_flat_frac = trek;
+        changes.push(
+          autotuneLog(
+            `genome mtf_trek_flat_frac ${g.mtf_trek_flat_frac.toFixed(1)}→${trek.toFixed(1)} bp`,
+            `choppy pressure ×${choppyCtx} — wider FLAT trek`
+          )
+        );
+      }
+      const storyMin = roundRet(Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03)));
+      if (storyMin !== roundRet(g.entry_story_conf_min)) {
+        patch.entry_story_conf_min = storyMin;
+        changes.push(
+          autotuneLog(
+            `genome entry_story_conf_min ${roundRet(g.entry_story_conf_min).toFixed(2)}→${storyMin.toFixed(2)}`,
+            'allow slightly weaker story when chop dominates'
+          )
+        );
+      }
     }
-    const storyMin = roundRet(Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03)));
-    if (storyMin !== roundRet(g.entry_story_conf_min)) {
-      patch.entry_story_conf_min = storyMin;
-      changes.push(
-        autotuneLog(
-          `genome entry_story_conf_min ${roundRet(g.entry_story_conf_min).toFixed(2)}→${storyMin.toFixed(2)}`,
-          'allow slightly weaker story when chop dominates'
-        )
-      );
-    }
-  }
 
-  // Bad expectancy + multi-TF fights in context → require aligned side
-  if (expectancy < -0.2 && !g.mtf_require_aligned_side) {
-    patch.mtf_require_aligned_side = true;
-    changes.push(
-      autotuneLog(
-        'genome mtf_require_aligned_side false→true',
-        'negative E — demand multi-TF alignment'
-      )
-    );
-  }
-
-  // Expanding market pressure → slightly faster regime confirm (self-build perception)
-  const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
-  if (expandingCtx >= 3 && expectancy > 0.15) {
-    const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
-    if (confirm !== g.regime_confirm_bars) {
-      patch.regime_confirm_bars = confirm;
+    if (expectancy < -0.2 && !g.mtf_require_aligned_side) {
+      patch.mtf_require_aligned_side = true;
       changes.push(
         autotuneLog(
-          `genome regime_confirm_bars ${g.regime_confirm_bars}→${confirm}`,
-          `expanding market ×${expandingCtx} — faster regime confirm`
+          'genome mtf_require_aligned_side false→true',
+          'negative E — demand multi-TF alignment'
         )
       );
     }
-  } else if (choppyCtx >= 2 && expectancy < 0) {
-    const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
-    if (dwell !== g.regime_min_dwell_bars) {
-      patch.regime_min_dwell_bars = dwell;
+
+    const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
+    if (expandingCtx >= 3 && expectancy > 0.15) {
+      const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
+      if (confirm !== g.regime_confirm_bars) {
+        patch.regime_confirm_bars = confirm;
+        changes.push(
+          autotuneLog(
+            `genome regime_confirm_bars ${g.regime_confirm_bars}→${confirm}`,
+            `expanding market ×${expandingCtx} — faster regime confirm`
+          )
+        );
+      }
+    } else if (choppyCtx >= 2 && expectancy < 0) {
+      const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
+      if (dwell !== g.regime_min_dwell_bars) {
+        patch.regime_min_dwell_bars = dwell;
+        changes.push(
+          autotuneLog(
+            `genome regime_min_dwell_bars ${g.regime_min_dwell_bars}→${dwell}`,
+            `choppy ×${choppyCtx} — longer dwell before regime switch`
+          )
+        );
+      }
+    }
+
+    const fightCtx = windowTrades.filter((t) => {
+      const a = (t.exit_ctx || t.entry_ctx)?.feed_agreement;
+      return a === 'FIGHT' || a === 'fight' || a === 'DISAGREE';
+    }).length;
+    if (fightCtx >= 2 && expectancy < 0.05 && !g.mtf_htf_veto) {
+      patch.mtf_htf_veto = true;
       changes.push(
-        autotuneLog(
-          `genome regime_min_dwell_bars ${g.regime_min_dwell_bars}→${dwell}`,
-          `choppy ×${choppyCtx} — longer dwell before regime switch`
-        )
+        autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
       );
     }
-  }
-
-  // Fight feed disagreement → HTF veto on
-  const fightCtx = windowTrades.filter((t) => {
-    const a = (t.exit_ctx || t.entry_ctx)?.feed_agreement;
-    return a === 'FIGHT' || a === 'fight' || a === 'DISAGREE';
-  }).length;
-  if (fightCtx >= 2 && expectancy < 0.05 && !g.mtf_htf_veto) {
-    patch.mtf_htf_veto = true;
-    changes.push(
-      autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
-    );
   }
 
   // Regime runner score — every auto-cal window (factory 5 closes); SIDE trades ignored
@@ -1296,17 +1294,24 @@ export function proposeAutoCalibration(
       softSizedLosses >= softLossMin ||
       (losses.length >= 3 && avgLossAbs >= current.hardinv_abs * 0.7));
 
-  const needPullBack =
-    human.intent === 'ease_peak_target' ||
-    softDominates ||
-    (expectancy < 0.05 &&
-      (raiseStreak >= bounds.raiseStreakBeforePullback ||
-        alreadyTall ||
-        leftWinnerOnTable ||
-        (asymmetryBad && (softLosses >= softLossMin || softSizedLosses >= softLossMin))));
+  /**
+   * CLEAR EVIDENCE — still look every 5 closes (~1h scalp), but Soft/Peak/Keep/Target/TP
+   * move only when the window is clearly Soft-heavy or Peak unreachable — not mixed noise.
+   * hold_course / +2/−2 never nudges exit knobs (legacy raise path removed).
+   */
+  const clearSoftHeavy = softDominates;
+  const clearUnreachablePeak =
+    human.intent === 'ease_peak_target' &&
+    (leftWinnerOnTable ||
+      softLosses >= softLossMin ||
+      softSizedLosses >= softLossMin ||
+      raiseStreak >= bounds.raiseStreakBeforePullback ||
+      alreadyTall ||
+      (asymmetryBad && (softLosses >= softLossMin || softSizedLosses >= softLossMin)));
 
-  const needProtectSooner =
-    human.intent === 'protect_sooner' || human.intent === 'tighten_filters';
+  const needPullBack = clearSoftHeavy || clearUnreachablePeak;
+
+  const needProtectSooner = human.intent === 'protect_sooner';
   const needTightenFilters = human.intent === 'tighten_filters';
   const needEaseFilters =
     human.intent === 'ease_filters' ||
@@ -1317,19 +1322,11 @@ export function proposeAutoCalibration(
     !needProtectSooner &&
     human.intent === 'let_winners_run' &&
     !alreadyTall &&
-    raiseStreak < bounds.raiseStreakBeforePullback;
-
-  const needBiggerWinnersLegacy =
-    !needPullBack &&
-    !needProtectSooner &&
-    human.intent === 'hold_course' &&
-    !alreadyTall &&
     raiseStreak < bounds.raiseStreakBeforePullback &&
-    (expectancy < 0.15 ||
-      (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
-      microWins >= 2);
+    expectancy >= 0.25;
 
-  const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
+  const doRaise = needBiggerWinners;
+  const moveExitKnobs = needPullBack || needProtectSooner || doRaise;
 
   // Soft too tight: many Soft cuts but avg Soft distance looks small vs MFE left on table
   const softTooTight =
@@ -1499,7 +1496,7 @@ export function proposeAutoCalibration(
     // target_pct / peak_mfe_pct track abs silently — no 0.000xx WHAT spam
   }
 
-  // Soft ease when too tight even without full raise path
+  // Soft ease when too tight — clear Soft× vs MFE mismatch (not mixed noise)
   if (!needPullBack && !doRaise && softTooTight) {
     const softBefore = next.hardinv_abs;
     next.hardinv_abs = Math.min(bounds.maxHardinvAbs, roundAbs(softBefore + bounds.softTightenStep));
@@ -1514,28 +1511,7 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Healthy polish
-  if (
-    !doRaise &&
-    !needPullBack &&
-    !needProtectSooner &&
-    expectancy >= 0.3 &&
-    avgWin >= avgLossAbs * 0.95 &&
-    wins.length >= losses.length
-  ) {
-    const retBefore = next.peak_retention;
-    next.peak_retention = roundRet(
-      Math.min(bounds.maxPeakRetention, next.peak_retention + 0.01)
-    );
-    if (next.peak_retention !== retBefore) {
-      changes.push(
-        autotuneLog(
-          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} hold+`,
-          'healthy window — tiny Keep polish'
-        )
-      );
-    }
-  }
+  // No tiny Keep polish on "healthy" mixed windows — that was silent Keep drift (75→76→77).
 
   // Peak above Soft CAP (never raise during pullback)
   if (!needPullBack) {
@@ -1744,51 +1720,59 @@ export function proposeAutoCalibration(
   next.target_pct = roundPct(next.target_pct);
   next.peak_mfe_pct = roundPct(next.peak_mfe_pct);
 
-  // Soft×3 + Target×3 — calibrate L1/L2 from MFE/Soft-loss; L3 stays tuned hardinv/target
+  // Soft×3 + Target×3 — L1/L2 from MFE only when exit knobs clearly move (not every hold)
   {
-    const before = readSoftTargetLayers(next);
-    const mfes = windowTrades.map((t) => Math.max(0, Number(t.mfe) || 0));
-    const lossAbs = windowTrades
-      .filter((t) => t.pnl_pts < -1e-9)
-      .map((t) => Math.abs(t.pnl_pts));
-    const suggested = suggestLayersFromExcursions(mfes, lossAbs, before);
     const softL3 = roundAbs(next.hardinv_abs);
     const tgtL3 = roundAbs(next.target_abs);
-    let softL1 = roundAbs(before.soft[0]! * 0.55 + suggested.soft[0]! * 0.45);
-    let softL2 = roundAbs(before.soft[1]! * 0.55 + suggested.soft[1]! * 0.45);
-    softL1 = Math.min(softL1, softL3);
-    softL2 = Math.min(Math.max(softL2, softL1), softL3);
-    let tgtL1 = roundAbs(before.target[0]! * 0.55 + suggested.target[0]! * 0.45);
-    let tgtL2 = roundAbs(before.target[1]! * 0.55 + suggested.target[1]! * 0.45);
-    tgtL1 = Math.max(Math.min(tgtL1, tgtL3), softL1);
-    tgtL2 = Math.max(Math.min(Math.max(tgtL2, tgtL1), tgtL3), softL2);
-    next.soft_l1_abs = softL1;
-    next.soft_l2_abs = softL2;
     next.soft_l3_abs = softL3;
     next.hardinv_abs = softL3;
-    next.target_l1_abs = tgtL1;
-    next.target_l2_abs = tgtL2;
     next.target_l3_abs = tgtL3;
     next.target_abs = tgtL3;
-    if (
-      next.soft_l1_abs !== before.soft[0] ||
-      next.soft_l2_abs !== before.soft[1] ||
-      next.target_l1_abs !== before.target[0] ||
-      next.target_l2_abs !== before.target[1]
-    ) {
-      changes.push(
-        autotuneLog(
-          `Soft layers ${before.soft[0]!.toFixed(1)}/${before.soft[1]!.toFixed(1)}/${before.soft[2]!.toFixed(1)}→${next.soft_l1_abs.toFixed(1)}/${next.soft_l2_abs.toFixed(1)}/${next.soft_l3_abs.toFixed(1)} · Target ${before.target[0]!.toFixed(1)}/${before.target[1]!.toFixed(1)}/${before.target[2]!.toFixed(1)}→${next.target_l1_abs.toFixed(1)}/${next.target_l2_abs.toFixed(1)}/${next.target_l3_abs.toFixed(1)}`,
-          '3 Soft + 3 Target — L1/L2 from MFE/Soft-loss · L3 = Soft CAP / Target CAP'
-        )
-      );
+    if (moveExitKnobs || softTooTight) {
+      const before = readSoftTargetLayers(next);
+      const mfes = windowTrades.map((t) => Math.max(0, Number(t.mfe) || 0));
+      const lossAbs = windowTrades
+        .filter((t) => t.pnl_pts < -1e-9)
+        .map((t) => Math.abs(t.pnl_pts));
+      const suggested = suggestLayersFromExcursions(mfes, lossAbs, before);
+      let softL1 = roundAbs(before.soft[0]! * 0.55 + suggested.soft[0]! * 0.45);
+      let softL2 = roundAbs(before.soft[1]! * 0.55 + suggested.soft[1]! * 0.45);
+      softL1 = Math.min(softL1, softL3);
+      softL2 = Math.min(Math.max(softL2, softL1), softL3);
+      let tgtL1 = roundAbs(before.target[0]! * 0.55 + suggested.target[0]! * 0.45);
+      let tgtL2 = roundAbs(before.target[1]! * 0.55 + suggested.target[1]! * 0.45);
+      tgtL1 = Math.max(Math.min(tgtL1, tgtL3), softL1);
+      tgtL2 = Math.max(Math.min(Math.max(tgtL2, tgtL1), tgtL3), softL2);
+      next.soft_l1_abs = softL1;
+      next.soft_l2_abs = softL2;
+      next.target_l1_abs = tgtL1;
+      next.target_l2_abs = tgtL2;
+      if (
+        next.soft_l1_abs !== before.soft[0] ||
+        next.soft_l2_abs !== before.soft[1] ||
+        next.target_l1_abs !== before.target[0] ||
+        next.target_l2_abs !== before.target[1]
+      ) {
+        changes.push(
+          autotuneLog(
+            `Soft layers ${before.soft[0]!.toFixed(1)}/${before.soft[1]!.toFixed(1)}/${before.soft[2]!.toFixed(1)}→${next.soft_l1_abs.toFixed(1)}/${next.soft_l2_abs.toFixed(1)}/${next.soft_l3_abs.toFixed(1)} · Target ${before.target[0]!.toFixed(1)}/${before.target[1]!.toFixed(1)}/${before.target[2]!.toFixed(1)}→${next.target_l1_abs.toFixed(1)}/${next.target_l2_abs.toFixed(1)}/${next.target_l3_abs.toFixed(1)}`,
+            '3 Soft + 3 Target — L1/L2 from MFE/Soft-loss · L3 = Soft CAP / Target CAP'
+          )
+        );
+      }
+    } else {
+      // Hold: keep L1/L2 exactly — do not blend from a noisy 5-trade window
+      next.soft_l1_abs = current.soft_l1_abs;
+      next.soft_l2_abs = current.soft_l2_abs;
+      next.target_l1_abs = current.target_l1_abs;
+      next.target_l2_abs = current.target_l2_abs;
     }
   }
 
   const genomeResult = proposeGenomePatch(
     next,
     windowTrades,
-    human.intent,
+    moveExitKnobs || softTooTight ? human.intent : 'hold_course',
     softDominates,
     expectancy,
     softLosses,
