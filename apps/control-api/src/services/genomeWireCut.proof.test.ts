@@ -16,7 +16,7 @@ import {
   softLossLearnerCutMfe,
 } from './exitManage.js';
 import { scoreManageAction, type ManageBrainInput } from './manageBrain.js';
-import { thinkLikeTrader } from './traderMind.js';
+import { thinkLikeTrader, thinkEntryLikeTrader } from './traderMind.js';
 import { rejection1m } from './marketStory.js';
 import { safetyAbsFloorForMid } from './robotDesk.js';
 import {
@@ -495,5 +495,174 @@ describe('genome wire-cut proof — flip knob → live behavior flips', () => {
       local_breakout_frac_floor: 0.05,
     });
     expect(classifyRegime(bars, 'RANGE')).toBe('EXPANSION');
+  });
+
+  it('mind_entry_conf_pb_wait — bounce WAIT confidence follows Genome', () => {
+    // m1 FLAT keeps stackSide=SELL (aligned DOWN); bounce branch uses pb_wait
+    const input = {
+      regime: 'RANGE',
+      chapter: 'BOUNCE_IN_SELL',
+      allow: 'SELL',
+      story_conf: 0.85,
+      red_1m: 14,
+      green_1m: 6,
+      zone_pos: 0.2,
+      bar_body_sign: 1,
+      m1_dir: 'FLAT' as const,
+      bias: 'DOWN' as const,
+      tf5_dir: 'DOWN' as const,
+      tf15_dir: 'DOWN' as const,
+      tf30_dir: 'DOWN' as const,
+    };
+    _resetBrainGenomeForTests({ mind_entry_conf_pb_wait: 0.45 });
+    const a = thinkEntryLikeTrader(input);
+    expect(a.choice).toBe('WAIT');
+    expect(a.confidence).toBeCloseTo(0.45, 2);
+    _resetBrainGenomeForTests({ mind_entry_conf_pb_wait: 0.72 });
+    const b = thinkEntryLikeTrader(input);
+    expect(b.choice).toBe('WAIT');
+    expect(b.confidence).toBeCloseTo(0.72, 2);
+  });
+
+  it('mind_entry_conf_hard_veto — allow BUY blocks SELL at Genome conf', () => {
+    const input = {
+      regime: 'RANGE',
+      chapter: 'RALLY',
+      allow: 'BUY',
+      story_conf: 0.9,
+      red_1m: 4,
+      green_1m: 2,
+      zone_pos: 0.5,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN' as const,
+      bias: 'DOWN' as const,
+      tf5_dir: 'DOWN' as const,
+      tf15_dir: 'DOWN' as const,
+      tf30_dir: 'DOWN' as const,
+    };
+    _resetBrainGenomeForTests({ mind_entry_conf_hard_veto: 0.3 });
+    const a = thinkEntryLikeTrader(input);
+    expect(a.choice).toBe('WAIT');
+    expect(a.confidence).toBeCloseTo(0.3, 2);
+    _resetBrainGenomeForTests({ mind_entry_conf_hard_veto: 0.55 });
+    const b = thinkEntryLikeTrader(input);
+    expect(b.choice).toBe('WAIT');
+    expect(b.confidence).toBeCloseTo(0.55, 2);
+  });
+
+  it('entry_post_impulse_late_eff_min — own knob (trek_eff_min flip does not unblock)', () => {
+    const { book, pos } = vRecoveryBook();
+    expect(
+      postImpulseTipBlocksEntry({
+        closedBars: book,
+        side: 'BUY',
+        zpos: pos,
+        lane: 'TREND_PULLBACK',
+        barSign: 1,
+      })
+    ).toBe(true);
+    // trek_eff_min is a different system — must not own post-impulse lateChop
+    _resetBrainGenomeForTests({ trek_eff_min: 0.9 });
+    expect(
+      postImpulseTipBlocksEntry({
+        closedBars: book,
+        side: 'BUY',
+        zpos: pos,
+        lane: 'TREND_PULLBACK',
+        barSign: 1,
+      })
+    ).toBe(true);
+    _resetBrainGenomeForTests({ entry_post_impulse_late_eff_min: 0.85 });
+    expect(getBrainGenome().entry_post_impulse_late_eff_min).toBe(0.85);
+    expect(getBrainGenome().trek_eff_min).toBe(0.4);
+  });
+
+  it('auto_cal_peak_raise_abs / target_raise_abs — raise path step follows Genome', () => {
+    const base = defaultDeskCalibration();
+    // micro-wins vs Soft losses → let_winners_run / raise path
+    const window = [
+      {
+        pnl_pts: 0.4,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'PeakProtection',
+        mfe: 3.5,
+        mae: -0.2,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: 0.5,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'PeakProtection',
+        mfe: 4.0,
+        mae: -0.1,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: -2.2,
+        regime: 'RANGE',
+        setup_type: 'FADE',
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.3,
+        mae: -2.2,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: 0.3,
+        regime: 'TREND_UP',
+        setup_type: 'PULLBACK',
+        exit_reason: 'PeakProtection',
+        mfe: 2.8,
+        mae: -0.2,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+      {
+        pnl_pts: -2.0,
+        regime: 'RANGE',
+        setup_type: 'FADE',
+        exit_reason: 'HardInvalidation · Soft',
+        mfe: 0.2,
+        mae: -2.0,
+        at: new Date().toISOString(),
+        entry_ctx: null,
+      },
+    ];
+    _resetBrainGenomeForTests({
+      auto_cal_peak_raise_abs: 0.4,
+      auto_cal_target_raise_abs: 0.8,
+    });
+    const lo = proposeAutoCalibration(base, window as any, new Set());
+    _resetBrainGenomeForTests({
+      auto_cal_peak_raise_abs: 1.5,
+      auto_cal_target_raise_abs: 2.5,
+    });
+    const hi = proposeAutoCalibration(base, window as any, new Set());
+    // When raise path fires, higher Genome steps → larger Peak/Target abs
+    if (lo.next.peak_mfe_abs > base.peak_mfe_abs || hi.next.peak_mfe_abs > base.peak_mfe_abs) {
+      expect(hi.next.peak_mfe_abs - base.peak_mfe_abs).toBeGreaterThanOrEqual(
+        lo.next.peak_mfe_abs - base.peak_mfe_abs
+      );
+    }
+    expect(getBrainGenome().auto_cal_peak_raise_abs).toBe(1.5);
+    expect(getBrainGenome().auto_cal_target_raise_abs).toBe(2.5);
+  });
+
+  it('entry_learner_min_updates on Genome (factory 20) — wired like manage_learner', () => {
+    expect(getBrainGenome().entry_learner_min_updates).toBe(20);
+    _resetBrainGenomeForTests({ entry_learner_min_updates: 8 });
+    expect(getBrainGenome().entry_learner_min_updates).toBe(8);
+  });
+
+  it('entry_post_impulse_zone_bars — sanitizer min 30, no consumer Math.max floor', () => {
+    _resetBrainGenomeForTests({ entry_post_impulse_zone_bars: 30 });
+    expect(getBrainGenome().entry_post_impulse_zone_bars).toBe(30);
+    // Below sanitizer floor clamps up
+    _resetBrainGenomeForTests({ entry_post_impulse_zone_bars: 10 as any });
+    expect(getBrainGenome().entry_post_impulse_zone_bars).toBe(30);
   });
 });

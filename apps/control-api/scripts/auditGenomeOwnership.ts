@@ -414,9 +414,41 @@ const MAP: Record<number, string[]> = {
   276: ['mind_entry_conf_weak'],
   277: ['mind_entry_conf_regime_boost'],
   278: ['mind_entry_conf_cap'],
+  279: ['entry_learner_min_updates'],
+  280: ['entry_post_impulse_late_eff_min'],
+  281: ['mind_entry_conf_regime_hyp'],
+  282: ['mind_entry_conf_pb_wait'],
+  283: ['mind_entry_conf_pb_resume_floor'],
+  284: ['mind_entry_conf_story_side_floor'],
+  285: ['mind_entry_conf_flip_after_loss'],
+  286: ['mind_entry_conf_chop_wait'],
+  287: ['mind_entry_conf_mixed_wait'],
+  288: ['mind_entry_conf_hard_veto'],
+  289: ['auto_cal_micro_win_vs_loss'],
+  290: ['auto_cal_high_mfe_vs_loss'],
+  291: ['auto_cal_left_winner_e_max'],
+  292: ['auto_cal_asym_win_vs_loss'],
+  293: ['auto_cal_soft_dom_e_max'],
+  294: ['auto_cal_soft_dom_win_vs_loss'],
+  295: ['auto_cal_ease_filter_e_min'],
+  296: ['auto_cal_legacy_raise_e_max'],
+  297: ['auto_cal_legacy_raise_win_vs_loss'],
+  298: ['auto_cal_soft_tight_e_max'],
+  299: ['auto_cal_healthy_e_min'],
+  300: ['auto_cal_healthy_win_vs_loss'],
+  301: ['auto_cal_target_ease_abs'],
+  302: ['auto_cal_target_pct_ease_div'],
+  303: ['auto_cal_peak_raise_abs'],
+  304: ['auto_cal_target_raise_abs'],
+  305: ['auto_cal_target_pct_raise_mult'],
+  306: ['auto_cal_peak_pct_raise_mult'],
+  307: ['auto_cal_giveback_raise_abs'],
+  308: ['auto_cal_healthy_keep_step'],
+  309: ['mind_entry_conf_stack_fight'],
+  310: ['mind_entry_conf_stack_chapter_wait'],
 };
 
-const MAX_ITEM = 278;
+const MAX_ITEM = 310;
 
 // Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();

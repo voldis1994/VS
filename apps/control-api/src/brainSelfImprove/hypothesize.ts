@@ -773,6 +773,38 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const entryConfWeak = bounceNum(g.mind_entry_conf_weak, 0.02, 0.3, 0.9, dir);
   const entryConfBoost = bounceNum(g.mind_entry_conf_regime_boost, 0.01, 0.02, 0.2, dir);
   const entryConfCap = bounceNum(g.mind_entry_conf_cap, 0.01, 0.7, 0.99, dir);
+  const entryLearnerMin = bounceInt(g.entry_learner_min_updates, 2, 5, 80, dir);
+  const postImpulseLateEff = bounceNum(g.entry_post_impulse_late_eff_min, 0.05, 0.1, 0.9, dir);
+  const entryConfRegimeHyp = bounceNum(g.mind_entry_conf_regime_hyp, 0.02, 0.3, 0.9, dir);
+  const entryConfPbWait = bounceNum(g.mind_entry_conf_pb_wait, 0.02, 0.2, 0.8, dir);
+  const entryConfPbResume = bounceNum(g.mind_entry_conf_pb_resume_floor, 0.02, 0.4, 0.95, dir);
+  const entryConfStorySide = bounceNum(g.mind_entry_conf_story_side_floor, 0.02, 0.4, 0.95, dir);
+  const entryConfFlipLoss = bounceNum(g.mind_entry_conf_flip_after_loss, 0.02, 0.4, 0.95, dir);
+  const entryConfChopWait = bounceNum(g.mind_entry_conf_chop_wait, 0.02, 0.15, 0.7, dir);
+  const entryConfMixedWait = bounceNum(g.mind_entry_conf_mixed_wait, 0.02, 0.15, 0.7, dir);
+  const entryConfHardVeto = bounceNum(g.mind_entry_conf_hard_veto, 0.02, 0.1, 0.6, dir);
+  const entryConfStackFight = bounceNum(g.mind_entry_conf_stack_fight, 0.02, 0.3, 0.9, dir);
+  const entryConfStackChapter = bounceNum(g.mind_entry_conf_stack_chapter_wait, 0.02, 0.25, 0.85, dir);
+  const acMicroWin = bounceNum(g.auto_cal_micro_win_vs_loss, 0.05, 0.2, 0.9, dir);
+  const acHighMfe = bounceNum(g.auto_cal_high_mfe_vs_loss, 0.05, 0.4, 1.5, dir);
+  const acLeftWinnerE = bounceNum(g.auto_cal_left_winner_e_max, 0.05, -0.5, 1.0, dir);
+  const acAsym = bounceNum(g.auto_cal_asym_win_vs_loss, 0.05, 0.5, 1.2, dir);
+  const acSoftDomE = bounceNum(g.auto_cal_soft_dom_e_max, 0.02, -0.5, 0.5, dir);
+  const acSoftDomWin = bounceNum(g.auto_cal_soft_dom_win_vs_loss, 0.05, 0.4, 1.2, dir);
+  const acEaseFilterE = bounceNum(g.auto_cal_ease_filter_e_min, 0.05, 0.1, 1.5, dir);
+  const acLegacyE = bounceNum(g.auto_cal_legacy_raise_e_max, 0.05, -0.2, 0.8, dir);
+  const acLegacyWin = bounceNum(g.auto_cal_legacy_raise_win_vs_loss, 0.05, 0.5, 1.2, dir);
+  const acSoftTightE = bounceNum(g.auto_cal_soft_tight_e_max, 0.05, -0.2, 0.8, dir);
+  const acHealthyE = bounceNum(g.auto_cal_healthy_e_min, 0.05, 0.05, 1.5, dir);
+  const acHealthyWin = bounceNum(g.auto_cal_healthy_win_vs_loss, 0.05, 0.5, 1.5, dir);
+  const acTargetEase = bounceNum(g.auto_cal_target_ease_abs, 0.1, 0.2, 5, dir);
+  const acTargetPctEase = bounceNum(g.auto_cal_target_pct_ease_div, 0.02, 1.01, 1.5, dir);
+  const acPeakRaise = bounceNum(g.auto_cal_peak_raise_abs, 0.1, 0.1, 3, dir);
+  const acTargetRaise = bounceNum(g.auto_cal_target_raise_abs, 0.1, 0.1, 5, dir);
+  const acTargetPctRaise = bounceNum(g.auto_cal_target_pct_raise_mult, 0.01, 1.01, 1.3, dir);
+  const acPeakPctRaise = bounceNum(g.auto_cal_peak_pct_raise_mult, 0.01, 1.01, 1.3, dir);
+  const acGivebackRaise = bounceNum(g.auto_cal_giveback_raise_abs, 0.05, 0.05, 1, dir);
+  const acHealthyKeep = bounceNum(g.auto_cal_healthy_keep_step, 0.005, 0.005, 0.1, dir);
   const manageFadeSoft = bounceNum(g.manage_path_fade_soft_mult, 0.02, 0.05, 0.5, dir);
   const manageStallMfe = bounceNum(g.manage_path_stall_mfe_soft_mult, 0.05, 0.1, 0.9, dir);
   const manageStallUpl = bounceNum(g.manage_path_stall_upl_soft_mult, 0.02, 0.05, 0.5, dir);
@@ -1708,6 +1740,38 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         mind_entry_conf_weak: entryConfWeak,
         mind_entry_conf_regime_boost: entryConfBoost,
         mind_entry_conf_cap: entryConfCap,
+        entry_learner_min_updates: entryLearnerMin,
+        entry_post_impulse_late_eff_min: postImpulseLateEff,
+        mind_entry_conf_regime_hyp: entryConfRegimeHyp,
+        mind_entry_conf_pb_wait: entryConfPbWait,
+        mind_entry_conf_pb_resume_floor: entryConfPbResume,
+        mind_entry_conf_story_side_floor: entryConfStorySide,
+        mind_entry_conf_flip_after_loss: entryConfFlipLoss,
+        mind_entry_conf_chop_wait: entryConfChopWait,
+        mind_entry_conf_mixed_wait: entryConfMixedWait,
+        mind_entry_conf_hard_veto: entryConfHardVeto,
+        mind_entry_conf_stack_fight: entryConfStackFight,
+        mind_entry_conf_stack_chapter_wait: entryConfStackChapter,
+        auto_cal_micro_win_vs_loss: acMicroWin,
+        auto_cal_high_mfe_vs_loss: acHighMfe,
+        auto_cal_left_winner_e_max: acLeftWinnerE,
+        auto_cal_asym_win_vs_loss: acAsym,
+        auto_cal_soft_dom_e_max: acSoftDomE,
+        auto_cal_soft_dom_win_vs_loss: acSoftDomWin,
+        auto_cal_ease_filter_e_min: acEaseFilterE,
+        auto_cal_legacy_raise_e_max: acLegacyE,
+        auto_cal_legacy_raise_win_vs_loss: acLegacyWin,
+        auto_cal_soft_tight_e_max: acSoftTightE,
+        auto_cal_healthy_e_min: acHealthyE,
+        auto_cal_healthy_win_vs_loss: acHealthyWin,
+        auto_cal_target_ease_abs: acTargetEase,
+        auto_cal_target_pct_ease_div: acTargetPctEase,
+        auto_cal_peak_raise_abs: acPeakRaise,
+        auto_cal_target_raise_abs: acTargetRaise,
+        auto_cal_target_pct_raise_mult: acTargetPctRaise,
+        auto_cal_peak_pct_raise_mult: acPeakPctRaise,
+        auto_cal_giveback_raise_abs: acGivebackRaise,
+        auto_cal_healthy_keep_step: acHealthyKeep,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
         last_lesson: `Explore tip+manage wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
@@ -1778,6 +1842,46 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           flipPeakKeepOwns,
           `flip peak_keep_owns ${flipPeakKeepOwns}`
         ),
+        genomePatch(
+          'entry_learner_min_updates',
+          entryLearnerMin,
+          `explore entry_learner_min ${entryLearnerMin}`
+        ),
+        genomePatch(
+          'entry_post_impulse_late_eff_min',
+          postImpulseLateEff,
+          `explore post_impulse_late_eff ${postImpulseLateEff}`
+        ),
+        genomePatch('mind_entry_conf_regime_hyp', entryConfRegimeHyp, `explore mind_regime_hyp ${entryConfRegimeHyp}`),
+        genomePatch('mind_entry_conf_pb_wait', entryConfPbWait, `explore mind_pb_wait ${entryConfPbWait}`),
+        genomePatch('mind_entry_conf_pb_resume_floor', entryConfPbResume, `explore mind_pb_resume ${entryConfPbResume}`),
+        genomePatch('mind_entry_conf_story_side_floor', entryConfStorySide, `explore mind_story_side ${entryConfStorySide}`),
+        genomePatch('mind_entry_conf_flip_after_loss', entryConfFlipLoss, `explore mind_flip_loss ${entryConfFlipLoss}`),
+        genomePatch('mind_entry_conf_chop_wait', entryConfChopWait, `explore mind_chop_wait ${entryConfChopWait}`),
+        genomePatch('mind_entry_conf_mixed_wait', entryConfMixedWait, `explore mind_mixed_wait ${entryConfMixedWait}`),
+        genomePatch('mind_entry_conf_hard_veto', entryConfHardVeto, `explore mind_hard_veto ${entryConfHardVeto}`),
+        genomePatch('mind_entry_conf_stack_fight', entryConfStackFight, `explore mind_stack_fight ${entryConfStackFight}`),
+        genomePatch('mind_entry_conf_stack_chapter_wait', entryConfStackChapter, `explore mind_stack_chapter ${entryConfStackChapter}`),
+        genomePatch('auto_cal_micro_win_vs_loss', acMicroWin, `explore ac_micro_win ${acMicroWin}`),
+        genomePatch('auto_cal_high_mfe_vs_loss', acHighMfe, `explore ac_high_mfe ${acHighMfe}`),
+        genomePatch('auto_cal_left_winner_e_max', acLeftWinnerE, `explore ac_left_winner_e ${acLeftWinnerE}`),
+        genomePatch('auto_cal_asym_win_vs_loss', acAsym, `explore ac_asym ${acAsym}`),
+        genomePatch('auto_cal_soft_dom_e_max', acSoftDomE, `explore ac_soft_dom_e ${acSoftDomE}`),
+        genomePatch('auto_cal_soft_dom_win_vs_loss', acSoftDomWin, `explore ac_soft_dom_win ${acSoftDomWin}`),
+        genomePatch('auto_cal_ease_filter_e_min', acEaseFilterE, `explore ac_ease_filter_e ${acEaseFilterE}`),
+        genomePatch('auto_cal_legacy_raise_e_max', acLegacyE, `explore ac_legacy_e ${acLegacyE}`),
+        genomePatch('auto_cal_legacy_raise_win_vs_loss', acLegacyWin, `explore ac_legacy_win ${acLegacyWin}`),
+        genomePatch('auto_cal_soft_tight_e_max', acSoftTightE, `explore ac_soft_tight_e ${acSoftTightE}`),
+        genomePatch('auto_cal_healthy_e_min', acHealthyE, `explore ac_healthy_e ${acHealthyE}`),
+        genomePatch('auto_cal_healthy_win_vs_loss', acHealthyWin, `explore ac_healthy_win ${acHealthyWin}`),
+        genomePatch('auto_cal_target_ease_abs', acTargetEase, `explore ac_tgt_ease ${acTargetEase}`),
+        genomePatch('auto_cal_target_pct_ease_div', acTargetPctEase, `explore ac_tgt_pct_ease ${acTargetPctEase}`),
+        genomePatch('auto_cal_peak_raise_abs', acPeakRaise, `explore ac_peak_raise ${acPeakRaise}`),
+        genomePatch('auto_cal_target_raise_abs', acTargetRaise, `explore ac_tgt_raise ${acTargetRaise}`),
+        genomePatch('auto_cal_target_pct_raise_mult', acTargetPctRaise, `explore ac_tgt_pct_raise ${acTargetPctRaise}`),
+        genomePatch('auto_cal_peak_pct_raise_mult', acPeakPctRaise, `explore ac_peak_pct_raise ${acPeakPctRaise}`),
+        genomePatch('auto_cal_giveback_raise_abs', acGivebackRaise, `explore ac_gb_raise ${acGivebackRaise}`),
+        genomePatch('auto_cal_healthy_keep_step', acHealthyKeep, `explore ac_healthy_keep ${acHealthyKeep}`),
         genomePatch(
           'entry_learner_override_margin',
           entryLearnerMargin,

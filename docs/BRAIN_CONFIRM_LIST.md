@@ -10,9 +10,9 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **278/278** schema+wire+hypothesize (manage/mind/exit/scalp/local/safety/auto-cal bp 221–278; tip wires 215–220).
+**STATUS 2026-10-01:** **310/310** schema+wire+hypothesize (221–278 + Mind/AutoCal residuals 279–310; tip 213–220).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
-**Review fix:** `auto_calibrate_every_n` window=trigger; exempt `[]` kept; `??` (0 ok); post-impulse `zone_bars` Genome; `genomeWireCut.proof.test.ts` = flip→decision (ne tikai value).
+**Review:** everyN window; exempt `[]`; `??`; post-impulse own `late_eff_min` + sanitizer horizon; Mind/AutoCal decision thresholds Genome; proofs flip→decision.
 
 ---
 
@@ -281,7 +281,7 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 ### Post-impulse tip (nearmēt kad kustība jau beigusies)
 213. entry_block_post_impulse_tip — ON: mid→late leg + tip → block BUY@HI / SELL@LO
 214. entry_post_impulse_share_min — min |mid→late|/zoneWidth (factory 0.22)
-215. entry_post_impulse_min_bars / entry_post_impulse_zone_bars — min bars + lookback (Genome horizon)
+215. entry_post_impulse_min_bars / entry_post_impulse_zone_bars — min bars + lookback (sanitizer min 30; no consumer floor)
 216. entry_post_impulse_exempt_lanes — BREAKOUT/REVERSAL; **[] = no exemptions**
 
 ### Tip / Peak wires (vairs neciets kods)
@@ -306,6 +306,15 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 272–278. mind_entry_conf_* ladder + boost/cap
 
 ---
+
+### Entry learner + Mind residual conf + AutoCal decisions (279–310)
+279. entry_learner_min_updates — EntryLearner override after ≥N (kā manage_learner_min_updates)
+280. entry_post_impulse_late_eff_min — post-impulse lateChop (ne trek_eff_min)
+281–288. mind_entry_conf_regime_hyp / pb_wait / pb_resume_floor / story_side_floor / flip_after_loss / chop_wait / mixed_wait / hard_veto
+309–310. mind_entry_conf_stack_fight / stack_chapter_wait — multi-TF stack WAIT conf
+289–300. auto_cal_* decision thresholds (micro-win, high-MFE, asymmetry, soft-dom, ease-filter, legacy-raise, soft-tight, healthy E/win×loss)
+301–308. auto_cal_* adjustment strength (target ease abs/div, peak/target raise abs, pct raise mults, giveback raise, healthy Keep step)
+
 
 ## NEDRĪKST (ārpus saraksta)
 - lot_size

@@ -313,29 +313,40 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     regime === 'PULLBACK_DOWNTREND' ||
     regime === 'FAILED_BREAKOUT_UP';
 
+  const confPbWait = genome.mind_entry_conf_pb_wait ?? 0.45;
+  const confPbResume = genome.mind_entry_conf_pb_resume_floor ?? 0.7;
+  const confChopWait = genome.mind_entry_conf_chop_wait ?? 0.4;
+  const confMixedWait = genome.mind_entry_conf_mixed_wait ?? 0.35;
+  const confStackFight = genome.mind_entry_conf_stack_fight ?? 0.55;
+  const confStackChapter = genome.mind_entry_conf_stack_chapter_wait ?? 0.5;
+  const confRegimeHyp = genome.mind_entry_conf_regime_hyp ?? 0.62;
+  const confStorySide = genome.mind_entry_conf_story_side_floor ?? 0.65;
+  const confFlipLoss = genome.mind_entry_conf_flip_after_loss ?? 0.7;
+  const confHardVeto = genome.mind_entry_conf_hard_veto ?? 0.3;
+
   // ——— 1) Multi-TF stack first (30m → 15m → 5m → 1m) ———
   if (stackSide === 'WAIT' && stack.bias !== 'FLAT') {
     // Higher bias clear but mid/trigger fighting — never invent the opposite side
     choice = 'WAIT';
     thesis = stack.thesis_lv;
     why = 'Cilvēks nespiestu pusi, kamēr 30/15/5/1m nesakrīt.';
-    confidence = 0.4;
+    confidence = confChopWait;
   } else if (stackSide === 'BUY') {
     if (sellStory && !buyStory && !regimeLong && m1 !== 'UP' && stack.tf5 !== 'UP') {
       choice = 'WAIT';
       thesis = `Steks ${stack.summary} UP, bet stāsts vēl ${chapter} — gaidu, ne shortoju.`;
       why = 'Pretējs stāsts + augšup steks: labāk WAIT nekā naža SELL.';
-      confidence = 0.55;
+      confidence = confStackFight;
     } else if (chapter === 'BOUNCE_IN_SELL' && m1 !== 'UP' && stack.tf5 !== 'UP') {
       choice = 'WAIT';
       thesis = 'Bounce selloff bez skaidras 5m/1m UP — nepalieku long pret selloff.';
       why = 'Gaidu, kamēr zemākie TF apstiprina vai selloff atsākas.';
-      confidence = 0.5;
+      confidence = confStackChapter;
     } else if (chapter === 'DIP_IN_RALLY' && m1 !== 'UP') {
       choice = 'WAIT';
       thesis = 'Dip pēc rally breakout — pārāk ātri BUY; gaidu 1m UP resume.';
       why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
-      confidence = 0.45;
+      confidence = confPbWait;
     } else {
       choice = 'BUY';
       thesis =
@@ -369,19 +380,19 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `Steks ${stack.summary} DOWN, bet stāsts vēl ${chapter} — gaidu, ne medīju bounce long.`;
       why = 'Pretējs stāsts + lejup steks: labāk WAIT nekā naža BUY.';
-      confidence = 0.55;
+      confidence = confStackFight;
     } else if (chapter === 'DIP_IN_RALLY' && m1 !== 'DOWN' && stack.tf5 !== 'DOWN') {
       choice = 'WAIT';
       thesis = 'Dip rally bez skaidras 5m/1m DOWN — ne shortoju dip.';
       why = 'Gaidu zemāko TF apstiprinājumu.';
-      confidence = 0.5;
+      confidence = confStackChapter;
     } else if (chapter === 'BOUNCE_IN_SELL' && m1 !== 'DOWN') {
       // First green after dump — real pullback OR bias change. Wait for resume.
       choice = 'WAIT';
       thesis =
         'Bounce pēc sell breakout — pārāk ātri SELL; gaidu 1m DOWN resume (ne first fade).';
       why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
-      confidence = 0.45;
+      confidence = confPbWait;
     } else {
       choice = 'SELL';
       thesis =
@@ -416,47 +427,47 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'BUY';
       thesis = `Steks jauktā (${stack.summary}), bet regime ${regime} — turu garo pusi kā darba hipotēzi.`;
       why = 'Bez skaidra multi-TF sekoju live regime; gaidu BUY setup.';
-      confidence = 0.62;
+      confidence = confRegimeHyp;
     } else if (regimeShort && chapter !== 'DIP_IN_RALLY') {
       choice = 'SELL';
       thesis = `Steks jauktā (${stack.summary}), bet regime ${regime} — turu īso pusi kā darba hipotēzi.`;
       why = 'Bez skaidra multi-TF sekoju live regime; gaidu SELL setup.';
-      confidence = 0.62;
+      confidence = confRegimeHyp;
     } else if (chapter === 'BOUNCE_IN_SELL') {
       if (m1 !== 'DOWN') {
         choice = 'WAIT';
         thesis =
           'Bounce pēc selloff — pārāk ātri SELL; gaidu 1m DOWN resume (ne first fade).';
         why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
-        confidence = 0.45;
+        confidence = confPbWait;
       } else {
         choice = 'SELL';
         thesis = `30m selloff bounce + 1m DOWN — SELL resume.`;
         why = '1m apstiprina selloff atsākšanos pēc bounce.';
-        confidence = Math.max(0.7, conf);
+        confidence = Math.max(confPbResume, conf);
       }
     } else if (allow === 'SELL' && chapter === 'SELLOFF') {
       choice = 'SELL';
       thesis = `30m selloff (${chapter}) un steks nav UP — esmu pārdevēja pusē.`;
       why = body < 0 ? 'Sarkans 10s apstiprina SELL.' : 'Gaidu SELL trigger.';
-      confidence = Math.max(0.65, conf);
+      confidence = Math.max(confStorySide, conf);
     } else if (chapter === 'DIP_IN_RALLY') {
       if (m1 !== 'UP') {
         choice = 'WAIT';
         thesis = 'Dip pēc rally — pārāk ātri BUY; gaidu 1m UP resume.';
         why = 'Cilvēks nogaida kustību: pullback confirm vai bias maiņa.';
-        confidence = 0.45;
+        confidence = confPbWait;
       } else {
         choice = 'BUY';
         thesis = `30m rally dip + 1m UP — BUY resume.`;
         why = '1m apstiprina rally atsākšanos pēc dip.';
-        confidence = Math.max(0.7, conf);
+        confidence = Math.max(confPbResume, conf);
       }
     } else if (allow === 'BUY' && chapter === 'RALLY') {
       choice = 'BUY';
       thesis = `30m rally (${chapter}) un steks nav DOWN — esmu pircēja pusē.`;
       why = body > 0 ? 'Zaļš 10s apstiprina BUY.' : 'Gaidu BUY trigger.';
-      confidence = Math.max(0.65, conf);
+      confidence = Math.max(confStorySide, conf);
     } else if (allow === 'SELL' && conf >= genome.entry_story_conf_min && g <= r) {
       choice = 'SELL';
       thesis = `Stāsts atļauj SELL (${chapter}) · pressure G${g}/R${r} · ${stack.summary}.`;
@@ -475,7 +486,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'SELL';
       thesis = 'Pēc Soft BUY zaudējuma un lejup spiediena — otra puse, ne same-dir spam.';
       why = 'Mācos no pēdējā close + live pressure.';
-      confidence = 0.7;
+      confidence = confFlipLoss;
     } else if (
       input.last_close_was_loss &&
       input.last_closed_side === 'SELL' &&
@@ -484,17 +495,17 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'BUY';
       thesis = 'Pēc Soft SELL zaudējuma un augšup spiediena — otra puse.';
       why = 'Mācos no pēdējā close + live pressure.';
-      confidence = 0.7;
+      confidence = confFlipLoss;
     } else if (chapter === 'RANGE_CHOP' || allow === 'NONE' || conf < genome.entry_chop_conf_max) {
       choice = 'WAIT';
       thesis = `Chop / vājš stāsts (${chapter}, conf=${conf.toFixed(2)}) · ${stack.summary} — nav ko uzspiest.`;
       why = 'Cilvēks sēž malā, kamēr parādās skaidra puse.';
-      confidence = 0.4;
+      confidence = confChopWait;
     } else {
       choice = 'WAIT';
       thesis = `Steks jauktā (${stack.summary}) un nav pietiekami skaidra stāsta — gaidu.`;
       why = 'Labāk WAIT nekā akls RANGE fade.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
   }
 
@@ -503,19 +514,19 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     choice = 'WAIT';
     thesis = `STĀSTS ${chapter} · tikai BUY · nepārdot — SELL aizliegts.`;
     why = 'Noteikums: allow=BUY → nekad neieeju SELL (pret stāstu).';
-    confidence = 0.3;
+    confidence = confHardVeto;
   }
   if (allow === 'SELL' && choice === 'BUY') {
     choice = 'WAIT';
     thesis = `STĀSTS ${chapter} · tikai SELL · nepirkt — BUY aizliegts.`;
     why = 'Noteikums: allow=SELL → nekad neieeju BUY (pret stāstu).';
-    confidence = 0.3;
+    confidence = confHardVeto;
   }
   if (allow === 'NONE' && choice !== 'WAIT') {
     choice = 'WAIT';
     thesis = `STĀSTS ${chapter} · allow NONE — gaidu skaidru pusi.`;
     why = 'Nav atļautās puses — neieeju.';
-    confidence = 0.3;
+    confidence = confHardVeto;
   }
 
   // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker (evolvable)
@@ -524,13 +535,13 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
       why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
     if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
       choice = 'WAIT';
       thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
       why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
   }
 
@@ -541,13 +552,13 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `${stack.summary} · 1m UP — gaidu sarkanu triggeri, ne shortoju bounce.`;
       why = 'Cilvēks ne shorto zaļā 1m pret bias; Soft to apēd.';
-      confidence = 0.4;
+      confidence = confChopWait;
     }
     if (choice === 'BUY' && m1 === 'DOWN') {
       choice = 'WAIT';
       thesis = `${stack.summary} · 1m DOWN — gaidu zaļu triggeri, ne longoju dip.`;
       why = 'Cilvēks ne longo sarkanā 1m pret bias; Soft to apēd.';
-      confidence = 0.4;
+      confidence = confChopWait;
     }
   }
 
@@ -564,7 +575,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `Pēc Soft ${input.last_closed_side} — negāžu to pašu pusi bez svaiga 1m apstiprinājuma.`;
       why = 'Same-dir Soft spam → Soft SL ķēde. Gaidu triggeri vai otru pusi.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
   }
 
@@ -574,7 +585,7 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     choice = 'WAIT';
     thesis = `Smadzenes pauzē ${paused} — Soft ķēde iegaumēta (self-improve).`;
     why = 'Pieredze: atkārtots Soft uz šo pusi; mācos, nevis spamu.';
-    confidence = 0.3;
+    confidence = confHardVeto;
   }
 
   // Genome: require 1m trigger when set
@@ -583,13 +594,13 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       choice = 'WAIT';
       thesis = `${stack.summary} · genome require_1m_trigger — gaidu DOWN 1m.`;
       why = 'Self-improve genome: bez 1m triggera neieeju.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
     if (choice === 'BUY' && m1 !== 'UP') {
       choice = 'WAIT';
       thesis = `${stack.summary} · genome require_1m_trigger — gaidu UP 1m.`;
       why = 'Self-improve genome: bez 1m triggera neieeju.';
-      confidence = 0.35;
+      confidence = confMixedWait;
     }
   }
 

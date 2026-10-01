@@ -766,6 +766,71 @@ export type BrainGenome = {
   mind_entry_conf_regime_boost: number;
   /** Entry PRĀTS conf ceiling after boost */
   mind_entry_conf_cap: number;
+
+  /** EntryLearner overrides Mind after ≥N updates */
+  entry_learner_min_updates: number;
+  /** Post-impulse lateChop: lateEff below this = chop (own knob, not trek_eff_min) */
+  entry_post_impulse_late_eff_min: number;
+  /** Entry PRĀTS conf: mixed stack + regime hypothesis */
+  mind_entry_conf_regime_hyp: number;
+  /** Entry PRĀTS conf: bounce/dip WAIT for 1m resume */
+  mind_entry_conf_pb_wait: number;
+  /** Entry PRĀTS conf floor: bounce/dip + 1m resume */
+  mind_entry_conf_pb_resume_floor: number;
+  /** Entry PRĀTS conf floor: story side without full stack */
+  mind_entry_conf_story_side_floor: number;
+  /** Entry PRĀTS conf: flip side after Soft loss */
+  mind_entry_conf_flip_after_loss: number;
+  /** Entry PRĀTS conf: chop / weak story WAIT */
+  mind_entry_conf_chop_wait: number;
+  /** Entry PRĀTS conf: mixed stack WAIT */
+  mind_entry_conf_mixed_wait: number;
+  /** Entry PRĀTS conf: hard veto → WAIT */
+  mind_entry_conf_hard_veto: number;
+  /** Entry PRĀTS conf: stack vs story fight WAIT */
+  mind_entry_conf_stack_fight: number;
+  /** Entry PRĀTS conf: stack + chapter WAIT (bounce/dip mid) */
+  mind_entry_conf_stack_chapter_wait: number;
+  /** Auto-cal: micro-win if pnl < avgLoss×this */
+  auto_cal_micro_win_vs_loss: number;
+  /** Auto-cal: high-MFE tiny-pnl if mfe ≥ avgLoss×this */
+  auto_cal_high_mfe_vs_loss: number;
+  /** Auto-cal: left-winner-on-table if E < this */
+  auto_cal_left_winner_e_max: number;
+  /** Auto-cal: asymmetryBad if avgWin < avgLoss×this */
+  auto_cal_asym_win_vs_loss: number;
+  /** Auto-cal: softDominates if E < this */
+  auto_cal_soft_dom_e_max: number;
+  /** Auto-cal: softDominates if avgWin < avgLoss×this */
+  auto_cal_soft_dom_win_vs_loss: number;
+  /** Auto-cal: ease filters if E ≥ this */
+  auto_cal_ease_filter_e_min: number;
+  /** Auto-cal: legacy raise if E < this */
+  auto_cal_legacy_raise_e_max: number;
+  /** Auto-cal: legacy raise if avgWin < avgLoss×this */
+  auto_cal_legacy_raise_win_vs_loss: number;
+  /** Auto-cal: softTooTight if E < this */
+  auto_cal_soft_tight_e_max: number;
+  /** Auto-cal: healthy polish if E ≥ this */
+  auto_cal_healthy_e_min: number;
+  /** Auto-cal: healthy if avgWin ≥ avgLoss×this */
+  auto_cal_healthy_win_vs_loss: number;
+  /** Auto-cal pullback: target_abs ease step */
+  auto_cal_target_ease_abs: number;
+  /** Auto-cal pullback: target_pct /= this */
+  auto_cal_target_pct_ease_div: number;
+  /** Auto-cal raise: peak_mfe_abs += this */
+  auto_cal_peak_raise_abs: number;
+  /** Auto-cal raise: target_abs += this */
+  auto_cal_target_raise_abs: number;
+  /** Auto-cal raise: target_pct *= this */
+  auto_cal_target_pct_raise_mult: number;
+  /** Auto-cal raise: peak_mfe_pct *= this */
+  auto_cal_peak_pct_raise_mult: number;
+  /** Auto-cal raise: peak_min_giveback_abs += this */
+  auto_cal_giveback_raise_abs: number;
+  /** Auto-cal healthy: peak_retention += this */
+  auto_cal_healthy_keep_step: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1279,6 +1344,39 @@ const DEFAULT_GENOME: BrainGenome = {
   mind_entry_conf_weak: 0.68,
   mind_entry_conf_regime_boost: 0.06,
   mind_entry_conf_cap: 0.92,
+
+  entry_learner_min_updates: 20,
+  entry_post_impulse_late_eff_min: 0.4,
+  mind_entry_conf_regime_hyp: 0.62,
+  mind_entry_conf_pb_wait: 0.45,
+  mind_entry_conf_pb_resume_floor: 0.7,
+  mind_entry_conf_story_side_floor: 0.65,
+  mind_entry_conf_flip_after_loss: 0.7,
+  mind_entry_conf_chop_wait: 0.4,
+  mind_entry_conf_mixed_wait: 0.35,
+  mind_entry_conf_hard_veto: 0.3,
+  mind_entry_conf_stack_fight: 0.55,
+  mind_entry_conf_stack_chapter_wait: 0.5,
+  auto_cal_micro_win_vs_loss: 0.45,
+  auto_cal_high_mfe_vs_loss: 0.8,
+  auto_cal_left_winner_e_max: 0.2,
+  auto_cal_asym_win_vs_loss: 0.85,
+  auto_cal_soft_dom_e_max: 0.05,
+  auto_cal_soft_dom_win_vs_loss: 0.75,
+  auto_cal_ease_filter_e_min: 0.5,
+  auto_cal_legacy_raise_e_max: 0.15,
+  auto_cal_legacy_raise_win_vs_loss: 0.9,
+  auto_cal_soft_tight_e_max: 0.15,
+  auto_cal_healthy_e_min: 0.3,
+  auto_cal_healthy_win_vs_loss: 0.95,
+  auto_cal_target_ease_abs: 1.2,
+  auto_cal_target_pct_ease_div: 1.12,
+  auto_cal_peak_raise_abs: 0.4,
+  auto_cal_target_raise_abs: 0.8,
+  auto_cal_target_pct_raise_mult: 1.06,
+  auto_cal_peak_pct_raise_mult: 1.05,
+  auto_cal_giveback_raise_abs: 0.1,
+  auto_cal_healthy_keep_step: 0.01,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1963,6 +2061,39 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     mind_entry_conf_weak: round2(clamp(Number(p.mind_entry_conf_weak ?? d.mind_entry_conf_weak), 0.3, 0.9)),
     mind_entry_conf_regime_boost: round2(clamp(Number(p.mind_entry_conf_regime_boost ?? d.mind_entry_conf_regime_boost), 0.02, 0.2)),
     mind_entry_conf_cap: round2(clamp(Number(p.mind_entry_conf_cap ?? d.mind_entry_conf_cap), 0.7, 0.99)),
+
+    entry_learner_min_updates: clampInt(p.entry_learner_min_updates, d.entry_learner_min_updates, 5, 100),
+    entry_post_impulse_late_eff_min: round2(clamp(Number(p.entry_post_impulse_late_eff_min ?? d.entry_post_impulse_late_eff_min), 0.1, 0.9)),
+    mind_entry_conf_regime_hyp: round2(clamp(Number(p.mind_entry_conf_regime_hyp ?? d.mind_entry_conf_regime_hyp), 0.3, 0.9)),
+    mind_entry_conf_pb_wait: round2(clamp(Number(p.mind_entry_conf_pb_wait ?? d.mind_entry_conf_pb_wait), 0.2, 0.8)),
+    mind_entry_conf_pb_resume_floor: round2(clamp(Number(p.mind_entry_conf_pb_resume_floor ?? d.mind_entry_conf_pb_resume_floor), 0.4, 0.95)),
+    mind_entry_conf_story_side_floor: round2(clamp(Number(p.mind_entry_conf_story_side_floor ?? d.mind_entry_conf_story_side_floor), 0.4, 0.95)),
+    mind_entry_conf_flip_after_loss: round2(clamp(Number(p.mind_entry_conf_flip_after_loss ?? d.mind_entry_conf_flip_after_loss), 0.4, 0.95)),
+    mind_entry_conf_chop_wait: round2(clamp(Number(p.mind_entry_conf_chop_wait ?? d.mind_entry_conf_chop_wait), 0.15, 0.7)),
+    mind_entry_conf_mixed_wait: round2(clamp(Number(p.mind_entry_conf_mixed_wait ?? d.mind_entry_conf_mixed_wait), 0.15, 0.7)),
+    mind_entry_conf_hard_veto: round2(clamp(Number(p.mind_entry_conf_hard_veto ?? d.mind_entry_conf_hard_veto), 0.1, 0.6)),
+    mind_entry_conf_stack_fight: round2(clamp(Number(p.mind_entry_conf_stack_fight ?? d.mind_entry_conf_stack_fight), 0.3, 0.9)),
+    mind_entry_conf_stack_chapter_wait: round2(clamp(Number(p.mind_entry_conf_stack_chapter_wait ?? d.mind_entry_conf_stack_chapter_wait), 0.25, 0.85)),
+    auto_cal_micro_win_vs_loss: round2(clamp(Number(p.auto_cal_micro_win_vs_loss ?? d.auto_cal_micro_win_vs_loss), 0.2, 0.9)),
+    auto_cal_high_mfe_vs_loss: round2(clamp(Number(p.auto_cal_high_mfe_vs_loss ?? d.auto_cal_high_mfe_vs_loss), 0.4, 1.5)),
+    auto_cal_left_winner_e_max: round2(clamp(Number(p.auto_cal_left_winner_e_max ?? d.auto_cal_left_winner_e_max), -0.5, 1.0)),
+    auto_cal_asym_win_vs_loss: round2(clamp(Number(p.auto_cal_asym_win_vs_loss ?? d.auto_cal_asym_win_vs_loss), 0.5, 1.2)),
+    auto_cal_soft_dom_e_max: round2(clamp(Number(p.auto_cal_soft_dom_e_max ?? d.auto_cal_soft_dom_e_max), -0.5, 0.5)),
+    auto_cal_soft_dom_win_vs_loss: round2(clamp(Number(p.auto_cal_soft_dom_win_vs_loss ?? d.auto_cal_soft_dom_win_vs_loss), 0.4, 1.2)),
+    auto_cal_ease_filter_e_min: round2(clamp(Number(p.auto_cal_ease_filter_e_min ?? d.auto_cal_ease_filter_e_min), 0.1, 1.5)),
+    auto_cal_legacy_raise_e_max: round2(clamp(Number(p.auto_cal_legacy_raise_e_max ?? d.auto_cal_legacy_raise_e_max), -0.2, 0.8)),
+    auto_cal_legacy_raise_win_vs_loss: round2(clamp(Number(p.auto_cal_legacy_raise_win_vs_loss ?? d.auto_cal_legacy_raise_win_vs_loss), 0.5, 1.2)),
+    auto_cal_soft_tight_e_max: round2(clamp(Number(p.auto_cal_soft_tight_e_max ?? d.auto_cal_soft_tight_e_max), -0.2, 0.8)),
+    auto_cal_healthy_e_min: round2(clamp(Number(p.auto_cal_healthy_e_min ?? d.auto_cal_healthy_e_min), 0.05, 1.5)),
+    auto_cal_healthy_win_vs_loss: round2(clamp(Number(p.auto_cal_healthy_win_vs_loss ?? d.auto_cal_healthy_win_vs_loss), 0.5, 1.5)),
+    auto_cal_target_ease_abs: round1(clamp(Number(p.auto_cal_target_ease_abs ?? d.auto_cal_target_ease_abs), 0.2, 5)),
+    auto_cal_target_pct_ease_div: round2(clamp(Number(p.auto_cal_target_pct_ease_div ?? d.auto_cal_target_pct_ease_div), 1.01, 1.5)),
+    auto_cal_peak_raise_abs: round1(clamp(Number(p.auto_cal_peak_raise_abs ?? d.auto_cal_peak_raise_abs), 0.1, 3)),
+    auto_cal_target_raise_abs: round1(clamp(Number(p.auto_cal_target_raise_abs ?? d.auto_cal_target_raise_abs), 0.1, 5)),
+    auto_cal_target_pct_raise_mult: round2(clamp(Number(p.auto_cal_target_pct_raise_mult ?? d.auto_cal_target_pct_raise_mult), 1.01, 1.3)),
+    auto_cal_peak_pct_raise_mult: round2(clamp(Number(p.auto_cal_peak_pct_raise_mult ?? d.auto_cal_peak_pct_raise_mult), 1.01, 1.3)),
+    auto_cal_giveback_raise_abs: round1(clamp(Number(p.auto_cal_giveback_raise_abs ?? d.auto_cal_giveback_raise_abs), 0.05, 1)),
+    auto_cal_healthy_keep_step: round2(clamp(Number(p.auto_cal_healthy_keep_step ?? d.auto_cal_healthy_keep_step), 0.005, 0.1)),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2499,6 +2630,38 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'mind_entry_conf_weak',
   'mind_entry_conf_regime_boost',
   'mind_entry_conf_cap',
+  'entry_learner_min_updates',
+  'entry_post_impulse_late_eff_min',
+  'mind_entry_conf_regime_hyp',
+  'mind_entry_conf_pb_wait',
+  'mind_entry_conf_pb_resume_floor',
+  'mind_entry_conf_story_side_floor',
+  'mind_entry_conf_flip_after_loss',
+  'mind_entry_conf_chop_wait',
+  'mind_entry_conf_mixed_wait',
+  'mind_entry_conf_hard_veto',
+  'mind_entry_conf_stack_fight',
+  'mind_entry_conf_stack_chapter_wait',
+  'auto_cal_micro_win_vs_loss',
+  'auto_cal_high_mfe_vs_loss',
+  'auto_cal_left_winner_e_max',
+  'auto_cal_asym_win_vs_loss',
+  'auto_cal_soft_dom_e_max',
+  'auto_cal_soft_dom_win_vs_loss',
+  'auto_cal_ease_filter_e_min',
+  'auto_cal_legacy_raise_e_max',
+  'auto_cal_legacy_raise_win_vs_loss',
+  'auto_cal_soft_tight_e_max',
+  'auto_cal_healthy_e_min',
+  'auto_cal_healthy_win_vs_loss',
+  'auto_cal_target_ease_abs',
+  'auto_cal_target_pct_ease_div',
+  'auto_cal_peak_raise_abs',
+  'auto_cal_target_raise_abs',
+  'auto_cal_target_pct_raise_mult',
+  'auto_cal_peak_pct_raise_mult',
+  'auto_cal_giveback_raise_abs',
+  'auto_cal_healthy_keep_step',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

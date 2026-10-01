@@ -138,8 +138,8 @@ export function postImpulseTipBlocksEntry(input: {
   const tipLo = g.exhaust_pos_lo ?? 0.2;
   const shareMin = g.entry_post_impulse_share_min ?? 0.22;
   const minBars = g.entry_post_impulse_min_bars ?? 12;
-  // Dedicated Genome horizon — not regimes.getZoneBars()
-  const zoneBars = Math.max(30, g.entry_post_impulse_zone_bars ?? g.zone_bars ?? 180);
+  // Genome horizon — sanitizer owns min 30 (no consumer Math.max floor)
+  const zoneBars = g.entry_post_impulse_zone_bars ?? g.zone_bars ?? 180;
   const zone = input.closedBars.slice(-zoneBars);
   const zonePrior = zone.length >= 3 ? zone.slice(0, -1) : zone;
   if (zonePrior.length < minBars) return false;
@@ -155,7 +155,7 @@ export function postImpulseTipBlocksEntry(input: {
   const recentShare = Math.abs(recentLegPts) / zoneWidth;
   if (recentShare < shareMin) return false;
 
-  // Late path efficiency — side oscillation after V still has mid→late NET
+  // Late path efficiency — own Genome knob (not trek_eff_min dual-use)
   let latePath = 0;
   const lateSlice = zonePrior.slice(-third);
   for (let i = 1; i < lateSlice.length; i++) {
@@ -166,7 +166,8 @@ export function postImpulseTipBlocksEntry(input: {
       ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
       : 0;
   const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
-  const lateChop = latePath > 1e-9 && lateEff < (g.trek_eff_min ?? 0.4);
+  const lateChop =
+    latePath > 1e-9 && lateEff < (g.entry_post_impulse_late_eff_min ?? 0.4);
 
   // Up-leg into HI tip → block BUY (chase finished rally / V top)
   if (recentLegPts > 0 && zpos >= tipHi && input.side === 'BUY') return true;
@@ -882,11 +883,11 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     },
     input.client_id
   );
+  const gLearn = getBrainGenome();
   const learnerReady =
-    learned.updates >= 20 &&
+    learned.updates >= Math.max(5, gLearn.entry_learner_min_updates ?? 20) &&
     learned.confidence >=
-      thought.confidence +
-        (getBrainGenome().entry_learner_override_margin ?? 0.08) &&
+      thought.confidence + (gLearn.entry_learner_override_margin ?? 0.08) &&
     !learned.explored;
   // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
   const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);

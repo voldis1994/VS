@@ -111,6 +111,26 @@ function calBounds() {
     softSizedLossDetectMin: g.soft_sized_loss_detect_min ?? SOFT_SIZED_LOSS_DETECT_MIN,
     softSizedLossFrac: g.soft_sized_loss_frac ?? 0.65,
     maxMfeGiveback: g.max_mfe_giveback ?? 0.35,
+    microWinVsLoss: g.auto_cal_micro_win_vs_loss ?? 0.45,
+    highMfeVsLoss: g.auto_cal_high_mfe_vs_loss ?? 0.8,
+    leftWinnerEMax: g.auto_cal_left_winner_e_max ?? 0.2,
+    asymWinVsLoss: g.auto_cal_asym_win_vs_loss ?? 0.85,
+    softDomEMax: g.auto_cal_soft_dom_e_max ?? 0.05,
+    softDomWinVsLoss: g.auto_cal_soft_dom_win_vs_loss ?? 0.75,
+    easeFilterEMin: g.auto_cal_ease_filter_e_min ?? 0.5,
+    legacyRaiseEMax: g.auto_cal_legacy_raise_e_max ?? 0.15,
+    legacyRaiseWinVsLoss: g.auto_cal_legacy_raise_win_vs_loss ?? 0.9,
+    softTightEMax: g.auto_cal_soft_tight_e_max ?? 0.15,
+    healthyEMin: g.auto_cal_healthy_e_min ?? 0.3,
+    healthyWinVsLoss: g.auto_cal_healthy_win_vs_loss ?? 0.95,
+    targetEaseAbs: g.auto_cal_target_ease_abs ?? 1.2,
+    targetPctEaseDiv: g.auto_cal_target_pct_ease_div ?? 1.12,
+    peakRaiseAbs: g.auto_cal_peak_raise_abs ?? 0.4,
+    targetRaiseAbs: g.auto_cal_target_raise_abs ?? 0.8,
+    targetPctRaiseMult: g.auto_cal_target_pct_raise_mult ?? 1.06,
+    peakPctRaiseMult: g.auto_cal_peak_pct_raise_mult ?? 1.05,
+    givebackRaiseAbs: g.auto_cal_giveback_raise_abs ?? 0.1,
+    healthyKeepStep: g.auto_cal_healthy_keep_step ?? 0.01,
   };
 }
 
@@ -1246,7 +1266,9 @@ export function proposeAutoCalibration(
       Math.abs(t.pnl_pts) >= Math.max(1.0, current.hardinv_abs * softFrac)
   ).length;
   const microWins = windowTrades.filter(
-    (t) => t.pnl_pts > 1e-9 && t.pnl_pts < Math.max(1.0, avgLossAbs * 0.45)
+    (t) =>
+      t.pnl_pts > 1e-9 &&
+      t.pnl_pts < Math.max(1.0, avgLossAbs * bounds.microWinVsLoss)
   ).length;
 
   const peakExits = windowTrades.filter((t) =>
@@ -1257,10 +1279,12 @@ export function proposeAutoCalibration(
       t.mfe > 0 &&
       t.pnl_pts > 0 &&
       t.pnl_pts < t.mfe * givebackFrac &&
-      t.mfe >= avgLossAbs * 0.8
+      t.mfe >= avgLossAbs * bounds.highMfeVsLoss
   ).length;
   const leftWinnerOnTable =
-    peakExits.length >= 2 && highMfeTinyPnl >= 2 && expectancy < 0.2;
+    peakExits.length >= 2 &&
+    highMfeTinyPnl >= 2 &&
+    expectancy < bounds.leftWinnerEMax;
 
   const human = reviewSessionLikeHuman(windowTrades);
   changes.push(`PRĀTS · ${human.diagnosis}`);
@@ -1280,13 +1304,16 @@ export function proposeAutoCalibration(
     next.target_abs >= next.hardinv_abs * 2.8;
 
   const asymmetryBad =
-    avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.85 && microWins >= 2;
+    avgWin > 0 &&
+    avgLossAbs > 0 &&
+    avgWin < avgLossAbs * bounds.asymWinVsLoss &&
+    microWins >= 2;
 
   const softLossMin = bounds.softSizedLossDetectMin;
   const softDominates =
-    expectancy < 0.05 &&
+    expectancy < bounds.softDomEMax &&
     avgLossAbs >= 1.0 &&
-    (wins.length === 0 || avgWin < avgLossAbs * 0.75) &&
+    (wins.length === 0 || avgWin < avgLossAbs * bounds.softDomWinVsLoss) &&
     (softLosses >= softLossMin ||
       softSizedLosses >= softLossMin ||
       (losses.length >= 3 && avgLossAbs >= current.hardinv_abs * 0.7));
@@ -1294,7 +1321,7 @@ export function proposeAutoCalibration(
   const needPullBack =
     human.intent === 'ease_peak_target' ||
     softDominates ||
-    (expectancy < 0.05 &&
+    (expectancy < bounds.softDomEMax &&
       (raiseStreak >= bounds.raiseStreakBeforePullback ||
         alreadyTall ||
         leftWinnerOnTable ||
@@ -1305,7 +1332,9 @@ export function proposeAutoCalibration(
   const needTightenFilters = human.intent === 'tighten_filters';
   const needEaseFilters =
     human.intent === 'ease_filters' ||
-    (human.intent === 'let_winners_run' && (current.entry_filter_level || 0) > 0 && expectancy >= 0.5);
+    (human.intent === 'let_winners_run' &&
+      (current.entry_filter_level || 0) > 0 &&
+      expectancy >= bounds.easeFilterEMin);
 
   const needBiggerWinners =
     !needPullBack &&
@@ -1320,8 +1349,8 @@ export function proposeAutoCalibration(
     human.intent === 'hold_course' &&
     !alreadyTall &&
     raiseStreak < bounds.raiseStreakBeforePullback &&
-    (expectancy < 0.15 ||
-      (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * 0.9) ||
+    (expectancy < bounds.legacyRaiseEMax ||
+      (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * bounds.legacyRaiseWinVsLoss) ||
       microWins >= 2);
 
   const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
@@ -1331,7 +1360,7 @@ export function proposeAutoCalibration(
     !softDominates &&
     softLosses >= 2 &&
     highMfeTinyPnl >= 1 &&
-    expectancy < 0.15 &&
+    expectancy < bounds.softTightEMax &&
     next.hardinv_abs <= 2.0;
 
   if (needPullBack) {
@@ -1386,10 +1415,12 @@ export function proposeAutoCalibration(
     next.peak_min_giveback_abs = roundAbs(
       Math.max(0.5, next.peak_min_giveback_abs - bounds.peakEaseGivebackStep)
     );
-    const easedTgt = roundAbs(next.target_abs - 1.2);
+    const easedTgt = roundAbs(next.target_abs - bounds.targetEaseAbs);
     const tgtFloor = roundAbs(next.hardinv_abs + 1.5);
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
-    next.target_pct = roundPct(Math.max(bounds.minTargetPct, next.target_pct / 1.12));
+    next.target_pct = roundPct(
+      Math.max(bounds.minTargetPct, next.target_pct / bounds.targetPctEaseDiv)
+    );
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(
         autotuneLog(
@@ -1459,14 +1490,26 @@ export function proposeAutoCalibration(
     const peakBefore = next.peak_mfe_abs;
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
-    next.peak_mfe_abs = Math.min(bounds.maxPeakMfeAbs, roundAbs(next.peak_mfe_abs + 0.4));
+    next.peak_mfe_abs = Math.min(
+      bounds.maxPeakMfeAbs,
+      roundAbs(next.peak_mfe_abs + bounds.peakRaiseAbs)
+    );
     next.peak_retention = roundRet(
       Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
     );
-    next.peak_min_giveback_abs = roundAbs(Math.min(2.0, next.peak_min_giveback_abs + 0.1));
-    next.target_abs = Math.min(bounds.maxTargetAbs, roundAbs(next.target_abs + 0.8));
-    next.target_pct = roundPct(Math.min(bounds.maxTargetPct, next.target_pct * 1.06));
-    next.peak_mfe_pct = roundPct(Math.min(bounds.maxPeakMfePct, next.peak_mfe_pct * 1.05));
+    next.peak_min_giveback_abs = roundAbs(
+      Math.min(2.0, next.peak_min_giveback_abs + bounds.givebackRaiseAbs)
+    );
+    next.target_abs = Math.min(
+      bounds.maxTargetAbs,
+      roundAbs(next.target_abs + bounds.targetRaiseAbs)
+    );
+    next.target_pct = roundPct(
+      Math.min(bounds.maxTargetPct, next.target_pct * bounds.targetPctRaiseMult)
+    );
+    next.peak_mfe_pct = roundPct(
+      Math.min(bounds.maxPeakMfePct, next.peak_mfe_pct * bounds.peakPctRaiseMult)
+    );
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(
         autotuneLog(
@@ -1514,13 +1557,13 @@ export function proposeAutoCalibration(
     !doRaise &&
     !needPullBack &&
     !needProtectSooner &&
-    expectancy >= 0.3 &&
-    avgWin >= avgLossAbs * 0.95 &&
+    expectancy >= bounds.healthyEMin &&
+    avgWin >= avgLossAbs * bounds.healthyWinVsLoss &&
     wins.length >= losses.length
   ) {
     const retBefore = next.peak_retention;
     next.peak_retention = roundRet(
-      Math.min(bounds.maxPeakRetention, next.peak_retention + 0.01)
+      Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.healthyKeepStep)
     );
     if (next.peak_retention !== retBefore) {
       changes.push(
