@@ -1,17 +1,19 @@
 # APSTIPRINĀŠANAI — kas iet uz smadzenēm
 
+**Oficiālā robeža (pēc #667):** [`docs/BRAIN_OWNERSHIP.md`](./BRAIN_OWNERSHIP.md)
+
 Ārpusē TIKAI 3:
 1. lot_size
 2. Capital dealing-rules (min stop / point size)
 3. Sistēma (session/timers/DB/WS/auth/routing)
 
-Viss zemāk = smadzenes. Režīmus smadzenes var uzlabot, ja rezultāts slikts.
+Viss zemāk = smadzenes (treidings). **Ne** AutoCal mut meta / broker SAFETY ops / procedūras ģeometrija.
 Skala: min solis 0.1 (body/trek = bp).
 
-Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
+Kopā uz smadzenēm (mērķis): **187** · live MAP pēc #666: **212/212**.
 
-**STATUS 2026-10-01:** **212/212** schema+wire+hypothesize (one-market 200–203 + regime runner 204–212).
-Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
+**STATUS 2026-10-01:** `main` = **#666**. PR **#667 CLOSED** (literāļu→Genome bloat noraidīts).
+Audit: `scripts/auditGenomeOwnership.ts` (N/N = schema+wire+hypo, ne “0 literāļu”).
 
 ---
 

@@ -4,6 +4,7 @@ import {
   deskCalibrationCatalog,
   getDeskCalibration,
   setDeskCalibration,
+  stripBrainOwnedDeskKnobs,
   type DeskCalibration,
 } from '../services/deskCalibration.js';
 import {
@@ -38,18 +39,26 @@ export async function registerDeskCalibrationRoutes(app: FastifyInstance): Promi
     const q = (request.query || {}) as { client_id?: string | number };
     const clientId = parseClientId(body.client_id ?? q.client_id);
     return runWithDeskClientAsync(clientId, async () => {
-      const { client_id: _c, ...patch } = body;
-      const calibration = setDeskCalibration(patch, clientId);
+      const { client_id: _c, ...rawPatch } = body;
+      // Soft/Peak/Target/SAFETY/entry-filter = BrainGenome SoT — ignore manual numbers.
+      const patch = stripBrainOwnedDeskKnobs(rawPatch);
+      const calibration =
+        Object.keys(patch).length > 0
+          ? setDeskCalibration(patch, clientId)
+          : getDeskCalibration(clientId);
       await logAudit('admin', 'desk_calibration_updated', 'desk', 'calibration', null, {
         client_id: clientId,
         hardinv_abs: calibration.hardinv_abs,
         peak_retention: calibration.peak_retention,
         enabled_regimes: calibration.enabled_regimes,
+        brain_owned_ignored: true,
+        applied_keys: Object.keys(patch),
       });
       return {
         success: true,
         client_id: clientId,
         calibration,
+        brain_owned_read_only: true,
         auto: getAutoCalibrateStatus(undefined, clientId),
         learner: getLearnerStatus(clientId),
       };

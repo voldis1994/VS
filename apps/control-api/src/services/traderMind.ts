@@ -114,7 +114,10 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     thesis = `Tirgus mainās pret mani (stāsts/pressure/1m). Man jau bija labs MFE — sāku domāt kā aizstāvēt peļņu, necerēt uz brīnumu.`;
   } else if (againstUs) {
     thesis = `Attēls pagriežas pret manu ${input.open_side}. Bez liela MFE esmu piesardzīgs — Soft ir mana pēdējā līnija.`;
-  } else if (mfe >= soft && upl >= soft * 0.85) {
+  } else if (
+    mfe >= soft &&
+    upl >= soft * (genome.near_target_lean_bank || 0.85)
+  ) {
     thesis = `Esmu spēcīgā plusā. Kamēr 1m un stāsts neteic pretējo, turu un ļauju Peak/Target strādāt.`;
   } else {
     thesis = `Vēl nav skaidra uzvara vai sakāve — skatos zonu, pressure un nākamo sveci; Soft sargā zaudētāju.`;

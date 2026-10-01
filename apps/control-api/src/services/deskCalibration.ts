@@ -83,7 +83,7 @@ export function defaultDeskCalibration(): DeskCalibration {
     soft_l2_abs: 1.8,
     soft_l3_abs: 2.2,
     peak_mfe_abs: 3.0,
-    peak_retention: 0.72,
+    peak_retention: 0.75,
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
     target_l1_abs: 2.5,
@@ -293,6 +293,45 @@ function saveToDisk(clientId: number, cfg: DeskCalibration): void {
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
 }
 
+/**
+ * Soft / Peak / Target / SAFETY / entry-filter — BrainGenome SoT.
+ * Manual PUT /api/desk/calibration must not write these (strips them).
+ * AutoCal + setBrainGenome may still update via setDeskCalibration.
+ */
+export const BRAIN_OWNED_DESK_KEYS = [
+  'hardinv_abs',
+  'soft_l1_abs',
+  'soft_l2_abs',
+  'soft_l3_abs',
+  'peak_mfe_abs',
+  'peak_retention',
+  'peak_min_giveback_abs',
+  'target_abs',
+  'target_l1_abs',
+  'target_l2_abs',
+  'target_l3_abs',
+  'safety_tp_rr',
+  'hardinv_pct',
+  'target_pct',
+  'peak_mfe_pct',
+  'entry_filter_level',
+] as const satisfies ReadonlyArray<keyof DeskCalibration>;
+
+const BRAIN_OWNED_DESK_KEY_SET = new Set<string>(BRAIN_OWNED_DESK_KEYS);
+
+/** Drop Soft/Peak/Target/SAFETY knobs from a manual desk PATCH. */
+export function stripBrainOwnedDeskKnobs(
+  partial: Partial<DeskCalibration>
+): Partial<DeskCalibration> {
+  const out: Partial<DeskCalibration> = {};
+  for (const [k, v] of Object.entries(partial)) {
+    if (BRAIN_OWNED_DESK_KEY_SET.has(k)) continue;
+    if (k === 'updated_at') continue;
+    (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
+}
+
 export function getDeskCalibration(clientId?: number | null): DeskCalibration {
   const id = resolveDeskClientId(clientId);
   let cached = cacheByClient.get(id);
@@ -380,6 +419,8 @@ function syncDeskKnobsToGenome(
       hardinv_pct_bp: fracToBp(next.hardinv_pct),
       peak_mfe_abs: next.peak_mfe_abs,
       peak_mfe_pct_bp: fracToBp(next.peak_mfe_pct),
+      // One Keep — desk retention writes both aliases
+      peak_keep: next.peak_retention,
       peak_retention: next.peak_retention,
       peak_min_giveback_abs: next.peak_min_giveback_abs,
       target_l1_abs: next.target_l1_abs,
@@ -449,6 +490,10 @@ export function deskCalibrationCatalog() {
     wait_only: ['UNKNOWN'],
     open_at_start: true,
     tradable_default: [...TRADABLE_DEFAULT],
+    /** Soft/Peak/Target/SAFETY — read-only on desk PUT; Genome / AutoCal own writes. */
+    brain_owned_knobs: [...BRAIN_OWNED_DESK_KEYS],
+    /** Operator may still toggle regime allowlist (kill / reopen). */
+    operator_knobs: ['enabled_regimes', 'soft_off_regimes'],
     knobs: [
       'hardinv_abs',
       'soft_l1_abs',

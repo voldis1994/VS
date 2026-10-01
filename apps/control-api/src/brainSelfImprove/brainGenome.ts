@@ -132,7 +132,7 @@ export type BrainGenome = {
   peak_mfe_abs: number;
   /** Peak MFE floor as bp of price (9 bp ≡ 0.0009) */
   peak_mfe_pct_bp: number;
-  /** Desk Peak Keep fraction (MindBank still uses peak_keep) */
+  /** Alias of peak_keep (one Keep SoT — sanitize syncs both) */
   peak_retention: number;
   /** Min absolute giveback before Peak cuts */
   peak_min_giveback_abs: number;
@@ -773,6 +773,7 @@ const DEFAULT_GENOME: BrainGenome = {
   version: 1,
   updated_at: new Date(0).toISOString(),
   peak_keep: 0.75,
+  // peak_retention default matches peak_keep (enforceOnePeakKeep)
   peak_arm_soft_mult: 1.35,
   peak_trail_soft_cap_mult: 1.75,
   story_fight_peak_arm_soft_mult: 1,
@@ -824,7 +825,7 @@ const DEFAULT_GENOME: BrainGenome = {
   hardinv_pct_bp: 8,
   peak_mfe_abs: 3,
   peak_mfe_pct_bp: 9,
-  peak_retention: 0.72,
+  peak_retention: 0.75,
   peak_min_giveback_abs: 0.85,
   target_l1_abs: 2.5,
   target_l2_abs: 3.5,
@@ -844,7 +845,7 @@ const DEFAULT_GENOME: BrainGenome = {
   layer_suggest_p85: 0.85,
   target_l3_min_vs_soft: 1.2,
   soft_layer_unlock_floor: 0.5,
-  peak_mfe_retention_fallback: 0.72,
+  peak_mfe_retention_fallback: 0.75,
   max_mfe_giveback: 0.35,
   hardinv_abs_floor: 1.5,
   hardinv_abs_cap: 2.2,
@@ -1281,6 +1282,25 @@ function enforceSoftTargetLadder(g: BrainGenome): void {
   // Target L3 ≥ Soft L3 × min
   const minT3 = round1(g.soft_l3_abs * g.target_l3_min_vs_soft);
   if (g.target_l3_abs < minT3) g.target_l3_abs = minT3;
+}
+
+/**
+ * One Peak Keep — peak_keep is canonical; peak_retention aliases it.
+ * Desk/AutoCal may patch retention alone → promote into peak_keep.
+ */
+function enforceOnePeakKeep(
+  g: BrainGenome,
+  raw: Partial<BrainGenome> | null | undefined
+): void {
+  const p = raw || {};
+  const patchedKeep = p.peak_keep != null && Number.isFinite(Number(p.peak_keep));
+  const patchedRet =
+    p.peak_retention != null && Number.isFinite(Number(p.peak_retention));
+  if (patchedRet && !patchedKeep) {
+    g.peak_keep = g.peak_retention;
+  } else {
+    g.peak_retention = g.peak_keep;
+  }
 }
 
 function enforceRegimeLadder(g: BrainGenome): void {
@@ -1720,6 +1740,7 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
   }
 
   enforceSoftTargetLadder(g);
+  enforceOnePeakKeep(g, p);
   enforceRegimeLadder(g);
   if (g.regime_persist_window > g.regime_mom_bars) {
     g.regime_persist_window = g.regime_mom_bars;
@@ -1822,7 +1843,7 @@ export function deskKnobsFromGenome(): {
     hardinv_pct: regimeBpToFrac(g.hardinv_pct_bp),
     peak_mfe_abs: g.peak_mfe_abs,
     peak_mfe_pct: regimeBpToFrac(g.peak_mfe_pct_bp),
-    peak_retention: g.peak_retention,
+    peak_retention: g.peak_keep,
     peak_min_giveback_abs: g.peak_min_giveback_abs,
     target_abs: g.target_l3_abs,
     target_l1_abs: g.target_l1_abs,

@@ -2810,7 +2810,8 @@ function decideOpenManageExit(
         : 1;
   const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
   const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
-  const deepGiveback = retNow < keepCfg - 0.12;
+  const deepGiveback =
+    retNow < keepCfg - (gBank.deep_giveback_offset || 0.12);
   const storyFightBank = softPlusStoryFightShouldBank({
     mfe: s.mfe,
     softSl: softSlNow,

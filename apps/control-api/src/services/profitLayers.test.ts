@@ -65,10 +65,18 @@ describe('Soft/Target 3-layer ladder', () => {
     expect(early * 1.35).toBeLessThan(l3Cap * 1.35);
   });
 
-  it('effectivePeakKeep — desk + genome share one Keep (MindBank = Peak trail)', () => {
+  it('effectivePeakKeep — genome.peak_keep is SoT (no max with desk)', () => {
     expect(effectivePeakKeep(0.72, 0.75)).toBe(0.75);
-    expect(effectivePeakKeep(0.8, 0.75)).toBe(0.8);
-    expect(effectivePeakKeep(0, 0)).toBe(0.72);
+    // Desk higher no longer wins — one Keep
+    expect(effectivePeakKeep(0.8, 0.75)).toBe(0.75);
+    expect(effectivePeakKeep(0, 0)).toBe(0.75);
+  });
+
+  it('effectivePeakKeep flips when genome.peak_keep changes', () => {
+    _resetBrainGenomeForTests({ peak_keep: 0.62 });
+    expect(effectivePeakKeep(0.9, 0.62)).toBe(0.62);
+    _resetBrainGenomeForTests({ peak_keep: 0.88 });
+    expect(effectivePeakKeep(0.5, 0.88)).toBe(0.88);
   });
 
   it('Target L1/L2 bank when MFE never stretched to fat L3', () => {

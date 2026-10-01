@@ -197,12 +197,13 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
 
   const saveCalibration = async (patch: Partial<DeskCalibration>) => {
     if (!cal) return;
+    // Soft/Peak/Target are BrainGenome SoT — only send operator knobs (regimes).
     setCalBusy(true);
     setCalMsg(null);
     try {
       const res = await apiFetch<{ calibration: DeskCalibration }>(`/api/desk/calibration${calQs}`, {
         method: 'PUT',
-        body: JSON.stringify({ ...cal, ...patch, client_id: clientIdForCal }),
+        body: JSON.stringify({ ...patch, client_id: clientIdForCal }),
       });
       setCal(res.calibration);
       setCalMsg('Saved');
@@ -514,24 +515,19 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
           {!cal && <div className="empty-state">Loading…</div>}
           {cal && (
             <>
+              <p className="hint-line" style={{ marginTop: 0 }}>
+                Soft / Peak / Target / SAFETY — BrainGenome SoT (read-only). Auto-cal + genome
+                raksta; manuāli skaitļi netiek pieņemti.
+              </p>
               <label className="field-label">HardInv abs</label>
               <input
                 className="input"
                 type="number"
                 step="0.1"
                 value={Number(cal.hardinv_abs.toFixed(1))}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    hardinv_abs: Math.round(Number(e.target.value) * 10) / 10,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    hardinv_abs: Math.round(cal.hardinv_abs * 10) / 10,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <label className="field-label">Peak keep % (75=25% giveback)</label>
               <input
@@ -541,18 +537,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 min={10}
                 max={95}
                 value={Math.round(cal.peak_retention * 100)}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    peak_retention: Math.round(Number(e.target.value)) / 100,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    peak_retention: Math.round(cal.peak_retention * 100) / 100,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <label className="field-label">Peak MFE floor</label>
               <input
@@ -560,18 +547,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 type="number"
                 step="0.1"
                 value={Number(cal.peak_mfe_abs.toFixed(1))}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    peak_mfe_abs: Math.round(Number(e.target.value) * 10) / 10,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    peak_mfe_abs: Math.round(cal.peak_mfe_abs * 10) / 10,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <label className="field-label">Peak min giveback</label>
               <input
@@ -579,18 +557,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 type="number"
                 step="0.1"
                 value={Number(cal.peak_min_giveback_abs.toFixed(1))}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    peak_min_giveback_abs: Math.round(Number(e.target.value) * 10) / 10,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    peak_min_giveback_abs: Math.round(cal.peak_min_giveback_abs * 10) / 10,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <label className="field-label">Target abs</label>
               <input
@@ -598,18 +567,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 type="number"
                 step="0.1"
                 value={Number(cal.target_abs.toFixed(1))}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    target_abs: Math.round(Number(e.target.value) * 10) / 10,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    target_abs: Math.round(cal.target_abs * 10) / 10,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <label className="field-label">Broker TP R:R (vs SL)</label>
               <input
@@ -619,18 +579,9 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 min={1.5}
                 max={4}
                 value={Number(cal.safety_tp_rr.toFixed(2))}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({
-                    ...cal,
-                    safety_tp_rr: Math.round(Number(e.target.value) * 100) / 100,
-                  })
-                }
-                onBlur={() =>
-                  void saveCalibration({
-                    safety_tp_rr: Math.round(cal.safety_tp_rr * 100) / 100,
-                  })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <p className="hint-line" style={{ marginTop: 2 }}>
                 Soft Peak/Target banko peļņu — brokeram tikai SAFETY SL (bez TP scratch).
@@ -643,26 +594,13 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 min={0}
                 max={3}
                 value={cal.entry_filter_level ?? 0}
-                disabled={calBusy}
-                onChange={(e) =>
-                  setCal({ ...cal, entry_filter_level: Number(e.target.value) })
-                }
-                onBlur={() =>
-                  void saveCalibration({ entry_filter_level: cal.entry_filter_level ?? 0 })
-                }
+                readOnly
+                disabled
+                title="BrainGenome SoT"
               />
               <p className="hint-line" style={{ marginTop: 2 }}>
-                0=OPEN · 1=flip · 2=+structure · 3=strict. Auto-cal paceļ/pazemina pēc closes.
+                0=OPEN · 1=flip · 2=+structure · 3=strict. Auto-cal / genome.
               </p>
-              <div className="actions" style={{ marginTop: 6 }}>
-                <button
-                  className="btn btn-primary"
-                  disabled={calBusy}
-                  onClick={() => void saveCalibration({})}
-                >
-                  Save knobs
-                </button>
-              </div>
               {calMsg && <div className="hint-line">{calMsg}</div>}
             </>
           )}

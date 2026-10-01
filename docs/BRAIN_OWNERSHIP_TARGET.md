@@ -1,9 +1,12 @@
 # Smadzenes ownership — mērķa saraksts
 
+> **Pēc #667:** skatīt arī [`BRAIN_OWNERSHIP.md`](./BRAIN_OWNERSHIP.md) — kas NAV smadzenes (meta/broker-ops/procedūra) un kāpēc MAP++ bija kļūda.
+
 Politika: **viss treidings → smadzenes**.  
 **Ārpusē tikai:** (1) `lot_size` · (4) Capital dealing-rules · (5) sistēma (infra/ops).
 
-SAFETY SL cushion un SAFETY TP R:R **iet uz smadzenēm** (treidinga riska forma, ne infra).
+SAFETY SL cushion un SAFETY TP R:R **iet uz smadzenēm** (treidinga riska forma, ne infra).  
+SAFETY broker retry / TP shove / price buckets **neiet** uz Genome (dealing-adjacent).
 
 **Skalas likums:** genome skaitļiem min solis **0.1** (kā Keep/persist). Body/trek = **bp** (1 bp = 0.0001 frac) — nekad `0.00008` (round→0). Live: `regimeBpToFrac()`.
 

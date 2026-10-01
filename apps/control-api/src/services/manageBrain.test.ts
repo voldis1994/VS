@@ -198,6 +198,32 @@ describe('manageBrain', () => {
     expect(r.action).toBe('HOLD');
   });
 
+  it('path quality deep-green Soft× follows genome near_target_lean_bank', () => {
+    // Loose (0.5): upl 2.0 ≥ soft×0.5 → deep-green credit (score more negative)
+    _resetBrainGenomeForTests({ near_target_lean_bank: 0.5 });
+    const loose = scoreManageAction(
+      base({
+        minute_policy: 'continue',
+        mfe: 4,
+        unrealized: 2.0,
+        soft_sl: 3.5,
+        soft_gate_allow: false,
+      })
+    );
+    // Strict (0.95): same upl does NOT qualify → no deep-green credit
+    _resetBrainGenomeForTests({ near_target_lean_bank: 0.95 });
+    const strict = scoreManageAction(
+      base({
+        minute_policy: 'continue',
+        mfe: 4,
+        unrealized: 2.0,
+        soft_sl: 3.5,
+        soft_gate_allow: false,
+      })
+    );
+    expect(loose.score).toBeLessThan(strict.score);
+  });
+
   it('mindOwnsGreenExit — BANK/CUT close Soft-sized green; never red', () => {
     expect(
       mindOwnsGreenExit({ action: 'BANK', execFav: 3.5, softSl: 3.4 }).exit
