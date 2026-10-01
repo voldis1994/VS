@@ -475,9 +475,51 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const recentLegOk =
     Math.abs(recentLeg) >= TREND_ENTER * trekRecentMult &&
     recentShare >= trekRecentShareMin;
-  const trekDirPts = recentLegOk ? recentLegPts : zoneTrekPts;
+  // Late-window efficiency: side oscillation after V has path ≫ net → not a trek.
+  // Without this, mid=dump-low + late=box-mid keeps inventing TREND_UP for hours.
+  let latePath = 0;
+  const lateSlice = zonePrior.slice(-third);
+  for (let i = 1; i < lateSlice.length; i++) {
+    latePath += Math.abs(lateSlice[i]!.close - lateSlice[i - 1]!.close);
+  }
+  const lateNet =
+    lateSlice.length >= 2
+      ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
+      : 0;
+  const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
+  // Late third is chop when path ≫ net — mid→late NET after a dump is NOT a trek
+  // (Capital Gold 08:00 dump → 09:00–11:19 side box still looked like TREND_UP).
+  const lateChop = latePath > 1e-9 && lateEff < trekEffMin;
+  const recentLegIsDirectional = recentLegOk && !lateChop;
+  const trekDirPts = recentLegIsDirectional
+    ? recentLegPts
+    : fullTrekOk
+      ? zoneTrekPts
+      : 0;
+
+  const absPersist = Math.abs(persistence);
+  const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
+  const chopTrek =
+    trekShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    recentShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    trekEfficiency <= RANGE_CHOP_TREK_EFF_MAX;
+  const quietTip = !expanding && Math.abs(lastVel) < TREND_ENTER;
+  const quietMid = nearZoneMid && quietTip;
+
+  // Compression before late-chop RANGE — ultra-tight squeeze must not fall to RANGE
+  if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
+
+  // Proven late-window chop beats soft recent-leg TREND (and sticky TREND prior).
+  // Do NOT early-return on full-zone chopTrek alone — V-recovery has low trekEff
+  // while the late leg is still directional (must remain TREND_UP).
+  if (inRange && chopPersist && lateChop && quietTip) return 'RANGE';
+
   const softMovePullback = genome.soft_move_trek_pullback_shortcut !== false;
-  if (inRange && (fullTrekOk || recentLegOk) && trekDirPts !== 0) {
+  if (
+    inRange &&
+    (fullTrekOk || recentLegIsDirectional) &&
+    trekDirPts !== 0
+  ) {
     if (trekDirPts > 0) {
       // Soft tip against the trek → pullback in uptrend (1m↓ while HTF↑)
       if (
@@ -499,22 +541,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     }
   }
 
-  // Compression only in the tight absolute band near mid — dead zone above → RANGE
-  if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
-
   // Positive RANGE — proven chop inside the box. NOT "inRange ⇒ RANGE".
   // Violent spike/dump that still sits in a wide 30m hi/lo must NOT become fade.
   // Genome: regime_range_chop_persist_max / trek_share_max / trek_eff_max.
   // Cold-start: quiet mid + chop trek may enter RANGE even when micro-bodies
   // above MOVE nudge |persistence| slightly over the chop max (Gold 0.35pt sine).
-  const absPersist = Math.abs(persistence);
-  const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
-  const chopTrek =
-    trekShare <= RANGE_CHOP_TREK_SHARE_MAX &&
-    recentShare <= RANGE_CHOP_TREK_SHARE_MAX &&
-    trekEfficiency <= RANGE_CHOP_TREK_EFF_MAX;
-  const quietMid =
-    nearZoneMid && !expanding && Math.abs(lastVel) < TREND_ENTER;
   if (inRange && chopPersist && (chopTrek || quietMid)) return 'RANGE';
   if (inRange && quietMid && chopTrek && previous === 'UNKNOWN') return 'RANGE';
 
