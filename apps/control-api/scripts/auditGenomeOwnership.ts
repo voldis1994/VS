@@ -446,9 +446,21 @@ const MAP: Record<number, string[]> = {
   308: ['auto_cal_healthy_keep_step'],
   309: ['mind_entry_conf_stack_fight'],
   310: ['mind_entry_conf_stack_chapter_wait'],
+  311: ['auto_cal_let_winners_e_min'],
+  312: ['auto_cal_choppy_ctx_min'],
+  313: ['auto_cal_choppy_e_max'],
+  314: ['auto_cal_neg_e_align_max'],
+  315: ['auto_cal_expand_ctx_min'],
+  316: ['auto_cal_expand_e_min'],
+  317: ['auto_cal_choppy_dwell_e_max'],
+  318: ['auto_cal_fight_ctx_min'],
+  319: ['auto_cal_fight_e_max'],
+  320: ['auto_cal_soft_dom_loss_count_min'],
+  321: ['auto_cal_soft_dom_loss_vs_hardinv'],
+  322: ['auto_cal_demote_recover_e_min'],
 };
 
-const MAX_ITEM = 310;
+const MAX_ITEM = 322;
 
 // Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();
@@ -461,6 +473,24 @@ for (const line of confirm.split('\n')) {
 
 const servicesDir = join(HERE, '../src/services');
 const brainDir = join(HERE, '../src/brainSelfImprove');
+const EXCLUDE_FROM_CONSUMER_WIRE = new Set([
+  // Schema / sanitize / factory — key names here are NOT runtime consumer wire
+  'brainGenome.ts',
+  // Explore proposals — coverage checked separately via hypoGaps
+  'hypothesize.ts',
+]);
+/**
+ * Keys that intentionally live only in sanitize (inter-knob ladder constraints).
+ * They reshape other regime_* values at sanitize time; consumers read those.
+ */
+const SANITIZE_OWNED_KEYS = new Set([
+  'gap_move_stay',
+  'gap_stay_enter',
+  'gap_enter_pullback',
+  'gap_pullback_reversal',
+  'gap_compress_expand',
+  'persist_enter_stay_min_gap',
+]);
 const files: string[] = [];
 for (const dir of [servicesDir, brainDir]) {
   for (const f of readdirSync(dir)) {
@@ -470,9 +500,14 @@ for (const dir of [servicesDir, brainDir]) {
   }
 }
 const corpusByFile = new Map(files.map((f) => [f, readFileSync(f, 'utf8')] as const));
-const corpus = [...corpusByFile.values()].join('\n');
 const hypo = corpusByFile.get(join(brainDir, 'hypothesize.ts')) || '';
 const autoCal = corpusByFile.get(join(servicesDir, 'autoCalibrate.ts')) || '';
+const genomeSrc = corpusByFile.get(join(brainDir, 'brainGenome.ts')) || '';
+/** Live consumers only — excludes brainGenome (schema) + hypothesize (explore). */
+const consumerFiles = files.filter((f) => !EXCLUDE_FROM_CONSUMER_WIRE.has(f.split('/').pop() || ''));
+const consumerCorpus = consumerFiles
+  .map((f) => corpusByFile.get(f) || '')
+  .join('\n');
 
 type Row = {
   n: number;
@@ -482,6 +517,7 @@ type Row = {
   missingFactory: string[];
   wired: string[];
   unwired: string[];
+  sanitizeOwned: string[];
   inHypo: string[];
   notInHypo: string[];
 };
@@ -492,20 +528,37 @@ for (let n = 1; n <= MAX_ITEM; n++) {
   const label = labels.get(n) || `item ${n}`;
   const inFactory = keys.filter((k) => factoryKeys.has(k));
   const missingFactory = keys.filter((k) => !factoryKeys.has(k));
-  const wired = inFactory.filter((k) => {
-    const re = new RegExp(`(?:\\.|['"])${k}(?:['"]|\\b)`);
-    return re.test(corpus);
-  });
+  const keyHit = (src: string, k: string) =>
+    new RegExp(`(?:\\.|['"])${k}(?:['"]|\\b)`).test(src);
+  const sanitizeOwned = inFactory.filter(
+    (k) => SANITIZE_OWNED_KEYS.has(k) && keyHit(genomeSrc, k)
+  );
+  // Wire = live consumer reference OR intentional sanitize-owned ladder key
+  const wired = inFactory.filter(
+    (k) => keyHit(consumerCorpus, k) || sanitizeOwned.includes(k)
+  );
   const unwired = inFactory.filter((k) => !wired.includes(k));
   const inHypo = inFactory.filter((k) => hypo.includes(k) || autoCal.includes(k));
   const notInHypo = inFactory.filter((k) => !inHypo.includes(k));
-  rows.push({ n, label, keys, inFactory, missingFactory, wired, unwired, inHypo, notInHypo });
+  rows.push({
+    n,
+    label,
+    keys,
+    inFactory,
+    missingFactory,
+    wired,
+    unwired,
+    sanitizeOwned,
+    inHypo,
+    notInHypo,
+  });
 }
 
 const noKeys = rows.filter((r) => !r.keys.length);
 const missingSchema = rows.filter((r) => r.missingFactory.length);
 const unwiredRows = rows.filter((r) => r.unwired.length);
 const hypoGaps = rows.filter((r) => r.notInHypo.length && r.inFactory.length);
+const sanitizeOwnedRows = rows.filter((r) => r.sanitizeOwned.length);
 
 console.log('=== SCHEMA ===');
 console.log(
@@ -520,7 +573,15 @@ for (const r of missingSchema) {
   console.log(`  #${r.n} missing: ${r.missingFactory.join(', ')}`);
 }
 
-console.log('\n=== CONSUMER WIRE ===');
+console.log('\n=== CONSUMER WIRE (excl. brainGenome.ts + hypothesize.ts) ===');
+console.log('consumer files scanned', consumerFiles.length);
+console.log(
+  'sanitize-owned ladder items (ok if only in brainGenome enforceRegimeLadder)',
+  sanitizeOwnedRows.length
+);
+for (const r of sanitizeOwnedRows) {
+  console.log(`  #${r.n} sanitize-owned: ${r.sanitizeOwned.join(', ')}`);
+}
 console.log('items with unwired keys', unwiredRows.length);
 for (const r of unwiredRows) {
   console.log(`  #${r.n} unwired: ${r.unwired.join(', ')} | ${r.label}`);
@@ -535,13 +596,18 @@ for (const r of hypoGaps) {
 const ok =
   !noKeys.length &&
   !missingSchema.length &&
-  !unwiredRows.length;
+  !unwiredRows.length &&
+  !hypoGaps.length;
 
 console.log('\n=== VERDICT ===');
 console.log(
   ok
-    ? `SCHEMA+WIRE complete for ${MAX_ITEM} mapped knobs`
+    ? `SCHEMA+CONSUMER-WIRE+HYPOTHESIZE complete for ${MAX_ITEM} mapped knobs`
     : 'GAPS remain — see above'
+);
+console.log(
+  `Note: wire = key name in live consumer .ts (not proof of every decision path). ` +
+    `Behavior proofs are representative (genomeWireCut.proof.test.ts), not 1:1 per knob.`
 );
 console.log(
   `hypothesize/auto-cal coverage: ${MAX_ITEM - hypoGaps.length}/${MAX_ITEM} items have ≥1 key explored`
@@ -550,8 +616,16 @@ console.log(
 const report = {
   ok,
   mapped: rows.filter((r) => r.keys.length).length,
+  consumerFiles: consumerFiles.map((f) => f.split('/').pop()),
+  excludedFromWire: [...EXCLUDE_FROM_CONSUMER_WIRE],
+  sanitizeOwnedKeys: [...SANITIZE_OWNED_KEYS],
   noKeys: noKeys.map((r) => r.n),
   missingSchema: missingSchema.map((r) => ({ n: r.n, keys: r.missingFactory })),
+  sanitizeOwned: sanitizeOwnedRows.map((r) => ({
+    n: r.n,
+    keys: r.sanitizeOwned,
+    label: r.label,
+  })),
   unwired: unwiredRows.map((r) => ({ n: r.n, keys: r.unwired, label: r.label })),
   hypoGaps: hypoGaps.map((r) => ({ n: r.n, keys: r.notInHypo })),
 };

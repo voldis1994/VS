@@ -884,8 +884,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     input.client_id
   );
   const gLearn = getBrainGenome();
+  // Sanitizer owns min updates (5–100) — no consumer Math.max floor
   const learnerReady =
-    learned.updates >= Math.max(5, gLearn.entry_learner_min_updates ?? 20) &&
+    learned.updates >= (gLearn.entry_learner_min_updates ?? 20) &&
     learned.confidence >=
       thought.confidence + (gLearn.entry_learner_override_margin ?? 0.08) &&
     !learned.explored;

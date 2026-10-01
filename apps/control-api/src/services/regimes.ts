@@ -655,7 +655,8 @@ function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
   const g = getBrainGenome();
   // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
-  const moveDiv = Math.max(2, g.regime_conf_move_div ?? 4);
+  // Sanitizer owns moveDiv (2–10) — no consumer Math.max floor
+  const moveDiv = g.regime_conf_move_div ?? 4;
   const strength = Math.min(
     1,
     Math.abs(bodyPct(last)) / (MOVE * moveDiv) + rangePct(last) / (MOVE_RANGE * moveDiv)

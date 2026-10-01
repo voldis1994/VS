@@ -10,9 +10,11 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **310/310** schema+wire+hypothesize (221–278 + Mind/AutoCal residuals 279–310; tip 213–220).
-Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
-**Review:** everyN window; exempt `[]`; `??`; post-impulse own `late_eff_min` + sanitizer horizon; Mind/AutoCal decision thresholds Genome; proofs flip→decision.
+**STATUS 2026-10-01:** **322/322** schema + consumer-wire + hypothesize (tip 213–220; manage/mind/auto-cal 221–322).
+Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`
+(consumer corpus **excl.** `brainGenome.ts` + `hypothesize.ts`; `ok` prasa arī hypoGaps=0; gap_* = sanitize-owned ladder).
+**Proof:** `genomeWireCut.proof.test.ts` = **representative** live flip tests (ne 1:1 uz katru knob).
+**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors; AutoCal decision E/ctx thresholds Genome.
 
 ---
 
@@ -307,13 +309,16 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
 ---
 
-### Entry learner + Mind residual conf + AutoCal decisions (279–310)
+### Entry learner + Mind residual conf + AutoCal decisions (279–322)
 279. entry_learner_min_updates — EntryLearner override after ≥N (kā manage_learner_min_updates)
 280. entry_post_impulse_late_eff_min — post-impulse lateChop (ne trek_eff_min)
 281–288. mind_entry_conf_regime_hyp / pb_wait / pb_resume_floor / story_side_floor / flip_after_loss / chop_wait / mixed_wait / hard_veto
 309–310. mind_entry_conf_stack_fight / stack_chapter_wait — multi-TF stack WAIT conf
 289–300. auto_cal_* decision thresholds (micro-win, high-MFE, asymmetry, soft-dom, ease-filter, legacy-raise, soft-tight, healthy E/win×loss)
 301–308. auto_cal_* adjustment strength (target ease abs/div, peak/target raise abs, pct raise mults, giveback raise, healthy Keep step)
+
+
+311–322. auto_cal_let_winners_e_min / choppy_ctx_min / choppy_e_max / neg_e_align_max / expand_ctx_min / expand_e_min / choppy_dwell_e_max / fight_ctx_min / fight_e_max / soft_dom_loss_count_min / soft_dom_loss_vs_hardinv / demote_recover_e_min — genome-path + softDominates residual thresholds
 
 
 ## NEDRĪKST (ārpus saraksta)

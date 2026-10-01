@@ -1,8 +1,108 @@
 {
   "ok": true,
-  "mapped": 310,
+  "mapped": 322,
+  "consumerFiles": [
+    "audit.ts",
+    "autoCalibrate.ts",
+    "capitalCom.ts",
+    "clientEvents.ts",
+    "clientPanel.ts",
+    "clientPanelStatic.ts",
+    "clientSubscriptions.ts",
+    "deskCalibration.ts",
+    "deskClientScope.ts",
+    "deskCycleHealth.ts",
+    "deskLearner.ts",
+    "entryFromRegime.ts",
+    "entryLearner.ts",
+    "entryPlaybook.ts",
+    "entryWatch.ts",
+    "epicEntryLock.ts",
+    "exitManage.ts",
+    "flipFilter.ts",
+    "intentFanout.ts",
+    "manageBrain.ts",
+    "marketContext.ts",
+    "marketStory.ts",
+    "multiTfRead.ts",
+    "pipelineBridge.ts",
+    "profitLayers.ts",
+    "publicInternetFeeds.ts",
+    "pullbackEpisode.ts",
+    "regimeBands.ts",
+    "regimeExitProfile.ts",
+    "regimeRunner.ts",
+    "regimes.ts",
+    "robotDesk.ts",
+    "robotReader.ts",
+    "sameDirNextMove.ts",
+    "softExitMarketGate.ts",
+    "staleQuoteGuard.ts",
+    "strategyReplay.ts",
+    "strongEntrySignal.ts",
+    "structureEntry.ts",
+    "tenSecondOhlc.ts",
+    "tradeLedger.ts",
+    "tradeOpenPolicy.ts",
+    "tradePresentation.ts",
+    "traderMind.ts",
+    "analyze.ts",
+    "brainReload.ts",
+    "candidate.ts",
+    "cli.ts",
+    "codePatches.ts",
+    "consoleUi.ts",
+    "evaluate.ts",
+    "experience.ts",
+    "guards.ts",
+    "loop.ts"
+  ],
+  "excludedFromWire": [
+    "brainGenome.ts",
+    "hypothesize.ts"
+  ],
+  "sanitizeOwnedKeys": [
+    "gap_move_stay",
+    "gap_stay_enter",
+    "gap_enter_pullback",
+    "gap_pullback_reversal",
+    "gap_compress_expand",
+    "persist_enter_stay_min_gap"
+  ],
   "noKeys": [],
   "missingSchema": [],
+  "sanitizeOwned": [
+    {
+      "n": 191,
+      "keys": [
+        "gap_move_stay",
+        "gap_stay_enter",
+        "gap_enter_pullback"
+      ],
+      "label": "GAP_MOVE_STAY / STAY_ENTER / ENTER_PULLBACK (bp)"
+    },
+    {
+      "n": 192,
+      "keys": [
+        "gap_pullback_reversal"
+      ],
+      "label": "GAP_PULLBACK_REVERSAL"
+    },
+    {
+      "n": 193,
+      "keys": [
+        "gap_compress_expand"
+      ],
+      "label": "GAP_COMPRESS_EXPAND"
+    },
+    {
+      "n": 194,
+      "keys": [
+        "persist_enter_stay_min_gap"
+      ],
+      "label": "persist_enter_stay_min_gap"
+    }
+  ],
   "unwired": [],
   "hypoGaps": []
 }

@@ -805,6 +805,18 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const acPeakPctRaise = bounceNum(g.auto_cal_peak_pct_raise_mult, 0.01, 1.01, 1.3, dir);
   const acGivebackRaise = bounceNum(g.auto_cal_giveback_raise_abs, 0.05, 0.05, 1, dir);
   const acHealthyKeep = bounceNum(g.auto_cal_healthy_keep_step, 0.005, 0.005, 0.1, dir);
+  const acLetWinnersE = bounceNum(g.auto_cal_let_winners_e_min, 0.05, -0.5, 2.0, dir);
+  const acChoppyCtx = bounceInt(g.auto_cal_choppy_ctx_min, 1, 1, 10, dir);
+  const acChoppyE = bounceNum(g.auto_cal_choppy_e_max, 0.05, -0.5, 1.0, dir);
+  const acNegAlign = bounceNum(g.auto_cal_neg_e_align_max, 0.05, -2.0, 0.5, dir);
+  const acExpandCtx = bounceInt(g.auto_cal_expand_ctx_min, 1, 1, 10, dir);
+  const acExpandE = bounceNum(g.auto_cal_expand_e_min, 0.05, -0.5, 2.0, dir);
+  const acChoppyDwellE = bounceNum(g.auto_cal_choppy_dwell_e_max, 0.05, -1.0, 0.5, dir);
+  const acFightCtx = bounceInt(g.auto_cal_fight_ctx_min, 1, 1, 10, dir);
+  const acFightE = bounceNum(g.auto_cal_fight_e_max, 0.02, -0.5, 1.0, dir);
+  const acSoftDomLossN = bounceInt(g.auto_cal_soft_dom_loss_count_min, 1, 1, 10, dir);
+  const acSoftDomLossVs = bounceNum(g.auto_cal_soft_dom_loss_vs_hardinv, 0.05, 0.3, 1.5, dir);
+  const acDemoteRecoverE = bounceNum(g.auto_cal_demote_recover_e_min, 0.05, -0.5, 1.5, dir);
   const manageFadeSoft = bounceNum(g.manage_path_fade_soft_mult, 0.02, 0.05, 0.5, dir);
   const manageStallMfe = bounceNum(g.manage_path_stall_mfe_soft_mult, 0.05, 0.1, 0.9, dir);
   const manageStallUpl = bounceNum(g.manage_path_stall_upl_soft_mult, 0.02, 0.05, 0.5, dir);
@@ -1772,6 +1784,18 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         auto_cal_peak_pct_raise_mult: acPeakPctRaise,
         auto_cal_giveback_raise_abs: acGivebackRaise,
         auto_cal_healthy_keep_step: acHealthyKeep,
+        auto_cal_let_winners_e_min: acLetWinnersE,
+        auto_cal_choppy_ctx_min: acChoppyCtx,
+        auto_cal_choppy_e_max: acChoppyE,
+        auto_cal_neg_e_align_max: acNegAlign,
+        auto_cal_expand_ctx_min: acExpandCtx,
+        auto_cal_expand_e_min: acExpandE,
+        auto_cal_choppy_dwell_e_max: acChoppyDwellE,
+        auto_cal_fight_ctx_min: acFightCtx,
+        auto_cal_fight_e_max: acFightE,
+        auto_cal_soft_dom_loss_count_min: acSoftDomLossN,
+        auto_cal_soft_dom_loss_vs_hardinv: acSoftDomLossVs,
+        auto_cal_demote_recover_e_min: acDemoteRecoverE,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
         last_lesson: `Explore tip+manage wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
@@ -1882,6 +1906,18 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('auto_cal_peak_pct_raise_mult', acPeakPctRaise, `explore ac_peak_pct_raise ${acPeakPctRaise}`),
         genomePatch('auto_cal_giveback_raise_abs', acGivebackRaise, `explore ac_gb_raise ${acGivebackRaise}`),
         genomePatch('auto_cal_healthy_keep_step', acHealthyKeep, `explore ac_healthy_keep ${acHealthyKeep}`),
+        genomePatch('auto_cal_let_winners_e_min', acLetWinnersE, `explore ac_let_winners_e ${acLetWinnersE}`),
+        genomePatch('auto_cal_choppy_ctx_min', acChoppyCtx, `explore ac_choppy_ctx ${acChoppyCtx}`),
+        genomePatch('auto_cal_choppy_e_max', acChoppyE, `explore ac_choppy_e ${acChoppyE}`),
+        genomePatch('auto_cal_neg_e_align_max', acNegAlign, `explore ac_neg_align ${acNegAlign}`),
+        genomePatch('auto_cal_expand_ctx_min', acExpandCtx, `explore ac_expand_ctx ${acExpandCtx}`),
+        genomePatch('auto_cal_expand_e_min', acExpandE, `explore ac_expand_e ${acExpandE}`),
+        genomePatch('auto_cal_choppy_dwell_e_max', acChoppyDwellE, `explore ac_choppy_dwell_e ${acChoppyDwellE}`),
+        genomePatch('auto_cal_fight_ctx_min', acFightCtx, `explore ac_fight_ctx ${acFightCtx}`),
+        genomePatch('auto_cal_fight_e_max', acFightE, `explore ac_fight_e ${acFightE}`),
+        genomePatch('auto_cal_soft_dom_loss_count_min', acSoftDomLossN, `explore ac_soft_dom_loss_n ${acSoftDomLossN}`),
+        genomePatch('auto_cal_soft_dom_loss_vs_hardinv', acSoftDomLossVs, `explore ac_soft_dom_loss_vs ${acSoftDomLossVs}`),
+        genomePatch('auto_cal_demote_recover_e_min', acDemoteRecoverE, `explore ac_demote_recover_e ${acDemoteRecoverE}`),
         genomePatch(
           'entry_learner_override_margin',
           entryLearnerMargin,

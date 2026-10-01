@@ -1,6 +1,7 @@
 /**
- * Proof: cutting hardcode wires — flip genome → live *decision* flips.
- * Not value-only: asserts the same functions desk/entry/auto-cal use.
+ * Representative proofs: flip genome → live *decision* flips.
+ * Not value-only; not 1:1 coverage of every mapped knob (see audit note).
+ * Asserts the same functions desk/entry/auto-cal use.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { _resetBrainGenomeForTests, getBrainGenome } from '../brainSelfImprove/brainGenome.js';

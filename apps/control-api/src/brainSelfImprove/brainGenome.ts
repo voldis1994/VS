@@ -831,6 +831,31 @@ export type BrainGenome = {
   auto_cal_giveback_raise_abs: number;
   /** Auto-cal healthy: peak_retention += this */
   auto_cal_healthy_keep_step: number;
+
+  /** Auto-cal genome path: let_winners if E > this */
+  auto_cal_let_winners_e_min: number;
+  /** Auto-cal: min choppy trade count to loosen trek/story */
+  auto_cal_choppy_ctx_min: number;
+  /** Auto-cal: choppy path if E < this */
+  auto_cal_choppy_e_max: number;
+  /** Auto-cal: require aligned side if E < this */
+  auto_cal_neg_e_align_max: number;
+  /** Auto-cal: min expanding trade count for faster confirm */
+  auto_cal_expand_ctx_min: number;
+  /** Auto-cal: expanding path if E > this */
+  auto_cal_expand_e_min: number;
+  /** Auto-cal: choppy dwell stretch if E < this */
+  auto_cal_choppy_dwell_e_max: number;
+  /** Auto-cal: min feed-fight count for HTF veto */
+  auto_cal_fight_ctx_min: number;
+  /** Auto-cal: fight→HTF veto if E < this */
+  auto_cal_fight_e_max: number;
+  /** Auto-cal softDominates: min loss count */
+  auto_cal_soft_dom_loss_count_min: number;
+  /** Auto-cal softDominates: avgLoss ≥ hardinv×this */
+  auto_cal_soft_dom_loss_vs_hardinv: number;
+  /** Auto-cal: recover demoted regimes if E > this */
+  auto_cal_demote_recover_e_min: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1377,6 +1402,19 @@ const DEFAULT_GENOME: BrainGenome = {
   auto_cal_peak_pct_raise_mult: 1.05,
   auto_cal_giveback_raise_abs: 0.1,
   auto_cal_healthy_keep_step: 0.01,
+
+  auto_cal_let_winners_e_min: 0.25,
+  auto_cal_choppy_ctx_min: 2,
+  auto_cal_choppy_e_max: 0.1,
+  auto_cal_neg_e_align_max: -0.2,
+  auto_cal_expand_ctx_min: 3,
+  auto_cal_expand_e_min: 0.15,
+  auto_cal_choppy_dwell_e_max: 0,
+  auto_cal_fight_ctx_min: 2,
+  auto_cal_fight_e_max: 0.05,
+  auto_cal_soft_dom_loss_count_min: 3,
+  auto_cal_soft_dom_loss_vs_hardinv: 0.7,
+  auto_cal_demote_recover_e_min: 0.1,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -2094,6 +2132,19 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     auto_cal_peak_pct_raise_mult: round2(clamp(Number(p.auto_cal_peak_pct_raise_mult ?? d.auto_cal_peak_pct_raise_mult), 1.01, 1.3)),
     auto_cal_giveback_raise_abs: round1(clamp(Number(p.auto_cal_giveback_raise_abs ?? d.auto_cal_giveback_raise_abs), 0.05, 1)),
     auto_cal_healthy_keep_step: round2(clamp(Number(p.auto_cal_healthy_keep_step ?? d.auto_cal_healthy_keep_step), 0.005, 0.1)),
+
+    auto_cal_let_winners_e_min: round2(clamp(Number(p.auto_cal_let_winners_e_min ?? d.auto_cal_let_winners_e_min), -0.5, 2.0)),
+    auto_cal_choppy_ctx_min: clampInt(p.auto_cal_choppy_ctx_min, d.auto_cal_choppy_ctx_min, 1, 10),
+    auto_cal_choppy_e_max: round2(clamp(Number(p.auto_cal_choppy_e_max ?? d.auto_cal_choppy_e_max), -0.5, 1.0)),
+    auto_cal_neg_e_align_max: round2(clamp(Number(p.auto_cal_neg_e_align_max ?? d.auto_cal_neg_e_align_max), -2.0, 0.5)),
+    auto_cal_expand_ctx_min: clampInt(p.auto_cal_expand_ctx_min, d.auto_cal_expand_ctx_min, 1, 10),
+    auto_cal_expand_e_min: round2(clamp(Number(p.auto_cal_expand_e_min ?? d.auto_cal_expand_e_min), -0.5, 2.0)),
+    auto_cal_choppy_dwell_e_max: round2(clamp(Number(p.auto_cal_choppy_dwell_e_max ?? d.auto_cal_choppy_dwell_e_max), -1.0, 0.5)),
+    auto_cal_fight_ctx_min: clampInt(p.auto_cal_fight_ctx_min, d.auto_cal_fight_ctx_min, 1, 10),
+    auto_cal_fight_e_max: round2(clamp(Number(p.auto_cal_fight_e_max ?? d.auto_cal_fight_e_max), -0.5, 1.0)),
+    auto_cal_soft_dom_loss_count_min: clampInt(p.auto_cal_soft_dom_loss_count_min, d.auto_cal_soft_dom_loss_count_min, 1, 10),
+    auto_cal_soft_dom_loss_vs_hardinv: round2(clamp(Number(p.auto_cal_soft_dom_loss_vs_hardinv ?? d.auto_cal_soft_dom_loss_vs_hardinv), 0.3, 1.5)),
+    auto_cal_demote_recover_e_min: round2(clamp(Number(p.auto_cal_demote_recover_e_min ?? d.auto_cal_demote_recover_e_min), -0.5, 1.5)),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2662,6 +2713,18 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'auto_cal_peak_pct_raise_mult',
   'auto_cal_giveback_raise_abs',
   'auto_cal_healthy_keep_step',
+  'auto_cal_let_winners_e_min',
+  'auto_cal_choppy_ctx_min',
+  'auto_cal_choppy_e_max',
+  'auto_cal_neg_e_align_max',
+  'auto_cal_expand_ctx_min',
+  'auto_cal_expand_e_min',
+  'auto_cal_choppy_dwell_e_max',
+  'auto_cal_fight_ctx_min',
+  'auto_cal_fight_e_max',
+  'auto_cal_soft_dom_loss_count_min',
+  'auto_cal_soft_dom_loss_vs_hardinv',
+  'auto_cal_demote_recover_e_min',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

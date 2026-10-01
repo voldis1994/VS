@@ -84,7 +84,8 @@ export function autoCalibrateWindowFromTrades<T>(trades: readonly T[]): T[] {
 /** Live auto-cal bounds from BrainGenome (factory consts as fallbacks). pct via bp (min 0.1). */
 function calBounds() {
   const g = getBrainGenome();
-  const bp = (n: number, fb: number) => Math.max(0.1, n ?? fb) * 1e-4;
+  // Sanitizer owns bp min 0.1 — no consumer Math.max floor
+  const bp = (n: number, fb: number) => (n ?? fb) * 1e-4;
   return {
     maxSafetyRr: g.auto_cal_max_safety_tp_rr ?? AUTO_CAL_MAX_SAFETY_TP_RR,
     maxTargetAbs: g.auto_cal_max_target_abs ?? AUTO_CAL_MAX_TARGET_ABS,
@@ -131,6 +132,18 @@ function calBounds() {
     peakPctRaiseMult: g.auto_cal_peak_pct_raise_mult ?? 1.05,
     givebackRaiseAbs: g.auto_cal_giveback_raise_abs ?? 0.1,
     healthyKeepStep: g.auto_cal_healthy_keep_step ?? 0.01,
+    letWinnersEMin: g.auto_cal_let_winners_e_min ?? 0.25,
+    choppyCtxMin: g.auto_cal_choppy_ctx_min ?? 2,
+    choppyEMax: g.auto_cal_choppy_e_max ?? 0.1,
+    negEAlignMax: g.auto_cal_neg_e_align_max ?? -0.2,
+    expandCtxMin: g.auto_cal_expand_ctx_min ?? 3,
+    expandEMin: g.auto_cal_expand_e_min ?? 0.15,
+    choppyDwellEMax: g.auto_cal_choppy_dwell_e_max ?? 0,
+    fightCtxMin: g.auto_cal_fight_ctx_min ?? 2,
+    fightEMax: g.auto_cal_fight_e_max ?? 0.05,
+    softDomLossCountMin: g.auto_cal_soft_dom_loss_count_min ?? 3,
+    softDomLossVsHardinv: g.auto_cal_soft_dom_loss_vs_hardinv ?? 0.7,
+    demoteRecoverEMin: g.auto_cal_demote_recover_e_min ?? 0.1,
   };
 }
 
@@ -1037,7 +1050,7 @@ function proposeGenomePatch(
         )
       );
     }
-  } else if (intent === 'let_winners_run' || expectancy > 0.25) {
+  } else if (intent === 'let_winners_run' || expectancy > calB.letWinnersEMin) {
     const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
@@ -1126,7 +1139,7 @@ function proposeGenomePatch(
     const midShare = ctx.green_share > 0.35 && ctx.green_share < 0.65;
     return midShare && !ctx.expanding;
   }).length;
-  if (choppyCtx >= 2 && expectancy < 0.1) {
+  if (choppyCtx >= calB.choppyCtxMin && expectancy < calB.choppyEMax) {
     // Trek flat is bp (min 0.1) — step 0.1, never 0.00008 dust
     const trek =
       Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
@@ -1152,7 +1165,7 @@ function proposeGenomePatch(
   }
 
   // Bad expectancy + multi-TF fights in context → require aligned side
-  if (expectancy < -0.2 && !g.mtf_require_aligned_side) {
+  if (expectancy < calB.negEAlignMax && !g.mtf_require_aligned_side) {
     patch.mtf_require_aligned_side = true;
     changes.push(
       autotuneLog(
@@ -1164,7 +1177,7 @@ function proposeGenomePatch(
 
   // Expanding market pressure → slightly faster regime confirm (self-build perception)
   const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
-  if (expandingCtx >= 3 && expectancy > 0.15) {
+  if (expandingCtx >= calB.expandCtxMin && expectancy > calB.expandEMin) {
     const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
     if (confirm !== g.regime_confirm_bars) {
       patch.regime_confirm_bars = confirm;
@@ -1175,7 +1188,7 @@ function proposeGenomePatch(
         )
       );
     }
-  } else if (choppyCtx >= 2 && expectancy < 0) {
+  } else if (choppyCtx >= calB.choppyCtxMin && expectancy < calB.choppyDwellEMax) {
     const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
     if (dwell !== g.regime_min_dwell_bars) {
       patch.regime_min_dwell_bars = dwell;
@@ -1193,7 +1206,7 @@ function proposeGenomePatch(
     const a = (t.exit_ctx || t.entry_ctx)?.feed_agreement;
     return a === 'FIGHT' || a === 'fight' || a === 'DISAGREE';
   }).length;
-  if (fightCtx >= 2 && expectancy < 0.05 && !g.mtf_htf_veto) {
+  if (fightCtx >= calB.fightCtxMin && expectancy < calB.fightEMax && !g.mtf_htf_veto) {
     patch.mtf_htf_veto = true;
     changes.push(
       autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
@@ -1316,7 +1329,8 @@ export function proposeAutoCalibration(
     (wins.length === 0 || avgWin < avgLossAbs * bounds.softDomWinVsLoss) &&
     (softLosses >= softLossMin ||
       softSizedLosses >= softLossMin ||
-      (losses.length >= 3 && avgLossAbs >= current.hardinv_abs * 0.7));
+      (losses.length >= bounds.softDomLossCountMin &&
+        avgLossAbs >= current.hardinv_abs * bounds.softDomLossVsHardinv));
 
   const needPullBack =
     human.intent === 'ease_peak_target' ||
@@ -1738,7 +1752,7 @@ export function proposeAutoCalibration(
     }
   }
 
-  if ((expectancy > 0.1 || !demotedThisCycle) && demotedSession.size) {
+  if ((expectancy > bounds.demoteRecoverEMin || !demotedThisCycle) && demotedSession.size) {
     const candidate = [...demotedSession].find((r) => r !== demotedThisCycle);
     if (candidate && !enabled.has(candidate)) {
       enabled.add(candidate);
