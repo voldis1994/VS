@@ -303,6 +303,39 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(r).not.toBe('RANGE');
   });
 
+  it('Gold dump then side box → RANGE not fake TREND_UP from mid→late leg', () => {
+    // Capital ~08:00–11:19: dump 4192→4152, sit near low, then box ~4155–4172.
+    // Mid third ≈ dump low; late mean ~+12pt higher → recentLegOk would fire
+    // TREND_UP, but late window path ≫ net (real tape = chop) → RANGE.
+    const bars: TenSecBar[] = [];
+    const n = getZoneBars() + 40;
+    for (let i = 0; i < n; i++) {
+      const z = i - (n - getZoneBars());
+      let c: number;
+      if (z < 0) {
+        c = 4192;
+      } else if (z < 60) {
+        c = 4192 - (z / 59) * 40; // dump
+      } else if (z < 120) {
+        c = 4152.5 + ((z % 5) - 2) * 0.35; // sit near low (mid third)
+      } else {
+        const t = z - 120;
+        // Reclaim into higher box then hard oscillate (late path ≫ net)
+        c =
+          t < 10
+            ? 4152.5 + (t / 9) * 12
+            : 4164 + Math.sin((t - 10) / 1.8) * 8 + ((t % 5) - 2) * 0.55;
+      }
+      const o = c + ((i % 3) - 1) * 0.06;
+      bars.push(bar(o, Math.max(o, c) + 0.3, Math.min(o, c) - 0.25, c, i));
+    }
+    const tip = bars[bars.length - 1]!.close;
+    bars.push(bar(tip, tip + 0.2, tip - 0.25, tip + 0.04, n));
+    expect(classifyRegime(bars, 'UNKNOWN')).toBe('RANGE');
+    expect(classifyRegime(bars, 'TREND_UP')).toBe('RANGE');
+    expect(classifyRegime(bars, 'PULLBACK_UPTREND')).toBe('RANGE');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = padBars([
       bar(100.0, 101.0, 99.6, 100.7, 0),
