@@ -3,7 +3,7 @@
  *
  *   npx tsx scripts/factoryResetLearning.ts --yes
  *   npx tsx scripts/factoryResetLearning.ts --yes --force-open
- *   npx tsx scripts/factoryResetLearning.ts --yes --keep-db-history
+ *   npx tsx scripts/factoryResetLearning.ts --yes --wipe-db   (only if Postgres up)
  */
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -23,23 +23,28 @@ async function main(): Promise<void> {
   if (!args.has('--yes') && !args.has('-y')) {
     console.error(
       `Refusing without --yes\n` +
-        `This wipes genome, learners, auto-cal, desk Soft/Peak/Target, experience,\n` +
-        `and (by default) trade/position/audit DB history.\n` +
+        `Wipes genome, learners, auto-cal, desk Soft/Peak/Target, experience (FILES).\n` +
+        `DB history wipe is OFF by default (use --wipe-db when Postgres is up).\n` +
         `KEEPS: clients, Capital credentials, broker accounts, capital_markets.\n` +
         `Run: npx tsx scripts/factoryResetLearning.ts --yes`
     );
     process.exit(2);
   }
-  console.log('[1/2] .env loaded — starting factory reset…');
+  const wipeDb = args.has('--wipe-db') || args.has('--wipe-db-history');
+  // legacy flag: --keep-db-history meant "don't wipe"; default is already no wipe
+  console.log(
+    wipeDb
+      ? '[1/2] FILE + DB wipe…'
+      : '[1/2] FILE wipe only (no Postgres) — starting…'
+  );
   const result = await factoryResetLearning({
     confirm: FACTORY_RESET_CONFIRM,
-    wipe_db_history: !args.has('--keep-db-history'),
+    wipe_db_history: wipeDb,
     force_open_trades: args.has('--force-open'),
     wipe_brain_history: !args.has('--keep-brain-history'),
   });
   console.log('[2/2] Done.');
   console.log(JSON.stringify(result, null, 2));
-  // Force-exit — do not wait on stray timers / trash cleanup
   process.exit(0);
 }
 
