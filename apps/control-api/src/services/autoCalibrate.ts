@@ -1376,13 +1376,10 @@ export function proposeAutoCalibration(
     const easedPeak = roundAbs(next.peak_mfe_abs - bounds.peakEaseAbsStep);
     const peakFloor = roundAbs(next.hardinv_abs + 0.5);
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
+    // Soft-heavy → raise Keep (protect). Never lower Keep on ease — that caused 75→65 drift.
     if (softDominates) {
       next.peak_retention = roundRet(
         Math.min(bounds.maxPeakRetention, Math.max(retBefore, retBefore + bounds.peakEaseRetentionStep))
-      );
-    } else {
-      next.peak_retention = roundRet(
-        Math.max(bounds.minPeakRetention, next.peak_retention - bounds.peakEaseRetentionStep)
       );
     }
     next.peak_min_giveback_abs = roundAbs(
@@ -1403,10 +1400,8 @@ export function proposeAutoCalibration(
     if (next.peak_retention !== retBefore) {
       changes.push(
         autotuneLog(
-          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ${
-            softDominates ? 'protect-sooner' : 'ease'
-          }`,
-          softDominates ? 'Soft eats winners — keep more of Peak MFE' : 'ease Keep for room'
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} protect-sooner`,
+          'Soft eats winners — keep more of Peak MFE'
         )
       );
     }

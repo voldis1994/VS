@@ -445,6 +445,24 @@ describe('autoCalibrate', () => {
     );
   });
 
+  it('pullback/ease never lowers Peak Keep (stops 75→65 drift)', () => {
+    const base = { ...defaultDeskCalibration(), peak_retention: 0.75 };
+    const r = proposeAutoCalibration(
+      base,
+      [
+        trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection', mfe: 2.5 }),
+        trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: 0.2, exit_reason: 'PeakProtection', mfe: 2.0 }),
+        trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
+        trade({ pnl_pts: -0.9 }),
+      ],
+      new Set(),
+      { raise_streak: 3 }
+    );
+    // Soft-heavy may raise Keep; ease must never cut it (was 75→71→67→65)
+    expect(r.next.peak_retention).toBeGreaterThanOrEqual(base.peak_retention);
+  });
+
   it('isolates auto-cal per client — A closes do not count for B', () => {
     beginAutoCalibrateSession('A', 1);
     beginAutoCalibrateSession('B', 2);

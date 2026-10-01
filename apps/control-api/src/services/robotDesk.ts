@@ -237,6 +237,8 @@ type Internal = RobotSession & {
   last_second_fetch_ms: number;
   /** Throttle Capital SECOND → 10s OHLC enrich (anti flat-bar) */
   last_second_ohlc_ms: number;
+  /** Throttle "10s enrich FAIL" LIVE LOG spam */
+  last_enrich_fail_tick_ms: number;
   last_closed_bar_key: string;
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
@@ -323,6 +325,8 @@ type Internal = RobotSession & {
 const ACTIVE_CADENCE_MS = 1_250;
 /** How often to pull Capital SECOND candles to rebuild flat 10s bars */
 const SECOND_OHLC_ENRICH_MS = 8_000;
+/** LIVE LOG: at most one "10s enrich FAIL" per unit in this window (was every cycle spam). */
+const ENRICH_FAIL_TICK_EVERY_MS = 60_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 /**
@@ -504,6 +508,7 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_second_ohlc_ms: _secOhlc,
+    last_enrich_fail_tick_ms: _enrichFail,
     last_closed_bar_key: _bar,
     closedBars: _bars,
     last_multi_feed_ms: _mf,
@@ -3423,32 +3428,44 @@ async function robotCycleLocked(s: Internal) {
                 detail: `10s MINUTE fallback enrich · SECOND failed (${secs.detail || 'no candles'}) · O=${lastSyn.open.toFixed(2)} H=${lastSyn.high.toFixed(2)} L=${lastSyn.low.toFixed(2)} C=${lastSyn.close.toFixed(2)} · body=${(bodyPct(lastSyn) * 100).toFixed(3)}%`,
               });
             } else {
+              const nowFail = Date.now();
+              if (nowFail - s.last_enrich_fail_tick_ms >= ENRICH_FAIL_TICK_EVERY_MS) {
+                s.last_enrich_fail_tick_ms = nowFail;
+                pushTick(s, {
+                  phase: 'WAIT',
+                  bid: quote.bid,
+                  ask: quote.ask,
+                  mid: quote.mid,
+                  detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
+                });
+              }
+            }
+          } else {
+            const nowFail = Date.now();
+            if (nowFail - s.last_enrich_fail_tick_ms >= ENRICH_FAIL_TICK_EVERY_MS) {
+              s.last_enrich_fail_tick_ms = nowFail;
               pushTick(s, {
                 phase: 'WAIT',
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
+                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
               });
             }
-          } else {
-            pushTick(s, {
-              phase: 'WAIT',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
-            });
           }
         }
       } catch (e) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `10s enrich ERROR · ${e instanceof Error ? e.message : String(e)}`,
-        });
+        const nowFail = Date.now();
+        if (nowFail - s.last_enrich_fail_tick_ms >= ENRICH_FAIL_TICK_EVERY_MS) {
+          s.last_enrich_fail_tick_ms = nowFail;
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `10s enrich ERROR · ${e instanceof Error ? e.message : String(e)}`,
+          });
+        }
       }
     }
 
@@ -4236,6 +4253,7 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_second_ohlc_ms: 0,
+    last_enrich_fail_tick_ms: 0,
     last_closed_bar_key: '',
     closedBars: [],
     last_multi_feed_ms: 0,
