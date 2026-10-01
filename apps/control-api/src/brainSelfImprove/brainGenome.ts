@@ -574,6 +574,28 @@ export type BrainGenome = {
   transition_detect_enabled: boolean;
   /** Unify playbook promote vs live regime */
   playbook_promote_vs_live_unify: boolean;
+  /**
+   * HTF bias promote only when 30+15+5 all present (null = not loaded).
+   * Prevents one partial TF from inventing TREND into side-move.
+   */
+  playbook_require_full_htf_stack: boolean;
+  /**
+   * Live RANGE/COMPRESSION/TRANSITION: do not HTF-promote to TREND.
+   * Side / RANGE_FADE wins until chop clears (brains may flip).
+   */
+  playbook_block_htf_promote_on_live_chop: boolean;
+  /**
+   * Live chop: do not story RALLY/SELLOFF promote to TREND.
+   * BREAK_UP/DOWN story still owns BREAKOUT lane (earlier).
+   */
+  playbook_block_story_promote_on_live_chop: boolean;
+  /**
+   * Sticky live TREND/PULLBACK + proven chop story + flat/incomplete HTF
+   * → RANGE_FADE (side after dump V), not eternal TREND thesis.
+   */
+  playbook_chop_overrides_sticky_trend: boolean;
+  /** REVERSAL_CANDIDATE also from BREAKOUT_UP/DOWN prior (V after pierce dump) */
+  reversal_from_breakout_prior: boolean;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -993,6 +1015,11 @@ const DEFAULT_GENOME: BrainGenome = {
   sticky_prior_enabled: true,
   transition_detect_enabled: false,
   playbook_promote_vs_live_unify: true,
+  playbook_require_full_htf_stack: true,
+  playbook_block_htf_promote_on_live_chop: true,
+  playbook_block_story_promote_on_live_chop: true,
+  playbook_chop_overrides_sticky_trend: true,
+  reversal_from_breakout_prior: true,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1538,6 +1565,12 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     sticky_prior_enabled: p.sticky_prior_enabled !== false,
     transition_detect_enabled: p.transition_detect_enabled === true,
     playbook_promote_vs_live_unify: p.playbook_promote_vs_live_unify !== false,
+    playbook_require_full_htf_stack: p.playbook_require_full_htf_stack !== false,
+    playbook_block_htf_promote_on_live_chop: p.playbook_block_htf_promote_on_live_chop !== false,
+    playbook_block_story_promote_on_live_chop:
+      p.playbook_block_story_promote_on_live_chop !== false,
+    playbook_chop_overrides_sticky_trend: p.playbook_chop_overrides_sticky_trend !== false,
+    reversal_from_breakout_prior: p.reversal_from_breakout_prior !== false,
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -1988,6 +2021,11 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'sticky_prior_enabled',
   'transition_detect_enabled',
   'playbook_promote_vs_live_unify',
+  'playbook_require_full_htf_stack',
+  'playbook_block_htf_promote_on_live_chop',
+  'playbook_block_story_promote_on_live_chop',
+  'playbook_chop_overrides_sticky_trend',
+  'reversal_from_breakout_prior',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

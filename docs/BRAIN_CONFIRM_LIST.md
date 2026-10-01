@@ -253,6 +253,13 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 193. GAP_COMPRESS_EXPAND
 194. persist_enter_stay_min_gap
 
+### Playbook priority / SIDE / REVERSAL (smadzenes evolvē)
+195. playbook_require_full_htf_stack — HTF promote tikai ar 30+15+5
+196. playbook_block_htf_promote_on_live_chop — SIDE pirms HTF uz live chop
+197. playbook_block_story_promote_on_live_chop — SIDE pirms stāsta TREND uz chop
+198. playbook_chop_overrides_sticky_trend — sticky TREND→SIDE uz proven chop
+199. reversal_from_breakout_prior — REVERSAL arī no BREAKOUT prior (V)
+
 ---
 
 ## NEDRĪKST (ārpus saraksta)

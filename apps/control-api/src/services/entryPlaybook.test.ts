@@ -18,16 +18,25 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     expect(setupAllowedOnLane(p.lane, 'BREAKOUT')).toBe(true);
   });
 
-  it('TREND lane owns Capital HTF DOWN — RANGE fade blocked', () => {
+  it('live chop + HTF DOWN stays SIDE — HTF does not steal RANGE_FADE', () => {
     const p = pickEntryPlaybook({
       liveRegime: 'RANGE',
       story: { allow: 'NONE', chapter: 'RANGE_CHOP' },
       htf: { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN' },
     });
-    expect(p.lane).toBe('TREND_PULLBACK');
-    expect(p.regime).toBe('TREND_DOWN');
-    expect(setupAllowedOnLane(p.lane, 'FADE')).toBe(false);
-    expect(setupAllowedOnLane(p.lane, 'PULLBACK')).toBe(true);
+    expect(p.lane).toBe('RANGE_FADE');
+    expect(p.regime).toBe('RANGE');
+    expect(setupAllowedOnLane(p.lane, 'FADE')).toBe(true);
+  });
+
+  it('partial HTF (only 30m) does not invent TREND on live chop', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'RANGE',
+      story: { allow: 'NONE', chapter: 'RANGE_CHOP' },
+      htf: { tf30: 'DOWN', tf15: null, tf5: null, m1: 'UP' },
+    });
+    expect(p.lane).toBe('RANGE_FADE');
+    expect(p.regime).toBe('RANGE');
   });
 
   it('RANGE_FADE only when HTF flat/mixed and chop story', () => {
@@ -41,7 +50,7 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     expect(setupAllowedOnLane(p.lane, 'FADE')).toBe(true);
   });
 
-  it('live TREND/BREAKOUT never demoted by chop story', () => {
+  it('live TREND keeps with clear HTF; demotes to SIDE on chop+flat HTF', () => {
     expect(
       pickEntryPlaybook({
         liveRegime: 'TREND_UP',
@@ -49,6 +58,13 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
         htf: { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN' },
       }).regime
     ).toBe('TREND_UP');
+    expect(
+      pickEntryPlaybook({
+        liveRegime: 'TREND_DOWN',
+        story: { allow: 'NONE', chapter: 'RANGE_CHOP' },
+        htf: { tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT' },
+      }).lane
+    ).toBe('RANGE_FADE');
     expect(
       pickEntryPlaybook({
         liveRegime: 'BREAKOUT_DOWN',

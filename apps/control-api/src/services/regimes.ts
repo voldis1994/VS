@@ -341,12 +341,18 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
       fromChop && last.close < lLo && (lLo - last.close) / lW >= localFrac;
   }
 
+  // V-flip: TREND prior, or BREAKOUT prior when genome allows (dump pierce → violent reclaim)
+  const revFromBreak = genome.reversal_from_breakout_prior !== false;
+  const rallyPrior =
+    previous === 'TREND_UP' || (revFromBreak && previous === 'BREAKOUT_UP');
+  const dumpPrior =
+    previous === 'TREND_DOWN' || (revFromBreak && previous === 'BREAKOUT_DOWN');
   const reversal =
-    (previous === 'TREND_UP' &&
+    (rallyPrior &&
       lastVel < -REVERSAL &&
       lastRange > avgRange &&
       !breakoutDown) ||
-    (previous === 'TREND_DOWN' &&
+    (dumpPrior &&
       lastVel > REVERSAL &&
       lastRange > avgRange &&
       !breakoutUp);

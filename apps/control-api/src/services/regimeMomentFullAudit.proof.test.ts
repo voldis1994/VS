@@ -215,15 +215,15 @@ describe('PROOF AUDIT: regime at the right market moment — full stack', () => 
       expect(setupAllowedOnLane(pb.lane, 'BREAKOUT')).toBe(true);
     });
 
-    it('Capital HTF DOWN promotes false RANGE → TREND_PULLBACK (not fade)', () => {
+    it('Capital HTF DOWN on live chop stays RANGE_FADE (SIDE before HTF)', () => {
       const pb = pickEntryPlaybook({
         liveRegime: 'RANGE',
         story: { allow: 'NONE', chapter: 'RANGE_CHOP' },
         htf: HTF_DOWN,
       });
-      expect(pb.lane).toBe('TREND_PULLBACK');
-      expect(pb.regime).toBe('TREND_DOWN');
-      expect(setupAllowedOnLane(pb.lane, 'FADE')).toBe(false);
+      expect(pb.lane).toBe('RANGE_FADE');
+      expect(pb.regime).toBe('RANGE');
+      expect(setupAllowedOnLane(pb.lane, 'FADE')).toBe(true);
       expect(capitalHtfBias(HTF_DOWN)).toBe('DOWN');
     });
 
@@ -261,7 +261,7 @@ describe('PROOF AUDIT: regime at the right market moment — full stack', () => 
     it('effectiveEntryRegime delegates to playbook (same contracts)', () => {
       expect(
         effectiveEntryRegime('RANGE', { allow: 'NONE', chapter: 'RANGE_CHOP' }, HTF_UP)
-      ).toBe('TREND_UP');
+      ).toBe('RANGE');
       expect(
         effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'EXHAUST_HI' }, HTF_FLAT)
       ).toBe('RANGE');
@@ -393,14 +393,14 @@ describe('PROOF AUDIT: regime at the right market moment — full stack', () => 
         fadeOk: false,
       },
       {
-        name: 'HTF UP + chop → TREND_UP',
+        name: 'HTF UP + chop → RANGE_FADE (SIDE before HTF)',
         live: 'RANGE',
         chapter: 'RANGE_CHOP',
         allow: 'NONE',
         htf: HTF_UP,
-        lane: 'TREND_PULLBACK',
-        regime: 'TREND_UP',
-        fadeOk: false,
+        lane: 'RANGE_FADE',
+        regime: 'RANGE',
+        fadeOk: true,
       },
       {
         name: 'BOUNCE_IN_SELL → PULLBACK_DOWNTREND',
