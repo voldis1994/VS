@@ -2,16 +2,10 @@
 import { getDeskCalibration } from './deskCalibration.js';
 import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import {
-  genomeTimedecayMinHoldMs,
   regimeExitProfile,
   structureInvalidationReason,
   type ExitZoneSnap,
 } from './regimeExitProfile.js';
-import {
-  activeSoftAbs,
-  readSoftTargetLayers,
-  targetLayerHit,
-} from './profitLayers.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -70,27 +64,9 @@ export const PEAK_MFE_RETENTION = 0.72;
 export const MAX_MFE_GIVEBACK = 0.35;
 
 /**
- * Single Peak Keep for Peak trail + MindBank Soft+ belt.
- * BrainGenome.peak_keep is SoT (peak_retention aliases it). No max(desk, genome).
- */
-export function effectivePeakKeep(
-  deskRetention: number,
-  genomeKeep: number
-): number {
-  const g = getBrainGenome();
-  const fallback = g.peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
-  if (genomeKeep > 0) return genomeKeep;
-  if (g.peak_keep > 0) return g.peak_keep;
-  if (deskRetention > 0) return deskRetention;
-  return fallback;
-}
-
-/**
- * Gold-scale factory defaults (reference).
- * Live Soft/Peak/Target follow desk calibration — auto-cal may move below these
- * floors when Soft-heavy losses or ease intent require it. Abs floor only
- * applies when it does not fight the Soft CAP.
- * Live paths read BrainGenome; these consts remain factory fallbacks.
+ * Gold-scale floors / caps.
+ * Soft HardInv CAP (~2.2) must stay WELL BELOW Target / Peak MFE floors —
+ * otherwise 80% tiny Peak wins + few large HardInv losses = negative expectancy.
  */
 export const HARDINV_ABS_FLOOR = 1.5;
 /** Cap Soft HardInv — `hardinv_abs` calibration knob is a CAP, not a floor. */
@@ -101,40 +77,6 @@ export const PEAK_MIN_GIVEBACK_ABS = 0.85;
 export const TARGET_ABS_FLOOR = 4.0;
 /** Broker SAFETY TP must be ≥ this × SAFETY SL distance — never TP < SL */
 export const SAFETY_TP_MIN_RR = 1.5;
-
-function genomeHardinvAbsFloor(): number {
-  const n = getBrainGenome().hardinv_abs_floor;
-  return n > 0 ? n : HARDINV_ABS_FLOOR;
-}
-
-function genomePeakMfeAbsFloor(): number {
-  const n = getBrainGenome().peak_mfe_abs_floor;
-  return n > 0 ? n : PEAK_MFE_ABS_FLOOR;
-}
-
-function genomePeakMinGivebackAbs(): number {
-  const n = getBrainGenome().peak_min_giveback_abs;
-  return n > 0 ? n : PEAK_MIN_GIVEBACK_ABS;
-}
-
-function genomeTargetAbsFloor(): number {
-  const n = getBrainGenome().target_abs_floor;
-  return n > 0 ? n : TARGET_ABS_FLOOR;
-}
-
-function genomeSafetyTpMinRr(): number {
-  const n = getBrainGenome().safety_tp_min_rr;
-  return n > 0 ? n : SAFETY_TP_MIN_RR;
-}
-
-function genomeSafetyTpVsMinStopMult(): number {
-  const n = getBrainGenome().safety_tp_vs_min_stop_mult;
-  return n > 0 ? n : 1.05;
-}
-
-function genomeSafetySlCushionFrac(): number {
-  return Math.max(0, getBrainGenome().safety_sl_cushion_bp) * 1e-4 || 0.002;
-}
 
 /**
  * Soft Target distance in price pts (manage Target gate).
@@ -147,11 +89,12 @@ export function targetTakeProfitDistance(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const profile = regimeExitProfile(regime);
-  const targetFloor = genomeTargetAbsFloor();
-  const targetAbs = cal.target_abs > 0 ? cal.target_abs : targetFloor;
   return (
-    Math.max(absEntry * cal.target_pct, scaleDeskAbs(targetAbs, absEntry)) *
-    profile.target_mult
+    Math.max(
+      absEntry * cal.target_pct,
+      scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry),
+      scaleDeskAbs(TARGET_ABS_FLOOR, absEntry)
+    ) * profile.target_mult
   );
 }
 
@@ -175,10 +118,10 @@ export function safetyTakeProfitDistance(
     opts.minStopDistance > 0
       ? opts.minStopDistance
       : 0;
-  if (min > 0) dist = Math.max(dist, min * genomeSafetyTpVsMinStopMult());
+  if (min > 0) dist = Math.max(dist, min * 1.05);
 
   const softSl = hardInvStopDistance(entry, regime);
-  const cushion = Math.max(Math.abs(entry), 1e-9) * genomeSafetySlCushionFrac();
+  const cushion = Math.max(Math.abs(entry), 1e-9) * 0.002; // same % as SAFETY SL pillow
   const slRef =
     opts?.stopDistancePrice != null &&
     Number.isFinite(opts.stopDistancePrice) &&
@@ -186,8 +129,7 @@ export function safetyTakeProfitDistance(
       ? opts.stopDistancePrice
       : Math.max(softSl, cushion);
   const cal = getDeskCalibration();
-  const minRr = genomeSafetyTpMinRr();
-  const rr = Math.max(minRr, Number(cal.safety_tp_rr) || minRr);
+  const rr = Math.max(SAFETY_TP_MIN_RR, Number(cal.safety_tp_rr) || SAFETY_TP_MIN_RR);
   dist = Math.max(dist, slRef * rr, softSl * rr);
   return dist;
 }
@@ -235,15 +177,13 @@ export function safetyTakeProfitDistancePts(
   const min = minPts != null && minPts > 0 ? minPts : 0;
   let pts = ps != null ? distPrice / ps : distPrice;
   if (stopDistancePts != null && stopDistancePts > 0) {
-    const minRr = genomeSafetyTpMinRr();
     const rr = Math.max(
-      minRr,
-      Number(getDeskCalibration().safety_tp_rr) || minRr
+      SAFETY_TP_MIN_RR,
+      Number(getDeskCalibration().safety_tp_rr) || SAFETY_TP_MIN_RR
     );
     pts = Math.max(pts, stopDistancePts * rr);
   }
-  const pillow = genomeSafetyTpVsMinStopMult();
-  pts = Math.max(pts, min * pillow, min + 1e-9);
+  pts = Math.max(pts, min * 1.05, min + 1e-9);
   return pts >= 10 ? Math.ceil(pts) : Math.round(pts * 100) / 100;
 }
 
@@ -251,13 +191,11 @@ export function safetyTakeProfitDistancePts(
  * First seconds after fill — spread settle + first pushback wick.
  * Broker SAFETY SL still protects; Soft HardInv waits.
  * Kept short so losers are not allowed to run for half a minute.
- * Live: BrainGenome.hardinv_grace_ms (factory matches this const).
  */
 export const HARDINV_GRACE_MS = 12_000;
 /**
  * Soft HardInv must stay breached this long (anti single-wick “magic minus”).
  * Short confirm — still debounce, but do not gift 37s of free adverse travel.
- * Live: BrainGenome.hardinv_confirm_ms.
  */
 export const HARDINV_CONFIRM_MS = 5_000;
 /** TimeDecay default hold (overridden per regime profile) */
@@ -265,34 +203,8 @@ export const TIMEDECAY_MIN_HOLD_MS = 12 * 60_000;
 /**
  * TimeDecay must lock REAL mid edge — at least ~half Soft HardInv,
  * never +0.75 winners against −4 Soft losses.
- * Live: BrainGenome.timedecay_min_fav_abs.
  */
 export const TIMEDECAY_MIN_FAV_ABS = 2.0;
-
-function genomeHardinvGraceMs(): number {
-  const n = getBrainGenome().hardinv_grace_ms;
-  return Number.isFinite(n) && n >= 0 ? n : HARDINV_GRACE_MS;
-}
-
-function genomeHardinvConfirmMs(): number {
-  const n = getBrainGenome().hardinv_confirm_ms;
-  return Number.isFinite(n) && n >= 0 ? n : HARDINV_CONFIRM_MS;
-}
-
-function genomeTimedecayMinFavAbs(): number {
-  const n = getBrainGenome().timedecay_min_fav_abs;
-  return n > 0 ? n : TIMEDECAY_MIN_FAV_ABS;
-}
-
-function genomeMaxMfeGiveback(): number {
-  const n = getBrainGenome().max_mfe_giveback;
-  return n > 0 ? n : MAX_MFE_GIVEBACK;
-}
-
-function genomeHardinvAbsCap(): number {
-  const n = getBrainGenome().hardinv_abs_cap;
-  return n > 0 ? n : HARDINV_ABS_CAP;
-}
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -382,16 +294,16 @@ function peakShouldCut(
 }
 
 /**
- * Peak trail floor — genome-owned Soft× mults (not hardcoded Soft ceiling).
- * Factory peak_arm_soft_mult=1.35 / peak_trail_soft_cap_mult=1.75; Brain may evolve.
+ * Peak trail floor once Soft-sized MFE exists.
+ *
+ * Gold (~4300) scales peak_mfe_abs 4.45 → ~9.5 via scaleDeskAbs — then a real
+ * 8pt winner never Peak-cuts while UI shows "Peak floor 4.45 / Keep 75%".
+ * Soft-sized MFE is enough to trail retention; do not wait for a higher scaled floor.
  */
 export function peakTrailMfeFloor(mfeFloor: number, softSl: number, minBank: number): number {
   const softSized = Math.max(softSl, minBank);
-  const g = getBrainGenome();
-  const lo = softSized * Math.max(0.5, g.peak_arm_soft_mult);
-  const hi = softSized * Math.max(lo / softSized, g.peak_trail_soft_cap_mult);
-  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return lo;
-  return Math.min(hi, Math.max(lo, mfeFloor));
+  if (!(mfeFloor > 0) || !Number.isFinite(mfeFloor)) return softSized;
+  return Math.min(mfeFloor, softSized);
 }
 
 /**
@@ -430,91 +342,40 @@ export function peakMfeFromCandles(
  * Candles/regimes look the same on **every** market — only size changes.
  * Scale abs pts by entry/REF so all epics share the same % R:R.
  * One desk calibration — not per-market.
- * Live: BrainGenome.desk_ref_mid.
  */
 export const DESK_REF_MID = 2000;
-
-export function deskRefMid(): number {
-  const n = getBrainGenome().desk_ref_mid;
-  return n > 0 ? n : DESK_REF_MID;
-}
 
 /** Map a REF-tuned absolute (pts at REF) onto this instrument's price. */
 export function scaleDeskAbs(refAbsPts: number, entry: number): number {
   const mid = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(refAbsPts * (mid / deskRefMid()), mid * 1e-9);
+  return Math.max(refAbsPts * (mid / DESK_REF_MID), mid * 1e-9);
 }
 
 /**
  * Soft HardInv distance in price pts.
  * Base CAP/floor at REF, then × regime exit profile (entry thesis).
- * Without MFE → Soft L3 CAP (broker safety / sizing). Live manage uses
- * {@link layeredHardInvDistance} / {@link activeSoftStopDistance} so L1/L2
- * unlock with proven MFE — Peak/MindBank Soft× must NOT use L3 blindly.
  */
 export function hardInvStopDistance(
   entry: number,
   regime?: string | null
 ): number {
-  return layeredHardInvDistance(entry, /* mfe */ Number.POSITIVE_INFINITY, regime).dist;
-}
-
-/**
- * Active Soft HardInv for live manage — Soft× Peak / MindBank Soft+ / story-fight.
- * Soft reference tracks the Soft layer Soft HardInv would cut at NOW (by MFE),
- * not day-one Soft L3 CAP. Soft×1 of L3 while Soft cuts at L1 = Soft eats Soft+.
- */
-export function activeSoftStopDistance(
-  entry: number,
-  mfe: number,
-  regime?: string | null
-): number {
-  return layeredHardInvDistance(entry, Math.max(0, Number.isFinite(mfe) ? mfe : 0), regime)
-    .dist;
-}
-
-/**
- * Soft HardInv with 3-layer unlock — no MFE keeps L1 tight; MFE earns L2/L3.
- */
-export function layeredHardInvDistance(
-  entry: number,
-  mfe: number,
-  regime?: string | null
-): { dist: number; layer: 1 | 2 | 3; abs: number } {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
-  const g = getBrainGenome();
-  const { abs, layer } = activeSoftAbs(
-    Number.isFinite(mfe) ? Math.max(0, mfe) : Number.POSITIVE_INFINITY,
-    cal
-  );
   const pct = absEntry * cal.hardinv_pct;
-  const floorAbs = Math.min(genomeHardinvAbsFloor(), abs);
-  const floor = scaleDeskAbs(floorAbs, absEntry);
-  const capAbs = Math.min(abs, genomeHardinvAbsCap());
-  const cap = scaleDeskAbs(capAbs, absEntry);
-  // Rich instruments: pct may exceed L1 abs — still capped by active layer
-  let sl = Math.min(Math.max(pct * (layer / 3), floor), cap);
+  const floor = scaleDeskAbs(HARDINV_ABS_FLOOR, absEntry);
+  const capGold = cal.hardinv_abs > 0 ? cal.hardinv_abs : HARDINV_ABS_CAP;
+  const cap = scaleDeskAbs(capGold, absEntry);
+  let sl = Math.min(Math.max(pct, floor), cap);
   const profile = regimeExitProfile(regime);
   sl *= profile.hardinv_mult;
-  const postCap = Math.max(1, g.layered_soft_post_mult_cap || 1.3);
-  sl = Math.min(sl, cap * postCap);
-  return { dist: sl, layer, abs };
+  // Never explode past ~1.3× scaled cap after regime widen (RANGE 1.15 etc.)
+  sl = Math.min(sl, cap * 1.3);
+  return sl;
 }
 
 /** Structure invalidation grace / confirm (faster than Soft Soft — thesis broken). */
 export const STRUCTURE_GRACE_MS = 8_000;
 export const STRUCTURE_CONFIRM_MS = 3_000;
-
-function genomeStructureGraceMs(): number {
-  const n = getBrainGenome().structure_grace_ms;
-  return Number.isFinite(n) && n >= 0 ? n : STRUCTURE_GRACE_MS;
-}
-
-function genomeStructureConfirmMs(): number {
-  const n = getBrainGenome().structure_confirm_ms;
-  return Number.isFinite(n) && n >= 0 ? n : STRUCTURE_CONFIRM_MS;
-}
 
 /**
  * Soft HardInv is LOSES-ONLY. After a Soft-sized MFE we do NOT move the line
@@ -540,11 +401,9 @@ export function beLockMinExec(sl: number): number {
 /**
  * Soft profit exits (Peak / Target / TimeDecay) must bank at least Soft HardInv
  * — otherwise Funds shows +£0.01…+£0.03 vs −£0.06 Soft (inverted R:R).
- * Live: BrainGenome.min_profit_bank_soft_mult (factory 1.0).
  */
 export function minProfitBank(sl: number): number {
-  const mult = Math.max(0.5, getBrainGenome().min_profit_bank_soft_mult || 1);
-  return Math.max(sl * mult, sl * 1e-9);
+  return Math.max(sl, sl * 1e-9);
 }
 
 /**
@@ -605,11 +464,13 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const cal = getDeskCalibration();
   const genome = getBrainGenome();
-  // Single Peak Keep source: desk + genome (effectivePeakKeep) — MindBank must match
-  let peakRet = effectivePeakKeep(cal.peak_retention, genome.peak_keep);
-  // Genome max giveback floor — never allow more than max_mfe_giveback fraction lost
-  peakRet = Math.max(peakRet, 1 - genomeMaxMfeGiveback());
-  // Regime profile may only tighten Keep % (cut sooner) — never undercut desk/genome
+  let peakRet =
+    cal.peak_retention > 0 ? cal.peak_retention : PEAK_MFE_RETENTION;
+  // Autonomous brain genome may tighten Keep % (cut sooner) — never loosen below desk
+  if (genome.peak_keep > 0) {
+    peakRet = Math.max(peakRet, genome.peak_keep);
+  }
+  // Regime profile may only tighten Keep % (cut sooner) — never undercut desk knob
   if (profile.peak_retention != null && profile.peak_retention > 0) {
     peakRet = Math.max(peakRet, profile.peak_retention);
   }
@@ -622,9 +483,7 @@ export function decideBestOutcomeExit(
   }
   let minGiveback =
     scaleDeskAbs(
-      cal.peak_min_giveback_abs > 0
-        ? cal.peak_min_giveback_abs
-        : genomePeakMinGivebackAbs(),
+      cal.peak_min_giveback_abs > 0 ? cal.peak_min_giveback_abs : PEAK_MIN_GIVEBACK_ABS,
       absEntry
     ) * profile.peak_giveback_mult;
   if (
@@ -634,25 +493,16 @@ export function decideBestOutcomeExit(
   ) {
     minGiveback = Math.min(minGiveback, overrides.min_giveback);
   }
-  const mfe = Math.max(s.mfe, Math.max(0, fav));
-  // Soft L1/L2/L3 — widen HardInv only after proven MFE (not day-one fat Soft)
-  const softLayered = layeredHardInvDistance(entry, mfe, thesisRegime);
-  const sl = softLayered.dist;
-  const layers = readSoftTargetLayers(cal);
-  const profileMult = profile.target_mult;
-  const targetDists = layers.target.map((abs) => {
-    const floor = scaleDeskAbs(abs, absEntry);
-    const pctShare = abs / Math.max(layers.target[2]!, 1e-9);
-    return Math.max(floor, absEntry * cal.target_pct * pctShare) * profileMult;
-  }) as [number, number, number];
-  const tp = targetDists[2]!;
-  /** Peak/Target/TimeDecay — never bank below Soft loss size (active layer) */
+  const tp = targetTakeProfitDistance(entry, thesisRegime);
+  const sl = hardInvStopDistance(entry, thesisRegime);
+  /** Peak/Target/TimeDecay — never bank below Soft loss size */
   const minBank = minProfitBank(sl);
-  const peakAbs =
-    cal.peak_mfe_abs > 0 ? cal.peak_mfe_abs : genomePeakMfeAbsFloor();
   let mfeFloor =
-    Math.max(absEntry * cal.peak_mfe_pct, scaleDeskAbs(peakAbs, absEntry)) *
-    profile.peak_mfe_mult;
+    Math.max(
+      absEntry * cal.peak_mfe_pct,
+      scaleDeskAbs(cal.peak_mfe_abs || PEAK_MFE_ABS_FLOOR, absEntry),
+      scaleDeskAbs(PEAK_MFE_ABS_FLOOR, absEntry)
+    ) * profile.peak_mfe_mult;
   if (
     overrides?.peak_mfe_floor != null &&
     Number.isFinite(overrides.peak_mfe_floor) &&
@@ -660,6 +510,7 @@ export function decideBestOutcomeExit(
   ) {
     mfeFloor = Math.min(mfeFloor, Math.max(overrides.peak_mfe_floor, sl));
   }
+  const mfe = Math.max(s.mfe, Math.max(0, fav));
   const retention =
     s.peak_retention != null
       ? s.peak_retention
@@ -667,8 +518,12 @@ export function decideBestOutcomeExit(
         ? Math.max(0, fav / mfe)
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
-  // Genome peak_arm_soft_mult / peak_trail_soft_cap_mult own Soft× trail floor
-  const trailFloor = Math.max(minBank * 0.5, peakTrailMfeFloor(mfeFloor, sl, minBank));
+  // Soft-sized MFE → trail at Keep %; do not wait for inflated Gold-scaled peak_mfe_abs.
+  // Genome peak_arm_soft_mult < 1 arms Peak earlier; > 1 waits for more MFE.
+  const trailFloor = Math.max(
+    minBank * 0.5,
+    peakTrailMfeFloor(mfeFloor, sl, minBank) * genome.peak_arm_soft_mult
+  );
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
@@ -688,13 +543,13 @@ export function decideBestOutcomeExit(
       thesisRegime,
       s.entry_zone
     );
-    if (structReason && heldMs >= genomeStructureGraceMs()) {
+    if (structReason && heldMs >= STRUCTURE_GRACE_MS) {
       const softSized = execFav >= minBank || execFav <= -minBank;
       if (softSized) {
         structureBreaching = true;
         const since = s.structure_breach_since_ms;
         if (since != null && Number.isFinite(since) && since > 0) {
-          if (nowMs - since >= genomeStructureConfirmMs()) {
+          if (nowMs - since >= STRUCTURE_CONFIRM_MS) {
             return {
               exit: true,
               reason: `${structReason} · held ${Math.round(heldMs / 1000)}s · family=${profile.family} · exec ${execFav.toFixed(5)}`,
@@ -707,15 +562,15 @@ export function decideBestOutcomeExit(
 
     // 2) Soft HardInv — true Soft-sized losers only (never flat BE after green MFE)
     const lossLine = softLossLine(sl, mfe);
-    if (heldMs >= genomeHardinvGraceMs() && fav <= lossLine) {
+    if (heldMs >= HARDINV_GRACE_MS && fav <= lossLine) {
       breaching = true;
       const since = s.hardinv_breach_since_ms;
       if (since != null && Number.isFinite(since) && since > 0) {
         const breachedFor = nowMs - since;
-        if (breachedFor >= genomeHardinvConfirmMs()) {
+        if (breachedFor >= HARDINV_CONFIRM_MS) {
           return {
             exit: true,
-            reason: `HardInvalidation · Soft L${softLayered.layer} · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)}) · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
+            reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ ${lossLine.toFixed(5)} (SL ${sl.toFixed(5)}) · exec ${execFav.toFixed(5)} · ${profile.family} · held ${Math.round(heldMs / 1000)}s · confirm ${Math.round(breachedFor / 1000)}s`,
             hardinv_breaching: true,
           };
         }
@@ -764,36 +619,18 @@ export function decideBestOutcomeExit(
     if (fav >= tp && execFav >= minBank) {
       return {
         exit: true,
-        reason: `Target L3 / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
-      };
-    }
-    const layerHit = targetLayerHit({
-      fav,
-      mfe,
-      execFav,
-      minBank,
-      targetDists,
-    });
-    if (layerHit && layerHit.layer < 3) {
-      return {
-        exit: true,
-        reason: `Target L${layerHit.layer} · ${profile.family} · UPL ${fav.toFixed(5)} ≥ T${layerHit.layer} ${layerHit.dist.toFixed(5)} · MFE ${mfe.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft L${softLayered.layer} ${sl.toFixed(5)}`,
+        reason: `Target / best outcome · ${profile.family} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)} · exec ${execFav.toFixed(5)} ≥ Soft ${sl.toFixed(5)}`,
       };
     }
 
-    const timedecayFavPct =
-      Math.max(0, genome.timedecay_fav_pct_bp) * 1e-4 || 0.00035;
     const minFav =
       Math.max(
-        scaleDeskAbs(genomeTimedecayMinFavAbs(), absEntry),
-        absEntry * timedecayFavPct,
+        scaleDeskAbs(TIMEDECAY_MIN_FAV_ABS, absEntry),
+        absEntry * 0.00035,
         minBank,
-        scaleDeskAbs(cal.target_abs || genomeTargetAbsFloor(), absEntry) * 0.4
+        scaleDeskAbs(cal.target_abs || TARGET_ABS_FLOOR, absEntry) * 0.4
       ) * profile.timedecay_min_fav_mult;
-    const holdNeed =
-      profile.timedecay_hold_ms > 0
-        ? profile.timedecay_hold_ms
-        : genomeTimedecayMinHoldMs(genome);
+    const holdNeed = profile.timedecay_hold_ms;
     if (
       heldMs > holdNeed &&
       fav >= minFav &&
@@ -818,7 +655,7 @@ export function isStructureBreaching(
 ): boolean {
   if (!s.open_side || s.entry_price == null) return false;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
-  if (heldMs < genomeStructureGraceMs()) return false;
+  if (heldMs < STRUCTURE_GRACE_MS) return false;
   return Boolean(
     structureInvalidationReason(
       s.open_side,

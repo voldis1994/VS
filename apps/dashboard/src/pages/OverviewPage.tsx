@@ -37,24 +37,14 @@ type AutoCalStatus = {
   session_expectancy_pts: number;
   session_wins: number;
   session_losses: number;
-  history?: Array<{
-    at: string;
-    summary: string;
-    changes: string[];
-    applied: boolean;
-    window_expectancy: number;
-  }>;
   knobs_now: {
     hardinv_abs: number;
-    hardinv_pct?: number;
     peak_mfe_abs: number;
     peak_retention: number;
     target_abs: number;
     safety_tp_rr?: number;
     entry_filter_level?: number;
     enabled_regimes: number;
-    genome_peak_keep?: number;
-    genome_soft_giveback?: number;
   };
 };
 
@@ -222,43 +212,6 @@ export function OverviewPage() {
       .catch((e) => setMsg(e instanceof Error ? e.message : 'Reset failed'));
   };
 
-  /** Full wipe: genome + learners + history → factory. Keeps Capital + clients. */
-  const factoryLearnFromScratch = () => {
-    const ok = window.confirm(
-      'LEARN FROM SCRATCH?\n\n' +
-        'WIPE: genome, Soft/Peak/Target, learners, auto-cal, trade history.\n' +
-        'KEEP: Capital API, clients, broker accounts.\n\n' +
-        'Close/FLAT robots first (open deals block unless you force).'
-    );
-    if (!ok) return;
-    const phrase = window.prompt('Ieraksti apstiprinājumu: LEARN_FROM_SCRATCH');
-    if (phrase !== 'LEARN_FROM_SCRATCH') {
-      setMsg('Atcelts — nepareiza frāze');
-      return;
-    }
-    setBusy(true);
-    void apiFetch<{ success?: boolean; error?: string; genome_path?: string }>(
-      '/api/system/factory-reset-learning',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          confirm: 'LEARN_FROM_SCRATCH',
-          wipe_db_history: false,
-          wipe_brain_history: true,
-        }),
-      }
-    )
-      .then((r) => {
-        setMsg(
-          r.success
-            ? 'FACTORY RESET · genome+learners wiped (files) · Capital/clients kept · restart robots'
-            : r.error || 'Factory reset failed'
-        );
-      })
-      .catch((e) => setMsg(e instanceof Error ? e.message : 'Factory reset failed'))
-      .finally(() => setBusy(false));
-  };
-
   const modeNow = (status?.mode || 'LIVE').toUpperCase();
   const ePts = auto?.session_expectancy_pts ?? 0;
   const sumPts = auto?.session_sum_pts ?? 0;
@@ -319,25 +272,16 @@ export function OverviewPage() {
         <div className="cmd-brain-head">
           <div>
             <div className="section-title" style={{ margin: 0 }}>
-              LEARNER · AUTOTUNE
+              LEARNER · AUTO-CAL
               {selectedClientId ? ` · #${selectedClientId}` : ''}
             </div>
             <p className="hint-line" style={{ margin: '4px 0 0' }}>
-              Soft+HardInv+genome free · ik 5 closes · WHAT/WHY pārskats
+              Online politika no closes · Soft = drošība · ik 5 closes Peak/Target mācība
             </p>
           </div>
           <div className="actions" style={{ margin: 0 }}>
             <button type="button" className="btn" onClick={factoryOpen}>
               SĀKT NO JAUNA
-            </button>
-            <button
-              type="button"
-              className="btn btn-stop"
-              disabled={busy}
-              title="Genome + learners + history → factory. Capital/clients kept."
-              onClick={factoryLearnFromScratch}
-            >
-              LEARN FROM SCRATCH
             </button>
             <Link className="btn" to="/trades">
               TRADES
@@ -397,15 +341,10 @@ export function OverviewPage() {
             </div>
             {auto.knobs_now && (
               <div className="hint-line mono cmd-knobs">
-                Soft {Number(auto.knobs_now.hardinv_abs).toFixed(1)} · Peak{' '}
-                {Number(auto.knobs_now.peak_mfe_abs).toFixed(1)}/
+                Soft {auto.knobs_now.hardinv_abs} · Peak {auto.knobs_now.peak_mfe_abs}/
                 {Math.round(auto.knobs_now.peak_retention * 100)}% · Target{' '}
-                {Number(auto.knobs_now.target_abs).toFixed(1)} · TP RR{' '}
-                {Number(auto.knobs_now.safety_tp_rr ?? 1.5).toFixed(2)} ·
+                {auto.knobs_now.target_abs} · TP RR {auto.knobs_now.safety_tp_rr ?? 1.5} ·
                 regimes {auto.knobs_now.enabled_regimes}
-                {auto.knobs_now.genome_peak_keep != null
-                  ? ` · genome keep ${Number(auto.knobs_now.genome_peak_keep).toFixed(2)}`
-                  : ''}
               </div>
             )}
             {(auto.last_summary || auto.last_changes?.length > 0) && (
@@ -415,29 +354,11 @@ export function OverviewPage() {
                     <span className="cmd-label">Last</span> {auto.last_summary}
                   </div>
                 )}
-                {auto.last_changes
-                  ?.filter((c) => c.includes('WHAT ·') || c.startsWith('PRĀTS') || c.startsWith('MĀCĪBA'))
-                  .slice(0, 8)
-                  .map((line, i) => {
-                    const what = /WHAT · (.+?) · WHY · (.+)/.exec(line);
-                    if (what) {
-                      return (
-                        <div key={`ov-ac-${i}`} className="autotune-info-row">
-                          <div className="autotune-what">
-                            <span className="cmd-label">WHAT</span> {what[1]}
-                          </div>
-                          <div className="autotune-why">
-                            <span className="cmd-label">WHY</span> {what[2]}
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div key={`ov-ac-${i}`} className="hint-line" style={{ color: 'var(--accent)' }}>
-                        {line}
-                      </div>
-                    );
-                  })}
+                {auto.last_changes?.length > 0 && (
+                  <div className="hint-line" style={{ color: 'var(--accent)' }}>
+                    <span className="cmd-label">Δ</span> {auto.last_changes.slice(0, 4).join(' · ')}
+                  </div>
+                )}
               </div>
             )}
           </>

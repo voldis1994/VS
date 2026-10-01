@@ -1,5 +1,3 @@
-import { humanizeApiNetworkError } from './apiNetworkError';
-
 const API_URL = import.meta.env.VITE_API_URL || '';
 const TOKEN_KEY = 'vs_client_token';
 
@@ -28,16 +26,11 @@ export async function clientFetch<T>(path: string, options?: RequestInit): Promi
   const token = getClientToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  let res: Response;
-  try {
-    res = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers,
-      credentials: 'include',
-    });
-  } catch (e) {
-    throw humanizeApiNetworkError(e);
-  }
+  const res = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+    credentials: 'include',
+  });
   const text = await res.text();
   let data: unknown = null;
   try {

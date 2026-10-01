@@ -1,7 +1,7 @@
 /** 10s OHLC + 14-regime entry — regime is the classifier; this picks the suitable setup. */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
-import { getActiveRegimeBands } from './regimeBands.js';
+import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
 import {
   bodyPct,
   isMoving10s,
@@ -17,16 +17,20 @@ export type RegimeEntry = {
   reason: string;
 };
 
+/** Same MOVE floor as isMoving / persist — shared regimeBands ladder */
+const DIP = ENTRY_DIP;
+const RALLY = ENTRY_RALLY;
+
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
 
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= getActiveRegimeBands().ENTRY_DIP;
+  return bodyPct(bar) <= DIP;
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= getActiveRegimeBands().ENTRY_RALLY;
+  return bodyPct(bar) >= RALLY;
 }
 
 function describe(bar: TenSecBar): string {

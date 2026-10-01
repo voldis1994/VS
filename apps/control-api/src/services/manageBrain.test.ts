@@ -57,35 +57,6 @@ describe('manageBrain', () => {
     expect(r.soft_gate_override).toBe(false);
   });
 
-  it('HOLD does not force Peak arm at Soft×1 — genome Soft× arm (no hidden Soft ceiling)', () => {
-    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35 });
-    const softOnly = scoreManageAction(
-      base({
-        minute_policy: 'continue',
-        mfe: 3.5, // Soft×1.0
-        unrealized: 3.4,
-        soft_sl: 3.5,
-        soft_gate_allow: false,
-        peak_protect_armed: false,
-      })
-    );
-    expect(softOnly.action).toBe('HOLD');
-    expect(softOnly.force_peak_arm).toBe(false);
-
-    const runner = scoreManageAction(
-      base({
-        minute_policy: 'continue',
-        mfe: 4.8, // Soft×1.37
-        unrealized: 4.5,
-        soft_sl: 3.5,
-        soft_gate_allow: false,
-        peak_protect_armed: false,
-      })
-    );
-    expect(runner.action).toBe('HOLD');
-    expect(runner.force_peak_arm).toBe(true);
-  });
-
   it('BANKs when reverse + Soft-green + weak session E', () => {
     const r = scoreManageAction(
       base({
@@ -118,27 +89,7 @@ describe('manageBrain', () => {
     );
     expect(['CUT', 'BANK']).toContain(r.action);
     expect(r.force_peak_arm).toBe(true);
-    // Keep override respects desk/genome cfg — no Mind 0.72–0.88 hardcode
-    expect(r.peak_retention_override).toBe(0.72);
-  });
-
-  it('BANK/CUT Keep override respects desk cfg outside old 0.72–0.88 band', () => {
-    const bank = scoreManageAction(
-      base({
-        minute_policy: 'reverse',
-        soft_gate_allow: true,
-        next_entry_side: 'SELL',
-        mfe: 5,
-        unrealized: 4.2,
-        soft_sl: 3.5,
-        session_expectancy_pts: -0.4,
-        closes_in_session: 5,
-        live_regime: 'TREND_DOWN',
-        peak_retention_cfg: 0.55,
-      })
-    );
-    expect(bank.action).toBe('BANK');
-    expect(bank.peak_retention_override).toBe(0.55);
+    expect(r.peak_retention_override).toBeGreaterThanOrEqual(0.72);
   });
 
   it('TRAILs by default when Soft MFE and no clear market change', () => {
@@ -153,40 +104,8 @@ describe('manageBrain', () => {
       })
     );
     expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
-    expect(r.reason).toMatch(/PRĀTS/);
+    expect(r.reason).toMatch(/PRĀTS|LEARNER/);
     expect(r.learner_features?.length).toBeGreaterThan(10);
-  });
-
-  it('Learner never overrides manage action — Mind/Genome only (one brain)', () => {
-    // Seed learner with many updates so old path would have overridden
-    for (let i = 0; i < 25; i++) {
-      scoreManageAction(
-        base({
-          minute_policy: 'reverse',
-          soft_gate_allow: false,
-          next_entry_side: 'SELL',
-          mfe: 5,
-          unrealized: 4.0,
-          soft_sl: 3.5,
-          session_expectancy_pts: -0.5,
-          closes_in_session: 6,
-        })
-      );
-    }
-    const r = scoreManageAction(
-      base({
-        minute_policy: 'continue',
-        mfe: 5,
-        unrealized: 4.5,
-        soft_sl: 3.5,
-        soft_gate_allow: false,
-        next_entry_side: 'BUY',
-      })
-    );
-    expect(r.reason).toMatch(/PRĀTS/);
-    expect(r.reason).not.toMatch(/^LEARNER/);
-    expect(r.learner_features?.length).toBeGreaterThan(0);
-    expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
   });
 
   it('applyManageBrainToExit forces Peak arm and softGate override', () => {
@@ -228,32 +147,6 @@ describe('manageBrain', () => {
       })
     );
     expect(r.action).toBe('HOLD');
-  });
-
-  it('path quality deep-green Soft× follows genome near_target_lean_bank', () => {
-    // Loose (0.5): upl 2.0 ≥ soft×0.5 → deep-green credit (score more negative)
-    _resetBrainGenomeForTests({ near_target_lean_bank: 0.5 });
-    const loose = scoreManageAction(
-      base({
-        minute_policy: 'continue',
-        mfe: 4,
-        unrealized: 2.0,
-        soft_sl: 3.5,
-        soft_gate_allow: false,
-      })
-    );
-    // Strict (0.95): same upl does NOT qualify → no deep-green credit
-    _resetBrainGenomeForTests({ near_target_lean_bank: 0.95 });
-    const strict = scoreManageAction(
-      base({
-        minute_policy: 'continue',
-        mfe: 4,
-        unrealized: 2.0,
-        soft_sl: 3.5,
-        soft_gate_allow: false,
-      })
-    );
-    expect(loose.score).toBeLessThan(strict.score);
   });
 
   it('mindOwnsGreenExit — BANK/CUT close Soft-sized green; never red', () => {

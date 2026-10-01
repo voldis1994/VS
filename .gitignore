@@ -74,4 +74,3 @@ data/brain-self-improve/candidates/**
 !data/brain-self-improve/versions/.gitkeep
 !data/brain-self-improve/candidates/.gitkeep
 !data/brain-self-improve/genome.json
-data/brain-self-improve/reload-needed.json

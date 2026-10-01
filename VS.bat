@@ -170,8 +170,6 @@ echo [OK]
 echo.
 
 echo [4/5] Palaisu API + publisko paneli :18080 ...
-REM Drop stale BRAIN reload flag so a leftover cycle does not bounce API on boot
-if exist "%ROOT%\data\brain-self-improve\reload-needed.json" del /q "%ROOT%\data\brain-self-improve\reload-needed.json" >nul 2>&1
 set "LIVE_TRADING_ENABLED=true"
 set "OPERATING_MODE=LIVE"
 set "MARKET_CORE_BRIDGE=1"
@@ -218,7 +216,6 @@ if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
 REM Live stack: NO tsx watch — BRAIN writing .ts must not kill API mid-trade
 REM (watch caused Failed to fetch / LIVE LOG stale). Code reload = exit 75 when FLAT.
-REM Live-loop also auto-restarts on unexpected crashes (no more permanent Failed to fetch).
 start "MR-ControlAPI" /D "%ROOT%" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& node tools\control-api-live-loop.mjs
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
@@ -283,13 +280,10 @@ if not "!PUBLIC_OK!"=="1" (
 echo.
 
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
-REM Only open ADMIN for the operator. :18080 is the Cloudflare CLIENT panel —
-REM opening it locally shows a dead desk (admin APIs blocked → SYSTEM DEGRADED / Loading forever).
-echo [..] gaidu admin Vite :5173 ...
-call :wait_port 5173 40
+start "" "http://127.0.0.1:18080"
 start http://localhost:5173/
-echo [OK] admin COMMAND http://localhost:5173/  ^<— TAVA lapa
-echo [OK] klienta panelis :18080 tikai tunelim (NEATVER pats — klienta login, ne admin)
+echo [OK] lokali panelis http://127.0.0.1:18080
+echo [OK] admin COMMAND http://localhost:5173/  (klientam NESUTI)
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)

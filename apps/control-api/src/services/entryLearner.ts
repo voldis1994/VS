@@ -12,7 +12,6 @@ import { resolveDeskClientId } from './deskClientScope.js';
 import type { MarketStory } from './marketStory.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 import { normalizeRegime } from './regimes.js';
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 export const ENTRY_LEARNER_ACTIONS = ['BUY', 'SELL', 'WAIT'] as const;
 export type EntryLearnerAction = (typeof ENTRY_LEARNER_ACTIONS)[number];
@@ -72,30 +71,6 @@ const L2 = 0.002;
 const TEMPERATURE = 0.9;
 const EXPLORE_EPS = process.env.VITEST ? 0 : 0.05;
 const MAX_W = 4;
-const WAIT_BOOST = 0.35;
-const ZONE_LO_BIN = 0.35;
-const ZONE_HI_BIN = 0.65;
-/** Additive action priors before softmax (#180 — genome entry_learner_prior_*). */
-const PRIOR_BUY = 0;
-const PRIOR_SELL = 0;
-const PRIOR_WAIT = 0.1;
-
-function learnerHyper() {
-  const g = getBrainGenome();
-  return {
-    lr: g.entry_learner_lr || LR,
-    l2: g.entry_learner_l2 ?? L2,
-    temp: g.entry_learner_temp || TEMPERATURE,
-    explore: process.env.VITEST ? 0 : g.entry_learner_explore_eps ?? EXPLORE_EPS,
-    maxW: g.entry_learner_max_w || MAX_W,
-    waitBoost: g.entry_learner_wait_boost || WAIT_BOOST,
-    zoneLo: g.entry_zone_lo_bin || ZONE_LO_BIN,
-    zoneHi: g.entry_zone_hi_bin || ZONE_HI_BIN,
-    priorBuy: g.entry_learner_prior_buy ?? PRIOR_BUY,
-    priorSell: g.entry_learner_prior_sell ?? PRIOR_SELL,
-    priorWait: g.entry_learner_prior_wait ?? PRIOR_WAIT,
-  };
-}
 
 const cache = new Map<number, EntryLearnerState>();
 
@@ -179,14 +154,13 @@ function hydrate(clientId: number): EntryLearnerState {
       if (raw.weights && Number(raw.version) === ENTRY_LEARNER_VERSION) {
         const w = emptyWeights();
         let ok = true;
-        const maxW = learnerHyper().maxW;
         for (const a of ENTRY_LEARNER_ACTIONS) {
           const src = raw.weights[a];
           if (!Array.isArray(src) || src.length !== ENTRY_FEATURE_NAMES.length) {
             ok = false;
             break;
           }
-          w[a] = src.map((x) => clamp(Number(x) || 0, -maxW, maxW));
+          w[a] = src.map((x) => clamp(Number(x) || 0, -MAX_W, MAX_W));
         }
         if (ok) {
           st = {
@@ -254,7 +228,6 @@ export function extractEntryFeatures(input: EntryFeatureInput): EntryFeatures {
   const md = input.m1_dir || 'FLAT';
   const bias = input.bias || 'FLAT';
   const m1Strong = input.m1_strong ? 1 : 0;
-  const { zoneLo, zoneHi } = learnerHyper();
 
   const feat: Record<(typeof ENTRY_FEATURE_NAMES)[number], number> = {
     story_allow_buy: allow === 'BUY' || allow === 'BOTH' ? 1 : 0,
@@ -288,9 +261,9 @@ export function extractEntryFeatures(input: EntryFeatureInput): EntryFeatures {
     regime_reversal: regime === 'REVERSAL_CANDIDATE' ? 1 : 0,
     green_share: greenShare,
     red_dom: r > g + 1 ? 1 : 0,
-    zone_lo: pos != null && pos <= zoneLo ? 1 : 0,
-    zone_hi: pos != null && pos >= zoneHi ? 1 : 0,
-    zone_mid: pos != null && pos > zoneLo && pos < zoneHi ? 1 : 0,
+    zone_lo: pos != null && pos <= 0.35 ? 1 : 0,
+    zone_hi: pos != null && pos >= 0.65 ? 1 : 0,
+    zone_mid: pos != null && pos > 0.35 && pos < 0.65 ? 1 : 0,
     bar_buy: body > 1e-8 ? 1 : 0,
     bar_sell: body < -1e-8 ? 1 : 0,
     story_conf: clamp(conf, 0, 1),
@@ -313,12 +286,6 @@ function softmaxScores(
   weights: ActionWeights,
   features: EntryFeatures
 ): Record<EntryLearnerAction, number> {
-  const { temp, priorBuy, priorSell, priorWait } = learnerHyper();
-  const priors: Record<EntryLearnerAction, number> = {
-    BUY: priorBuy,
-    SELL: priorSell,
-    WAIT: priorWait,
-  };
   const logits: Record<EntryLearnerAction, number> = {
     BUY: 0,
     SELL: 0,
@@ -328,7 +295,7 @@ function softmaxScores(
     let s = 0;
     const w = weights[a];
     for (let i = 0; i < features.length; i++) s += w[i]! * features[i]!;
-    logits[a] = (s + priors[a]) / temp;
+    logits[a] = s / TEMPERATURE;
   }
   const maxL = Math.max(logits.BUY, logits.SELL, logits.WAIT);
   const exps: Record<EntryLearnerAction, number> = { BUY: 0, SELL: 0, WAIT: 0 };
@@ -377,7 +344,7 @@ export function entryLearnerChoose(
     }
   }
   let explored = false;
-  if (rng() < learnerHyper().explore) {
+  if (rng() < EXPLORE_EPS) {
     action = ENTRY_LEARNER_ACTIONS[Math.floor(rng() * ENTRY_LEARNER_ACTIONS.length)]!;
     explored = true;
   }
@@ -420,20 +387,19 @@ export function entryLearnerLearnFromClose(opts: {
   const reward = Math.tanh(opts.pnl_pts / scale);
 
   const probs = softmaxScores(st.weights, x);
-  const { lr, l2, maxW, waitBoost } = learnerHyper();
   for (const a of ENTRY_LEARNER_ACTIONS) {
     const w = st.weights[a];
     const indicator = a === action ? 1 : 0;
     const adv = indicator - probs[a]!;
     for (let i = 0; i < w.length; i++) {
-      const g = lr * reward * adv * x[i]! - l2 * w[i]!;
-      w[i] = clamp(w[i]! + g, -maxW, maxW);
+      const g = LR * reward * adv * x[i]! - L2 * w[i]!;
+      w[i] = clamp(w[i]! + g, -MAX_W, MAX_W);
     }
   }
   if (reward < -0.15) {
     const wWait = st.weights.WAIT;
     for (let i = 0; i < wWait.length; i++) {
-      wWait[i] = clamp(wWait[i]! + lr * (-reward) * waitBoost * x[i]!, -maxW, maxW);
+      wWait[i] = clamp(wWait[i]! + LR * (-reward) * 0.35 * x[i]!, -MAX_W, MAX_W);
     }
   }
 

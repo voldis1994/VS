@@ -1,8 +1,8 @@
 /** Live ENTRY WATCH — what the robot is reading / waiting for (all regimes). */
 import type { RegimeName } from './regimes.js';
 import {
-  getMinBarsForZone,
-  getZoneBars,
+  MIN_BARS_FOR_ZONE,
+  ZONE_BARS,
   normalizeRegime,
 } from './regimes.js';
 import type { RegimeEntry } from './entryFromRegime.js';
@@ -13,15 +13,8 @@ import {
   lastClosed1mFromTenSec,
   minuteDir,
 } from './structureEntry.js';
-import { pickEntryPlaybook } from './entryPlaybook.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
-import {
-  regimeAllowedForEntry,
-  regimeEntryPermitted,
-  regimeIsSoftOff,
-  getDeskCalibration,
-} from './deskCalibration.js';
-import { isStrongEntrySignal } from './strongEntrySignal.js';
+import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import {
   flipFilterReason,
   requiredFlipSide,
@@ -29,20 +22,15 @@ import {
   sameDirLockMs,
   sameDirectionBlocked,
 } from './flipFilter.js';
-import { getActiveRegimeBands } from './regimeBands.js';
+import { ENTRY_DIP, ENTRY_RALLY, MOVE, MOVE_RANGE } from './regimeBands.js';
 import { readMarketStory, type MarketStory } from './marketStory.js';
 import { readMultiTfStack, sideFromMultiTf, type TfDir } from './multiTfRead.js';
 import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
 
-function watchBands() {
-  const b = getActiveRegimeBands();
-  return {
-    DIP: b.ENTRY_DIP,
-    RALLY: b.ENTRY_RALLY,
-    MOVING_BODY: b.MOVE,
-    MOVING_RANGE: b.MOVE_RANGE,
-  };
-}
+const DIP = ENTRY_DIP;
+const RALLY = ENTRY_RALLY;
+const MOVING_BODY = MOVE;
+const MOVING_RANGE = MOVE_RANGE;
 
 export type EntryWatchStatus =
   | 'STOPPED'
@@ -58,12 +46,7 @@ export type EntryWatchStatus =
   | 'ENTERING';
 
 export type EntryWatch = {
-  /** Canonical entry thesis (playbook) — UI / arm / Soft OFF share this */
   regime: RegimeName;
-  /** Live classifier label (may differ from thesis on false RANGE) */
-  live_regime: RegimeName;
-  /** Playbook lane owning this bar */
-  lane: string;
   regime_enabled: boolean;
   enabled_regimes: RegimeName[];
   status: EntryWatchStatus;
@@ -122,23 +105,21 @@ export function zoneBarProgress(have: number): {
   zone_progress: string;
 } {
   const n = Math.max(0, Math.floor(Number(have) || 0));
-  const need = getMinBarsForZone();
-  const full = getZoneBars();
-  const left = Math.max(0, need - n);
+  const left = Math.max(0, MIN_BARS_FOR_ZONE - n);
   const ready = left === 0;
   let zone_progress: string;
   if (!ready) {
     const mins = Math.max(1, Math.ceil((left * 10) / 60));
-    zone_progress = `${n}/${need} sveces · vēl ${left} (≈${mins}m)`;
-  } else if (n < full) {
-    zone_progress = `${n}/${full} sveces · min OK · pilna zona vēl ${full - n}`;
+    zone_progress = `${n}/${MIN_BARS_FOR_ZONE} sveces · vēl ${left} (≈${mins}m)`;
+  } else if (n < ZONE_BARS) {
+    zone_progress = `${n}/${ZONE_BARS} sveces · min OK · pilna zona vēl ${ZONE_BARS - n}`;
   } else {
-    zone_progress = `${n}/${full} sveces · zona pilna`;
+    zone_progress = `${n}/${ZONE_BARS} sveces · zona pilna`;
   }
   return {
     zone_bars: n,
-    zone_need: need,
-    zone_full: full,
+    zone_need: MIN_BARS_FOR_ZONE,
+    zone_full: ZONE_BARS,
     zone_left: left,
     zone_ready: ready,
     zone_progress,
@@ -165,7 +146,6 @@ export function watchRecipe(regime?: string | null): {
   threshold_body_pct: number;
 } {
   const r = normalizeRegime(regime);
-  const { DIP, RALLY, MOVING_BODY } = watchBands();
   switch (r) {
     case 'TREND_UP':
       return {
@@ -243,24 +223,21 @@ export function watchRecipe(regime?: string | null): {
       return {
         direction: null,
         setup: 'FADE',
-        looking_for:
-          'RANGE · fade pēc reject · LO BUY / HI SELL (ne tip-chase breakout / fake-break)',
+        looking_for: 'RANGE · fade / start apakšējā vai augšējā pusē (ne wrong-half)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'COMPRESSION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for:
-          'COMPRESSION · fade pēc reject · LO BUY / HI SELL (ne tip-chase · auto-cal later)',
+        looking_for: 'COMPRESSION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'TRANSITION':
       return {
         direction: null,
         setup: 'FADE',
-        looking_for:
-          'TRANSITION · fade pēc reject · LO BUY / HI SELL (ne tip-chase · auto-cal later)',
+        looking_for: 'TRANSITION · OPEN fade · DIP → BUY · RALLY → SELL (auto-cal later)',
         threshold_body_pct: MOVING_BODY,
       };
     case 'UNKNOWN':
@@ -294,7 +271,6 @@ function barVsTrigger(
   const body = bodyPct(bar);
   const rng = rangePct(bar);
   const mkt = marketOf(bar);
-  const { DIP, RALLY, MOVING_BODY, MOVING_RANGE } = watchBands();
   const bits = [
     `body ${pctStr(body)}`,
     `range ${pctStr(rng)}`,
@@ -322,8 +298,6 @@ export type BuildWatchInput = {
   open_side: 'BUY' | 'SELL' | null;
   entry_enabled: boolean;
   regime: string | null | undefined;
-  /** Frozen fill thesis — MANAGE UI must not show opposite live "meklē SELL" */
-  entry_regime?: string | null;
   last_closed: TenSecBar | null | undefined;
   forming_c: number | null | undefined;
   just_closed: boolean;
@@ -377,38 +351,10 @@ export function multiTfWatchLine(input: {
 }
 
 export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
-  const liveRegime = normalizeRegime(input.regime);
+  const regime = normalizeRegime(input.regime);
+  const recipe = watchRecipe(regime);
   const enabled = getDeskCalibration().enabled_regimes;
-  const bars = input.closed_bars?.length
-    ? input.closed_bars
-    : input.last_closed
-      ? [input.last_closed]
-      : [];
-  const storySnap =
-    input.last_closed && bars.length
-      ? readMarketStory(bars, input.last_closed)
-      : null;
-  // One thesis: Capital HTF + story playbook (not live RANGE label alone)
-  const htfSnap = {
-    tf30: input.capital_tf30_dir,
-    tf15: input.capital_tf15_dir,
-    tf5: input.capital_tf5_dir,
-    m1: input.capital_m1_dir,
-  };
-  const playbook = pickEntryPlaybook({
-    liveRegime,
-    story: storySnap,
-    htf: htfSnap,
-  });
-  // Open trade: authoritative thesis = frozen fill (one truth with manage log)
-  const frozenEntry =
-    input.open_side && input.entry_regime
-      ? normalizeRegime(input.entry_regime)
-      : null;
-  const entryRegime = frozenEntry ?? playbook.regime;
-  const recipe = watchRecipe(entryRegime);
-  const regimeOn = regimeAllowedForEntry(entryRegime);
-  const softOff = regimeIsSoftOff(entryRegime);
+  const regimeOn = regimeAllowedForEntry(regime);
   const zone = zoneBarProgress(input.closed_bar_count ?? 0);
   const bar = input.last_closed || null;
   const body = bar ? bodyPct(bar) : null;
@@ -425,51 +371,31 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const needSide = lockEnabled
     ? requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss })
     : null;
-  // Soft OFF still evaluates entry — strong signal may override
-  const mayEvalEntry =
-    bar &&
-    zone.zone_ready &&
-    (regimeOn || softOff) &&
-    input.entry_enabled &&
-    !input.open_side;
-  const rawSig = mayEvalEntry
-    ? decideEntryWithStructure({
-        bar,
-        // Same thesis Soft OFF / looking_for already use — one market
-        regime: entryRegime,
-        classify_live: liveRegime,
-        closedBars: bars,
-        last_closed_side: lastClosedSide,
-        last_close_was_loss: wasLoss,
-        capital_m1_dir: input.capital_m1_dir,
-        capital_tf5_dir: input.capital_tf5_dir,
-        capital_tf15_dir: input.capital_tf15_dir,
-        capital_tf30_dir: input.capital_tf30_dir,
-      })
-    : null;
-  const strongOverride =
-    Boolean(rawSig) &&
-    softOff &&
-    isStrongEntrySignal({
-      direction: rawSig!.direction,
-      setup: rawSig!.setup,
-      storyAllow: storySnap?.allow,
-      storyChapter: storySnap?.chapter,
-      storyConf: storySnap?.confidence,
-      htf: {
-        tf30: input.capital_tf30_dir,
-        tf15: input.capital_tf15_dir,
-        tf5: input.capital_tf5_dir,
-      },
-    });
-  const entryPermitted = regimeEntryPermitted(entryRegime, { strong: strongOverride });
+  const rawSig =
+    bar && zone.zone_ready && regimeOn && input.entry_enabled && !input.open_side
+      ? decideEntryWithStructure({
+          bar,
+          regime,
+          closedBars: input.closed_bars?.length
+            ? input.closed_bars
+            : bar
+              ? [bar]
+              : [],
+          last_closed_side: lastClosedSide,
+          last_close_was_loss: wasLoss,
+          capital_m1_dir: input.capital_m1_dir,
+          capital_tf5_dir: input.capital_tf5_dir,
+          capital_tf15_dir: input.capital_tf15_dir,
+          capital_tf30_dir: input.capital_tf30_dir,
+        })
+      : null;
   const flipBlocked = Boolean(
     rawSig &&
       sameDirectionBlocked(rawSig.direction, lastClosedSide, closedAtMs, Date.now(), {
         wasLoss,
       })
   );
-  const sig = flipBlocked || !entryPermitted ? null : rawSig;
+  const sig = flipBlocked ? null : rawSig;
 
   let status: EntryWatchStatus = 'WAITING_TRIGGER';
   if (!input.running) status = 'STOPPED';
@@ -481,30 +407,21 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   else if (input.status_override) status = input.status_override;
   else if (!zone.zone_ready || !bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';
-  else if (!entryPermitted) status = 'REGIME_OFF';
+  else if (!regimeOn) status = 'REGIME_OFF';
   else if (sig) status = 'ARMED';
   else status = 'WAITING_TRIGGER';
 
   const vs = barVsTrigger(bar, recipe, sig);
   let last_reason = input.last_reason || '';
   if (!last_reason) {
-    if (status === 'ARMED' && sig) {
-      last_reason = strongOverride
-        ? `Soft OFF override · ${sig.reason}`
-        : sig.reason;
-    } else if (status === 'FLIP_FILTER' && lastClosedSide) {
+    if (status === 'ARMED' && sig) last_reason = sig.reason;
+    else if (status === 'FLIP_FILTER' && lastClosedSide) {
       const blockedSig = flipBlocked && rawSig ? rawSig.direction : lastClosedSide;
       last_reason = flipFilterReason(blockedSig, lastClosedSide, lockLeft, wasLoss);
     } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
     else if (status === 'REGIME_OFF')
-      last_reason = softOff
-        ? entryRegime !== liveRegime
-          ? `${liveRegime}→${entryRegime} Soft OFF · gaida strong signal`
-          : `${entryRegime} Soft OFF · gaida strong signal`
-        : entryRegime !== liveRegime
-          ? `${liveRegime}→${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`
-          : `${entryRegime} Hard OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
-    else if (status === 'WAITING_TRIGGER') last_reason = `${entryRegime} · ${vs}`;
+      last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
+    else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
     else if (status === 'MANAGE') last_reason = `Pozīcija ${input.open_side} — manage`;
     else if (status === 'MANAGE_ONLY') last_reason = 'Entry smadzenes OFF (manage-only)';
     else if (status === 'COOLDOWN')
@@ -520,12 +437,10 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     ? ` · FLIP LOCK ${Math.ceil(lockMs / 1000)}s: last ${lastClosedSide} → ${needSide} only · ${lockLeft}s`
     : '';
 
-  const story: MarketStory =
-    storySnap ??
-    readMarketStory(
-      bars,
-      bar
-    );
+  const story: MarketStory = readMarketStory(
+    input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
+    bar
+  );
   const tfLine = multiTfWatchLine({
     closed_bars: input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
     capital_m1_dir: input.capital_m1_dir,
@@ -533,50 +448,6 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     capital_tf15_dir: input.capital_tf15_dir,
     capital_tf30_dir: input.capital_tf30_dir,
   });
-  // MANAGE: one thesis — open side + frozen regime; no live opposite "meklē SELL"
-  if (input.open_side && status === 'MANAGE') {
-    const manageLook = `MANAGE ${input.open_side} · thesis ${entryRegime} · live ${liveRegime} · ${tfLine.summary} · Peak/Soft path · no new orders`;
-    return {
-      regime: entryRegime,
-      live_regime: liveRegime,
-      lane: frozenEntry ? 'LIVE' : playbook.lane,
-      regime_enabled: regimeOn,
-      enabled_regimes: [...enabled],
-      status,
-      looking_for: lookingForWithZone(manageLook, zone, entryRegime),
-      bar_vs_trigger: 'MANAGE',
-      market_story: `${tfLine.summary} · ${story.summary_lv}`,
-      story_chapter: story.chapter,
-      story_allow: story.allow,
-      story_detail: `${tfLine.thesis} · ${story.detail}`,
-      direction: input.open_side,
-      setup: input.open_side ? 'MANAGE' : null,
-      armed: false,
-      last_closed_side: lastClosedSide,
-      need_side: needSide,
-      lock_left_s: lockLeft,
-      zone_bars: zone.zone_bars,
-      zone_need: zone.zone_need,
-      zone_full: zone.zone_full,
-      zone_left: zone.zone_left,
-      zone_ready: zone.zone_ready,
-      zone_progress: zone.zone_progress,
-      threshold_body_pct: recipe.threshold_body_pct,
-      bar: {
-        o: bar?.open ?? null,
-        h: bar?.high ?? null,
-        l: bar?.low ?? null,
-        c: bar?.close ?? null,
-        forming_c: input.forming_c ?? null,
-        body_pct: body,
-        range_pct: rng,
-        market: mkt,
-        closed: Boolean(input.just_closed && bar),
-      },
-      last_reason: last_reason || `Pozīcija ${input.open_side} — manage ${entryRegime}`,
-    };
-  }
-
   // Lead with Capital multi-TF stack — not the old story-only "meklē SELL"
   const mindSide =
     sig?.direction ??
@@ -586,18 +457,14 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     tfLine.mind === 'WAIT'
       ? `PRĀTS WAIT · ${tfLine.summary}`
       : `PRĀTS ${tfLine.mind} · ${tfLine.summary}`;
-  const promoteNote =
-    entryRegime !== liveRegime ? ` · thesis ${liveRegime}→${entryRegime}` : '';
-  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${promoteNote}${flipNote}`;
+  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
 
   return {
-    regime: entryRegime,
-    live_regime: liveRegime,
-    lane: playbook.lane,
+    regime,
     regime_enabled: regimeOn,
     enabled_regimes: [...enabled],
     status,
-    looking_for: lookingForWithZone(lookBase, zone, entryRegime),
+    looking_for: lookingForWithZone(lookBase, zone, regime),
     bar_vs_trigger: vs,
     market_story: `${tfLine.summary} · ${story.summary_lv}`,
     story_chapter: story.chapter,

@@ -5,7 +5,6 @@
  * Soft HardInv + Soft-sized structure remain sacred (never delayed / widened).
  * Brain owns Soft-sized green banks: BANK/CUT execute closes — not only Peak nudge.
  */
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { thesisFailureReason, type ExitSide } from './exitManage.js';
 import {
   pressureFightsSide,
@@ -93,26 +92,6 @@ export type ManageBrainApply = {
 
 const MIN_SAMPLE = 3;
 
-/** Factory fallbacks for manage score weights (= prior hardcode) */
-export const MANAGE_SCORE_SESSION_E_NEG = 0.7;
-export const MANAGE_SCORE_SESSION_E_POS = 0.35;
-export const MANAGE_SCORE_WINDOW_E_NEG = 0.55;
-export const MANAGE_SCORE_PATH_SOFT_GREEN = 0.25;
-export const MANAGE_SCORE_PATH_GIVEBACK = 0.9;
-export const MANAGE_SCORE_M1_REVERSE = 0.95;
-export const MANAGE_SCORE_M1_CONTINUE = 0.85;
-export const MANAGE_SCORE_NEXT_ENTRY_OPP = 0.7;
-export const MANAGE_SCORE_THESIS_FIGHT = 0.55;
-export const MANAGE_SCORE_CLAMP = 2.5;
-/** @deprecated One-brain: Learner never overrides manage action (features only). */
-export const MANAGE_LEARNER_OVERRIDE_MARGIN = 0.08;
-export const SESSION_E_BANK_HI = 0.25;
-export const SESSION_E_BANK_LO = -0.15;
-export const PRESSURE_WITH_US_BUY = 0.58;
-export const PRESSURE_WITH_US_SELL = 0.42;
-export const NEAR_TARGET_LEAN_BANK = 0.85;
-export const PEAK_MFE_FLOOR_EASE = 0.85;
-
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
@@ -126,25 +105,6 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   const mfe = Math.max(0, input.mfe);
   const mae = Math.max(0, input.mae);
   const upl = input.unrealized;
-  const g = getBrainGenome();
-  const minSample = Math.max(1, g.manage_min_sample || MIN_SAMPLE);
-  const sessionELo = g.session_e_bank_lo ?? SESSION_E_BANK_LO;
-  const sessionEHi = g.session_e_bank_hi || SESSION_E_BANK_HI;
-  const wSessionNeg = g.manage_score_session_e_neg || MANAGE_SCORE_SESSION_E_NEG;
-  const wSessionPos = g.manage_score_session_e_pos || MANAGE_SCORE_SESSION_E_POS;
-  const wWindowNeg = g.manage_score_window_e_neg || MANAGE_SCORE_WINDOW_E_NEG;
-  const wPathGreen = g.manage_score_path_soft_green || MANAGE_SCORE_PATH_SOFT_GREEN;
-  const wGiveback = g.manage_score_path_giveback || MANAGE_SCORE_PATH_GIVEBACK;
-  const wM1Rev = g.manage_score_m1_reverse || MANAGE_SCORE_M1_REVERSE;
-  const wM1Cont = g.manage_score_m1_continue || MANAGE_SCORE_M1_CONTINUE;
-  const wNextOpp = g.manage_score_next_entry_opp || MANAGE_SCORE_NEXT_ENTRY_OPP;
-  const wThesis = g.manage_score_thesis_fight || MANAGE_SCORE_THESIS_FIGHT;
-  const scoreClamp = g.manage_score_clamp || MANAGE_SCORE_CLAMP;
-  const pressureBuy = g.pressure_with_us_buy || PRESSURE_WITH_US_BUY;
-  const pressureSell = g.pressure_with_us_sell || PRESSURE_WITH_US_SELL;
-  const nearTarget = g.near_target_lean_bank || NEAR_TARGET_LEAN_BANK;
-  const peakEase = g.peak_mfe_floor_ease || PEAK_MFE_FLOOR_EASE;
-  const cutRetention = g.mind_cut_retention || 0.55;
   const retention =
     input.peak_retention != null && Number.isFinite(input.peak_retention)
       ? input.peak_retention
@@ -156,57 +116,55 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   const bits: string[] = [];
 
   // --- Expectancy memory (needs a few closes) ---
-  const sampleOk = input.closes_in_session >= minSample;
+  const sampleOk = input.closes_in_session >= MIN_SAMPLE;
   const sessionE = sampleOk ? input.session_expectancy_pts : 0;
   const windowE =
     sampleOk && input.last_window_expectancy != null
       ? input.last_window_expectancy
       : null;
   if (sampleOk) {
-    if (sessionE < sessionELo) {
-      score += wSessionNeg;
+    if (sessionE < -0.15) {
+      score += 0.7;
       bits.push(`sessionE ${sessionE.toFixed(2)} weak → protect`);
-    } else if (sessionE > sessionEHi) {
-      score -= wSessionPos;
+    } else if (sessionE > 0.25) {
+      score -= 0.35;
       bits.push(`sessionE ${sessionE.toFixed(2)} strong → let run`);
     }
-    if (windowE != null && windowE < (g.session_expectancy_cut ?? -0.2)) {
-      score += wWindowNeg;
+    if (windowE != null && windowE < -0.2) {
+      score += 0.55;
       bits.push(`windowE ${windowE.toFixed(2)} → bank sooner`);
     }
   }
 
-  // --- Live path quality (Soft× from genome near_target_lean_bank) ---
-  const deepGreenSoft = Math.max(0.5, Math.min(1, nearTarget));
-  const fadeSoft = Math.max(0.05, 1 - deepGreenSoft);
+  // --- Live path quality ---
   if (mfe >= soft) {
     bits.push(`Soft-MFE ${mfe.toFixed(2)}`);
-    if (upl >= soft * deepGreenSoft) {
-      score -= wPathGreen;
+    if (upl >= soft * 0.85) {
+      score -= 0.25;
       bits.push('deep green');
-    } else if (upl > 0 && retention < cutRetention) {
-      score += wGiveback;
+    } else if (upl > 0 && retention < 0.55) {
+      score += 0.9;
       bits.push(`giveback ret=${(retention * 100).toFixed(0)}%`);
-    } else if (upl <= soft * fadeSoft && upl > 0) {
+    } else if (upl <= soft * 0.15 && upl > 0) {
       score += 0.75;
       bits.push('green fading → Soft');
     }
-  } else if (mfe > soft * 0.4 && upl < soft * fadeSoft) {
+  } else if (mfe > soft * 0.4 && upl < soft * 0.15) {
     score += 0.2;
     bits.push('sub-Soft stall');
   }
 
-  if (mae >= soft * deepGreenSoft && upl > 0) {
+  if (mae >= soft * 0.85 && upl > 0) {
     score += 0.45;
     bits.push(`MAE ${mae.toFixed(2)} deep then green`);
   }
 
   // --- Market change / thesis ---
   if (input.minute_policy === 'continue') {
-    score -= wM1Cont;
+    score -= 0.85;
     bits.push('1m continue');
   } else if (input.minute_policy === 'reverse') {
-    score += wM1Rev;
+    score += 0.95;
     bits.push('1m reverse');
   } else if (input.minute_policy === 'wait') {
     score += 0.15;
@@ -214,7 +172,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   }
 
   if (input.next_entry_side && input.next_entry_side !== input.open_side) {
-    score += wNextOpp;
+    score += 0.7;
     bits.push(`next ${input.next_entry_side} vs open`);
   } else if (input.next_entry_side && input.next_entry_side === input.open_side) {
     score -= 0.55;
@@ -223,7 +181,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
 
   const thesisFail = thesisFailureReason(input.open_side, input.live_regime);
   if (thesisFail) {
-    score += wThesis + 0.25;
+    score += 0.8;
     bits.push(thesisFail.replace('ThesisFailure · ', 'thesis '));
   } else if (
     input.entry_regime &&
@@ -255,13 +213,13 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
       bits.push('story with us');
     }
     if (pressureFightsSide(mkt.pressure.green_share, input.open_side)) {
-      score += wThesis;
+      score += 0.55;
       bits.push(
         `pressure G${mkt.pressure.green_1m}/R${mkt.pressure.red_1m} against`
       );
     } else if (
-      (input.open_side === 'BUY' && mkt.pressure.green_share >= pressureBuy) ||
-      (input.open_side === 'SELL' && mkt.pressure.green_share <= pressureSell)
+      (input.open_side === 'BUY' && mkt.pressure.green_share >= 0.58) ||
+      (input.open_side === 'SELL' && mkt.pressure.green_share <= 0.42)
     ) {
       score -= 0.4;
       bits.push('pressure with us');
@@ -293,17 +251,18 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   }
 
   // Near Target → lean BANK when market already changed
-  if (upl >= input.target_dist * nearTarget && input.soft_gate_allow) {
+  if (upl >= input.target_dist * 0.85 && input.soft_gate_allow) {
     score += 0.4;
     bits.push('near Target');
   }
 
-  score = clamp(score, -scoreClamp, scoreClamp);
+  score = clamp(score, -2.5, 2.5);
 
-  // --- ONE BRAIN: Mind/Genome decides. Learner features only (no action override). ---
+  // --- PRĀTS decides; LEARNER advises once it has enough closes ---
   const learned = learnerChooseAction(input, input.client_id);
   const thought = thinkLikeTrader(input);
-  const action = thought.decision;
+  const learnerReady = learned.updates >= 20 && learned.confidence >= thought.confidence + 0.08;
+  const action = learnerReady && !learned.explored ? learned.action : thought.decision;
 
   let soft_gate_override: boolean | null = null;
   let peak_retention_override: number | null = null;
@@ -315,26 +274,24 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     Boolean(input.next_entry_side && input.next_entry_side !== input.open_side) ||
     Boolean(thesisFail);
 
-  // Soft× arm threshold is genome-owned (Soft×1 was a hidden Soft ceiling)
-  const armNeed = soft * Math.max(0.5, g.peak_arm_soft_mult);
   if (action === 'BANK') {
     soft_gate_override = true;
     force_peak_arm = true;
-    // Respect desk/genome Keep 0.10–0.95 — do NOT force 0.72–0.88 Mind hardcode
-    peak_retention_override = clamp(input.peak_retention_cfg, 0.1, 0.95);
+    peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.8), 0.72, 0.88);
   } else if (action === 'CUT') {
     force_peak_arm = true;
-    peak_retention_override = clamp(input.peak_retention_cfg, 0.1, 0.95);
-    peak_mfe_floor_override = Math.max(soft, input.peak_mfe_floor * peakEase);
+    peak_retention_override = clamp(Math.max(input.peak_retention_cfg, 0.78), 0.72, 0.88);
+    peak_mfe_floor_override = Math.max(soft, input.peak_mfe_floor * 0.85);
   } else if (action === 'HOLD') {
     soft_gate_override = false;
-    if (mfe >= armNeed) force_peak_arm = true;
+    if (mfe >= soft) force_peak_arm = true;
   } else {
-    force_peak_arm = mfe >= armNeed || input.peak_protect_armed;
+    force_peak_arm = mfe >= soft * 0.6 || input.peak_protect_armed;
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 
-  const reason = `${thought.spoken} · ${thought.thesis.slice(0, 90)}${
+  const who = learnerReady ? learned.detail : thought.spoken;
+  const reason = `${who} · ${thought.thesis.slice(0, 90)}${
     thought.thesis.length > 90 ? '…' : ''
   } · E ${score.toFixed(2)}`;
 

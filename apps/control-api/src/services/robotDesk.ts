@@ -1,6 +1,5 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import {
   withCapitalAccountSession,
   closeCapitalPosition,
@@ -24,7 +23,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
-  getMinBarsForZone,
+  MIN_BARS_FOR_ZONE,
   clearRegimeBookFor,
   type RegimeName,
 } from './regimes.js';
@@ -36,11 +35,9 @@ import {
 import {
   closed1mProfitPolicy,
   decideBestOutcomeExit,
-  effectivePeakKeep,
   executableFavorable,
   favorableMove,
   hardInvStopDistance,
-  activeSoftStopDistance,
   minProfitBank,
   peakMfeFromCandles,
   peakTrailMfeFloor,
@@ -54,26 +51,14 @@ import { softExitMarketGate } from './softExitMarketGate.js';
 import {
   buildMarketContext,
   compactMarketContext,
-  softPlusStoryFightShouldBank,
-  storyFightsSide,
   type MarketContextSnapshot,
 } from './marketContext.js';
-import {
-  detectPullbackEpisode,
-  softPlusPullbackEpisodeShouldBank,
-} from './pullbackEpisode.js';
 import { learnerLearnFromClose, type LearnerFeatures } from './deskLearner.js';
 import {
   entryLearnerLearnFromClose,
   type EntryFeatures,
 } from './entryLearner.js';
-import {
-  regimeAllowedForEntry,
-  regimeEntryPermitted,
-  regimeIsSoftOff,
-  getDeskCalibration,
-} from './deskCalibration.js';
-import { isStrongEntrySignal } from './strongEntrySignal.js';
+import { regimeAllowedForEntry, getDeskCalibration } from './deskCalibration.js';
 import { runWithDeskClientAsync } from './deskClientScope.js';
 import {
   recordClosedTrade,
@@ -86,9 +71,7 @@ import {
   getAutoCalibrateStatus,
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
-import { decideEntryWithStructure, zoneGeometry, effectiveEntryRegime } from './structureEntry.js';
-import { readMarketStory } from './marketStory.js';
-import { regimeRunnerShouldHoldTarget } from './regimeRunner.js';
+import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -117,14 +100,7 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
-import {
-  hasBrainReloadRequest,
-  isControlApiLiveLoop,
-  maybeExitForBrainCodeReload,
-} from '../brainSelfImprove/brainReload.js';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { maybeExitForBrainCodeReload } from '../brainSelfImprove/brainReload.js';
 
 export type RobotTick = {
   at: string;
@@ -163,15 +139,7 @@ export type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
-  /**
-   * Canonical thesis for UI / manage / board (playbook).
-   * When flat: entry_watch thesis; when open: frozen entry_regime.
-   */
   regime: RegimeName;
-  /** Live classifyRegime sticky label (may differ from thesis) */
-  live_regime?: RegimeName;
-  /** Frozen playbook thesis at fill — exit/learn; null when flat */
-  entry_regime?: RegimeName | null;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -221,8 +189,6 @@ export type RobotSession = {
   cycle_busy_age_ms?: number;
   /** ISO time of newest LIVE LOG tick */
   last_tick_at?: string | null;
-  /** Newest of last_tick_at / last_quote_at — UI stale banner */
-  last_activity_at?: string | null;
 };
 
 type Internal = RobotSession & {
@@ -252,37 +218,16 @@ type Internal = RobotSession & {
   last_multi_tf_fetch_ms: number;
   /** After reverse Capital 1m: PeakProtect 25% giveback trails live */
   peak_protect_armed: boolean;
-  /**
-   * Manage pullback-episode active — adverse bounce/dip vs TREND thesis.
-   * Peak Soft× drops; Soft+ may bank Soft×1 before Soft HardInv.
-   */
-  pullback_episode_active: boolean;
-  /**
-   * Regime runner armed — Target T1–T3 touched; hold until live leaves thesis family.
-   * Not used for SIDE entries.
-   */
-  regime_runner_armed: boolean;
-  /** Live left thesis family while runner was armed (release / good exit path) */
-  regime_runner_released: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
   last_1m_profit_exit_key: string;
   /** Cached live entry watch for board UI */
   entry_watch: EntryWatch | null;
   /** Consecutive EXIT blocked (no dealId) — clear ghost after broker flat */
   exit_deal_fails: number;
-  /**
-   * Consecutive manage/entry cycles where Capital list succeeded but epic was flat
-   * while we still held local open_side. One empty list during an API blip must NOT
-   * clear MANAGE / close the thesis — that left Capital open (or Soft-closed) while
-   * the desk kept the old entry signal and re-fired.
-   */
-  broker_flat_streak: number;
   /** Prevent overlapping robotCycle (Capital awaits > cadence) */
   cycle_busy: boolean;
   /** Wall clock when cycle_busy became true — unstick hung Capital awaits */
   cycle_busy_since: number;
-  /** Bumped on start/unstuck so a hung cycle's finally cannot clear a newer cycle */
-  cycle_gen: number;
   /** Retry entry after failed order on same closed 10s bar */
   pending_entry: {
     direction: 'BUY' | 'SELL';
@@ -325,49 +270,9 @@ const ACTIVE_CADENCE_MS = 1_250;
 const SECOND_OHLC_ENRICH_MS = 8_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
-/**
- * If a Capital await hangs past this, force-clear cycle_busy so polling resumes.
- * Keep above CAPITAL_LOCK_HOLD_MS (45s) — multi-account queue is not a hang.
- */
-export const CYCLE_BUSY_STALE_MS = 55_000;
-/** Soft UI: Capital queue / slow API (multi-account same connection). Not an error yet. */
-export const CYCLE_BUSY_WARN_MS = 15_000;
-/** Hard UI STUCK: approaching real hang / unstuck. */
-export const CYCLE_BUSY_STUCK_MS = 40_000;
-/** Abort one robotCycle wall-clock so one account cannot starve the rest forever. */
-export const CYCLE_WALL_MS = 42_000;
-/** LIVE LOG stale only when idle this long (ignore while cycle_busy — ticks pause by design). */
-export const LIVE_LOG_STALE_MS = 45_000;
-/** Reuse SECOND enrich across robots on same epic (cuts Capital lock queue). */
-const SECOND_ENRICH_CACHE_MS = 5_000;
+/** If a Capital await hangs, force-clear so the robot keeps polling */
+const CYCLE_BUSY_STALE_MS = 50_000;
 const ZONE_SEED_THROTTLE_MS = 15_000;
-
-type SecondEnrichCache = {
-  at: number;
-  ok: boolean;
-  candles: Awaited<ReturnType<typeof fetchCapitalPrices>>['candles'];
-  detail: string;
-};
-const secondEnrichByEpic = new Map<string, SecondEnrichCache>();
-
-async function fetchSecondPricesCached(
-  session: Parameters<typeof fetchCapitalPrices>[0],
-  epic: string
-): Promise<Awaited<ReturnType<typeof fetchCapitalPrices>>> {
-  const key = epic.trim().toUpperCase();
-  const hit = secondEnrichByEpic.get(key);
-  if (hit && Date.now() - hit.at < SECOND_ENRICH_CACHE_MS) {
-    return { ok: hit.ok, candles: hit.candles, detail: `${hit.detail} · cache` };
-  }
-  const secs = await fetchCapitalPrices(session, epic, 'SECOND', 50);
-  secondEnrichByEpic.set(key, {
-    at: Date.now(),
-    ok: secs.ok,
-    candles: secs.candles,
-    detail: secs.detail,
-  });
-  return secs;
-}
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
@@ -385,8 +290,6 @@ function setRobotCadence(s: Internal, ms: number) {
   s.timer = setInterval(() => {
     if (s.cycle_busy) {
       if (s.cycle_busy_since > 0 && Date.now() - s.cycle_busy_since > CYCLE_BUSY_STALE_MS) {
-        // Invalidate hung generation so its finally cannot clear a fresh cycle
-        s.cycle_gen += 1;
         s.cycle_busy = false;
         s.cycle_busy_since = 0;
         pushTick(s, {
@@ -418,7 +321,7 @@ export function shouldAttemptZoneSeed(
   nowMs = Date.now(),
   throttleMs = ZONE_SEED_THROTTLE_MS
 ): boolean {
-  if (closedBarCount >= getMinBarsForZone()) return false;
+  if (closedBarCount >= MIN_BARS_FOR_ZONE) return false;
   return nowMs - lastSeedAttemptMs >= throttleMs;
 }
 
@@ -458,13 +361,6 @@ function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
   if (s.ticks.length > MAX_TICKS) s.ticks.length = MAX_TICKS;
 }
 
-/** One thesis for logs/UI: frozen fill thesis when open, else playbook from watch. */
-function sessionThesis(s: Internal): RegimeName {
-  if (s.open_side && s.entry_regime) return s.entry_regime;
-  if (s.entry_watch?.regime) return s.entry_watch.regime;
-  return s.regime;
-}
-
 function refreshEntryWatch(
   s: Internal,
   opts?: { cooldown_left_s?: number; status_override?: EntryWatch['status'] | null; last_reason?: string }
@@ -475,7 +371,6 @@ function refreshEntryWatch(
     open_side: s.open_side,
     entry_enabled: s.entry_enabled,
     regime: s.regime,
-    entry_regime: s.entry_regime,
     last_closed: s.ohlcState.last_closed,
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),
@@ -488,9 +383,9 @@ function refreshEntryWatch(
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
     capital_m1_dir: capitalCandleDir(s.last_minute_candles),
-    capital_tf5_dir: capitalHigherTfDir(s.last_tf5_candles),
-    capital_tf15_dir: capitalHigherTfDir(s.last_tf15_candles),
-    capital_tf30_dir: capitalHigherTfDir(s.last_tf30_candles),
+    capital_tf5_dir: capitalCandleDir(s.last_tf5_candles),
+    capital_tf15_dir: capitalCandleDir(s.last_tf15_candles),
+    capital_tf30_dir: capitalCandleDir(s.last_tf30_candles),
   });
 }
 
@@ -528,20 +423,8 @@ function publicSession(s: Internal): RobotSession {
     s.cycle_busy && s.cycle_busy_since > 0
       ? Math.max(0, Date.now() - s.cycle_busy_since)
       : 0;
-  const tickMs = lastTickAt ? Date.parse(lastTickAt) : NaN;
-  const quoteMs = s.last_quote_at ? Date.parse(s.last_quote_at) : NaN;
-  let lastActivityAt: string | null = null;
-  if (Number.isFinite(tickMs) && Number.isFinite(quoteMs)) {
-    lastActivityAt = tickMs >= quoteMs ? lastTickAt : s.last_quote_at;
-  } else if (Number.isFinite(tickMs)) lastActivityAt = lastTickAt;
-  else if (Number.isFinite(quoteMs)) lastActivityAt = s.last_quote_at;
-  const thesis = sessionThesis(s);
   return {
     ...rest,
-    /** Public regime = thesis (one truth). Live classify stays on live_regime. */
-    regime: thesis,
-    live_regime: s.regime,
-    entry_regime: s.entry_regime,
     closed_at_ms: s.closed_at_ms,
     entry_watch: s.entry_watch,
     ohlc_10s: publicOhlc10s(s.ohlcState),
@@ -550,19 +433,15 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
-    decision_chain: buildDecisionChain(s, thesis),
-    /** Desk health — UI: warn vs STUCK thresholds (see CYCLE_BUSY_* exports) */
+    decision_chain: buildDecisionChain(s),
+    /** Desk health — UI can show STUCK when cycle hangs */
     cycle_busy: s.cycle_busy,
     cycle_busy_age_ms: busyAge,
     last_tick_at: lastTickAt,
-    last_activity_at: lastActivityAt,
   };
 }
 
-function buildDecisionChain(
-  s: Internal,
-  thesis: RegimeName
-): NonNullable<RobotSession['decision_chain']> {
+function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
   const ohlc = publicOhlc10s(s.ohlcState);
   const ohlcLine =
     ohlc.last_c != null
@@ -591,7 +470,7 @@ function buildDecisionChain(
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: thesis || 'UNKNOWN',
+    regime: s.regime || 'UNKNOWN',
     setup: w?.setup ?? null,
     action,
   };
@@ -671,13 +550,13 @@ async function seedZoneFromMinuteHistory(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ZONE SEED WAIT · book=${s.closedBars.length}/${getMinBarsForZone()} · ${
+      detail: `ZONE SEED WAIT · book=${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · ${
         mins.detail || 'no minute candles'
       } · live 10s still building`,
     });
     refreshEntryWatch(s, {
       status_override: 'SEEDING',
-      last_reason: `Lasa tirgu · ${s.closedBars.length}/${getMinBarsForZone()} · seed: ${mins.detail || 'fail'}`,
+      last_reason: `Lasa tirgu · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · seed: ${mins.detail || 'fail'}`,
     });
     return;
   }
@@ -707,7 +586,7 @@ async function seedZoneFromMinuteHistory(
     s.ohlc_10s = publicOhlc10s(s.ohlcState);
   }
   refreshEntryWatch(s, {
-    last_reason: `ZONE SEED · ${s.closedBars.length}/${getMinBarsForZone()} sveces · regime=${s.regime}`,
+    last_reason: `ZONE SEED · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} sveces · regime=${s.regime}`,
   });
   pushTick(s, {
     phase: 'INFO',
@@ -742,18 +621,6 @@ function capitalCandleDir(
   if (c.close > c.open) return 'UP';
   if (c.close < c.open) return 'DOWN';
   return 'FLAT';
-}
-
-/**
- * Higher TF (5m/15m/30m) — same rule as Capital.com chart and as 1m:
- * last *closed* candle open vs close. Do NOT invent direction from a 4-candle
- * trek average (that showed 5m↑ while Capital’s last 5m was clearly red).
- * Returns null when no closed candle yet.
- */
-function capitalHigherTfDir(
-  candles: CapitalPriceCandle[]
-): 'UP' | 'DOWN' | 'FLAT' | null {
-  return capitalCandleDir(candles);
 }
 
 /**
@@ -851,7 +718,7 @@ async function persistClosedTradeLedger(
     holdMs < 90_000 &&
     pnlPts != null &&
     Number.isFinite(pnlPts) &&
-    Math.abs(pnlPts) < soft * (getBrainGenome().scratch_soft_mfe_frac || 0.5)
+    Math.abs(pnlPts) < soft * 0.5
   ) {
     exitReason = `EXTERNAL · SCRATCH ${Math.round(holdMs / 1000)}s · |UPL| ${pnlPts.toFixed(
       2
@@ -961,34 +828,18 @@ async function persistClosedTradeLedger(
         epic: s.epic,
         entry_ctx: compactMarketContext(s.entry_market),
         exit_ctx: exitCtx,
-        regime_runner_used: Boolean(s.regime_runner_armed),
-        regime_runner_released: Boolean(s.regime_runner_released),
       },
       s.client_id
     );
     const st = getAutoCalibrateStatus(undefined, s.client_id);
     if (cycle?.applied) {
-      const whatWhy = cycle.changes.filter((c) => c.includes('WHAT ·') || c.includes('WHY ·'));
-      const lines =
-        whatWhy.length > 0
-          ? whatWhy.slice(0, 8).join(' │ ')
-          : cycle.changes.join(' · ') || 'hold';
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTOTUNE APPLIED · ${cycle.summary} · ${lines} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · E=${st.session_expectancy_pts.toFixed(2)}`,
+        detail: `AUTO-CAL APPLIED · ${cycle.summary} · ${cycle.changes.join(' · ') || 'hold'} · knobs updated · entries stay open · session E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level}`,
       });
-      for (const line of whatWhy.slice(0, 12)) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `AUTOTUNE · ${line}`,
-        });
-      }
       if (cycleTouchesBrokerTp(cycle.changes)) {
         void syncAllOpenRobotsBrokerTp();
       }
@@ -998,7 +849,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTOTUNE hold · ${cycle.summary} · closes ${st.closes_in_session} · Soft free · genome free`,
+        detail: `AUTO-CAL hold · ${cycle.summary} · closes ${st.closes_in_session}`,
       });
     } else {
       pushTick(s, {
@@ -1006,7 +857,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTOTUNE watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · Soft ${st.knobs_now.hardinv_abs} · TP RR ${st.knobs_now.safety_tp_rr}`,
+        detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${st.knobs_now.safety_tp_rr}`,
       });
     }
     // Push live counters to COMMAND so CLOSES/LEARNER update without full refresh
@@ -1046,12 +897,8 @@ function clearTradeState(s: Internal) {
   s.safety_tp = null;
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
-  s.pullback_episode_active = false;
-  s.regime_runner_armed = false;
-  s.regime_runner_released = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
-  s.broker_flat_streak = 0;
   s.hardinv_breach_since_ms = 0;
   s.structure_breach_since_ms = 0;
   s.entry_regime = null;
@@ -1061,37 +908,6 @@ function clearTradeState(s: Internal) {
   s.last_learner_features = null;
   s.last_entry_features = null;
   s.entry_market = null;
-}
-
-/** How many consecutive empty Capital lists before we trust "broker flat". */
-const BROKER_FLAT_CONFIRM = 3;
-
-/**
- * Capital list OK but epic missing while we still hold local open_side.
- * Returns true only after BROKER_FLAT_CONFIRM consecutive empties — one blip
- * must not drop MANAGE / keep the old entry signal and re-fire.
- */
-function confirmBrokerFlatWhileLocalOpen(
-  s: Internal,
-  quote: { bid: number | null; ask: number | null; mid: number | null },
-  where: 'manage' | 'entry'
-): boolean {
-  s.broker_flat_streak = (s.broker_flat_streak || 0) + 1;
-  if (s.broker_flat_streak < BROKER_FLAT_CONFIRM) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Broker list empty · keep MANAGE ${s.open_side} (confirm ${s.broker_flat_streak}/${BROKER_FLAT_CONFIRM} · ${where}) — API blip ≠ close`,
-    });
-    return false;
-  }
-  return true;
-}
-
-function noteBrokerOpenPresent(s: Internal): void {
-  s.broker_flat_streak = 0;
 }
 
 /** Mark a Capital dealId as already counted toward CLOSES / LEARNER. */
@@ -1205,20 +1021,9 @@ async function reconcileCapitalActivityCloses(
       ask: quote.ask,
       mid: quote.mid,
       detail: `RECONCILE CLOSE · ${side} ${actType} · deal ${dealId.slice(0, 12)} · CLOSES ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N}${
-        cycle?.applied ? ` · AUTOTUNE ${cycle.summary}` : ''
+        cycle?.applied ? ` · AUTO-CAL ${cycle.summary}` : ''
       } · Soft≈${soft.toFixed(1)}`,
     });
-    if (cycle?.applied) {
-      for (const line of cycle.changes.filter((c) => c.includes('WHAT ·')).slice(0, 8)) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `AUTOTUNE · ${line}`,
-        });
-      }
-    }
     if (s.client_id) {
       emitToClient(s.client_id, {
         type: 'auto_cal_update',
@@ -1262,7 +1067,6 @@ async function waitCycleIdle(s: Internal, maxMs = 30_000): Promise<void> {
  * SAFETY SL as a true cushion — NOT dealing-rules minimum.
  * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
  * so noise does not stop every trade (slightly tighter than 0.25%).
- * Live cushion / ×broker / ×spread from BrainGenome (factory = prior hardcode).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1289,23 +1093,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const g = getBrainGenome();
-  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
-  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
-  const spreadMult = Math.max(1, g.safety_sl_spread_mult || 8);
-  const pctCushion = abs * cushionFrac;
+  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floorHi = g.safety_abs_floor_hi || 0.5;
-  const floorMid = g.safety_abs_floor_mid || 0.25;
-  const floorLo = g.safety_abs_floor_lo || 0.05;
-  const floor =
-    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? 0.0005 : 0.00005;
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
-    Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
-    Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -1321,15 +1116,12 @@ function safetyStopDistancePts(
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const g = getBrainGenome();
-  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
-  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
-  const pct = abs * cushionFrac;
-  let fromPct = minPts * brokerMult;
+  const pct = abs * 0.002;
+  let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * brokerMult, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -1403,196 +1195,12 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Snapshot of a running robot — restored after BRAIN exit-75 API restart. */
-export type RunningRobotSnapshot = {
-  account_id: number;
-  epic: string;
-  lot_size: number;
-  trading_enabled: boolean;
-  entry_enabled: boolean;
-  display_name: string;
-  last_closed_side: 'BUY' | 'SELL' | null;
-  last_close_was_loss: boolean;
-  closed_at_ms: number;
-};
-
-export type RunningRobotsPersistFile = {
-  at: string;
-  reason: string;
-  robots: RunningRobotSnapshot[];
-};
-
-function repoRootFromRobotDesk(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, '../../../../');
-}
-
-export function runningRobotsSnapshotPath(): string {
-  const env = process.env.BRAIN_RUNNING_ROBOTS_PATH?.trim();
-  if (env) return env;
-  return path.join(
-    repoRootFromRobotDesk(),
-    'data',
-    'brain-self-improve',
-    'running-robots.json'
-  );
-}
-
-export function anyRunningOpenTrade(): boolean {
-  return [...sessions.values()].some(
-    (x) => x.running && Boolean(x.open_side || x.deal_id)
-  );
-}
-
-/**
- * Persist running FLAT robots before BRAIN exit 75 so live-loop restart
- * can rehydrate the same account/epic/lot/entry sessions.
- */
-export function persistRunningRobotsForReload(reason = 'brain_code_reload'): number {
-  const robots: RunningRobotSnapshot[] = [];
-  for (const s of sessions.values()) {
-    if (!s.running) continue;
-    // Exit 75 only when all FLAT — skip any open just in case
-    if (s.open_side || s.deal_id) continue;
-    robots.push({
-      account_id: s.account_id,
-      epic: s.epic,
-      lot_size: s.lot_size,
-      trading_enabled: s.trading_enabled,
-      entry_enabled: s.entry_enabled,
-      display_name: s.display_name,
-      last_closed_side: s.last_closed_side,
-      last_close_was_loss: s.last_close_was_loss,
-      closed_at_ms: s.closed_at_ms,
-    });
-  }
-  const p = runningRobotsSnapshotPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  const body: RunningRobotsPersistFile = {
-    at: new Date().toISOString(),
-    reason,
-    robots,
-  };
-  const tmp = `${p}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, p);
-  return robots.length;
-}
-
-export function clearRunningRobotsSnapshot(): void {
-  const p = runningRobotsSnapshotPath();
-  try {
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  } catch {
-    /* ignore */
-  }
-}
-
-function readRunningRobotsSnapshot(): RunningRobotsPersistFile | null {
-  const p = runningRobotsSnapshotPath();
-  try {
-    if (!fs.existsSync(p)) return null;
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as RunningRobotsPersistFile;
-    if (!raw || !Array.isArray(raw.robots)) return null;
-    return raw;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * After Control API restart (BRAIN exit 75), re-START previously running FLAT robots
- * with the same account/epic/lot/entry state and resume polling.
- */
-export async function restoreRunningRobotsAfterReload(): Promise<number> {
-  const snap = readRunningRobotsSnapshot();
-  if (!snap?.robots.length) {
-    clearRunningRobotsSnapshot();
-    return 0;
-  }
-  let restored = 0;
-  for (const r of snap.robots) {
-    try {
-      const session = await startRobotSession({
-        account_id: r.account_id,
-        epic: r.epic,
-        display_name: r.display_name,
-        lot_size: r.lot_size,
-        trading_enabled: r.trading_enabled,
-        entry_enabled: r.entry_enabled,
-      });
-      const internal = sessions.get(session.id);
-      if (internal) {
-        internal.last_closed_side = r.last_closed_side;
-        internal.last_close_was_loss = Boolean(r.last_close_was_loss);
-        internal.closed_at_ms = Number(r.closed_at_ms) || 0;
-        pushTick(internal, {
-          phase: 'INFO',
-          bid: null,
-          ask: null,
-          mid: null,
-          detail: `BRAIN reload restore · ${r.epic} · lot ${r.lot_size} · entry=${r.entry_enabled ? 'ON' : 'OFF'} · polling resumed`,
-        });
-        refreshEntryWatch(internal, {
-          last_reason: 'BRAIN reload restore · lasa tirgu · meklē entry',
-        });
-      }
-      restored += 1;
-    } catch (err) {
-      console.error(
-        `[robotDesk] BRAIN reload restore failed for account=${r.account_id} epic=${r.epic}:`,
-        err instanceof Error ? err.message : err
-      );
-    }
-  }
-  clearRunningRobotsSnapshot();
-  if (restored > 0) {
-    console.log(`[robotDesk] BRAIN reload restored ${restored} robot session(s)`);
-  }
-  return restored;
-}
-
 /** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
 export function checkBrainCodeReload(): void {
-  const anyOpen = anyRunningOpenTrade();
-  if (hasBrainReloadRequest() && !anyOpen && isControlApiLiveLoop()) {
-    persistRunningRobotsForReload();
-  }
+  const anyOpen = [...sessions.values()].some(
+    (x) => x.running && Boolean(x.open_side || x.deal_id)
+  );
   maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
-}
-
-/** Test helper — drop in-memory sessions (simulates API process death). */
-export function _resetRobotSessionsForTests(): void {
-  for (const s of sessions.values()) {
-    if (s.timer) clearInterval(s.timer);
-    s.timer = null;
-    s.running = false;
-  }
-  sessions.clear();
-}
-
-/** Test helper — mutate session fields (e.g. mark open trade). */
-export function _patchRobotSessionForTests(
-  id: string,
-  patch: Partial<{
-    open_side: 'BUY' | 'SELL' | null;
-    deal_id: string | null;
-    mode: 'FLAT' | 'MANAGE' | 'ENTRY';
-    last_closed_side: 'BUY' | 'SELL' | null;
-    last_close_was_loss: boolean;
-    closed_at_ms: number;
-    entry_enabled: boolean;
-  }>
-): void {
-  const s = sessions.get(id);
-  if (!s) return;
-  Object.assign(s, patch);
-}
-
-/** Test helper — whether the interval poller is armed. */
-export function _robotHasPollTimerForTests(id: string): boolean {
-  const s = sessions.get(id);
-  return Boolean(s?.timer && s.cadence_ms > 0 && s.running);
 }
 
 /** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
@@ -1936,7 +1544,7 @@ async function exitTrade(
       market: s.epic,
       display_name: s.display_name,
       side: s.open_side,
-      trade_type: mapTradeType(s.open_side, null, s.entry_regime || s.regime),
+      trade_type: mapTradeType(s.open_side, null, s.regime),
       lot_size: s.lot_size,
       reason,
     });
@@ -2225,31 +1833,17 @@ async function enterTradeLocked(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.safety_tp = profitLevel != null && Number.isFinite(profitLevel) ? profitLevel : null;
   s.error = null;
-  // Freeze exit thesis at fill — use Capital-promoted playbook, not false RANGE label
-  const fillBar = s.ohlcState.last_closed;
-  const fillStory = fillBar ? readMarketStory(s.closedBars, fillBar) : null;
-  s.entry_regime = effectiveEntryRegime(s.regime, fillStory, {
-    tf30: capitalHigherTfDir(s.last_tf30_candles),
-    tf15: capitalHigherTfDir(s.last_tf15_candles),
-    tf5: capitalHigherTfDir(s.last_tf5_candles),
-    m1: capitalCandleDir(s.last_minute_candles),
-  });
+  // Freeze exit thesis at fill — live classify must not rewrite Soft/Peak mid-trade
+  s.entry_regime = s.regime;
   s.entry_setup = setupType ?? null;
   const z = zoneGeometry(s.closedBars);
   s.entry_zone = z
     ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
     : null;
-  s.entry_market = buildMarketContext(
-    s.closedBars,
-    s.entry_regime || s.regime,
-    s.multiFeed
-  );
+  s.entry_market = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   s.structure_breach_since_ms = 0;
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
-  s.pullback_episode_active = false;
-  s.regime_runner_armed = false;
-  s.regime_runner_released = false;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
@@ -2338,7 +1932,7 @@ async function enterTradeLocked(
       market: s.epic,
       display_name: s.display_name,
       side: direction,
-      trade_type: mapTradeType(direction, setupType, s.entry_regime || s.regime),
+      trade_type: mapTradeType(direction, setupType, s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
     });
@@ -2395,13 +1989,13 @@ function reportCapitalLeaseFail(s: Internal, result: CapitalComSessionResult) {
     detail: rateLimited
       ? `RATE LIMIT — ${result.detail}`
       : timedOut
-        ? `CAPITAL TIMEOUT — ${result.detail} · retry next tick · zona ${s.closedBars.length}/${getMinBarsForZone()}`
+        ? `CAPITAL TIMEOUT — ${result.detail} · retry next tick · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
         : `Session fail: ${result.detail}`,
   });
   refreshEntryWatch(s, {
     status_override: 'SEEDING',
     last_reason: timedOut
-      ? `Capital timeout · zona ${s.closedBars.length}/${getMinBarsForZone()}`
+      ? `Capital timeout · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
       : result.detail,
   });
   if (rateLimited) setRobotCadence(s, 5_000);
@@ -2422,17 +2016,8 @@ function decideOpenManageExit(
 ): string | null {
   if (quote.mid == null || !s.open_side) return null;
   if (s.entry_price == null) s.entry_price = quote.mid;
-  // Legacy attach: freeze playbook thesis (same as fill), not raw sticky live
-  if (!s.entry_regime && s.regime) {
-    const attachBar = s.ohlcState.last_closed;
-    const attachStory = attachBar ? readMarketStory(s.closedBars, attachBar) : null;
-    s.entry_regime = effectiveEntryRegime(s.regime, attachStory, {
-      tf30: capitalHigherTfDir(s.last_tf30_candles),
-      tf15: capitalHigherTfDir(s.last_tf15_candles),
-      tf5: capitalHigherTfDir(s.last_tf5_candles),
-      m1: capitalCandleDir(s.last_minute_candles),
-    });
-  }
+  // If we attached without freeze (legacy), freeze now from live state
+  if (!s.entry_regime && s.regime) s.entry_regime = s.regime;
   updateExcursion(s, quote.mid);
   // Seed Peak MFE from Capital 1m highs/lows — live mid alone forgets the bounce peak
   if (s.entry_price != null && s.last_minute_candles.length) {
@@ -2493,46 +2078,6 @@ function decideOpenManageExit(
       : null,
     prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
   });
-
-  // Pullback episode — TREND thesis + adverse bounce/dip (V-bottom Soft eat)
-  const gEp = getBrainGenome();
-  const liveSnapEp = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
-  const epMinute: 'continue' | 'reverse' | 'wait' =
-    softGate.minute_policy === 'continue' ||
-    softGate.minute_policy === 'reverse' ||
-    softGate.minute_policy === 'wait'
-      ? softGate.minute_policy
-      : 'wait';
-  const ep = detectPullbackEpisode({
-    enabled: gEp.pullback_episode_enabled,
-    openSide: s.open_side!,
-    entryRegime: s.entry_regime || s.regime,
-    liveRegime: s.regime,
-    storyChapter: liveSnapEp.story?.chapter,
-    minutePolicy: epMinute,
-    active: Boolean(s.pullback_episode_active),
-  });
-  if (ep.started) {
-    s.pullback_episode_active = true;
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Pullback episode · ${ep.why} · Peak Soft×${gEp.pullback_episode_peak_arm_soft_mult.toFixed(2)}`,
-    });
-  } else if (ep.ended) {
-    s.pullback_episode_active = false;
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Pullback episode · ${ep.why}`,
-    });
-  } else {
-    s.pullback_episode_active = ep.active;
-  }
 
   // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
   if (closed1m && s.open_side && s.entry_price != null) {
@@ -2639,85 +2184,42 @@ function decideOpenManageExit(
     });
   }
 
-  // Soft+ MFE → arm Peak trail (genome peak_arm_soft_mult — Soft×1 was Soft ceiling).
-  // Soft reference = ACTIVE Soft layer (by MFE), not Soft L3 CAP — Soft× of L3 while Soft
-  // cuts at L1 lets Soft eat Soft+ before Peak/MindBank fire.
-  // Exception: 30m story fights → genome story_fight_peak_arm_soft_mult (factory Soft×1).
-  // Exception: pullback episode active → genome pullback_episode_peak_arm_soft_mult.
+  // Soft-sized MFE → arm Peak trail early (Soft no longer BE-locks winners)
   if (
     !s.peak_protect_armed &&
     s.open_side &&
     s.entry_price != null &&
     quote.mid != null
   ) {
-    const softSl = activeSoftStopDistance(
-      s.entry_price,
-      s.mfe,
-      s.entry_regime || s.regime
-    );
-    const liveSnap = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
-    const storyFight = storyFightsSide(liveSnap.story?.allow, s.open_side);
-    const epActive = Boolean(s.pullback_episode_active);
-    const gArm = getBrainGenome();
-    const armMult = epActive
-      ? gEp.pullback_episode_peak_arm_soft_mult
-      : storyFight
-        ? gArm.story_fight_peak_arm_soft_mult
-        : gArm.peak_arm_soft_mult;
-    const armNeed = softSl * Math.max(0.5, armMult);
-    // Episode: also require min Soft× MFE so reverse alone with zero green does not arm
-    const epMinOk =
-      !epActive ||
-      s.mfe >= softSl * Math.max(0.25, gEp.pullback_episode_min_mfe_soft_mult);
-    if (s.mfe >= armNeed && epMinOk) {
+    const softSl = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+    if (s.mfe >= softSl) {
       s.peak_protect_armed = true;
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: epActive
-          ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (pullback episode) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
-          : storyFight
-            ? `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (stāsts fights ${s.open_side}) · ${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)} · Soft+ pirms Soft`
-            : `PeakProtect ARMED · Soft×${armMult.toFixed(2)} MFE (${s.mfe.toFixed(2)} ≥ ${armNeed.toFixed(2)}) · trail owns winners`,
+        detail: `PeakProtect ARMED · Soft MFE reached (${s.mfe.toFixed(2)} ≥ Soft ${softSl.toFixed(2)}) · trail owns winners`,
       });
     }
   }
 
   // ★ Mega brain — 30m zone/story/pressure/feed + expectancy → HOLD/TRAIL/CUT/BANK
   const cal = getDeskCalibration(s.client_id);
-  const softSlNow = activeSoftStopDistance(
-    s.entry_price,
-    s.mfe,
-    s.entry_regime || s.regime
+  const softSlNow = hardInvStopDistance(s.entry_price, s.entry_regime || s.regime);
+  // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak
+  const peakFloorNow = peakTrailMfeFloor(
+    Math.max(
+      Math.abs(s.entry_price) * cal.peak_mfe_pct,
+      scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
+    ),
+    softSlNow,
+    minProfitBank(softSlNow)
   );
-  const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
-  const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
-  // Soft-sized trail floor — never feed Gold-scaled ~9.5 peak_mfe_abs into brain/Peak.
-  // Story fights / pullback episode → genome Soft× floor so Peak Keep can bank Soft+.
-  const storyFightsOpen = storyFightsSide(liveMarket.story?.allow, s.open_side!);
-  const epFloor = Boolean(s.pullback_episode_active);
-  const gFloor = getBrainGenome();
-  const peakFloorNow =
-    epFloor || storyFightsOpen
-      ? softSlNow *
-        Math.max(
-          0.5,
-          epFloor
-            ? gEp.pullback_episode_peak_arm_soft_mult
-            : gFloor.story_fight_peak_arm_soft_mult
-        )
-      : peakTrailMfeFloor(
-          Math.max(
-            Math.abs(s.entry_price) * cal.peak_mfe_pct,
-            scaleDeskAbs(cal.peak_mfe_abs, s.entry_price)
-          ),
-          softSlNow,
-          minProfitBank(softSlNow)
-        );
   const targetNow = targetTakeProfitDistance(s.entry_price, s.entry_regime || s.regime);
   const autoSt = getAutoCalibrateStatus(undefined, s.client_id);
+  const favNowBrain = favorableMove(s.open_side, s.entry_price, quote.mid);
+  const liveMarket = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
   const brain = scoreManageAction({
     open_side: s.open_side,
     entry_price: s.entry_price,
@@ -2797,53 +2299,22 @@ function decideOpenManageExit(
     return `${mindExit.tag} · ${brain.reason} · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)}`;
   }
 
-  // Belt: Soft+ giveback — genome runner/leg mults (Brain may ease; Soft×1 was Soft ceiling).
-  // Soft reference = active Soft layer (same Soft Soft HardInv / Peak Soft× use).
-  // Keep = effectivePeakKeep(desk, genome) — same Keep Peak trail uses.
-  const gBank = getBrainGenome();
-  const keepCfg = effectivePeakKeep(cal.peak_retention, gBank.peak_keep);
+  // Belt: Soft+ green giving back under Keep % — take the PLUS even if mind said HOLD
+  // (1m continue used to HOLD forever → Soft ate the winner as a minus)
+  const keepCfg = cal.peak_retention > 0 ? cal.peak_retention : 0.75;
   const retNow =
     s.peak_retention != null
       ? s.peak_retention
       : s.mfe > 0
         ? Math.max(0, favNowBrain / s.mfe)
         : 1;
-  const runnerMfe = s.mfe >= softSlNow * gBank.soft_plus_runner_mult;
-  const softPlusLeg = s.mfe >= softSlNow * gBank.soft_plus_leg_mult;
-  const deepGiveback =
-    retNow < keepCfg - (gBank.deep_giveback_offset || 0.12);
-  const storyFightBank = softPlusStoryFightShouldBank({
-    mfe: s.mfe,
-    softSl: softSlNow,
-    execFav: execNow,
-    retention: retNow,
-    keep: keepCfg,
-    storyAllow: liveMarket.story?.allow,
-    openSide: s.open_side!,
-  });
-  const epBank = softPlusPullbackEpisodeShouldBank({
-    episodeActive: Boolean(s.pullback_episode_active),
-    mfe: s.mfe,
-    softSl: softSlNow,
-    execFav: execNow,
-    retention: retNow,
-    keep: keepCfg,
-    minMfeSoftMult: gBank.pullback_episode_min_mfe_soft_mult,
-  });
   if (
-    storyFightBank ||
-    epBank ||
-    (execNow >= softSlNow &&
-      softPlusLeg &&
-      retNow < keepCfg &&
-      (s.peak_protect_armed || runnerMfe || deepGiveback))
+    execNow >= softSlNow &&
+    s.mfe >= softSlNow &&
+    retNow < keepCfg
   ) {
     s.last_brain_action = 'BANK';
-    return epBank
-      ? `MindBank · Soft+ pullback episode · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} · Soft+ pirms Soft apēd`
-      : storyFightBank
-        ? `MindBank · Soft+ vs stāsts · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} · Soft+ pirms Soft apēd`
-        : `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;
+    return `MindBank · Soft+ giveback · retention ${(retNow * 100).toFixed(0)}% < Keep ${(keepCfg * 100).toFixed(0)}% · exec ${execNow.toFixed(5)} ≥ Soft ${softSlNow.toFixed(5)} · neļauju plusam kļūt par mīnusu`;
   }
 
   const peakOverrides: ExitDecideOverrides | null =
@@ -2876,66 +2347,8 @@ function decideOpenManageExit(
         // Target/TimeDecay wait — brain HOLD or softGate continue
         return null;
       }
-      // Regime runner: after T1–T3, hold Target while live family matches thesis
-      // (not SIDE). HardInv / Peak / MindBank already ran above.
-      const softSlRunner = activeSoftStopDistance(
-        s.entry_price,
-        s.mfe,
-        s.entry_regime || s.regime
-      );
-      const execFavRunner = executableFavorable(
-        s.open_side,
-        s.entry_price,
-        quote.bid,
-        quote.ask,
-        quote.mid
-      );
-      const runner = regimeRunnerShouldHoldTarget({
-        entryRegime: s.entry_regime || s.regime,
-        liveRegime: s.regime,
-        armed: Boolean(s.regime_runner_armed),
-        fav: favNow,
-        mfe: s.mfe,
-        execFav: execFavRunner,
-        minBank: minProfitBank(softSlRunner),
-        absEntry: Math.abs(s.entry_price),
-        targetAbs: getDeskCalibration(s.client_id).target_abs,
-      });
-      if (runner.arm && !s.regime_runner_armed) {
-        s.regime_runner_armed = true;
-        pushTick(s, {
-          phase: 'MANAGE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `Regime runner ARMED · ${runner.why}`,
-        });
-      }
-      if (s.regime_runner_armed && !runner.hold) {
-        s.regime_runner_released = true;
-      }
-      if (runner.hold) {
-        if (s.last_brain_action !== 'REGIME_RUNNER_HOLD') {
-          s.last_brain_action = 'REGIME_RUNNER_HOLD';
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: runner.why,
-          });
-        }
-        return null;
-      }
       const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
-      if (tpDec.exit) {
-        const releaseTag = s.regime_runner_armed
-          ? s.regime_runner_released
-            ? ' · RegimeRunner release'
-            : ' · RegimeRunner'
-          : '';
-        return `${tpDec.reason}${releaseTag} · ${brain.action}`;
-      }
+      if (tpDec.exit) return `${tpDec.reason} · ${brain.action}`;
     }
   }
   return null;
@@ -3041,40 +2454,35 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
 
   if (listedOk) {
     if (brokerOpen) {
-      noteBrokerOpenPresent(s);
       s.open_side = brokerOpen.direction;
       s.deal_id = brokerOpen.deal_id;
       syncFromBrokerOpen(s, brokerOpen, quote.mid);
       s.mode = 'MANAGE';
       if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
     } else if (s.open_side) {
-      // Need N empty lists in a row — one Capital blip must not drop MANAGE
-      if (confirmBrokerFlatWhileLocalOpen(s, quote, 'manage')) {
-        const closedSide = s.open_side;
-        s.last_closed_side = closedSide;
-        s.last_close_was_loss = true;
-        s.closed_at_ms = Date.now();
-        const flatReason = marketAllowsTrading(quote.market_status)
-          ? 'EXTERNAL · broker flat (manage cycle)'
-          : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
-        await persistClosedTradeLedger(s, quote, flatReason, 'external');
-        clearTradeState(s);
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: marketAllowsTrading(quote.market_status)
-            ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
-            : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
-        });
-        const rec = await withCapitalAccountSession(leaseInput, async (session) => {
-          await reconcileCapitalActivityCloses(session, s, quote);
-        });
-        if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
-        return;
-      }
-      // else: keep open_side + Soft/HardInv through the blip
+      const closedSide = s.open_side;
+      s.last_closed_side = closedSide;
+      s.last_close_was_loss = true;
+      s.closed_at_ms = Date.now();
+      const flatReason = marketAllowsTrading(quote.market_status)
+        ? 'EXTERNAL · broker flat (manage cycle)'
+        : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
+      await persistClosedTradeLedger(s, quote, flatReason, 'external');
+      clearTradeState(s);
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: marketAllowsTrading(quote.market_status)
+          ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
+          : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
+      });
+      const rec = await withCapitalAccountSession(leaseInput, async (session) => {
+        await reconcileCapitalActivityCloses(session, s, quote);
+      });
+      if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
+      return;
     }
   } else {
     pushTick(s, {
@@ -3140,7 +2548,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ONE TRADE · manage ${s.open_side} · ${sessionThesis(s)} · UPL ${
+    detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
       s.unrealized != null ? s.unrealized.toFixed(5) : '—'
     } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
       s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -3177,40 +2585,17 @@ async function syncAllOpenRobotsBrokerTp(): Promise<void> {
 
 async function robotCycle(s: Internal) {
   if (!s.running || s.cycle_busy) return;
-  s.cycle_gen += 1;
-  const myGen = s.cycle_gen;
   s.cycle_busy = true;
   s.cycle_busy_since = Date.now();
   try {
-    await Promise.race([
-      runWithDeskClientAsync(s.client_id || 0, () => robotCycleLocked(s)),
-      new Promise<never>((_, rej) => {
-        setTimeout(() => {
-          rej(new Error(`CYCLE WALL ${CYCLE_WALL_MS / 1000}s — Capital cycle aborted (citi konti var turpināt)`));
-        }, CYCLE_WALL_MS);
-      }),
-    ]);
-  } catch (err) {
-    if (s.cycle_gen === myGen) {
-      const detail = err instanceof Error ? err.message : String(err);
-      pushTick(s, {
-        phase: 'ERROR',
-        bid: s.last_bid,
-        ask: s.last_ask,
-        mid: s.last_mid,
-        detail,
-      });
-    }
+    await runWithDeskClientAsync(s.client_id || 0, () => robotCycleLocked(s));
   } finally {
-    if (s.cycle_gen === myGen) {
-      s.cycle_busy = false;
-      s.cycle_busy_since = 0;
-    }
+    s.cycle_busy = false;
+    s.cycle_busy_since = 0;
     // ACCEPTed BRAIN .ts → soft restart only when every robot is FLAT
-    const anyOpen = anyRunningOpenTrade();
-    if (hasBrainReloadRequest() && !anyOpen && isControlApiLiveLoop()) {
-      persistRunningRobotsForReload();
-    }
+    const anyOpen = [...sessions.values()].some(
+      (x) => x.running && Boolean(x.open_side || x.deal_id)
+    );
     maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
   }
 }
@@ -3312,7 +2697,7 @@ async function robotCycleLocked(s: Internal) {
         s.last_market_closed_tick_ms = now;
         refreshEntryWatch(s, {
           status_override: 'SEEDING',
-          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
+          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
         pushTick(s, {
           phase: 'WAIT',
@@ -3321,7 +2706,7 @@ async function robotCycleLocked(s: Internal) {
           mid: quote0.mid,
           detail: `MARKET ${quote0.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
-          }s until TRADEABLE · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
+          }s until TRADEABLE · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
         });
       }
     });
@@ -3377,7 +2762,7 @@ async function robotCycleLocked(s: Internal) {
     if (needEnrich) {
       s.last_second_ohlc_ms = Date.now();
       try {
-        const secs = await fetchSecondPricesCached(session, s.epic);
+        const secs = await fetchCapitalPrices(session, s.epic, 'SECOND', 50);
         if (secs.ok && secs.candles.length >= 2) {
           const beforeKey = s.ohlcState.last_closed
             ? closedBarKey(s.ohlcState.last_closed)
@@ -3462,34 +2847,31 @@ async function robotCycleLocked(s: Internal) {
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
-        noteBrokerOpenPresent(s);
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
         syncFromBrokerOpen(s, brokerOpen, quote.mid);
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
-        // Local thought open but broker flat → confirm before treating as closed
-        if (confirmBrokerFlatWhileLocalOpen(s, quote, 'entry')) {
-          const closedSide = s.open_side;
-          s.last_closed_side = closedSide;
-          s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
-          });
-          s.closed_at_ms = Date.now();
-          await persistClosedTradeLedger(
-            s,
-            quote,
-            'EXTERNAL · broker flat (entry cycle)',
-            'external'
-          );
-          clearTradeState(s);
-        }
+        // Local thought open but broker flat → treat as closed
+        const closedSide = s.open_side;
+        s.last_closed_side = closedSide;
+        s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
+        });
+        s.closed_at_ms = Date.now();
+        await persistClosedTradeLedger(
+          s,
+          quote,
+          'EXTERNAL · broker flat (entry cycle)',
+          'external'
+        );
+        clearTradeState(s);
       }
     } else {
       positionsUncertain = true;
@@ -3513,7 +2895,7 @@ async function robotCycleLocked(s: Internal) {
       mid: quote.mid,
       detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · mode=${s.mode} · side=${
         s.open_side || 'FLAT'
-      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · regime=${sessionThesis(s)}`,
+      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · regime=${s.regime}`,
     });
     if (s.open_side) {
       refreshEntryWatch(s, { status_override: 'MANAGE', last_reason: `MANAGE ${s.open_side}` });
@@ -3522,14 +2904,14 @@ async function robotCycleLocked(s: Internal) {
     // Trading OFF: still manage/exit open trades; block only new entries
     if (!s.trading_enabled && !(s.open_side || brokerOpen)) {
       refreshEntryWatch(s, {
-        last_reason: `Trading OFF · lasa · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
+        last_reason: `Trading OFF · lasa · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
       });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${getMinBarsForZone()} · regime=${sessionThesis(s)}`,
+        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${s.regime}`,
       });
       return null;
     }
@@ -3573,7 +2955,7 @@ async function robotCycleLocked(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${sessionThesis(s)} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -3651,14 +3033,14 @@ async function robotCycleLocked(s: Internal) {
     if (quote.mid == null) {
       refreshEntryWatch(s, {
         status_override: 'SEEDING',
-        last_reason: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
+        last_reason: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
       });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
+        detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
       });
       return null;
     }
@@ -3694,7 +3076,7 @@ async function robotCycleLocked(s: Internal) {
         : bar;
     const ohlc = s.ohlc_10s;
     const ohlcLine = entryBar
-      ? `10s O=${entryBar.open.toFixed(2)} H=${entryBar.high.toFixed(2)} L=${entryBar.low.toFixed(2)} C=${entryBar.close.toFixed(2)} ${sessionThesis(s)} · feeds ${
+      ? `10s O=${entryBar.open.toFixed(2)} H=${entryBar.high.toFixed(2)} L=${entryBar.low.toFixed(2)} C=${entryBar.close.toFixed(2)} ${s.regime} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -3730,50 +3112,33 @@ async function robotCycleLocked(s: Internal) {
     const decideNow = Boolean(mindBar);
 
     if (decideNow && mindBar) {
-      // Capital HTF first — RANGE promote must not rely on 10s-book alone
-      try {
-        await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
-      } catch {
-        /* keep previous */
-      }
-      const capitalMd = capitalCandleDir(s.last_minute_candles);
-      const capitalTf5 = capitalHigherTfDir(s.last_tf5_candles);
-      const capitalTf15 = capitalHigherTfDir(s.last_tf15_candles);
-      const capitalTf30 = capitalHigherTfDir(s.last_tf30_candles);
-      const capitalHtf = {
-        tf30: capitalTf30,
-        tf15: capitalTf15,
-        tf5: capitalTf5,
-        m1: capitalMd,
-      };
-      const storySnap = readMarketStory(s.closedBars, mindBar);
-      const entryRegime = effectiveEntryRegime(s.regime, storySnap, capitalHtf);
-      const softOff = regimeIsSoftOff(entryRegime, s.client_id);
-      const hardBlocked =
-        !regimeAllowedForEntry(entryRegime, s.client_id) && !softOff;
-      if (hardBlocked) {
+      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.entry_close_latch = null;
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
-          last_reason:
-            entryRegime !== s.regime
-              ? `${s.regime}→${entryRegime} Hard OFF kalibrācijā`
-              : `${s.regime} Hard OFF kalibrācijā`,
+          last_reason: `${s.regime} OFF kalibrācijā`,
         });
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime Hard OFF · no entry`,
+          detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime OFF · no entry`,
         });
       } else {
-        // One thesis: Soft OFF already used entryRegime — decide uses the same
-        // (not raw sticky live). classify_live keeps tip-chase on real chop.
+        // Mind reads Capital 30m→15m→5m→1m — BUY/SELL executes (no FORMING starve)
+        try {
+          await refreshCapitalMultiTf(session, s, { forceHigher: !s.last_tf30_candles.length });
+        } catch {
+          /* keep previous */
+        }
+        const capitalMd = capitalCandleDir(s.last_minute_candles);
+        const capitalTf5 = capitalCandleDir(s.last_tf5_candles);
+        const capitalTf15 = capitalCandleDir(s.last_tf15_candles);
+        const capitalTf30 = capitalCandleDir(s.last_tf30_candles);
         const sig = decideEntryWithStructure({
           bar: mindBar,
-          regime: entryRegime,
-          classify_live: s.regime,
+          regime: s.regime,
           closedBars: s.closedBars,
           last_closed_side: s.last_closed_side,
           last_close_was_loss: s.last_close_was_loss,
@@ -3783,46 +3148,8 @@ async function robotCycleLocked(s: Internal) {
           capital_tf15_dir: capitalTf15,
           capital_tf30_dir: capitalTf30,
         });
-        const strong =
-          Boolean(sig) &&
-          isStrongEntrySignal({
-            direction: sig!.direction,
-            setup: sig!.setup,
-            storyAllow: storySnap.allow,
-            storyChapter: storySnap.chapter,
-            storyConf: storySnap.confidence,
-            htf: capitalHtf,
-          });
-        if (
-          softOff &&
-          !regimeEntryPermitted(entryRegime, { strong, clientId: s.client_id })
-        ) {
-          s.entry_close_latch = null;
-          refreshEntryWatch(s, {
-            status_override: 'REGIME_OFF',
-            last_reason:
-              entryRegime !== s.regime
-                ? `${s.regime}→${entryRegime} Soft OFF · gaida strong signal`
-                : `${s.regime} Soft OFF · gaida strong signal`,
-          });
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `${ohlcLine} · ENTRY WATCH · Soft OFF ${entryRegime} · nav strong signal · no entry`,
-          });
-        } else if (sig) {
+        if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;
-          if (softOff && strong) {
-            pushTick(s, {
-              phase: 'DECIDE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `${ohlcLine} · Soft OFF override · strong ${sig.direction} ${sig.setup} · ${entryRegime}`,
-            });
-          }
           const flipOpts = { wasLoss: s.last_close_was_loss };
           const lockMs = sameDirLockMs(s.last_close_was_loss);
           if (
@@ -3942,48 +3269,18 @@ async function robotCycleLocked(s: Internal) {
       }
     } else if (s.pending_entry && s.pending_entry.bar_key === barKey && entryBar) {
       // Retry failed order on the same closed 10s bar — re-validate regime + flip lock
-      try {
-        await refreshCapitalMultiTf(session, s, { forceHigher: false });
-      } catch {
-        /* keep previous */
-      }
-      const pendingHtf = {
-        tf30: capitalHigherTfDir(s.last_tf30_candles),
-        tf15: capitalHigherTfDir(s.last_tf15_candles),
-        tf5: capitalHigherTfDir(s.last_tf5_candles),
-        m1: capitalCandleDir(s.last_minute_candles),
-      };
-      const pendingStory = readMarketStory(s.closedBars, entryBar);
-      const pendingRegime = effectiveEntryRegime(s.regime, pendingStory, pendingHtf);
-      const pendingStrong = isStrongEntrySignal({
-        direction: s.pending_entry.direction,
-        setup: s.pending_entry.setup,
-        storyAllow: pendingStory.allow,
-        storyChapter: pendingStory.chapter,
-        storyConf: pendingStory.confidence,
-        htf: pendingHtf,
-      });
-      if (
-        !regimeEntryPermitted(pendingRegime, {
-          strong: pendingStrong,
-          clientId: s.client_id,
-        })
-      ) {
+      if (!regimeAllowedForEntry(s.regime, s.client_id)) {
         s.pending_entry = null;
-        const soft = regimeIsSoftOff(pendingRegime, s.client_id);
         refreshEntryWatch(s, {
           status_override: 'REGIME_OFF',
-          last_reason:
-            pendingRegime !== s.regime
-              ? `${s.regime}→${pendingRegime} ${soft ? 'Soft OFF' : 'Hard OFF'} · cleared pending retry`
-              : `${s.regime} ${soft ? 'Soft OFF' : 'Hard OFF'} · cleared pending retry`,
+          last_reason: `${s.regime} OFF · cleared pending retry`,
         });
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · pending cleared · regime ${soft ? 'Soft OFF' : 'Hard OFF'}`,
+          detail: `${ohlcLine} · pending cleared · regime OFF`,
         });
       } else if (
         sameDirectionBlocked(
@@ -4182,7 +3479,6 @@ export async function startRobotSession(input: {
   } else if (existing?.cycle_busy) {
     existing.running = false;
     await waitCycleIdle(existing);
-    existing.cycle_gen += 1;
     existing.cycle_busy = false;
     existing.cycle_busy_since = 0;
   }
@@ -4252,16 +3548,11 @@ export async function startRobotSession(input: {
     last_manage_minute_fetch_ms: 0,
     last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
-    pullback_episode_active: false,
-    regime_runner_armed: false,
-    regime_runner_released: false,
     last_1m_profit_exit_key: '',
     entry_watch: null,
     exit_deal_fails: 0,
-    broker_flat_streak: 0,
     cycle_busy: false,
     cycle_busy_since: 0,
-    cycle_gen: 0,
     pending_entry: null,
     entry_close_latch: null,
     hardinv_breach_since_ms: 0,
@@ -4287,7 +3578,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
+      detail: `AUTO-CAL session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {

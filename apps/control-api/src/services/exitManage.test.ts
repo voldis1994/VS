@@ -7,7 +7,6 @@ import {
   favorableMove,
   hardInvStopDistance,
   peakMfeFromCandles,
-  peakTrailMfeFloor,
   safetyTakeProfitDistance,
   safetyTakeProfitDistancePts,
   safetyTakeProfitLevel,
@@ -33,8 +32,9 @@ import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js
 import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 
 beforeEach(() => {
-  _resetBrainGenomeForTests();
   setDeskCalibration(defaultDeskCalibration());
+  // Pin factory genome — live BRAIN self-improve must not break Keep 75% unit contracts
+  _resetBrainGenomeForTests();
 });
 
 function snap(
@@ -87,31 +87,6 @@ describe('closed1mProfitPolicy', () => {
   });
   it('waits on doji', () => {
     expect(closed1mProfitPolicy('BUY', { open: 2000, close: 2000 })).toBe('wait');
-  });
-});
-
-describe('peakTrailMfeFloor — Soft ceiling vs inflated Gold floor', () => {
-  it('arms above Soft×1.0 so Soft-sized winners are not Peak-banked at Soft £0.50', () => {
-    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35, peak_trail_soft_cap_mult: 1.75 });
-    const soft = 3.3;
-    const floor = peakTrailMfeFloor(soft, soft, soft);
-    expect(floor).toBeCloseTo(soft * 1.35, 5);
-    expect(floor).toBeGreaterThan(soft);
-  });
-
-  it('caps inflated Gold peak_mfe_abs (~9.6) at Soft×cap so Peak Keep still fires', () => {
-    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.35, peak_trail_soft_cap_mult: 1.75 });
-    const soft = 3.44;
-    const inflated = 9.6;
-    const floor = peakTrailMfeFloor(inflated, soft, soft);
-    expect(floor).toBeCloseTo(soft * 1.75, 5);
-    expect(floor).toBeLessThan(inflated);
-  });
-
-  it('Brain may ease peak_arm_soft_mult toward Soft×1 (autotune freedom)', () => {
-    _resetBrainGenomeForTests({ peak_arm_soft_mult: 1.0, peak_trail_soft_cap_mult: 1.75 });
-    const soft = 3.3;
-    expect(peakTrailMfeFloor(soft, soft, soft)).toBeCloseTo(soft, 5);
   });
 });
 
@@ -194,8 +169,6 @@ describe('decideBestOutcomeExit', () => {
     const aged = {
       entry_at: new Date(now - 60_000).toISOString(),
       hardinv_breach_since_ms: now - (HARDINV_CONFIRM_MS + 1_000),
-      // Unlock Soft L3 so HardInv distance matches hardInvStopDistance (broker CAP)
-      mfe: 10,
     };
     const slTrend = hardInvStopDistance(2000, 'TREND_UP');
     const hold = decideBestOutcomeExit(
@@ -217,7 +190,6 @@ describe('decideBestOutcomeExit', () => {
         entry_price: 2000,
         regime: 'TREND_UP',
         entry_at: aged.entry_at,
-        mfe: 10,
         hardinv_breach_since_ms: 0,
       }),
       2000 - slTrend - 0.2,
@@ -424,9 +396,9 @@ describe('decideBestOutcomeExit', () => {
     expect(enough.reason).toMatch(/PeakProtection/);
   });
 
-  it('Gold Peak Keep 75% trails after Soft×1.35 MFE (not Soft×1.0 ceiling, not inflated 9.6 floor)', () => {
-    // Soft×1.0 banked every Gold winner at Soft £0.50; Soft×1.35 lets runners breathe.
-    // Inflated peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 must not starve Peak Keep.
+  it('Gold Peak Keep 75% trails after Soft-sized MFE (not inflated peak_mfe_abs floor)', () => {
+    // Live bug: peak_mfe_abs 4.45 × (4300/2000) ≈ 9.6 → 8pt SELL never Peak-cut
+    // while UI showed Keep 75% and MFE ~8 / UPL ~4 (retention ~50%).
     setDeskCalibration({
       ...defaultDeskCalibration(),
       peak_retention: 0.75,

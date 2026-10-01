@@ -24,7 +24,7 @@ import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
-import { checkBrainCodeReload, restoreRunningRobotsAfterReload } from './services/robotDesk.js';
+import { checkBrainCodeReload } from './services/robotDesk.js';
 import { clearStaleBrainReloadOnBoot } from './brainSelfImprove/brainReload.js';
 import { authMiddleware, isAdminTokenConfigured } from './middleware/auth.js';
 import { isEncryptionKeyConfigured } from './security/encryption.js';
@@ -199,13 +199,6 @@ async function main() {
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
   clearStaleBrainReloadOnBoot();
-  // BRAIN exit-75 live-loop restart — put running FLAT robots back on the board
-  try {
-    const n = await restoreRunningRobotsAfterReload();
-    if (n > 0) console.log(`Restored ${n} robot session(s) after BRAIN code reload`);
-  } catch (err) {
-    console.error('BRAIN robot restore failed:', err);
-  }
 
   setInterval(() => {
     telemetry.broadcast({

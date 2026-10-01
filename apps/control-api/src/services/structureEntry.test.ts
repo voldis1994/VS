@@ -1,23 +1,17 @@
-import {
-  _setTradeOpenAtStartForTests,
-  _setEntryFilterLevelForTests,
-} from './tradeOpenPolicy.js';
+import { _setTradeOpenAtStartForTests } from './tradeOpenPolicy.js';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
   aggregateTenSecToMinutes,
   decideEntryWithStructure,
-  effectiveEntryRegime,
   lastClosed1mFromTenSec,
   minuteTrendBias,
   structureGate,
   structureStartEntry,
-  tipChaseBlocksEntry,
   zoneGeometry,
 } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,119 +81,6 @@ describe('zone geometry uses entry close', () => {
     const z = zoneGeometry(book, entry);
     expect(z).not.toBeNull();
     expect(z!.pos).toBeLessThan(0.5);
-  });
-});
-
-describe('effectiveEntryRegime — RANGE only when truly range; never blocks others', () => {
-  beforeEach(() => {
-    _setTradeOpenAtStartForTests(false);
-  });
-  afterEach(() => {
-    _setTradeOpenAtStartForTests(null);
-  });
-
-  it('never demotes TREND/PULLBACK/BREAKOUT/EXPANSION/REVERSAL/FAILED', () => {
-    const story = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
-    const htf = { tf30: 'DOWN' as const, tf15: 'DOWN' as const, tf5: 'DOWN' as const };
-    for (const r of [
-      'TREND_UP',
-      'TREND_DOWN',
-      'PULLBACK_UPTREND',
-      'PULLBACK_DOWNTREND',
-      'BREAKOUT_UP',
-      'BREAKOUT_DOWN',
-      'EXPANSION',
-      'REVERSAL_CANDIDATE',
-      'FAILED_BREAKOUT_UP',
-      'FAILED_BREAKOUT_DOWN',
-    ] as const) {
-      expect(effectiveEntryRegime(r, story, htf)).toBe(r);
-    }
-  });
-
-  it('live chop keeps SIDE even with full HTF UP/DOWN (no false TREND steal)', () => {
-    const chop = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
-    expect(
-      effectiveEntryRegime('RANGE', chop, {
-        tf30: 'UP',
-        tf15: 'UP',
-        tf5: 'UP',
-      })
-    ).toBe('RANGE');
-    expect(
-      effectiveEntryRegime('RANGE', chop, {
-        tf30: 'DOWN',
-        tf15: 'DOWN',
-        tf5: 'FLAT',
-      })
-    ).toBe('RANGE');
-    expect(
-      effectiveEntryRegime('COMPRESSION', chop, {
-        tf30: 'UP',
-        tf15: 'UP',
-        tf5: 'DOWN',
-        m1: 'DOWN',
-      })
-    ).toBe('COMPRESSION');
-  });
-
-  it('BREAK story still owns pierce; RALLY/SELLOFF on live chop stay SIDE', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('RANGE');
-    expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
-      'BREAKOUT_UP'
-    );
-    // EXHAUST without Capital HTF = chop-edge → RANGE fade brain (not fake TREND)
-    expect(effectiveEntryRegime('TRANSITION', { allow: 'BOTH', chapter: 'EXHAUST_HI' })).toBe(
-      'TRANSITION'
-    );
-    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'EXHAUST_HI' })).toBe('RANGE');
-  });
-
-  it('SELLOFF on live chop stays SIDE; BREAK_DOWN still BREAKOUT', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe('RANGE');
-    expect(effectiveEntryRegime('COMPRESSION', { allow: 'SELL', chapter: 'BREAK_DOWN' })).toBe(
-      'BREAKOUT_DOWN'
-    );
-  });
-
-  it('one-market: dip/bounce on live chop stay SIDE (no invent PULLBACK)', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'DIP_IN_RALLY' })).toBe(
-      'RANGE'
-    );
-    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'BOUNCE_IN_SELL' })).toBe(
-      'RANGE'
-    );
-  });
-
-  it('keeps RANGE only when Capital HTF flat/mixed AND story is chop', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'NONE', chapter: 'RANGE_CHOP' })).toBe('RANGE');
-    expect(effectiveEntryRegime('RANGE', { allow: 'BOTH', chapter: 'MIXED' })).toBe('RANGE');
-    expect(effectiveEntryRegime('RANGE', null)).toBe('RANGE');
-    expect(
-      effectiveEntryRegime(
-        'RANGE',
-        { allow: 'NONE', chapter: 'RANGE_CHOP' },
-        { tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT' }
-      )
-    ).toBe('RANGE');
-  });
-
-  it('live chop RALLY stays RANGE thesis — half-fade still blocks mid/HI BUY', () => {
-    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
-    const entry = book[book.length - 1]!;
-    const zone = zoneGeometry(book, entry)!;
-    expect(zone.pos).toBeGreaterThan(0.5);
-    const sig = {
-      direction: 'BUY' as const,
-      setup: 'CONTINUATION' as const,
-      reason: 'mind BUY',
-    };
-    const thesis = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
-    expect(thesis).toBe('RANGE');
-    const gate = structureGate(sig, thesis, entry, zone, null, 'UP');
-    expect(gate.ok).toBe(false);
-    // True TREND_UP live still allows upper-half BUY at gate
-    expect(structureGate(sig, 'TREND_UP', entry, zone, null, 'UP').ok).toBe(true);
   });
 });
 
@@ -347,11 +228,8 @@ describe('executable gates (not impossible AND-stacks)', () => {
       regime: 'RANGE',
       closedBars: book,
     });
-    // False RANGE + selloff story → promote TREND_DOWN: may SELL, never knife BUY
-    if (fadeBuy) {
-      expect(fadeBuy.direction).toBe('SELL');
-      expect(fadeBuy.reason).toMatch(/TREND_DOWN|PRĀTS ENTRY SELL/);
-    }
+    // RANGE fade BUY blocked into selloff
+    expect(fadeBuy).toBeNull();
 
     // TREND_UP into multi-1m selloff: entry brain uses the picture — may SELL/WAIT,
     // never knife a RANGE-style bounce BUY against the book.
@@ -663,139 +541,5 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN/);
     void book;
     void trigger;
-  });
-});
-
-describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', () => {
-  beforeEach(() => {
-    _resetBrainGenomeForTests({});
-  });
-  afterEach(() => {
-    _setEntryFilterLevelForTests(null);
-    _setTradeOpenAtStartForTests(null);
-    _resetBrainGenomeForTests({});
-  });
-
-  it('entry_require_regime_setup: mind side without 10s/structure recipe → null', () => {
-    // Quiet mid-zone tip — no PULLBACK/FADE recipe; mind may want BUY but must WAIT
-    const book = zoneBook({ lo: 4150, hi: 4170, lastClose: 4160, lastOpen: 4160.05 });
-    const entry = book[book.length - 1]!;
-    const sig = decideEntryWithStructure({
-      bar: entry,
-      regime: 'TREND_UP',
-      classify_live: 'TREND_UP',
-      closedBars: book,
-      capital_m1_dir: 'UP',
-      capital_tf5_dir: 'UP',
-      capital_tf15_dir: 'UP',
-      capital_tf30_dir: 'UP',
-    });
-    // Either null (no recipe) or a real PULLBACK/CONTINUATION structure match — never invent-only
-    if (sig) {
-      expect(sig.reason).not.toMatch(/nav 10s trigger — izpildu PRĀTS/);
-    } else {
-      expect(sig).toBeNull();
-    }
-  });
-
-
-  it('tipChaseBlocksEntry: false RANGE + TREND_PULLBACK still blocks RALLY BUY at HI tip', () => {
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'RANGE',
-        lane: 'TREND_PULLBACK',
-        chapter: 'RALLY',
-        side: 'BUY',
-        zpos: 0.85,
-        barSign: 1,
-      })
-    ).toBe(true);
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'RANGE',
-        lane: 'TREND_PULLBACK',
-        chapter: 'SELLOFF',
-        side: 'SELL',
-        zpos: 0.12,
-        barSign: -1,
-      })
-    ).toBe(true);
-  });
-
-  it('tipChaseBlocksEntry: true live TREND_PULLBACK does not use chop tip knife', () => {
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'TREND_UP',
-        lane: 'TREND_PULLBACK',
-        chapter: 'RALLY',
-        side: 'BUY',
-        zpos: 0.85,
-        barSign: 1,
-      })
-    ).toBe(false);
-  });
-
-  it('tipChaseBlocksEntry: REVERSAL lane never stolen by RANGE tip rules', () => {
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'REVERSAL_CANDIDATE',
-        lane: 'REVERSAL',
-        chapter: 'RALLY',
-        side: 'BUY',
-        zpos: 0.85,
-        barSign: 1,
-      })
-    ).toBe(false);
-  });
-
-  it('tipChaseBlocksEntry RANGE_FADE chop uses genome struct_extreme_* (not hardcode 0.85)', () => {
-    _resetBrainGenomeForTests({ struct_extreme_hi: 0.9, struct_extreme_lo: 0.1 });
-    // Below new extreme → no block
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'RANGE',
-        lane: 'RANGE_FADE',
-        chapter: 'RANGE_CHOP',
-        side: 'BUY',
-        zpos: 0.86,
-        barSign: 1,
-      })
-    ).toBe(false);
-    // At/above extreme → block
-    expect(
-      tipChaseBlocksEntry({
-        liveRegime: 'RANGE',
-        lane: 'RANGE_FADE',
-        chapter: 'RANGE_CHOP',
-        side: 'BUY',
-        zpos: 0.91,
-        barSign: 1,
-      })
-    ).toBe(true);
-  });
-
-  it('L0 + live RANGE + HTF UP + RALLY at HI tip → no BUY arm (thesis tip safety)', () => {
-    _setEntryFilterLevelForTests(0);
-    _setTradeOpenAtStartForTests(true);
-    // Zone HI tip ~0.85 — last close near hi
-    const book = zoneBook({ lo: 4153.7, hi: 4159.48, lastClose: 4158.9, lastOpen: 4157.5 });
-    const entry = book[book.length - 1]!;
-    const z = zoneGeometry(book, entry)!;
-    expect(z.pos).toBeGreaterThanOrEqual(0.8);
-    const sig = decideEntryWithStructure({
-      bar: entry,
-      regime: 'RANGE',
-      closedBars: book,
-      capital_m1_dir: 'DOWN',
-      capital_tf5_dir: 'UP',
-      capital_tf15_dir: 'UP',
-      capital_tf30_dir: 'UP',
-    });
-    // Promote would be PULLBACK_UPTREND; tip knife must still block BUY at HI RALLY
-    if (sig) {
-      expect(sig.direction).not.toBe('BUY');
-    } else {
-      expect(sig).toBeNull();
-    }
   });
 });

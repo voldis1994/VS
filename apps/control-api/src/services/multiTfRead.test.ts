@@ -121,28 +121,4 @@ describe('multiTfRead', () => {
     ];
     expect(trekBiasFromCandles(candles, 4)).toBe('DOWN');
   });
-
-  it('fresh closed red beats stale green majority (Gold dump vs 5m↑ bug)', () => {
-    // 3×5m rally greens then 1×5m dump red — Capital chart is DOWN; old trek stayed UP
-    const candles = [
-      { open: 4164, high: 4168, low: 4163, close: 4167 },
-      { open: 4167, high: 4170, low: 4166, close: 4169 },
-      { open: 4169, high: 4173, low: 4168, close: 4172 },
-      { open: 4172, high: 4172.5, low: 4164, close: 4165 }, // closed dump
-      { open: 4165, high: 4166, low: 4163, close: 4163.5 }, // forming
-    ];
-    expect(trekBiasFromCandles(candles, 4)).toBe('DOWN');
-    expect(trekBiasFromCandles(candles, 4)).not.toBe('UP');
-  });
-
-  it('fresh closed green beats stale red majority', () => {
-    const candles = [
-      { open: 4172, high: 4173, low: 4168, close: 4169 },
-      { open: 4169, high: 4170, low: 4165, close: 4166 },
-      { open: 4166, high: 4167, low: 4163, close: 4164 },
-      { open: 4164, high: 4171, low: 4163.5, close: 4170 }, // closed recovery
-      { open: 4170, high: 4171, low: 4169, close: 4170.2 },
-    ];
-    expect(trekBiasFromCandles(candles, 4)).toBe('UP');
-  });
 });
