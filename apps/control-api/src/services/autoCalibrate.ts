@@ -1,10 +1,9 @@
 /**
  * Ultimate desk auto-calibrate — watches closes since robot START and
- * softly retunes Soft/Peak/Target + entry_filter_level + regime allowlist
- * every N closes.
+ * softly retunes Soft/Peak/Target + entry_filter_level every N closes.
  *
- * Soft by design: never daily/% entry blocks, never empty allowlist,
- * never starve below MIN_ENABLED_REGIMES; core regimes never auto-OFF.
+ * Soft by design: never daily/% entry blocks, never empty allowlist.
+ * Regimes: NEVER auto-OFF — only calibrate Soft/Peak/Target (and may ON missing).
  * Lot size untouched.
  * Entry filters start OPEN (0); auto-cal raises after bad closes.
  */
@@ -37,9 +36,8 @@ export const AUTO_CAL_MAX_PEAK_RETENTION = 0.75;
 export const AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK = 2;
 
 /**
- * Core liquid regimes — auto-cal NEVER turns these OFF.
- * Demoting RANGE/TREND left only rare BREAKOUT_* → robot starves.
- * Satellite regimes (BREAKOUT / FAILED / REVERSAL) may still soft-demote.
+ * Core liquid regimes — always kept ON.
+ * AutoCal never turns ANY regime OFF (only Soft/Peak/Target calibrate).
  */
 export const CORE_ALWAYS_ON_REGIMES: readonly string[] = [
   'RANGE',
@@ -781,7 +779,7 @@ export function proposeAutoCalibration(
     }
   }
 
-  // --- Soft regime book ---
+  // --- Regime book: NEVER OFF — AutoCal only calibrates Soft/Peak/Target ---
   const byRegime = new Map<string, { sum: number; n: number }>();
   for (const t of windowTrades) {
     const r = String(t.regime || 'UNKNOWN').toUpperCase();
@@ -794,7 +792,7 @@ export function proposeAutoCalibration(
 
   let enabled = new Set(next.enabled_regimes.map((r) => String(r).toUpperCase()));
 
-  // Promote clear winners
+  // May turn missing winners ON — never delete / OFF any regime
   for (const [r, st] of byRegime) {
     if (st.n >= 1 && st.sum > 0.4 && !enabled.has(r)) {
       enabled.add(r);
@@ -803,51 +801,28 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Demote at most ONE worst *satellite* offender (never CORE)
-  let demotedThisCycle: string | null = null;
-  const offenders = [...byRegime.entries()]
-    .filter(
-      ([r, st]) =>
-        !isCoreAlwaysOnRegime(r) && st.n >= 2 && st.sum < -0.35
-    )
-    .sort((a, b) => a[1].sum - b[1].sum);
-  if (offenders.length && enabled.size > MIN_ENABLED_REGIMES) {
-    const worst = offenders[0]![0];
-    if (enabled.has(worst) && enabled.size - 1 >= MIN_ENABLED_REGIMES) {
-      enabled.delete(worst);
-      demotedSession.add(worst);
-      demotedThisCycle = worst;
-      changes.push(`regime OFF ${worst}`);
+  // Clear any stale demote book — AutoCal no longer demotes
+  if (demotedSession.size) {
+    for (const r of [...demotedSession]) {
+      if (!enabled.has(r)) {
+        enabled.add(r);
+        changes.push(`regime ON ${r}`);
+      }
+      demotedSession.delete(r);
     }
   }
 
-  // Positive cycle OR flat — soft re-promote one previously demoted regime
-  if ((expectancy > 0.1 || !demotedThisCycle) && demotedSession.size) {
-    const candidate = [...demotedSession].find((r) => r !== demotedThisCycle);
-    if (candidate && !enabled.has(candidate)) {
-      enabled.add(candidate);
-      demotedSession.delete(candidate);
-      changes.push(`regime ON ${candidate}`);
+  // All tradable defaults stay ON (calibrate Soft/Peak/Target instead of killing regimes)
+  for (const r of tradableDefaultRegimes()) {
+    if (!enabled.has(r)) {
+      enabled.add(r);
+      changes.push(`regime ON ${r}`);
     }
   }
-
-  // Core always stay ON — cannot starve liquid regimes
   for (const r of CORE_ALWAYS_ON_REGIMES) {
     if (!enabled.has(r)) {
       enabled.add(r);
-      demotedSession.delete(r);
       changes.push(`regime ON ${r} (core)`);
-    }
-  }
-
-  // Floor: never starve — refill from tradable defaults
-  if (enabled.size < MIN_ENABLED_REGIMES) {
-    for (const r of tradableDefaultRegimes()) {
-      if (enabled.size >= MIN_ENABLED_REGIMES) break;
-      if (!enabled.has(r)) {
-        enabled.add(r);
-        changes.push(`regime ON ${r} (floor)`);
-      }
     }
   }
 

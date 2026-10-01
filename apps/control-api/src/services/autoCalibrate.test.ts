@@ -77,7 +77,7 @@ describe('autoCalibrate', () => {
     expect(getAutoCalibrateStatus().cycles_run).toBe(1);
   });
 
-  it('soft-demotes satellite regime but NEVER turns OFF core (RANGE etc)', () => {
+  it('never turns OFF any regime — only calibrates Soft/Peak/Target', () => {
     const current = defaultDeskCalibration();
     const window = [
       trade({ pnl_pts: -1.5, regime: 'BREAKOUT_UP', exit_reason: 'HardInvalidation' }),
@@ -89,13 +89,14 @@ describe('autoCalibrate', () => {
     const demoted = new Set<string>();
     const result = proposeAutoCalibration(current, window, demoted);
     expect(result.next.enabled_regimes.length).toBeGreaterThanOrEqual(MIN_ENABLED_REGIMES);
-    expect(result.next.enabled_regimes.includes('BREAKOUT_UP' as never)).toBe(false);
+    expect(result.next.enabled_regimes.includes('BREAKOUT_UP' as never)).toBe(true);
     expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
     expect(result.next.enabled_regimes.includes('TREND_UP' as never)).toBe(true);
-    expect(result.changes.some((c) => c.includes('regime OFF BREAKOUT_UP'))).toBe(true);
+    expect(result.changes.some((c) => c.includes('regime OFF'))).toBe(false);
+    expect(demoted.size).toBe(0);
   });
 
-  it('refuses to auto-OFF core RANGE even when it is the worst loser', () => {
+  it('never auto-OFF RANGE (or any regime) even when it is the worst loser', () => {
     const current = defaultDeskCalibration();
     const window = [
       trade({ pnl_pts: -2, regime: 'RANGE' }),
@@ -106,7 +107,7 @@ describe('autoCalibrate', () => {
     ];
     const result = proposeAutoCalibration(current, window, new Set());
     expect(result.next.enabled_regimes.includes('RANGE' as never)).toBe(true);
-    expect(result.changes.some((c) => c.includes('regime OFF RANGE'))).toBe(false);
+    expect(result.changes.some((c) => c.includes('regime OFF'))).toBe(false);
     for (const r of CORE_ALWAYS_ON_REGIMES) {
       expect(result.next.enabled_regimes.includes(r as never)).toBe(true);
     }
