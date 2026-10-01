@@ -3427,20 +3427,10 @@ async function robotCycleLocked(s: Internal) {
                 mid: quote.mid,
                 detail: `10s MINUTE fallback enrich · SECOND failed (${secs.detail || 'no candles'}) · O=${lastSyn.open.toFixed(2)} H=${lastSyn.high.toFixed(2)} L=${lastSyn.low.toFixed(2)} C=${lastSyn.close.toFixed(2)} · body=${(bodyPct(lastSyn) * 100).toFixed(3)}%`,
               });
-            } else {
-              const nowFail = Date.now();
-              if (nowFail - s.last_enrich_fail_tick_ms >= ENRICH_FAIL_TICK_EVERY_MS) {
-                s.last_enrich_fail_tick_ms = nowFail;
-                pushTick(s, {
-                  phase: 'WAIT',
-                  bid: quote.bid,
-                  ask: quote.ask,
-                  mid: quote.mid,
-                  detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
-                });
-              }
             }
+            // Still flat / quiet — not a FAIL. No LIVE LOG spam (Capital SECOND often empty in QUIET).
           } else {
+            // No SECOND + no MINUTE — real gap; log once per minute, not every enrich
             const nowFail = Date.now();
             if (nowFail - s.last_enrich_fail_tick_ms >= ENRICH_FAIL_TICK_EVERY_MS) {
               s.last_enrich_fail_tick_ms = nowFail;
@@ -3449,7 +3439,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
+                detail: `10s OHLC quiet · SECOND ${secs.detail || 'empty'} · MINUTE unavailable · waiting range`,
               });
             }
           }
