@@ -59,23 +59,23 @@ export const TREK_FIRM_MULT = 1.5;
 
 function storyKnobs() {
   const g = getBrainGenome();
-  const minPathBp = Math.max(0.1, g.story_min_path_bp || 7);
+  const minPathBp = Math.max(0.1, g.story_min_path_bp ?? 7);
   return {
     minPathFrac: minPathBp * 1e-4 || STORY_MIN_PATH_PCT,
-    chaseEdge: g.chase_edge || CHASE_EDGE,
-    confMin: g.story_conf_min || STORY_CONF_MIN,
-    trekFirmMult: g.trek_firm_mult || TREK_FIRM_MULT,
-    sellStructPos: g.story_sell_struct_pos || 0.45,
-    buyStructPos: g.story_buy_struct_pos || 0.55,
-    colorDelta: Math.max(1, g.bounce_dip_color_delta || 2),
-    exhaustLo: g.exhaust_pos_lo || 0.2,
-    exhaustHi: g.exhaust_pos_hi || 0.8,
-    confBreak: g.story_conf_break || 0.8,
-    confBounceDip: g.story_conf_bounce_dip || 0.85,
-    confStruct: g.story_conf_struct || 0.75,
-    confRecent: g.story_conf_recent || 0.7,
-    confChopThin: g.story_conf_chop_thin || 0.35,
-    confChop: g.story_conf_chop || 0.4,
+    chaseEdge: g.chase_edge ?? CHASE_EDGE,
+    confMin: g.story_conf_min ?? STORY_CONF_MIN,
+    trekFirmMult: g.trek_firm_mult ?? TREK_FIRM_MULT,
+    sellStructPos: g.story_sell_struct_pos ?? 0.45,
+    buyStructPos: g.story_buy_struct_pos ?? 0.55,
+    colorDelta: Math.max(1, g.bounce_dip_color_delta ?? 2),
+    exhaustLo: g.exhaust_pos_lo ?? 0.2,
+    exhaustHi: g.exhaust_pos_hi ?? 0.8,
+    confBreak: g.story_conf_break ?? 0.8,
+    confBounceDip: g.story_conf_bounce_dip ?? 0.85,
+    confStruct: g.story_conf_struct ?? 0.75,
+    confRecent: g.story_conf_recent ?? 0.7,
+    confChopThin: g.story_conf_chop_thin ?? 0.35,
+    confChop: g.story_conf_chop ?? 0.4,
     scalpWick: g.scalp_wick_confirm !== false,
   };
 }
@@ -129,7 +129,7 @@ function tapeMinuteBucketMs(bars: TenSecBar[]): number {
 function closedMinutes(bars: TenSecBar[]): MinuteBar[] {
   const mins = aggregateTenSecToMinutes(bars);
   const lastBucket = tapeMinuteBucketMs(bars);
-  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
+  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars ?? 3);
   return mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
 }
 
@@ -153,10 +153,10 @@ function zonePos(
   const width = Math.max(hi - lo, 1e-9);
   const pos = Math.min(1, Math.max(0, (entryBar.close - lo) / width));
   const g = getBrainGenome();
-  const cutLo = g.zone_band_cut_lo || 0.2;
-  const cutMidLo = g.zone_band_cut_mid_lo || 0.4;
-  const cutMidHi = g.zone_band_cut_mid_hi || 0.6;
-  const cutHi = g.zone_band_cut_hi || 0.8;
+  const cutLo = g.zone_band_cut_lo ?? 0.2;
+  const cutMidLo = g.zone_band_cut_mid_lo ?? 0.4;
+  const cutMidHi = g.zone_band_cut_mid_hi ?? 0.6;
+  const cutHi = g.zone_band_cut_hi ?? 0.8;
   const band =
     pos <= cutLo
       ? 'LO'
@@ -257,7 +257,7 @@ export function readMarketStory(
   const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
   const midPx = Math.abs(last.close) || 1;
   const knobs = storyKnobs();
-  const trekAbs = getBrainGenome().trek_min_path_abs_pts || 3;
+  const trekAbs = getBrainGenome().trek_min_path_abs_pts ?? 3;
   const minPath = Math.max(trekAbs, midPx * knobs.minPathFrac);
   const midZone = (windowHi + windowLo) / 2;
 
@@ -444,10 +444,10 @@ function oneMDir(m: MinuteBar | null): 'UP' | 'DOWN' | 'FLAT' {
 }
 
 /** Upper/lower wick rejection on last 1m — genome scalp_wick_* (not literals). */
-function rejection1m(m: MinuteBar, side: 'BUY' | 'SELL'): boolean {
+export function rejection1m(m: MinuteBar, side: 'BUY' | 'SELL'): boolean {
   const g = getBrainGenome();
-  const wickFrac = g.scalp_wick_frac || 0.45;
-  const bodyFrac = g.scalp_wick_body_frac || 0.15;
+  const wickFrac = g.scalp_wick_frac ?? 0.45;
+  const bodyFrac = g.scalp_wick_body_frac ?? 0.15;
   const span = Math.max(m.high - m.low, 1e-9);
   const upper = (m.high - Math.max(m.open, m.close)) / span;
   const lower = (Math.min(m.open, m.close) - m.low) / span;

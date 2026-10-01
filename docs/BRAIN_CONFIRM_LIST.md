@@ -12,6 +12,7 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
 **STATUS 2026-10-01:** **278/278** schema+wire+hypothesize (manage/mind/exit/scalp/local/safety/auto-cal bp 221–278; tip wires 215–220).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
+**Review fix:** `auto_calibrate_every_n` window=trigger; exempt `[]` kept; `??` (0 ok); post-impulse `zone_bars` Genome; `genomeWireCut.proof.test.ts` = flip→decision (ne tikai value).
 
 ---
 
@@ -280,8 +281,8 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 ### Post-impulse tip (nearmēt kad kustība jau beigusies)
 213. entry_block_post_impulse_tip — ON: mid→late leg + tip → block BUY@HI / SELL@LO
 214. entry_post_impulse_share_min — min |mid→late|/zoneWidth (factory 0.22)
-215. entry_post_impulse_min_bars — min zonePrior bars (factory 12)
-216. entry_post_impulse_exempt_lanes — BREAKOUT/REVERSAL (pierce/flip own)
+215. entry_post_impulse_min_bars / entry_post_impulse_zone_bars — min bars + lookback (Genome horizon)
+216. entry_post_impulse_exempt_lanes — BREAKOUT/REVERSAL; **[] = no exemptions**
 
 ### Tip / Peak wires (vairs neciets kods)
 217. entry_tip_chase_trend_pullback — tip-chase uz TREND_PULLBACK

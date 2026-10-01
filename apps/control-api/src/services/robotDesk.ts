@@ -83,7 +83,7 @@ import {
   type TradeLedgerSource,
 } from './tradeLedger.js';
 import {
-  AUTO_CALIBRATE_EVERY_N,
+  autoCalibrateEveryN,
   ensureAutoCalibrateSession,
   getAutoCalibrateStatus,
   noteClosedTradeForAutoCalibrate,
@@ -853,7 +853,7 @@ async function persistClosedTradeLedger(
     holdMs < 90_000 &&
     pnlPts != null &&
     Number.isFinite(pnlPts) &&
-    Math.abs(pnlPts) < soft * (getBrainGenome().scratch_soft_mfe_frac || 0.5)
+    Math.abs(pnlPts) < soft * (getBrainGenome().scratch_soft_mfe_frac ?? 0.5)
   ) {
     exitReason = `EXTERNAL · SCRATCH ${Math.round(holdMs / 1000)}s · |UPL| ${pnlPts.toFixed(
       2
@@ -1011,7 +1011,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTOTUNE watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · Soft ${st.knobs_now.hardinv_abs} · TP RR ${st.knobs_now.safety_tp_rr}`,
+        detail: `AUTOTUNE watch ${st.closes_in_session}/${autoCalibrateEveryN()} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · Soft ${st.knobs_now.hardinv_abs} · TP RR ${st.knobs_now.safety_tp_rr}`,
       });
     }
     // Push live counters to COMMAND so CLOSES/LEARNER update without full refresh
@@ -1209,7 +1209,7 @@ async function reconcileCapitalActivityCloses(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `RECONCILE CLOSE · ${side} ${actType} · deal ${dealId.slice(0, 12)} · CLOSES ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N}${
+      detail: `RECONCILE CLOSE · ${side} ${actType} · deal ${dealId.slice(0, 12)} · CLOSES ${st.closes_in_session}/${autoCalibrateEveryN()}${
         cycle?.applied ? ` · AUTOTUNE ${cycle.summary}` : ''
       } · Soft≈${soft.toFixed(1)}`,
     });
@@ -1269,6 +1269,26 @@ async function waitCycleIdle(s: Internal, maxMs = 30_000): Promise<void> {
  * so noise does not stop every trade (slightly tighter than 0.25%).
  * Live cushion / ×broker / ×spread from BrainGenome (factory = prior hardcode).
  */
+/** Genome SAFETY abs floor for mid — exported for wire-cut proof. */
+export function safetyAbsFloorForMid(mid: number): number {
+  const abs = Math.max(Math.abs(mid), 1e-9);
+  const g = getBrainGenome();
+  const floorHi = g.safety_abs_floor_hi ?? 0.5;
+  const floorMid = g.safety_abs_floor_mid ?? 0.25;
+  const floorLo = g.safety_abs_floor_lo ?? 0.05;
+  const floorTiny = abs * (Math.max(0.1, g.safety_abs_floor_tiny_bp ?? 5) * 1e-4);
+  const floorNano = abs * (Math.max(0.1, g.safety_abs_floor_nano_bp ?? 0.5) * 1e-4);
+  return abs >= 1000
+    ? floorHi
+    : abs >= 100
+      ? floorMid
+      : abs >= 10
+        ? floorLo
+        : abs >= 1
+          ? floorTiny
+          : floorNano;
+}
+
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1289,7 +1309,7 @@ function safetyStopLevel(
   const abs = Math.max(Math.abs(ref), 1e-9);
   const g = getBrainGenome();
   // bp → frac (min step 0.1 bp) — no 0.00005 / 0.0005 literals
-  const spreadFallbackFrac = Math.max(0.1, g.safety_spread_fallback_bp || 0.5) * 1e-4;
+  const spreadFallbackFrac = Math.max(0.1, g.safety_spread_fallback_bp ?? 0.5) * 1e-4;
   const spr =
     spread != null && Number.isFinite(spread) && spread > 0
       ? spread
@@ -1297,19 +1317,19 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * spreadFallbackFrac;
 
-  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp || 20) * 1e-4;
-  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
-  const spreadMult = Math.max(1, g.safety_sl_spread_mult || 8);
+  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp ?? 20) * 1e-4;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult ?? 2.5);
+  const spreadMult = Math.max(1, g.safety_sl_spread_mult ?? 8);
   const pctCushion = abs * cushionFrac;
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floorHi = g.safety_abs_floor_hi || 0.5;
-  const floorMid = g.safety_abs_floor_mid || 0.25;
-  const floorLo = g.safety_abs_floor_lo || 0.05;
-  const floorTiny = abs * (Math.max(0.1, g.safety_abs_floor_tiny_bp || 5) * 1e-4);
-  const floorNano = abs * (Math.max(0.1, g.safety_abs_floor_nano_bp || 0.5) * 1e-4);
+  const floorHi = g.safety_abs_floor_hi ?? 0.5;
+  const floorMid = g.safety_abs_floor_mid ?? 0.25;
+  const floorLo = g.safety_abs_floor_lo ?? 0.05;
+  const floorTiny = abs * (Math.max(0.1, g.safety_abs_floor_tiny_bp ?? 5) * 1e-4);
+  const floorNano = abs * (Math.max(0.1, g.safety_abs_floor_nano_bp ?? 0.5) * 1e-4);
   const floor =
     abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? floorTiny : floorNano;
   const dist =
@@ -1331,8 +1351,8 @@ function safetyStopDistancePts(
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
   const g = getBrainGenome();
-  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp || 20) * 1e-4;
-  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
+  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp ?? 20) * 1e-4;
+  const brokerMult = Math.max(1, g.safety_sl_broker_min_mult ?? 2.5);
   const pct = abs * cushionFrac;
   let fromPct = minPts * brokerMult;
   if (pointSize != null && pointSize > 0) {
@@ -4291,7 +4311,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
+      detail: `AUTOTUNE session · closes ${st.closes_in_session}/${autoCalibrateEveryN()} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · genome keep ${Number(st.knobs_now.genome_peak_keep).toFixed(2)} · OPEN TRADE-ALL (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {

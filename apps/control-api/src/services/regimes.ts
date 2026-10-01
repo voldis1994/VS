@@ -125,12 +125,12 @@ export const MIN_BARS_FOR_ZONE = 90;
 
 /** Live zone window (10s bars) from BrainGenome — factory = ZONE_BARS. */
 export function getZoneBars(): number {
-  return Math.max(30, getBrainGenome().zone_bars || ZONE_BARS);
+  return Math.max(30, getBrainGenome().zone_bars ?? ZONE_BARS);
 }
 
 /** Live min bars before zone classify — factory = MIN_BARS_FOR_ZONE. */
 export function getMinBarsForZone(): number {
-  const minNeed = getBrainGenome().min_bars_for_zone || MIN_BARS_FOR_ZONE;
+  const minNeed = getBrainGenome().min_bars_for_zone ?? MIN_BARS_FOR_ZONE;
   return Math.min(getZoneBars(), Math.max(10, minNeed));
 }
 
@@ -323,11 +323,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   // Local consolidation break (last ~10m), independent of full 30m box.
   // Gold 17:45: dump pierced 4149–4154 shelf while still "inRange" of the wider
   // 30m zone that already contained the earlier 4160→… selloff → false RANGE.
-  const lbMax = genome.local_breakout_lookback_max || 60;
-  const lbMin = genome.local_breakout_lookback_min || 18;
-  const lbSkip = genome.local_breakout_skip_bars || 6;
-  const lbMinStruct = genome.local_breakout_min_struct_bars || 12;
-  const lbClearMult = genome.local_breakout_clear_frac_mult || 0.5;
+  const lbMax = genome.local_breakout_lookback_max ?? 60;
+  const lbMin = genome.local_breakout_lookback_min ?? 18;
+  const lbSkip = genome.local_breakout_skip_bars ?? 6;
+  const lbMinStruct = genome.local_breakout_min_struct_bars ?? 12;
+  const lbClearMult = genome.local_breakout_clear_frac_mult ?? 0.5;
   const localLookback = Math.min(lbMax, Math.max(lbMin, zonePrior.length - lbSkip));
   const localStruct = zonePrior.slice(0, -lbSkip).slice(-localLookback);
   let localBreakUp = false;
@@ -337,7 +337,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     const lLo = Math.min(...localStruct.map((b) => b.low));
     const lW = Math.max(lHi - lLo, 1e-9);
     const localFrac = Math.max(
-      genome.local_breakout_frac_floor || 0.12,
+      genome.local_breakout_frac_floor ?? 0.12,
       CLEAR_BREAK_FRAC * lbClearMult
     );
     localBreakUp =
@@ -465,11 +465,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const trekEfficiency = zonePath > 1e-9 ? Math.abs(zoneTrekPts) / zonePath : 0;
   const trekShare = Math.abs(zoneTrekPts) / zoneWidth;
   const recentShare = Math.abs(recentLegPts) / zoneWidth;
-  const trekFullMult = genome.trek_full_enter_mult || 4;
-  const trekShareMin = genome.trek_share_min || 0.35;
-  const trekEffMin = genome.trek_eff_min || 0.4;
-  const trekRecentMult = genome.trek_recent_enter_mult || 2;
-  const trekRecentShareMin = genome.trek_recent_share_min || 0.25;
+  const trekFullMult = genome.trek_full_enter_mult ?? 4;
+  const trekShareMin = genome.trek_share_min ?? 0.35;
+  const trekEffMin = genome.trek_eff_min ?? 0.4;
+  const trekRecentMult = genome.trek_recent_enter_mult ?? 2;
+  const trekRecentShareMin = genome.trek_recent_share_min ?? 0.25;
   const fullTrekOk =
     Math.abs(zoneTrek) >= TREND_ENTER * trekFullMult &&
     trekShare >= trekShareMin &&
@@ -603,12 +603,12 @@ export function stabilizeRegime(
   const genome = getBrainGenome();
   const { MIN_DWELL_BARS, CONFIRM_BARS } = getActiveRegimeBands();
   /** ≥N×10s between flips — stops “viena svece visi režīmi” chains */
-  const SWITCH_GAP_BARS = Math.max(1, genome.switch_gap_bars || 2);
+  const SWITCH_GAP_BARS = Math.max(1, genome.switch_gap_bars ?? 2);
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
   // Chop→trend: genome confirm (factory 1 = immediate strong flip, matches prior)
   const need = chopToTrend
-    ? Math.max(1, genome.chop_to_trend_confirm_bars || 1)
+    ? Math.max(1, genome.chop_to_trend_confirm_bars ?? 1)
     : sameFamily || strong
       ? 1
       : CONFIRM_BARS;
@@ -655,7 +655,7 @@ function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
   const g = getBrainGenome();
   // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
-  const moveDiv = Math.max(2, g.regime_conf_move_div || 4);
+  const moveDiv = Math.max(2, g.regime_conf_move_div ?? 4);
   const strength = Math.min(
     1,
     Math.abs(bodyPct(last)) / (MOVE * moveDiv) + rangePct(last) / (MOVE_RANGE * moveDiv)
@@ -764,7 +764,7 @@ export function notePipelineRegime(
     // Account-scoped: display/confidence only — never touch pending_count.
     // Fanout stamps must not soft-confirm a stabilize flip on the next OHLC bar.
     if (next !== 'UNKNOWN') {
-      const floor = getBrainGenome().book_confidence_floor_after_switch || 0.55;
+      const floor = getBrainGenome().book_confidence_floor_after_switch ?? 0.55;
       b.confidence = Math.max(b.confidence, floor);
     }
   } else if (next !== b.current) {
@@ -779,7 +779,7 @@ export function notePipelineRegime(
   }
   b.last_update = now;
   if (!scoped && next !== 'UNKNOWN') {
-    const floor = getBrainGenome().book_confidence_floor_after_switch || 0.55;
+    const floor = getBrainGenome().book_confidence_floor_after_switch ?? 0.55;
     b.confidence = Math.max(b.confidence, floor);
   }
   return toSnapshot(epicKey(epic), b);

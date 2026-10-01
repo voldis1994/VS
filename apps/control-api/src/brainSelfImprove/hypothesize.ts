@@ -728,6 +728,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipPostImpulseTip = !g.entry_block_post_impulse_tip;
   const postImpulseShare = bounceNum(g.entry_post_impulse_share_min, 0.02, 0.1, 0.45, dir);
   const postImpulseMinBars = bounceInt(g.entry_post_impulse_min_bars, 2, 6, 40, dir);
+  const postImpulseZoneBars = bounceInt(g.entry_post_impulse_zone_bars, 10, 60, 360, dir);
   const postImpulseExempt = toggleInArray(g.entry_post_impulse_exempt_lanes, 'LIVE');
   const flipTipChaseTrend = !g.entry_tip_chase_trend_pullback;
   const flipTipFinished = !g.entry_tip_block_finished_move;
@@ -1643,6 +1644,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         entry_block_post_impulse_tip: flipPostImpulseTip,
         entry_post_impulse_share_min: postImpulseShare,
         entry_post_impulse_min_bars: postImpulseMinBars,
+        entry_post_impulse_zone_bars: postImpulseZoneBars,
         entry_post_impulse_exempt_lanes: postImpulseExempt,
         entry_tip_chase_trend_pullback: flipTipChaseTrend,
         entry_tip_block_finished_move: flipTipFinished,
@@ -1745,6 +1747,11 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           'entry_post_impulse_min_bars',
           postImpulseMinBars,
           `explore post_impulse_min_bars ${postImpulseMinBars}`
+        ),
+        genomePatch(
+          'entry_post_impulse_zone_bars',
+          postImpulseZoneBars,
+          `explore post_impulse_zone_bars ${postImpulseZoneBars}`
         ),
         genomeArrayPatch(
           'entry_post_impulse_exempt_lanes',

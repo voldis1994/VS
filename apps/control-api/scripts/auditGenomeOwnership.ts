@@ -350,7 +350,7 @@ const MAP: Record<number, string[]> = {
   212: ['regime_runner_eligible_regimes'],
   213: ['entry_block_post_impulse_tip'],
   214: ['entry_post_impulse_share_min'],
-  215: ['entry_post_impulse_min_bars'],
+  215: ['entry_post_impulse_min_bars', 'entry_post_impulse_zone_bars'],
   216: ['entry_post_impulse_exempt_lanes'],
   217: ['entry_tip_chase_trend_pullback'],
   218: ['entry_tip_block_finished_move'],

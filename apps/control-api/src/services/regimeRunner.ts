@@ -133,7 +133,7 @@ export function regimeRunnerShouldHoldTarget(
     minBank: input.minBank,
     targetDists: [t1, t2, t3],
   });
-  const minLayer = Math.max(1, Math.min(3, g.regime_runner_min_target_layer || 1));
+  const minLayer = Math.max(1, Math.min(3, g.regime_runner_min_target_layer ?? 1));
   const reached =
     hit != null && hit.layer >= minLayer
       ? hit.layer
@@ -175,14 +175,14 @@ export function evaluateRegimeRunnerScore(
   notes: RegimeRunnerCloseNote[],
   g: BrainGenome = getBrainGenome()
 ): { score: number; change: string | null } {
-  const max = Math.max(1, g.regime_runner_score_max || 10);
+  const max = Math.max(1, g.regime_runner_score_max ?? 10);
   const min = 0;
   let score = Math.max(min, Math.min(max, Number(g.regime_runner_score ?? max)));
   const runnerCloses = notes.filter((n) => n.used_runner);
   if (runnerCloses.length < 1) {
     return { score, change: null };
   }
-  const retainFloor = Math.max(0.2, Math.min(0.95, g.regime_runner_success_mfe_retain || 0.45));
+  const retainFloor = Math.max(0.2, Math.min(0.95, g.regime_runner_success_mfe_retain ?? 0.45));
   let good = 0;
   let bad = 0;
   for (const n of runnerCloses) {
@@ -190,12 +190,12 @@ export function evaluateRegimeRunnerScore(
     if (n.pnl_pts > 0 && retain >= retainFloor) good += 1;
     else if (
       n.pnl_pts < -1e-9 ||
-      retain < retainFloor * (g.regime_runner_bad_retain_frac || 0.5)
+      retain < retainFloor * (g.regime_runner_bad_retain_frac ?? 0.5)
     )
       bad += 1;
   }
-  const deduct = Math.max(1, g.regime_runner_deduct_pts || 2);
-  const recover = Math.max(1, g.regime_runner_recover_pts || 1);
+  const deduct = Math.max(1, g.regime_runner_deduct_pts ?? 2);
+  const recover = Math.max(1, g.regime_runner_recover_pts ?? 1);
   if (bad > good) {
     const next = Math.max(min, score - deduct);
     return {

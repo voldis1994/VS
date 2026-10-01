@@ -63,8 +63,8 @@ export function tipChaseBlocksEntry(input: {
   const g = getBrainGenome();
   const ch = String(input.chapter || '').toUpperCase();
   const { extremeHi, extremeLo } = structKnobs();
-  const tipHi = g.exhaust_pos_hi || 0.8;
-  const tipLo = g.exhaust_pos_lo || 0.2;
+  const tipHi = g.exhaust_pos_hi ?? 0.8;
+  const tipLo = g.exhaust_pos_lo ?? 0.2;
   const exhaustTipBlock = g.exhaust_tip_chase_block !== false;
   const lane = input.lane;
   const live = input.liveRegime;
@@ -126,18 +126,20 @@ export function postImpulseTipBlocksEntry(input: {
 }): boolean {
   const g = getBrainGenome();
   if (g.entry_block_post_impulse_tip === false) return false;
-  const exempt = g.entry_post_impulse_exempt_lanes?.length
+  // [] = no exemptions (Genome may clear BREAKOUT/REVERSAL)
+  const exempt = Array.isArray(g.entry_post_impulse_exempt_lanes)
     ? g.entry_post_impulse_exempt_lanes
     : ['BREAKOUT', 'REVERSAL'];
   if (exempt.includes(input.lane)) return false;
   const zpos = input.zpos;
   if (zpos == null || !input.closedBars.length) return false;
 
-  const tipHi = g.exhaust_pos_hi || 0.8;
-  const tipLo = g.exhaust_pos_lo || 0.2;
-  const shareMin = g.entry_post_impulse_share_min || 0.22;
-  const minBars = g.entry_post_impulse_min_bars || 12;
-  const zoneBars = getZoneBars();
+  const tipHi = g.exhaust_pos_hi ?? 0.8;
+  const tipLo = g.exhaust_pos_lo ?? 0.2;
+  const shareMin = g.entry_post_impulse_share_min ?? 0.22;
+  const minBars = g.entry_post_impulse_min_bars ?? 12;
+  // Dedicated Genome horizon — not regimes.getZoneBars()
+  const zoneBars = Math.max(30, g.entry_post_impulse_zone_bars ?? g.zone_bars ?? 180);
   const zone = input.closedBars.slice(-zoneBars);
   const zonePrior = zone.length >= 3 ? zone.slice(0, -1) : zone;
   if (zonePrior.length < minBars) return false;
@@ -164,7 +166,7 @@ export function postImpulseTipBlocksEntry(input: {
       ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
       : 0;
   const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
-  const lateChop = latePath > 1e-9 && lateEff < (g.trek_eff_min || 0.4);
+  const lateChop = latePath > 1e-9 && lateEff < (g.trek_eff_min ?? 0.4);
 
   // Up-leg into HI tip → block BUY (chase finished rally / V top)
   if (recentLegPts > 0 && zpos >= tipHi && input.side === 'BUY') return true;
@@ -273,27 +275,27 @@ export const TREK_MIN_PATH_FRAC = 0.0007;
 function structKnobs() {
   const g = getBrainGenome();
   return {
-    halfLo: g.struct_half_lo || HALF_LO,
-    halfHi: g.struct_half_hi || HALF_HI,
-    extremeHi: g.struct_extreme_hi || EXTREME_HI,
-    extremeLo: g.struct_extreme_lo || EXTREME_LO,
-    startLo: g.struct_start_lo || START_LO,
-    startHi: g.struct_start_hi || START_HI,
-    pierceHi: g.breakout_pierce_pos_hi || BREAKOUT_PIERCE_HI,
-    pierceLo: g.breakout_pierce_pos_lo || BREAKOUT_PIERCE_LO,
-    failLo: g.failed_break_reclaim_pos_lo || FAILED_BREAK_RECLAIM_LO,
-    failHi: g.failed_break_reclaim_pos_hi || FAILED_BREAK_RECLAIM_HI,
-    compressLo: g.compression_entry_pos_lo || COMPRESSION_ENTRY_LO,
-    compressHi: g.compression_entry_pos_hi || COMPRESSION_ENTRY_HI,
+    halfLo: g.struct_half_lo ?? HALF_LO,
+    halfHi: g.struct_half_hi ?? HALF_HI,
+    extremeHi: g.struct_extreme_hi ?? EXTREME_HI,
+    extremeLo: g.struct_extreme_lo ?? EXTREME_LO,
+    startLo: g.struct_start_lo ?? START_LO,
+    startHi: g.struct_start_hi ?? START_HI,
+    pierceHi: g.breakout_pierce_pos_hi ?? BREAKOUT_PIERCE_HI,
+    pierceLo: g.breakout_pierce_pos_lo ?? BREAKOUT_PIERCE_LO,
+    failLo: g.failed_break_reclaim_pos_lo ?? FAILED_BREAK_RECLAIM_LO,
+    failHi: g.failed_break_reclaim_pos_hi ?? FAILED_BREAK_RECLAIM_HI,
+    compressLo: g.compression_entry_pos_lo ?? COMPRESSION_ENTRY_LO,
+    compressHi: g.compression_entry_pos_hi ?? COMPRESSION_ENTRY_HI,
   };
 }
 
 function bandOf(pos: number): ZoneBand {
   const g = getBrainGenome();
-  const lo = g.zone_band_cut_lo || 0.2;
-  const midLo = g.zone_band_cut_mid_lo || 0.4;
-  const midHi = g.zone_band_cut_mid_hi || 0.6;
-  const hi = g.zone_band_cut_hi || 0.8;
+  const lo = g.zone_band_cut_lo ?? 0.2;
+  const midLo = g.zone_band_cut_mid_lo ?? 0.4;
+  const midHi = g.zone_band_cut_mid_hi ?? 0.6;
+  const hi = g.zone_band_cut_hi ?? 0.8;
   if (pos <= lo) return 'LO';
   if (pos <= midLo) return 'MID_LO';
   if (pos <= midHi) return 'MID';
@@ -383,7 +385,7 @@ export function lastClosed1mFromTenSec(bars: TenSecBar[]): MinuteBar | null {
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return null;
   const lastBucket = tapeBucketMs(bars, 60_000);
-  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars || 3);
+  const minBars = Math.max(1, getBrainGenome().m1_aggregate_min_bars ?? 3);
   const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
   return closed.length ? closed[closed.length - 1]! : null;
 }
@@ -412,7 +414,7 @@ export function minuteTrendBias(
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return 'FLAT';
   const lastBucket = tapeBucketMs(bars, 60_000);
-  const minBars = Math.max(1, g.m1_aggregate_min_bars || 3);
+  const minBars = Math.max(1, g.m1_aggregate_min_bars ?? 3);
   const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
   const window = closed.slice(-Math.max(3, lb));
   if (window.length < 3) return 'FLAT';
@@ -429,9 +431,8 @@ export function minuteTrendBias(
   const trek =
     Math.max(...window.map((m) => m.high)) - Math.min(...window.map((m) => m.low));
   const midPx = Math.abs(last.close) || 1;
-  const trekFrac =
-    Math.max(0.1, g.minute_trend_bias_trek_min_path_bp || 7) * 1e-4 || TREK_MIN_PATH_FRAC;
-  const trekAbs = getBrainGenome().trek_min_path_abs_pts || 3;
+  const trekFrac = Math.max(0.1, g.minute_trend_bias_trek_min_path_bp ?? 7) * 1e-4;
+  const trekAbs = getBrainGenome().trek_min_path_abs_pts ?? 3;
   const minPath = Math.max(trekAbs, midPx * trekFrac);
   if (trek < minPath) return 'FLAT';
 
@@ -594,8 +595,8 @@ export function structureGate(
     compressHi,
   } = structKnobs();
   const g = getBrainGenome();
-  const bandLo = g.zone_band_cut_lo || 0.2;
-  const bandHi = g.zone_band_cut_hi || 0.8;
+  const bandLo = g.zone_band_cut_lo ?? 0.2;
+  const bandHi = g.zone_band_cut_hi ?? 0.8;
 
   // Level <2: no structure soft-blocks — mind already chose the side
   if (!entryStructureEnabled()) {
@@ -834,7 +835,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     htf: htfSnap,
   });
   const gateRegime = playbook.regime;
-  const m1StrongMult = getBrainGenome().entry_m1_strong_move_mult || 0.5;
+  const m1StrongMult = getBrainGenome().entry_m1_strong_move_mult ?? 0.5;
   const m1Strong =
     m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * m1StrongMult
       ? true
@@ -885,7 +886,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     learned.updates >= 20 &&
     learned.confidence >=
       thought.confidence +
-        (getBrainGenome().entry_learner_override_margin || 0.08) &&
+        (getBrainGenome().entry_learner_override_margin ?? 0.08) &&
     !learned.explored;
   // Setup is a preferred trigger — lane filters wrong setups (no RANGE FADE on BREAKOUT)
   const rawAll = decideEntryFrom10sRegime(input.bar, gateRegime);

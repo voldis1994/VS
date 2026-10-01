@@ -635,7 +635,9 @@ export type BrainGenome = {
   entry_post_impulse_share_min: number;
   /** Min zonePrior bars before post-impulse tip runs */
   entry_post_impulse_min_bars: number;
-  /** Lanes exempt from post-impulse tip (pierce/flip own) */
+  /** Lookback bars for post-impulse tip (Genome — not regimes.getZoneBars) */
+  entry_post_impulse_zone_bars: number;
+  /** Lanes exempt from post-impulse tip; [] = no exemptions */
   entry_post_impulse_exempt_lanes: string[];
   /** Tip-chase knife applies on TREND_PULLBACK lane */
   entry_tip_chase_trend_pullback: boolean;
@@ -1213,6 +1215,7 @@ const DEFAULT_GENOME: BrainGenome = {
   entry_block_post_impulse_tip: true,
   entry_post_impulse_share_min: 0.22,
   entry_post_impulse_min_bars: 12,
+  entry_post_impulse_zone_bars: 180,
   entry_post_impulse_exempt_lanes: ['BREAKOUT', 'REVERSAL'],
   entry_tip_chase_trend_pullback: true,
   entry_tip_block_finished_move: true,
@@ -1420,6 +1423,18 @@ function sanitizeStringArray(raw: unknown, fb: string[]): string[] {
     ),
   ];
   return out.length ? out : [...fb];
+}
+
+/** Like sanitizeStringArray but [] is a valid config (“no exemptions”). */
+function sanitizeStringArrayAllowEmpty(raw: unknown, fb: string[]): string[] {
+  if (!Array.isArray(raw)) return [...fb];
+  return [
+    ...new Set(
+      raw
+        .map((x) => String(x || '').trim().toUpperCase())
+        .filter((x) => x.length > 0 && x.length < 64)
+    ),
+  ];
 }
 
 function sanitizeEnabledRegimes(raw: unknown, fb: string[]): string[] {
@@ -1876,7 +1891,13 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       6,
       60
     ),
-    entry_post_impulse_exempt_lanes: sanitizeStringArray(
+    entry_post_impulse_zone_bars: clampInt(
+      p.entry_post_impulse_zone_bars,
+      d.entry_post_impulse_zone_bars,
+      30,
+      360
+    ),
+    entry_post_impulse_exempt_lanes: sanitizeStringArrayAllowEmpty(
       p.entry_post_impulse_exempt_lanes,
       d.entry_post_impulse_exempt_lanes
     ),
@@ -2414,6 +2435,7 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'entry_block_post_impulse_tip',
   'entry_post_impulse_share_min',
   'entry_post_impulse_min_bars',
+  'entry_post_impulse_zone_bars',
   'entry_post_impulse_exempt_lanes',
   'entry_tip_chase_trend_pullback',
   'entry_tip_block_finished_move',

@@ -126,26 +126,26 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   const mae = Math.max(0, input.mae);
   const upl = input.unrealized;
   const g = getBrainGenome();
-  const minSample = Math.max(1, g.manage_min_sample || MIN_SAMPLE);
+  const minSample = Math.max(1, g.manage_min_sample ?? MIN_SAMPLE);
   const sessionELo = g.session_e_bank_lo ?? SESSION_E_BANK_LO;
-  const sessionEHi = g.session_e_bank_hi || SESSION_E_BANK_HI;
-  const wSessionNeg = g.manage_score_session_e_neg || MANAGE_SCORE_SESSION_E_NEG;
-  const wSessionPos = g.manage_score_session_e_pos || MANAGE_SCORE_SESSION_E_POS;
-  const wWindowNeg = g.manage_score_window_e_neg || MANAGE_SCORE_WINDOW_E_NEG;
-  const wPathGreen = g.manage_score_path_soft_green || MANAGE_SCORE_PATH_SOFT_GREEN;
-  const wGiveback = g.manage_score_path_giveback || MANAGE_SCORE_PATH_GIVEBACK;
-  const wM1Rev = g.manage_score_m1_reverse || MANAGE_SCORE_M1_REVERSE;
-  const wM1Cont = g.manage_score_m1_continue || MANAGE_SCORE_M1_CONTINUE;
-  const wNextOpp = g.manage_score_next_entry_opp || MANAGE_SCORE_NEXT_ENTRY_OPP;
-  const wThesis = g.manage_score_thesis_fight || MANAGE_SCORE_THESIS_FIGHT;
-  const scoreClamp = g.manage_score_clamp || MANAGE_SCORE_CLAMP;
+  const sessionEHi = g.session_e_bank_hi ?? SESSION_E_BANK_HI;
+  const wSessionNeg = g.manage_score_session_e_neg ?? MANAGE_SCORE_SESSION_E_NEG;
+  const wSessionPos = g.manage_score_session_e_pos ?? MANAGE_SCORE_SESSION_E_POS;
+  const wWindowNeg = g.manage_score_window_e_neg ?? MANAGE_SCORE_WINDOW_E_NEG;
+  const wPathGreen = g.manage_score_path_soft_green ?? MANAGE_SCORE_PATH_SOFT_GREEN;
+  const wGiveback = g.manage_score_path_giveback ?? MANAGE_SCORE_PATH_GIVEBACK;
+  const wM1Rev = g.manage_score_m1_reverse ?? MANAGE_SCORE_M1_REVERSE;
+  const wM1Cont = g.manage_score_m1_continue ?? MANAGE_SCORE_M1_CONTINUE;
+  const wNextOpp = g.manage_score_next_entry_opp ?? MANAGE_SCORE_NEXT_ENTRY_OPP;
+  const wThesis = g.manage_score_thesis_fight ?? MANAGE_SCORE_THESIS_FIGHT;
+  const scoreClamp = g.manage_score_clamp ?? MANAGE_SCORE_CLAMP;
   const learnerMargin =
-    g.manage_learner_override_margin || MANAGE_LEARNER_OVERRIDE_MARGIN;
-  const pressureBuy = g.pressure_with_us_buy || PRESSURE_WITH_US_BUY;
-  const pressureSell = g.pressure_with_us_sell || PRESSURE_WITH_US_SELL;
-  const nearTarget = g.near_target_lean_bank || NEAR_TARGET_LEAN_BANK;
-  const peakEase = g.peak_mfe_floor_ease || PEAK_MFE_FLOOR_EASE;
-  const cutRetention = g.mind_cut_retention || 0.55;
+    g.manage_learner_override_margin ?? MANAGE_LEARNER_OVERRIDE_MARGIN;
+  const pressureBuy = g.pressure_with_us_buy ?? PRESSURE_WITH_US_BUY;
+  const pressureSell = g.pressure_with_us_sell ?? PRESSURE_WITH_US_SELL;
+  const nearTarget = g.near_target_lean_bank ?? NEAR_TARGET_LEAN_BANK;
+  const peakEase = g.peak_mfe_floor_ease ?? PEAK_MFE_FLOOR_EASE;
+  const cutRetention = g.mind_cut_retention ?? 0.55;
   const retention =
     input.peak_retention != null && Number.isFinite(input.peak_retention)
       ? input.peak_retention
@@ -178,14 +178,14 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   }
 
   // --- Live path quality (genome Soft× / score knobs) ---
-  const deepGreenMult = g.manage_path_deep_green_soft_mult || 0.85;
-  const fadeMult = g.manage_path_fade_soft_mult || 0.15;
-  const fadeScore = g.manage_path_fade_score || 0.75;
-  const stallMfeMult = g.manage_path_stall_mfe_soft_mult || 0.4;
-  const stallUplMult = g.manage_path_stall_upl_soft_mult || 0.15;
-  const stallScore = g.manage_path_stall_score || 0.2;
-  const maeDeepMult = g.manage_mae_deep_soft_mult || 0.85;
-  const maeDeepScore = g.manage_mae_deep_score || 0.45;
+  const deepGreenMult = g.manage_path_deep_green_soft_mult ?? 0.85;
+  const fadeMult = g.manage_path_fade_soft_mult ?? 0.15;
+  const fadeScore = g.manage_path_fade_score ?? 0.75;
+  const stallMfeMult = g.manage_path_stall_mfe_soft_mult ?? 0.4;
+  const stallUplMult = g.manage_path_stall_upl_soft_mult ?? 0.15;
+  const stallScore = g.manage_path_stall_score ?? 0.2;
+  const maeDeepMult = g.manage_mae_deep_soft_mult ?? 0.85;
+  const maeDeepScore = g.manage_mae_deep_score ?? 0.45;
   if (mfe >= soft) {
     bits.push(`Soft-MFE ${mfe.toFixed(2)}`);
     if (upl >= soft * deepGreenMult) {
@@ -209,10 +209,10 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   }
 
   // --- Market change / thesis ---
-  const wM1Wait = g.manage_score_m1_wait || 0.15;
-  const wNextSame = g.manage_score_next_same || 0.55;
-  const wThesisBonus = g.manage_score_thesis_bonus || 0.25;
-  const wSoftGate = g.manage_score_soft_gate_open || 0.2;
+  const wM1Wait = g.manage_score_m1_wait ?? 0.15;
+  const wNextSame = g.manage_score_next_same ?? 0.55;
+  const wThesisBonus = g.manage_score_thesis_bonus ?? 0.25;
+  const wSoftGate = g.manage_score_soft_gate_open ?? 0.2;
   if (input.minute_policy === 'continue') {
     score -= wM1Cont;
     bits.push('1m continue');
@@ -252,15 +252,15 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   }
 
   // --- Mega market context (30m story / pressure / velocity / feed) ---
-  const wStoryFight = g.manage_score_story_fight || 0.85;
-  const wStoryWith = g.manage_score_story_with || 0.35;
-  const wPressureWith = g.manage_score_pressure_with || 0.4;
-  const wExpandCont = g.manage_score_expand_continue || 0.35;
-  const wExpandRev = g.manage_score_expand_reverse || 0.45;
-  const wFeedDiv = g.manage_score_feed_divergent || 0.5;
-  const wFeedStrong = g.manage_score_feed_strong || 0.15;
-  const wChapter = g.manage_score_chapter_change || 0.35;
-  const wNearTarget = g.manage_score_near_target || 0.4;
+  const wStoryFight = g.manage_score_story_fight ?? 0.85;
+  const wStoryWith = g.manage_score_story_with ?? 0.35;
+  const wPressureWith = g.manage_score_pressure_with ?? 0.4;
+  const wExpandCont = g.manage_score_expand_continue ?? 0.35;
+  const wExpandRev = g.manage_score_expand_reverse ?? 0.45;
+  const wFeedDiv = g.manage_score_feed_divergent ?? 0.5;
+  const wFeedStrong = g.manage_score_feed_strong ?? 0.15;
+  const wChapter = g.manage_score_chapter_change ?? 0.35;
+  const wNearTarget = g.manage_score_near_target ?? 0.4;
   const mkt = input.market;
   if (mkt) {
     bits.push(mkt.summary);
@@ -323,7 +323,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   // --- PRĀTS decides; LEARNER advises once it has enough closes ---
   const learned = learnerChooseAction(input, input.client_id);
   const thought = thinkLikeTrader(input);
-  const learnerMinUpdates = g.manage_learner_min_updates || 20;
+  const learnerMinUpdates = g.manage_learner_min_updates ?? 20;
   const learnerReady =
     learned.updates >= learnerMinUpdates &&
     learned.confidence >= thought.confidence + learnerMargin;

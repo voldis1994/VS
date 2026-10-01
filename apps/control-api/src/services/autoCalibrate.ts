@@ -73,39 +73,44 @@ export const SOFT_SIZED_LOSS_DETECT_MIN = 2;
 
 /** Autotune cadence — genome auto_calibrate_every_n (not literal 5). */
 export function autoCalibrateEveryN(): number {
-  return Math.max(2, getBrainGenome().auto_calibrate_every_n || AUTO_CALIBRATE_EVERY_N);
+  return Math.max(2, getBrainGenome().auto_calibrate_every_n ?? AUTO_CALIBRATE_EVERY_N);
+}
+
+/** Same slice the live trigger uses after everyN closes. */
+export function autoCalibrateWindowFromTrades<T>(trades: readonly T[]): T[] {
+  return trades.slice(-autoCalibrateEveryN());
 }
 
 /** Live auto-cal bounds from BrainGenome (factory consts as fallbacks). pct via bp (min 0.1). */
 function calBounds() {
   const g = getBrainGenome();
-  const bp = (n: number, fb: number) => Math.max(0.1, n || fb) * 1e-4;
+  const bp = (n: number, fb: number) => Math.max(0.1, n ?? fb) * 1e-4;
   return {
-    maxSafetyRr: g.auto_cal_max_safety_tp_rr || AUTO_CAL_MAX_SAFETY_TP_RR,
-    maxTargetAbs: g.auto_cal_max_target_abs || AUTO_CAL_MAX_TARGET_ABS,
-    maxPeakMfeAbs: g.auto_cal_max_peak_mfe_abs || AUTO_CAL_MAX_PEAK_MFE_ABS,
-    maxPeakRetention: g.auto_cal_max_peak_retention || AUTO_CAL_MAX_PEAK_RETENTION,
-    minPeakRetention: g.auto_cal_min_peak_retention || AUTO_CAL_MIN_PEAK_RETENTION,
-    minHardinvAbs: g.auto_cal_min_hardinv_abs || AUTO_CAL_MIN_HARDINV_ABS,
-    maxHardinvAbs: g.auto_cal_max_hardinv_abs || AUTO_CAL_MAX_HARDINV_ABS,
+    maxSafetyRr: g.auto_cal_max_safety_tp_rr ?? AUTO_CAL_MAX_SAFETY_TP_RR,
+    maxTargetAbs: g.auto_cal_max_target_abs ?? AUTO_CAL_MAX_TARGET_ABS,
+    maxPeakMfeAbs: g.auto_cal_max_peak_mfe_abs ?? AUTO_CAL_MAX_PEAK_MFE_ABS,
+    maxPeakRetention: g.auto_cal_max_peak_retention ?? AUTO_CAL_MAX_PEAK_RETENTION,
+    minPeakRetention: g.auto_cal_min_peak_retention ?? AUTO_CAL_MIN_PEAK_RETENTION,
+    minHardinvAbs: g.auto_cal_min_hardinv_abs ?? AUTO_CAL_MIN_HARDINV_ABS,
+    maxHardinvAbs: g.auto_cal_max_hardinv_abs ?? AUTO_CAL_MAX_HARDINV_ABS,
     minHardinvPct: bp(g.auto_cal_min_hardinv_pct_bp, 2),
     maxHardinvPct: bp(g.auto_cal_max_hardinv_pct_bp, 40),
     minTargetPct: bp(g.auto_cal_min_target_pct_bp, 8),
     maxTargetPct: bp(g.auto_cal_max_target_pct_bp, 100),
     minPeakMfePct: bp(g.auto_cal_min_peak_mfe_pct_bp, 2),
     maxPeakMfePct: bp(g.auto_cal_max_peak_mfe_pct_bp, 60),
-    softTightenStep: g.soft_tighten_step || SOFT_TIGHTEN_STEP,
-    peakEaseAbsStep: g.peak_ease_abs_step || PEAK_EASE_ABS_STEP,
-    peakEaseRetentionStep: g.peak_ease_retention_step || PEAK_EASE_RETENTION_STEP,
-    peakEaseGivebackStep: g.peak_ease_giveback_step || PEAK_EASE_GIVEBACK_STEP,
-    safetyTpRrStep: g.safety_tp_rr_step || SAFETY_TP_RR_STEP,
-    safetyTpRrPullbackStep: g.safety_tp_rr_pullback_step || SAFETY_TP_RR_PULLBACK_STEP,
-    minEnabledRegimes: g.min_enabled_regimes || MIN_ENABLED_REGIMES,
+    softTightenStep: g.soft_tighten_step ?? SOFT_TIGHTEN_STEP,
+    peakEaseAbsStep: g.peak_ease_abs_step ?? PEAK_EASE_ABS_STEP,
+    peakEaseRetentionStep: g.peak_ease_retention_step ?? PEAK_EASE_RETENTION_STEP,
+    peakEaseGivebackStep: g.peak_ease_giveback_step ?? PEAK_EASE_GIVEBACK_STEP,
+    safetyTpRrStep: g.safety_tp_rr_step ?? SAFETY_TP_RR_STEP,
+    safetyTpRrPullbackStep: g.safety_tp_rr_pullback_step ?? SAFETY_TP_RR_PULLBACK_STEP,
+    minEnabledRegimes: g.min_enabled_regimes ?? MIN_ENABLED_REGIMES,
     raiseStreakBeforePullback:
-      g.raise_streak_before_pullback || AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK,
-    softSizedLossDetectMin: g.soft_sized_loss_detect_min || SOFT_SIZED_LOSS_DETECT_MIN,
-    softSizedLossFrac: g.soft_sized_loss_frac || 0.65,
-    maxMfeGiveback: g.max_mfe_giveback || 0.35,
+      g.raise_streak_before_pullback ?? AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK,
+    softSizedLossDetectMin: g.soft_sized_loss_detect_min ?? SOFT_SIZED_LOSS_DETECT_MIN,
+    softSizedLossFrac: g.soft_sized_loss_frac ?? 0.65,
+    maxMfeGiveback: g.max_mfe_giveback ?? 0.35,
   };
 }
 
@@ -160,7 +165,7 @@ function roundPct(n: number): number {
 export const SOFT_PCT_REF_MID = 2750;
 export function softPctFromAbs(hardinvAbs: number): number {
   const g = getBrainGenome();
-  const refMid = g.soft_pct_ref_mid || SOFT_PCT_REF_MID;
+  const refMid = g.soft_pct_ref_mid ?? SOFT_PCT_REF_MID;
   const raw = Math.max(0, Number(hardinvAbs) || 0) / refMid;
   return Math.round(raw * 1e4) / 1e4;
 }
@@ -647,9 +652,11 @@ export function noteClosedTradeForAutoCalibrate(
   });
   persistSession(id);
 
-  if (state.trades.length % autoCalibrateEveryN() !== 0) return null;
+  const everyN = autoCalibrateEveryN();
+  if (state.trades.length % everyN !== 0) return null;
 
-  const window = state.trades.slice(-AUTO_CALIBRATE_EVERY_N);
+  // Window must match trigger cadence (Genome everyN — not factory const 5)
+  const window = autoCalibrateWindowFromTrades(state.trades);
   const current = getDeskCalibration(id);
   let genomeNow: BrainGenome | null = null;
   try {
@@ -847,7 +854,7 @@ function proposeGenomePatch(
         )
       );
     }
-    const sa = [...(g.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
+    const sa = [...(g.soft_off_regimes ?? [])].map((r) => String(r).toUpperCase()).sort();
     const sb = [...(next.soft_off_regimes || [])].map((r) => String(r).toUpperCase()).sort();
     if (sa.join(',') !== sb.join(',')) {
       patch.soft_off_regimes = [...(next.soft_off_regimes || [])];
@@ -1181,9 +1188,10 @@ function proposeGenomePatch(
       pnl_pts: Number(t.pnl_pts) || 0,
       mfe: Number(t.mfe) || 0,
     }));
-    const evalN = Math.max(2, g.regime_runner_eval_every_n || AUTO_CALIBRATE_EVERY_N);
+    const evalN = Math.max(2, g.regime_runner_eval_every_n ?? AUTO_CALIBRATE_EVERY_N);
     const runnerN = notes.filter((n) => n.used_runner).length;
-    if (runnerN > 0 && windowTrades.length >= Math.min(evalN, AUTO_CALIBRATE_EVERY_N)) {
+    const calEvery = autoCalibrateEveryN();
+    if (runnerN > 0 && windowTrades.length >= Math.min(evalN, calEvery)) {
       const { score, change } = evaluateRegimeRunnerScore(notes, g);
       if (score !== g.regime_runner_score) {
         patch.regime_runner_score = score;
@@ -1223,8 +1231,8 @@ export function proposeAutoCalibration(
     ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length)
     : 0;
   const expectancy = sum / windowTrades.length;
-  const softFrac = getBrainGenome().soft_sized_loss_frac || 0.65;
-  const givebackFrac = getBrainGenome().max_mfe_giveback || 0.35;
+  const softFrac = getBrainGenome().soft_sized_loss_frac ?? 0.65;
+  const givebackFrac = getBrainGenome().max_mfe_giveback ?? 0.35;
   const softLosses = windowTrades.filter(
     (t) =>
       /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason)) &&

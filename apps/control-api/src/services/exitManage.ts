@@ -79,7 +79,7 @@ export function effectivePeakKeep(
   genomeKeep: number
 ): number {
   const g = getBrainGenome();
-  const fallback = g.peak_mfe_retention_fallback || PEAK_MFE_RETENTION;
+  const fallback = g.peak_mfe_retention_fallback ?? PEAK_MFE_RETENTION;
   if (g.peak_keep_genome_owns !== false) {
     if (genomeKeep > 0) return genomeKeep;
     return deskRetention > 0 ? deskRetention : fallback;
@@ -97,7 +97,8 @@ export function softPlusDeepGiveback(
   keep: number,
   offset = getBrainGenome().deep_giveback_offset
 ): boolean {
-  const off = offset > 0 ? offset : 0.12;
+  // ?? so 0 is a valid Genome value (bank at Keep exactly)
+  const off = offset ?? 0.12;
   return retention < keep - off;
 }
 
@@ -107,7 +108,7 @@ export function softLossLearnerCutMfe(
   soft: number,
   mult = getBrainGenome().mind_cut_soft_mult
 ): boolean {
-  const m = mult > 0 ? mult : 0.75;
+  const m = mult ?? 0.75;
   return mfe >= soft * m;
 }
 
@@ -159,7 +160,9 @@ function genomeSafetyTpVsMinStopMult(): number {
 }
 
 function genomeSafetySlCushionFrac(): number {
-  return Math.max(0, getBrainGenome().safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const bp = getBrainGenome().safety_sl_cushion_bp;
+  const frac = Math.max(0, bp ?? 20) * 1e-4;
+  return frac;
 }
 
 /**
@@ -524,7 +527,7 @@ export function layeredHardInvDistance(
   let sl = Math.min(Math.max(pct * (layer / 3), floor), cap);
   const profile = regimeExitProfile(regime);
   sl *= profile.hardinv_mult;
-  const postCap = Math.max(1, g.layered_soft_post_mult_cap || 1.3);
+  const postCap = Math.max(1, g.layered_soft_post_mult_cap ?? 1.3);
   sl = Math.min(sl, cap * postCap);
   return { dist: sl, layer, abs };
 }
@@ -570,7 +573,7 @@ export function beLockMinExec(sl: number): number {
  * Live: BrainGenome.min_profit_bank_soft_mult (factory 1.0).
  */
 export function minProfitBank(sl: number): number {
-  const mult = Math.max(0.5, getBrainGenome().min_profit_bank_soft_mult || 1);
+  const mult = Math.max(0.5, getBrainGenome().min_profit_bank_soft_mult ?? 1);
   return Math.max(sl * mult, sl * 1e-9);
 }
 
@@ -695,7 +698,7 @@ export function decideBestOutcomeExit(
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
   // Genome peak_arm_soft_mult / peak_trail_soft_cap_mult own Soft× trail floor
-  const trailMinBankFrac = getBrainGenome().peak_trail_minbank_frac || 0.5;
+  const trailMinBankFrac = getBrainGenome().peak_trail_minbank_frac ?? 0.5;
   const trailFloor = Math.max(
     minBank * trailMinBankFrac,
     peakTrailMfeFloor(mfeFloor, sl, minBank)
@@ -814,8 +817,8 @@ export function decideBestOutcomeExit(
 
     // bp only — min step 0.1 (factory timedecay_fav_pct_bp=3.5), no 0.00035 frac
     const timedecayFavPct =
-      Math.max(0.1, genome.timedecay_fav_pct_bp || 3.5) * 1e-4;
-    const tdTargetFrac = genome.timedecay_target_frac || 0.4;
+      Math.max(0.1, genome.timedecay_fav_pct_bp ?? 3.5) * 1e-4;
+    const tdTargetFrac = genome.timedecay_target_frac ?? 0.4;
     const minFav =
       Math.max(
         scaleDeskAbs(genomeTimedecayMinFavAbs(), absEntry),

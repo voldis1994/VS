@@ -59,14 +59,14 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   const upl = input.unrealized;
   const mkt = input.market;
   const genome = getBrainGenome();
-  const cutSoftMult = genome.mind_cut_soft_mult || 0.75;
-  const cutRetention = genome.mind_cut_retention || 0.55;
-  const greenSoftArm = genome.green_soft_arm_mult || 0.95;
-  const againstHi = genome.against_us_soft_mult_hi || 0.75;
-  const againstLo = genome.against_us_soft_mult_lo || 0.5;
+  const cutSoftMult = genome.mind_cut_soft_mult ?? 0.75;
+  const cutRetention = genome.mind_cut_retention ?? 0.55;
+  const greenSoftArm = genome.green_soft_arm_mult ?? 0.95;
+  const againstHi = genome.against_us_soft_mult_hi ?? 0.75;
+  const againstLo = genome.against_us_soft_mult_lo ?? 0.5;
   const sessionECut = genome.session_expectancy_cut ?? -0.2;
-  const confBase = genome.mind_entry_conf_base || 0.55;
-  const deepGiveOffset = genome.deep_giveback_offset || 0.12;
+  const confBase = genome.mind_entry_conf_base ?? 0.55;
+  const deepGiveOffset = genome.deep_giveback_offset ?? 0.12;
   const retention =
     input.peak_retention != null && Number.isFinite(input.peak_retention)
       ? input.peak_retention
@@ -114,7 +114,7 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     thesis = `Tirgus mainās pret mani (stāsts/pressure/1m). Man jau bija labs MFE — sāku domāt kā aizstāvēt peļņu, necerēt uz brīnumu.`;
   } else if (againstUs) {
     thesis = `Attēls pagriežas pret manu ${input.open_side}. Bez liela MFE esmu piesardzīgs — Soft ir mana pēdējā līnija.`;
-  } else if (mfe >= soft && upl >= soft * (genome.mind_deep_green_soft_mult || 0.85)) {
+  } else if (mfe >= soft && upl >= soft * (genome.mind_deep_green_soft_mult ?? 0.85)) {
     thesis = `Esmu spēcīgā plusā. Kamēr 1m un stāsts neteic pretējo, turu un ļauju Peak/Target strādāt.`;
   } else {
     thesis = `Vēl nav skaidra uzvara vai sakāve — skatos zonu, pressure un nākamo sveci; Soft sargā zaudētāju.`;
@@ -180,27 +180,27 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
     why = givingBack
       ? 'Man jau Soft+ peļņa, bet atdodu no MFE — bankoju plusu, neļauju Soft apēst uzvaru.'
       : 'Man ir Soft izmēra peļņa un tirgus jau pagriežas. Bankoju plusu — Soft ir tikai mīnusiem.';
-    confidence = genome.mind_manage_conf_bank || 0.88;
+    confidence = genome.mind_manage_conf_bank ?? 0.88;
   } else if (mfe >= soft * cutSoftMult && upl > 0 && (againstUs || retention < cutRetention)) {
     decision = 'CUT';
     why =
       'Biju plusā, tagad atdodu — ciešākais cut, lai plus nepaliek mīnusā.';
-    confidence = genome.mind_manage_conf_cut || 0.78;
+    confidence = genome.mind_manage_conf_cut ?? 0.78;
   } else if (input.minute_policy === 'continue' && !againstUs) {
     decision = 'HOLD';
     why =
       'Svece vēl iet manā virzienā un peļņa nav atdota — turu; Peak trail gatavs.';
-    confidence = genome.mind_manage_conf_hold_continue || 0.8;
+    confidence = genome.mind_manage_conf_hold_continue ?? 0.8;
   } else if (againstUs && mfe < soft * againstLo) {
     decision = 'HOLD';
     why =
       'Attēls slikts, bet vēl nav Soft+ ko bankot. Soft nogriezīs īsto mīnusu — es negriežu panikā.';
-    confidence = genome.mind_manage_conf_hold_against || 0.6;
+    confidence = genome.mind_manage_conf_hold_against ?? 0.6;
   } else {
     decision = 'TRAIL';
     why =
       'Nav skaidra «ņem plusu» vai «turi» — Peak trail; Soft sargā mīnusu.';
-    confidence = genome.mind_manage_conf_trail || 0.65;
+    confidence = genome.mind_manage_conf_trail ?? 0.65;
   }
 
   const spoken = `PRĀTS ${decision} · ${thesis.slice(0, 120)}${thesis.length > 120 ? '…' : ''} · ${why.slice(0, 100)}${why.length > 100 ? '…' : ''}`;
@@ -350,17 +350,17 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
           : 'Gaidu BUY trigger (dip pullback), nevis shortu pret sveci.';
       confidence = stack.aligned
         ? m1 === 'UP' && strong
-          ? genome.mind_entry_conf_aligned_strong || 0.9
-          : genome.mind_entry_conf_aligned || 0.82
+          ? genome.mind_entry_conf_aligned_strong ?? 0.9
+          : genome.mind_entry_conf_aligned ?? 0.82
         : m1 === 'UP' && strong
-          ? genome.mind_entry_conf_strong_m1 || 0.85
+          ? genome.mind_entry_conf_strong_m1 ?? 0.85
           : bias === 'UP'
-            ? genome.mind_entry_conf_bias || 0.75
-            : genome.mind_entry_conf_weak || 0.68;
+            ? genome.mind_entry_conf_bias ?? 0.75
+            : genome.mind_entry_conf_weak ?? 0.68;
       if (regimeLong || buyStory) {
         confidence = Math.min(
-          genome.mind_entry_conf_cap || 0.92,
-          confidence + (genome.mind_entry_conf_regime_boost || 0.06)
+          genome.mind_entry_conf_cap ?? 0.92,
+          confidence + (genome.mind_entry_conf_regime_boost ?? 0.06)
         );
       }
     }
@@ -396,17 +396,17 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
           : 'Gaidu SELL trigger (rally fade), nevis long pret sveci.';
       confidence = stack.aligned
         ? m1 === 'DOWN' && strong
-          ? genome.mind_entry_conf_aligned_strong || 0.9
-          : genome.mind_entry_conf_aligned || 0.82
+          ? genome.mind_entry_conf_aligned_strong ?? 0.9
+          : genome.mind_entry_conf_aligned ?? 0.82
         : m1 === 'DOWN' && strong
-          ? genome.mind_entry_conf_strong_m1 || 0.85
+          ? genome.mind_entry_conf_strong_m1 ?? 0.85
           : bias === 'DOWN'
-            ? genome.mind_entry_conf_bias || 0.75
-            : genome.mind_entry_conf_weak || 0.68;
+            ? genome.mind_entry_conf_bias ?? 0.75
+            : genome.mind_entry_conf_weak ?? 0.68;
       if (regimeShort || sellStory) {
         confidence = Math.min(
-          genome.mind_entry_conf_cap || 0.92,
-          confidence + (genome.mind_entry_conf_regime_boost || 0.06)
+          genome.mind_entry_conf_cap ?? 0.92,
+          confidence + (genome.mind_entry_conf_regime_boost ?? 0.06)
         );
       }
     }
@@ -624,9 +624,9 @@ export function reviewSessionLikeHuman(
   const sum = trades.reduce((a, t) => a + t.pnl_pts, 0);
   const e = sum / trades.length;
   const genome = getBrainGenome();
-  const sessionEHi = genome.session_e_bank_hi || 0.25;
-  const softSizedFrac = genome.soft_sized_loss_frac || 0.65;
-  const leftOnTableMin = Math.max(1, genome.left_on_table_peak_tiny_min || 2);
+  const sessionEHi = genome.session_e_bank_hi ?? 0.25;
+  const softSizedFrac = genome.soft_sized_loss_frac ?? 0.65;
+  const leftOnTableMin = Math.max(1, genome.left_on_table_peak_tiny_min ?? 2);
   const softLosses = trades.filter((t) =>
     /HardInvalidation|HardInv/i.test(String(t.exit_reason || ''))
   );
@@ -635,7 +635,7 @@ export function reviewSessionLikeHuman(
       /PeakProtection|TimeDecay|Target/i.test(String(t.exit_reason || '')) &&
       t.mfe > 1e-6 &&
       t.pnl_pts > 0 &&
-      t.pnl_pts < t.mfe * (genome.max_mfe_giveback || 0.35)
+      t.pnl_pts < t.mfe * (genome.max_mfe_giveback ?? 0.35)
   );
   const leftOnTable = peakTiny.length >= leftOnTableMin;
   const knifeSoft =
