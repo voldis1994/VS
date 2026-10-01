@@ -18,8 +18,10 @@ echo           trades / positions / executions / audit (DB)
 echo.
 echo   PIRMS TAM: apturi robotus / FLAT (atverti deali bloke, ja nav --force-open)
 echo   Pec tam:  restart VS.bat un starte robotus no jauna
-echo   TIP: ja DB nav augsa, genome/learners tomer notiras; DB skip ar timeout
+echo   TIP: ja DB nav augsa — genome/learners tomer notiras ^(DB skip 3s^)
 echo.
+
+
 
 if not exist "%ROOT%\apps\control-api\package.json" (
   color 0C

@@ -12,7 +12,6 @@ import {
   FACTORY_RESET_CONFIRM,
   factoryResetLearning,
 } from '../src/services/factoryResetLearning.js';
-import { pool } from '../src/db/pool.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../..');
@@ -31,29 +30,20 @@ async function main(): Promise<void> {
     );
     process.exit(2);
   }
-  console.log('[1/3] Loading .env + factory reset…');
+  console.log('[1/2] .env loaded — starting factory reset…');
   const result = await factoryResetLearning({
     confirm: FACTORY_RESET_CONFIRM,
     wipe_db_history: !args.has('--keep-db-history'),
     force_open_trades: args.has('--force-open'),
     wipe_brain_history: !args.has('--keep-brain-history'),
   });
-  console.log('[2/3] Done.');
+  console.log('[2/2] Done.');
   console.log(JSON.stringify(result, null, 2));
-  console.log('[3/3] Closing DB pool…');
-  try {
-    await pool.end();
-  } catch {
-    /* ignore */
-  }
+  // Force-exit — do not wait on stray timers / trash cleanup
+  process.exit(0);
 }
 
-main().catch(async (e) => {
+main().catch((e) => {
   console.error(e instanceof Error ? e.message : e);
-  try {
-    await pool.end();
-  } catch {
-    /* ignore */
-  }
   process.exit(1);
 });
