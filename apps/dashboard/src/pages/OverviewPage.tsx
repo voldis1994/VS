@@ -243,7 +243,7 @@ export function OverviewPage() {
         method: 'POST',
         body: JSON.stringify({
           confirm: 'LEARN_FROM_SCRATCH',
-          wipe_db_history: true,
+          wipe_db_history: false,
           wipe_brain_history: true,
         }),
       }
@@ -251,7 +251,7 @@ export function OverviewPage() {
       .then((r) => {
         setMsg(
           r.success
-            ? 'FACTORY RESET · genome+learners+history wiped · Capital/clients kept · restart robots'
+            ? 'FACTORY RESET · genome+learners wiped (files) · Capital/clients kept · restart robots'
             : r.error || 'Factory reset failed'
         );
       })

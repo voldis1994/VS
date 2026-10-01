@@ -54,7 +54,11 @@ export const FACTORY_RESET_CONFIRM = 'LEARN_FROM_SCRATCH';
 export type FactoryResetLearningOpts = {
   /** Must equal LEARN_FROM_SCRATCH */
   confirm: string;
-  /** Wipe Postgres trades/positions/executions/audit (default true) */
+  /**
+   * Wipe Postgres trades/positions/executions/audit.
+   * Default FALSE — Windows bat must not open pg (connect hangs even with timeouts).
+   * Pass true / --wipe-db only when Postgres is known up.
+   */
   wipe_db_history?: boolean;
   /** Allow reset while a robot has an open deal (default false) */
   force_open_trades?: boolean;
@@ -291,6 +295,11 @@ export async function factoryResetLearning(
   const wiped: string[] = [];
   const robots_stopped: string[] = [];
   const robots_manage_only: string[] = [];
+  const wantDb = opts.wipe_db_history === true;
+
+  // Snapshot client ids BEFORE wiping JSON dirs
+  log('scan client ids from disk (no DB)…');
+  let clientIds = [...new Set([0, ...listClientIdsFromDisk()])].sort((a, b) => a - b);
 
   log('stop robots…');
   for (const s of listRobotSessions()) {
@@ -317,10 +326,15 @@ export async function factoryResetLearning(
   wiped.push(`${experiencePath()}→empty`);
 
   _resetDeskCalibrationCacheForTests();
-  log('load client ids (DB 3s max)…');
-  const dbIds = await listClientIdsFromDb();
-  const diskIds = listClientIdsFromDisk();
-  const clientIds = [...new Set([0, ...dbIds, ...diskIds])].sort((a, b) => a - b);
+
+  // Optional DB — only when explicitly requested (never by default bat path)
+  if (wantDb) {
+    log('DB mode ON — load client ids from Postgres…');
+    const dbIds = await listClientIdsFromDb();
+    clientIds = [...new Set([0, ...clientIds, ...dbIds])].sort((a, b) => a - b);
+  } else {
+    log('DB skipped (default) — file reset only');
+  }
 
   log(`reset ${clientIds.length} client desk/learner…`);
   for (const id of clientIds) {
@@ -335,7 +349,7 @@ export async function factoryResetLearning(
   }
 
   let db_history_wiped = false;
-  if (opts.wipe_db_history !== false) {
+  if (wantDb) {
     log('wipe DB trade/audit history…');
     const dbWiped = await wipeDbHistory();
     wiped.push(...dbWiped);
