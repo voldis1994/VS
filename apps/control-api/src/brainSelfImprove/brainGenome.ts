@@ -856,6 +856,87 @@ export type BrainGenome = {
   auto_cal_soft_dom_loss_vs_hardinv: number;
   /** Auto-cal: recover demoted regimes if E > this */
   auto_cal_demote_recover_e_min: number;
+  auto_cal_soft_loss_abs_floor: number;
+  auto_cal_micro_win_abs_floor: number;
+  auto_cal_peak_exits_min: number;
+  auto_cal_high_mfe_tiny_count_min: number;
+  auto_cal_micro_wins_min: number;
+  auto_cal_avg_loss_abs_floor: number;
+  auto_cal_already_tall_soft_mult: number;
+  auto_cal_soft_tight_soft_losses_min: number;
+  auto_cal_soft_tight_high_mfe_min: number;
+  auto_cal_soft_tight_hardinv_max: number;
+  auto_cal_regime_promote_n_min: number;
+  auto_cal_regime_promote_sum_min: number;
+  auto_cal_regime_keep_n_max: number;
+  auto_cal_regime_keep_sum_min: number;
+  auto_cal_regime_demote_sum_max: number;
+  auto_cal_mut_soft_plus_giveback_step: number;
+  auto_cal_mut_peak_arm_step: number;
+  auto_cal_mut_soft_layer_unlock_step: number;
+  auto_cal_mut_pb_episode_arm_step: number;
+  auto_cal_mut_pb_episode_mfe_step: number;
+  auto_cal_mut_soft_plus_runner_step: number;
+  auto_cal_mut_soft_plus_leg_step: number;
+  auto_cal_mut_soft_plus_giveback_min: number;
+  auto_cal_mut_soft_plus_giveback_max: number;
+  auto_cal_mut_peak_arm_min: number;
+  auto_cal_mut_peak_arm_max: number;
+  auto_cal_mut_soft_layer_unlock_min: number;
+  auto_cal_mut_soft_layer_unlock_max: number;
+  auto_cal_mut_pb_episode_arm_min: number;
+  auto_cal_mut_pb_episode_arm_max: number;
+  auto_cal_mut_pb_episode_mfe_min: number;
+  auto_cal_mut_pb_episode_mfe_max: number;
+  auto_cal_mut_soft_plus_runner_min: number;
+  auto_cal_mut_soft_plus_runner_max: number;
+  auto_cal_mut_soft_plus_leg_min: number;
+  auto_cal_mut_soft_plus_leg_max: number;
+  auto_cal_range_soft_min: number;
+  auto_cal_range_wins_min: number;
+  auto_cal_pb_soft_min: number;
+  auto_cal_mut_range_chop_down: number;
+  auto_cal_mut_range_share_down: number;
+  auto_cal_mut_range_eff_down: number;
+  auto_cal_mut_range_chop_up: number;
+  auto_cal_mut_range_chop_min: number;
+  auto_cal_mut_range_chop_max: number;
+  auto_cal_mut_range_share_min: number;
+  auto_cal_mut_range_share_max: number;
+  auto_cal_mut_range_eff_min: number;
+  auto_cal_mut_range_eff_max: number;
+  auto_cal_same_side_pause_max: number;
+  auto_cal_same_side_pause_soft_min: number;
+  auto_cal_same_side_pause_step: number;
+  auto_cal_choppy_green_lo: number;
+  auto_cal_choppy_green_hi: number;
+  auto_cal_mut_trek_flat_mult: number;
+  auto_cal_mut_trek_flat_min: number;
+  auto_cal_mut_trek_flat_max: number;
+  auto_cal_mut_story_conf_step: number;
+  auto_cal_mut_story_conf_min: number;
+  auto_cal_mut_story_conf_max: number;
+  auto_cal_mut_confirm_bars_min: number;
+  auto_cal_mut_confirm_bars_max: number;
+  auto_cal_mut_confirm_bars_step: number;
+  auto_cal_mut_dwell_bars_min: number;
+  auto_cal_mut_dwell_bars_max: number;
+  auto_cal_mut_dwell_bars_step: number;
+  story_recent_mins: number;
+  story_recent_color_min: number;
+  story_bounce_green_lo: number;
+  story_bounce_green_hi: number;
+  story_bounce_red_min: number;
+  story_dip_red_lo: number;
+  story_dip_red_hi: number;
+  story_dip_green_min: number;
+  minute_trend_bias_window_min: number;
+  minute_trend_bias_color_votes: number;
+  mind_pressure_delta: number;
+  mind_session_knife_soft_min: number;
+  mind_session_soft_losses_min: number;
+  mind_session_soft_sized_min: number;
+  mind_session_soft_cap_abs: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1415,6 +1496,87 @@ const DEFAULT_GENOME: BrainGenome = {
   auto_cal_soft_dom_loss_count_min: 3,
   auto_cal_soft_dom_loss_vs_hardinv: 0.7,
   auto_cal_demote_recover_e_min: 0.1,
+  auto_cal_soft_loss_abs_floor: 1.0,
+  auto_cal_micro_win_abs_floor: 1.0,
+  auto_cal_peak_exits_min: 2,
+  auto_cal_high_mfe_tiny_count_min: 2,
+  auto_cal_micro_wins_min: 2,
+  auto_cal_avg_loss_abs_floor: 1.0,
+  auto_cal_already_tall_soft_mult: 2.8,
+  auto_cal_soft_tight_soft_losses_min: 2,
+  auto_cal_soft_tight_high_mfe_min: 1,
+  auto_cal_soft_tight_hardinv_max: 2.0,
+  auto_cal_regime_promote_n_min: 1,
+  auto_cal_regime_promote_sum_min: 0.4,
+  auto_cal_regime_keep_n_max: 2,
+  auto_cal_regime_keep_sum_min: -0.35,
+  auto_cal_regime_demote_sum_max: -0.8,
+  auto_cal_mut_soft_plus_giveback_step: 0.03,
+  auto_cal_mut_peak_arm_step: 0.05,
+  auto_cal_mut_soft_layer_unlock_step: 0.05,
+  auto_cal_mut_pb_episode_arm_step: 0.05,
+  auto_cal_mut_pb_episode_mfe_step: 0.05,
+  auto_cal_mut_soft_plus_runner_step: 0.05,
+  auto_cal_mut_soft_plus_leg_step: 0.05,
+  auto_cal_mut_soft_plus_giveback_min: 0.55,
+  auto_cal_mut_soft_plus_giveback_max: 0.85,
+  auto_cal_mut_peak_arm_min: 0.5,
+  auto_cal_mut_peak_arm_max: 2.0,
+  auto_cal_mut_soft_layer_unlock_min: 0.5,
+  auto_cal_mut_soft_layer_unlock_max: 1.5,
+  auto_cal_mut_pb_episode_arm_min: 0.5,
+  auto_cal_mut_pb_episode_arm_max: 1.35,
+  auto_cal_mut_pb_episode_mfe_min: 0.25,
+  auto_cal_mut_pb_episode_mfe_max: 1.0,
+  auto_cal_mut_soft_plus_runner_min: 1.0,
+  auto_cal_mut_soft_plus_runner_max: 2.0,
+  auto_cal_mut_soft_plus_leg_min: 1.0,
+  auto_cal_mut_soft_plus_leg_max: 2.0,
+  auto_cal_range_soft_min: 2,
+  auto_cal_range_wins_min: 2,
+  auto_cal_pb_soft_min: 2,
+  auto_cal_mut_range_chop_down: 0.03,
+  auto_cal_mut_range_share_down: 0.03,
+  auto_cal_mut_range_eff_down: 0.03,
+  auto_cal_mut_range_chop_up: 0.02,
+  auto_cal_mut_range_chop_min: 0.08,
+  auto_cal_mut_range_chop_max: 0.55,
+  auto_cal_mut_range_share_min: 0.12,
+  auto_cal_mut_range_share_max: 0.55,
+  auto_cal_mut_range_eff_min: 0.15,
+  auto_cal_mut_range_eff_max: 0.7,
+  auto_cal_same_side_pause_max: 12,
+  auto_cal_same_side_pause_soft_min: 2,
+  auto_cal_same_side_pause_step: 1,
+  auto_cal_choppy_green_lo: 0.35,
+  auto_cal_choppy_green_hi: 0.65,
+  auto_cal_mut_trek_flat_mult: 1.08,
+  auto_cal_mut_trek_flat_min: 1.5,
+  auto_cal_mut_trek_flat_max: 12,
+  auto_cal_mut_story_conf_step: 0.03,
+  auto_cal_mut_story_conf_min: 0.35,
+  auto_cal_mut_story_conf_max: 0.8,
+  auto_cal_mut_confirm_bars_min: 1,
+  auto_cal_mut_confirm_bars_max: 8,
+  auto_cal_mut_confirm_bars_step: 1,
+  auto_cal_mut_dwell_bars_min: 2,
+  auto_cal_mut_dwell_bars_max: 12,
+  auto_cal_mut_dwell_bars_step: 1,
+  story_recent_mins: 5,
+  story_recent_color_min: 3,
+  story_bounce_green_lo: 1,
+  story_bounce_green_hi: 2,
+  story_bounce_red_min: 2,
+  story_dip_red_lo: 1,
+  story_dip_red_hi: 2,
+  story_dip_green_min: 2,
+  minute_trend_bias_window_min: 3,
+  minute_trend_bias_color_votes: 3,
+  mind_pressure_delta: 1,
+  mind_session_knife_soft_min: 2,
+  mind_session_soft_losses_min: 2,
+  mind_session_soft_sized_min: 2,
+  mind_session_soft_cap_abs: 2.2,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -2145,6 +2307,87 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     auto_cal_soft_dom_loss_count_min: clampInt(p.auto_cal_soft_dom_loss_count_min, d.auto_cal_soft_dom_loss_count_min, 1, 10),
     auto_cal_soft_dom_loss_vs_hardinv: round2(clamp(Number(p.auto_cal_soft_dom_loss_vs_hardinv ?? d.auto_cal_soft_dom_loss_vs_hardinv), 0.3, 1.5)),
     auto_cal_demote_recover_e_min: round2(clamp(Number(p.auto_cal_demote_recover_e_min ?? d.auto_cal_demote_recover_e_min), -0.5, 1.5)),
+    auto_cal_soft_loss_abs_floor: round1(clamp(Number(p.auto_cal_soft_loss_abs_floor ?? d.auto_cal_soft_loss_abs_floor), 0.2, 5)),
+    auto_cal_micro_win_abs_floor: round1(clamp(Number(p.auto_cal_micro_win_abs_floor ?? d.auto_cal_micro_win_abs_floor), 0.2, 5)),
+    auto_cal_peak_exits_min: clampInt(p.auto_cal_peak_exits_min, d.auto_cal_peak_exits_min, 1, 10),
+    auto_cal_high_mfe_tiny_count_min: clampInt(p.auto_cal_high_mfe_tiny_count_min, d.auto_cal_high_mfe_tiny_count_min, 1, 10),
+    auto_cal_micro_wins_min: clampInt(p.auto_cal_micro_wins_min, d.auto_cal_micro_wins_min, 1, 10),
+    auto_cal_avg_loss_abs_floor: round1(clamp(Number(p.auto_cal_avg_loss_abs_floor ?? d.auto_cal_avg_loss_abs_floor), 0.2, 5)),
+    auto_cal_already_tall_soft_mult: round2(clamp(Number(p.auto_cal_already_tall_soft_mult ?? d.auto_cal_already_tall_soft_mult), 1.5, 5)),
+    auto_cal_soft_tight_soft_losses_min: clampInt(p.auto_cal_soft_tight_soft_losses_min, d.auto_cal_soft_tight_soft_losses_min, 1, 10),
+    auto_cal_soft_tight_high_mfe_min: clampInt(p.auto_cal_soft_tight_high_mfe_min, d.auto_cal_soft_tight_high_mfe_min, 1, 10),
+    auto_cal_soft_tight_hardinv_max: round1(clamp(Number(p.auto_cal_soft_tight_hardinv_max ?? d.auto_cal_soft_tight_hardinv_max), 0.5, 8)),
+    auto_cal_regime_promote_n_min: clampInt(p.auto_cal_regime_promote_n_min, d.auto_cal_regime_promote_n_min, 1, 10),
+    auto_cal_regime_promote_sum_min: round2(clamp(Number(p.auto_cal_regime_promote_sum_min ?? d.auto_cal_regime_promote_sum_min), 0.05, 5)),
+    auto_cal_regime_keep_n_max: clampInt(p.auto_cal_regime_keep_n_max, d.auto_cal_regime_keep_n_max, 1, 10),
+    auto_cal_regime_keep_sum_min: round2(clamp(Number(p.auto_cal_regime_keep_sum_min ?? d.auto_cal_regime_keep_sum_min), -5, 1)),
+    auto_cal_regime_demote_sum_max: round2(clamp(Number(p.auto_cal_regime_demote_sum_max ?? d.auto_cal_regime_demote_sum_max), -10, 0)),
+    auto_cal_mut_soft_plus_giveback_step: round2(clamp(Number(p.auto_cal_mut_soft_plus_giveback_step ?? d.auto_cal_mut_soft_plus_giveback_step), 0.005, 0.2)),
+    auto_cal_mut_peak_arm_step: round2(clamp(Number(p.auto_cal_mut_peak_arm_step ?? d.auto_cal_mut_peak_arm_step), 0.01, 0.3)),
+    auto_cal_mut_soft_layer_unlock_step: round2(clamp(Number(p.auto_cal_mut_soft_layer_unlock_step ?? d.auto_cal_mut_soft_layer_unlock_step), 0.01, 0.3)),
+    auto_cal_mut_pb_episode_arm_step: round2(clamp(Number(p.auto_cal_mut_pb_episode_arm_step ?? d.auto_cal_mut_pb_episode_arm_step), 0.01, 0.3)),
+    auto_cal_mut_pb_episode_mfe_step: round2(clamp(Number(p.auto_cal_mut_pb_episode_mfe_step ?? d.auto_cal_mut_pb_episode_mfe_step), 0.01, 0.3)),
+    auto_cal_mut_soft_plus_runner_step: round2(clamp(Number(p.auto_cal_mut_soft_plus_runner_step ?? d.auto_cal_mut_soft_plus_runner_step), 0.01, 0.3)),
+    auto_cal_mut_soft_plus_leg_step: round2(clamp(Number(p.auto_cal_mut_soft_plus_leg_step ?? d.auto_cal_mut_soft_plus_leg_step), 0.01, 0.3)),
+    auto_cal_mut_soft_plus_giveback_min: round2(clamp(Number(p.auto_cal_mut_soft_plus_giveback_min ?? d.auto_cal_mut_soft_plus_giveback_min), 0.3, 0.9)),
+    auto_cal_mut_soft_plus_giveback_max: round2(clamp(Number(p.auto_cal_mut_soft_plus_giveback_max ?? d.auto_cal_mut_soft_plus_giveback_max), 0.5, 0.99)),
+    auto_cal_mut_peak_arm_min: round2(clamp(Number(p.auto_cal_mut_peak_arm_min ?? d.auto_cal_mut_peak_arm_min), 0.2, 1.5)),
+    auto_cal_mut_peak_arm_max: round2(clamp(Number(p.auto_cal_mut_peak_arm_max ?? d.auto_cal_mut_peak_arm_max), 0.8, 3)),
+    auto_cal_mut_soft_layer_unlock_min: round2(clamp(Number(p.auto_cal_mut_soft_layer_unlock_min ?? d.auto_cal_mut_soft_layer_unlock_min), 0.2, 1.2)),
+    auto_cal_mut_soft_layer_unlock_max: round2(clamp(Number(p.auto_cal_mut_soft_layer_unlock_max ?? d.auto_cal_mut_soft_layer_unlock_max), 0.8, 2.5)),
+    auto_cal_mut_pb_episode_arm_min: round2(clamp(Number(p.auto_cal_mut_pb_episode_arm_min ?? d.auto_cal_mut_pb_episode_arm_min), 0.2, 1.2)),
+    auto_cal_mut_pb_episode_arm_max: round2(clamp(Number(p.auto_cal_mut_pb_episode_arm_max ?? d.auto_cal_mut_pb_episode_arm_max), 0.8, 2.5)),
+    auto_cal_mut_pb_episode_mfe_min: round2(clamp(Number(p.auto_cal_mut_pb_episode_mfe_min ?? d.auto_cal_mut_pb_episode_mfe_min), 0.1, 0.8)),
+    auto_cal_mut_pb_episode_mfe_max: round2(clamp(Number(p.auto_cal_mut_pb_episode_mfe_max ?? d.auto_cal_mut_pb_episode_mfe_max), 0.5, 2)),
+    auto_cal_mut_soft_plus_runner_min: round2(clamp(Number(p.auto_cal_mut_soft_plus_runner_min ?? d.auto_cal_mut_soft_plus_runner_min), 0.5, 1.5)),
+    auto_cal_mut_soft_plus_runner_max: round2(clamp(Number(p.auto_cal_mut_soft_plus_runner_max ?? d.auto_cal_mut_soft_plus_runner_max), 1.0, 3)),
+    auto_cal_mut_soft_plus_leg_min: round2(clamp(Number(p.auto_cal_mut_soft_plus_leg_min ?? d.auto_cal_mut_soft_plus_leg_min), 0.5, 1.5)),
+    auto_cal_mut_soft_plus_leg_max: round2(clamp(Number(p.auto_cal_mut_soft_plus_leg_max ?? d.auto_cal_mut_soft_plus_leg_max), 1.0, 3)),
+    auto_cal_range_soft_min: clampInt(p.auto_cal_range_soft_min, d.auto_cal_range_soft_min, 1, 10),
+    auto_cal_range_wins_min: clampInt(p.auto_cal_range_wins_min, d.auto_cal_range_wins_min, 1, 10),
+    auto_cal_pb_soft_min: clampInt(p.auto_cal_pb_soft_min, d.auto_cal_pb_soft_min, 1, 10),
+    auto_cal_mut_range_chop_down: round2(clamp(Number(p.auto_cal_mut_range_chop_down ?? d.auto_cal_mut_range_chop_down), 0.005, 0.15)),
+    auto_cal_mut_range_share_down: round2(clamp(Number(p.auto_cal_mut_range_share_down ?? d.auto_cal_mut_range_share_down), 0.005, 0.15)),
+    auto_cal_mut_range_eff_down: round2(clamp(Number(p.auto_cal_mut_range_eff_down ?? d.auto_cal_mut_range_eff_down), 0.005, 0.15)),
+    auto_cal_mut_range_chop_up: round2(clamp(Number(p.auto_cal_mut_range_chop_up ?? d.auto_cal_mut_range_chop_up), 0.005, 0.15)),
+    auto_cal_mut_range_chop_min: round2(clamp(Number(p.auto_cal_mut_range_chop_min ?? d.auto_cal_mut_range_chop_min), 0.02, 0.4)),
+    auto_cal_mut_range_chop_max: round2(clamp(Number(p.auto_cal_mut_range_chop_max ?? d.auto_cal_mut_range_chop_max), 0.2, 0.9)),
+    auto_cal_mut_range_share_min: round2(clamp(Number(p.auto_cal_mut_range_share_min ?? d.auto_cal_mut_range_share_min), 0.02, 0.4)),
+    auto_cal_mut_range_share_max: round2(clamp(Number(p.auto_cal_mut_range_share_max ?? d.auto_cal_mut_range_share_max), 0.2, 0.9)),
+    auto_cal_mut_range_eff_min: round2(clamp(Number(p.auto_cal_mut_range_eff_min ?? d.auto_cal_mut_range_eff_min), 0.05, 0.5)),
+    auto_cal_mut_range_eff_max: round2(clamp(Number(p.auto_cal_mut_range_eff_max ?? d.auto_cal_mut_range_eff_max), 0.3, 0.95)),
+    auto_cal_same_side_pause_max: clampInt(p.auto_cal_same_side_pause_max, d.auto_cal_same_side_pause_max, 2, 30),
+    auto_cal_same_side_pause_soft_min: clampInt(p.auto_cal_same_side_pause_soft_min, d.auto_cal_same_side_pause_soft_min, 1, 10),
+    auto_cal_same_side_pause_step: clampInt(p.auto_cal_same_side_pause_step, d.auto_cal_same_side_pause_step, 1, 5),
+    auto_cal_choppy_green_lo: round2(clamp(Number(p.auto_cal_choppy_green_lo ?? d.auto_cal_choppy_green_lo), 0.1, 0.5)),
+    auto_cal_choppy_green_hi: round2(clamp(Number(p.auto_cal_choppy_green_hi ?? d.auto_cal_choppy_green_hi), 0.5, 0.9)),
+    auto_cal_mut_trek_flat_mult: round2(clamp(Number(p.auto_cal_mut_trek_flat_mult ?? d.auto_cal_mut_trek_flat_mult), 1.01, 1.5)),
+    auto_cal_mut_trek_flat_min: round1(clamp(Number(p.auto_cal_mut_trek_flat_min ?? d.auto_cal_mut_trek_flat_min), 0.5, 8)),
+    auto_cal_mut_trek_flat_max: round1(clamp(Number(p.auto_cal_mut_trek_flat_max ?? d.auto_cal_mut_trek_flat_max), 4, 40)),
+    auto_cal_mut_story_conf_step: round2(clamp(Number(p.auto_cal_mut_story_conf_step ?? d.auto_cal_mut_story_conf_step), 0.005, 0.15)),
+    auto_cal_mut_story_conf_min: round2(clamp(Number(p.auto_cal_mut_story_conf_min ?? d.auto_cal_mut_story_conf_min), 0.1, 0.7)),
+    auto_cal_mut_story_conf_max: round2(clamp(Number(p.auto_cal_mut_story_conf_max ?? d.auto_cal_mut_story_conf_max), 0.4, 0.99)),
+    auto_cal_mut_confirm_bars_min: clampInt(p.auto_cal_mut_confirm_bars_min, d.auto_cal_mut_confirm_bars_min, 1, 4),
+    auto_cal_mut_confirm_bars_max: clampInt(p.auto_cal_mut_confirm_bars_max, d.auto_cal_mut_confirm_bars_max, 2, 20),
+    auto_cal_mut_confirm_bars_step: clampInt(p.auto_cal_mut_confirm_bars_step, d.auto_cal_mut_confirm_bars_step, 1, 3),
+    auto_cal_mut_dwell_bars_min: clampInt(p.auto_cal_mut_dwell_bars_min, d.auto_cal_mut_dwell_bars_min, 1, 8),
+    auto_cal_mut_dwell_bars_max: clampInt(p.auto_cal_mut_dwell_bars_max, d.auto_cal_mut_dwell_bars_max, 4, 30),
+    auto_cal_mut_dwell_bars_step: clampInt(p.auto_cal_mut_dwell_bars_step, d.auto_cal_mut_dwell_bars_step, 1, 3),
+    story_recent_mins: clampInt(p.story_recent_mins, d.story_recent_mins, 2, 20),
+    story_recent_color_min: clampInt(p.story_recent_color_min, d.story_recent_color_min, 1, 10),
+    story_bounce_green_lo: clampInt(p.story_bounce_green_lo, d.story_bounce_green_lo, 0, 5),
+    story_bounce_green_hi: clampInt(p.story_bounce_green_hi, d.story_bounce_green_hi, 1, 8),
+    story_bounce_red_min: clampInt(p.story_bounce_red_min, d.story_bounce_red_min, 1, 8),
+    story_dip_red_lo: clampInt(p.story_dip_red_lo, d.story_dip_red_lo, 0, 5),
+    story_dip_red_hi: clampInt(p.story_dip_red_hi, d.story_dip_red_hi, 1, 8),
+    story_dip_green_min: clampInt(p.story_dip_green_min, d.story_dip_green_min, 1, 8),
+    minute_trend_bias_window_min: clampInt(p.minute_trend_bias_window_min, d.minute_trend_bias_window_min, 2, 10),
+    minute_trend_bias_color_votes: clampInt(p.minute_trend_bias_color_votes, d.minute_trend_bias_color_votes, 2, 10),
+    mind_pressure_delta: clampInt(p.mind_pressure_delta, d.mind_pressure_delta, 0, 5),
+    mind_session_knife_soft_min: clampInt(p.mind_session_knife_soft_min, d.mind_session_knife_soft_min, 1, 10),
+    mind_session_soft_losses_min: clampInt(p.mind_session_soft_losses_min, d.mind_session_soft_losses_min, 1, 10),
+    mind_session_soft_sized_min: clampInt(p.mind_session_soft_sized_min, d.mind_session_soft_sized_min, 1, 10),
+    mind_session_soft_cap_abs: round1(clamp(Number(p.mind_session_soft_cap_abs ?? d.mind_session_soft_cap_abs), 0.5, 8)),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2725,6 +2968,87 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'auto_cal_soft_dom_loss_count_min',
   'auto_cal_soft_dom_loss_vs_hardinv',
   'auto_cal_demote_recover_e_min',
+  'auto_cal_soft_loss_abs_floor',
+  'auto_cal_micro_win_abs_floor',
+  'auto_cal_peak_exits_min',
+  'auto_cal_high_mfe_tiny_count_min',
+  'auto_cal_micro_wins_min',
+  'auto_cal_avg_loss_abs_floor',
+  'auto_cal_already_tall_soft_mult',
+  'auto_cal_soft_tight_soft_losses_min',
+  'auto_cal_soft_tight_high_mfe_min',
+  'auto_cal_soft_tight_hardinv_max',
+  'auto_cal_regime_promote_n_min',
+  'auto_cal_regime_promote_sum_min',
+  'auto_cal_regime_keep_n_max',
+  'auto_cal_regime_keep_sum_min',
+  'auto_cal_regime_demote_sum_max',
+  'auto_cal_mut_soft_plus_giveback_step',
+  'auto_cal_mut_peak_arm_step',
+  'auto_cal_mut_soft_layer_unlock_step',
+  'auto_cal_mut_pb_episode_arm_step',
+  'auto_cal_mut_pb_episode_mfe_step',
+  'auto_cal_mut_soft_plus_runner_step',
+  'auto_cal_mut_soft_plus_leg_step',
+  'auto_cal_mut_soft_plus_giveback_min',
+  'auto_cal_mut_soft_plus_giveback_max',
+  'auto_cal_mut_peak_arm_min',
+  'auto_cal_mut_peak_arm_max',
+  'auto_cal_mut_soft_layer_unlock_min',
+  'auto_cal_mut_soft_layer_unlock_max',
+  'auto_cal_mut_pb_episode_arm_min',
+  'auto_cal_mut_pb_episode_arm_max',
+  'auto_cal_mut_pb_episode_mfe_min',
+  'auto_cal_mut_pb_episode_mfe_max',
+  'auto_cal_mut_soft_plus_runner_min',
+  'auto_cal_mut_soft_plus_runner_max',
+  'auto_cal_mut_soft_plus_leg_min',
+  'auto_cal_mut_soft_plus_leg_max',
+  'auto_cal_range_soft_min',
+  'auto_cal_range_wins_min',
+  'auto_cal_pb_soft_min',
+  'auto_cal_mut_range_chop_down',
+  'auto_cal_mut_range_share_down',
+  'auto_cal_mut_range_eff_down',
+  'auto_cal_mut_range_chop_up',
+  'auto_cal_mut_range_chop_min',
+  'auto_cal_mut_range_chop_max',
+  'auto_cal_mut_range_share_min',
+  'auto_cal_mut_range_share_max',
+  'auto_cal_mut_range_eff_min',
+  'auto_cal_mut_range_eff_max',
+  'auto_cal_same_side_pause_max',
+  'auto_cal_same_side_pause_soft_min',
+  'auto_cal_same_side_pause_step',
+  'auto_cal_choppy_green_lo',
+  'auto_cal_choppy_green_hi',
+  'auto_cal_mut_trek_flat_mult',
+  'auto_cal_mut_trek_flat_min',
+  'auto_cal_mut_trek_flat_max',
+  'auto_cal_mut_story_conf_step',
+  'auto_cal_mut_story_conf_min',
+  'auto_cal_mut_story_conf_max',
+  'auto_cal_mut_confirm_bars_min',
+  'auto_cal_mut_confirm_bars_max',
+  'auto_cal_mut_confirm_bars_step',
+  'auto_cal_mut_dwell_bars_min',
+  'auto_cal_mut_dwell_bars_max',
+  'auto_cal_mut_dwell_bars_step',
+  'story_recent_mins',
+  'story_recent_color_min',
+  'story_bounce_green_lo',
+  'story_bounce_green_hi',
+  'story_bounce_red_min',
+  'story_dip_red_lo',
+  'story_dip_red_hi',
+  'story_dip_green_min',
+  'minute_trend_bias_window_min',
+  'minute_trend_bias_color_votes',
+  'mind_pressure_delta',
+  'mind_session_knife_soft_min',
+  'mind_session_soft_losses_min',
+  'mind_session_soft_sized_min',
+  'mind_session_soft_cap_abs',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

@@ -817,6 +817,87 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const acSoftDomLossN = bounceInt(g.auto_cal_soft_dom_loss_count_min, 1, 1, 10, dir);
   const acSoftDomLossVs = bounceNum(g.auto_cal_soft_dom_loss_vs_hardinv, 0.05, 0.3, 1.5, dir);
   const acDemoteRecoverE = bounceNum(g.auto_cal_demote_recover_e_min, 0.05, -0.5, 1.5, dir);
+  const acSoftLossAbsFloor = bounceNum(g.auto_cal_soft_loss_abs_floor, 0.1, 0.2, 8, dir);
+  const acMicroWinAbsFloor = bounceNum(g.auto_cal_micro_win_abs_floor, 0.1, 0.2, 8, dir);
+  const acPeakExitsMin = bounceInt(g.auto_cal_peak_exits_min, 1, 1, 10, dir);
+  const acHighMfeTinyCountMin = bounceInt(g.auto_cal_high_mfe_tiny_count_min, 1, 1, 10, dir);
+  const acMicroWinsMin = bounceInt(g.auto_cal_micro_wins_min, 1, 1, 10, dir);
+  const acAvgLossAbsFloor = bounceNum(g.auto_cal_avg_loss_abs_floor, 0.1, 0.2, 8, dir);
+  const acAlreadyTallSoftMult = bounceNum(g.auto_cal_already_tall_soft_mult, 0.1, 1.0, 5.0, dir);
+  const acSoftTightSoftLossesMin = bounceInt(g.auto_cal_soft_tight_soft_losses_min, 1, 1, 10, dir);
+  const acSoftTightHighMfeMin = bounceInt(g.auto_cal_soft_tight_high_mfe_min, 1, 1, 10, dir);
+  const acSoftTightHardinvMax = bounceNum(g.auto_cal_soft_tight_hardinv_max, 0.1, 0.2, 8, dir);
+  const acRegimePromoteNMin = bounceInt(g.auto_cal_regime_promote_n_min, 1, 1, 10, dir);
+  const acRegimePromoteSumMin = bounceNum(g.auto_cal_regime_promote_sum_min, 0.05, 0.05, 5, dir);
+  const acRegimeKeepNMax = bounceInt(g.auto_cal_regime_keep_n_max, 1, 1, 10, dir);
+  const acRegimeKeepSumMin = bounceNum(g.auto_cal_regime_keep_sum_min, 0.05, -5, 1, dir);
+  const acRegimeDemoteSumMax = bounceNum(g.auto_cal_regime_demote_sum_max, 0.1, -10, 0, dir);
+  const acMutSoftPlusGivebackStep = bounceNum(g.auto_cal_mut_soft_plus_giveback_step, 0.01, 0.005, 0.3, dir);
+  const acMutPeakArmStep = bounceNum(g.auto_cal_mut_peak_arm_step, 0.01, 0.005, 0.3, dir);
+  const acMutSoftLayerUnlockStep = bounceNum(g.auto_cal_mut_soft_layer_unlock_step, 0.01, 0.005, 0.3, dir);
+  const acMutPbEpisodeArmStep = bounceNum(g.auto_cal_mut_pb_episode_arm_step, 0.01, 0.005, 0.3, dir);
+  const acMutPbEpisodeMfeStep = bounceNum(g.auto_cal_mut_pb_episode_mfe_step, 0.01, 0.005, 0.3, dir);
+  const acMutSoftPlusRunnerStep = bounceNum(g.auto_cal_mut_soft_plus_runner_step, 0.01, 0.005, 0.3, dir);
+  const acMutSoftPlusLegStep = bounceNum(g.auto_cal_mut_soft_plus_leg_step, 0.01, 0.005, 0.3, dir);
+  const acMutSoftPlusGivebackMin = bounceNum(g.auto_cal_mut_soft_plus_giveback_min, 0.02, 0.3, 0.9, dir);
+  const acMutSoftPlusGivebackMax = bounceNum(g.auto_cal_mut_soft_plus_giveback_max, 0.02, 0.5, 0.99, dir);
+  const acMutPeakArmMin = bounceNum(g.auto_cal_mut_peak_arm_min, 0.05, 0.2, 1.5, dir);
+  const acMutPeakArmMax = bounceNum(g.auto_cal_mut_peak_arm_max, 0.1, 0.8, 3, dir);
+  const acMutSoftLayerUnlockMin = bounceNum(g.auto_cal_mut_soft_layer_unlock_min, 0.05, 0.2, 1.5, dir);
+  const acMutSoftLayerUnlockMax = bounceNum(g.auto_cal_mut_soft_layer_unlock_max, 0.1, 0.8, 2.5, dir);
+  const acMutPbEpisodeArmMin = bounceNum(g.auto_cal_mut_pb_episode_arm_min, 0.05, 0.2, 1.5, dir);
+  const acMutPbEpisodeArmMax = bounceNum(g.auto_cal_mut_pb_episode_arm_max, 0.1, 0.8, 2.5, dir);
+  const acMutPbEpisodeMfeMin = bounceNum(g.auto_cal_mut_pb_episode_mfe_min, 0.05, 0.1, 0.8, dir);
+  const acMutPbEpisodeMfeMax = bounceNum(g.auto_cal_mut_pb_episode_mfe_max, 0.05, 0.5, 2, dir);
+  const acMutSoftPlusRunnerMin = bounceNum(g.auto_cal_mut_soft_plus_runner_min, 0.1, 0.5, 1.5, dir);
+  const acMutSoftPlusRunnerMax = bounceNum(g.auto_cal_mut_soft_plus_runner_max, 0.1, 1.0, 3, dir);
+  const acMutSoftPlusLegMin = bounceNum(g.auto_cal_mut_soft_plus_leg_min, 0.1, 0.5, 1.5, dir);
+  const acMutSoftPlusLegMax = bounceNum(g.auto_cal_mut_soft_plus_leg_max, 0.1, 1.0, 3, dir);
+  const acRangeSoftMin = bounceInt(g.auto_cal_range_soft_min, 1, 1, 10, dir);
+  const acRangeWinsMin = bounceInt(g.auto_cal_range_wins_min, 1, 1, 10, dir);
+  const acPbSoftMin = bounceInt(g.auto_cal_pb_soft_min, 1, 1, 10, dir);
+  const acMutRangeChopDown = bounceNum(g.auto_cal_mut_range_chop_down, 0.01, 0.005, 0.15, dir);
+  const acMutRangeShareDown = bounceNum(g.auto_cal_mut_range_share_down, 0.01, 0.005, 0.15, dir);
+  const acMutRangeEffDown = bounceNum(g.auto_cal_mut_range_eff_down, 0.01, 0.005, 0.15, dir);
+  const acMutRangeChopUp = bounceNum(g.auto_cal_mut_range_chop_up, 0.01, 0.005, 0.15, dir);
+  const acMutRangeChopMin = bounceNum(g.auto_cal_mut_range_chop_min, 0.02, 0.02, 0.4, dir);
+  const acMutRangeChopMax = bounceNum(g.auto_cal_mut_range_chop_max, 0.02, 0.2, 0.9, dir);
+  const acMutRangeShareMin = bounceNum(g.auto_cal_mut_range_share_min, 0.02, 0.02, 0.4, dir);
+  const acMutRangeShareMax = bounceNum(g.auto_cal_mut_range_share_max, 0.02, 0.2, 0.9, dir);
+  const acMutRangeEffMin = bounceNum(g.auto_cal_mut_range_eff_min, 0.02, 0.05, 0.5, dir);
+  const acMutRangeEffMax = bounceNum(g.auto_cal_mut_range_eff_max, 0.02, 0.3, 0.95, dir);
+  const acSameSidePauseMax = bounceInt(g.auto_cal_same_side_pause_max, 1, 2, 30, dir);
+  const acSameSidePauseSoftMin = bounceInt(g.auto_cal_same_side_pause_soft_min, 1, 1, 10, dir);
+  const acSameSidePauseStep = bounceInt(g.auto_cal_same_side_pause_step, 1, 1, 5, dir);
+  const acChoppyGreenLo = bounceNum(g.auto_cal_choppy_green_lo, 0.05, 0.1, 0.5, dir);
+  const acChoppyGreenHi = bounceNum(g.auto_cal_choppy_green_hi, 0.05, 0.5, 0.9, dir);
+  const acMutTrekFlatMult = bounceNum(g.auto_cal_mut_trek_flat_mult, 0.02, 1.01, 1.5, dir);
+  const acMutTrekFlatMin = bounceNum(g.auto_cal_mut_trek_flat_min, 0.5, 0.5, 8, dir);
+  const acMutTrekFlatMax = bounceInt(g.auto_cal_mut_trek_flat_max, 1, 1, 10, dir);
+  const acMutStoryConfStep = bounceNum(g.auto_cal_mut_story_conf_step, 0.01, 0.005, 0.3, dir);
+  const acMutStoryConfMin = bounceNum(g.auto_cal_mut_story_conf_min, 0.02, 0.1, 0.99, dir);
+  const acMutStoryConfMax = bounceNum(g.auto_cal_mut_story_conf_max, 0.02, 0.1, 0.99, dir);
+  const acMutConfirmBarsMin = bounceInt(g.auto_cal_mut_confirm_bars_min, 1, 1, 20, dir);
+  const acMutConfirmBarsMax = bounceInt(g.auto_cal_mut_confirm_bars_max, 1, 1, 20, dir);
+  const acMutConfirmBarsStep = bounceInt(g.auto_cal_mut_confirm_bars_step, 1, 1, 20, dir);
+  const acMutDwellBarsMin = bounceInt(g.auto_cal_mut_dwell_bars_min, 1, 1, 20, dir);
+  const acMutDwellBarsMax = bounceInt(g.auto_cal_mut_dwell_bars_max, 1, 1, 20, dir);
+  const acMutDwellBarsStep = bounceInt(g.auto_cal_mut_dwell_bars_step, 1, 1, 20, dir);
+  const stRecentMins = bounceInt(g.story_recent_mins, 1, 1, 20, dir);
+  const stRecentColorMin = bounceInt(g.story_recent_color_min, 1, 1, 10, dir);
+  const stBounceGreenLo = bounceInt(g.story_bounce_green_lo, 1, 1, 10, dir);
+  const stBounceGreenHi = bounceInt(g.story_bounce_green_hi, 1, 1, 10, dir);
+  const stBounceRedMin = bounceInt(g.story_bounce_red_min, 1, 1, 10, dir);
+  const stDipRedLo = bounceInt(g.story_dip_red_lo, 1, 1, 10, dir);
+  const stDipRedHi = bounceInt(g.story_dip_red_hi, 1, 1, 10, dir);
+  const stDipGreenMin = bounceInt(g.story_dip_green_min, 1, 1, 10, dir);
+  const mtbTrendBiasWindowMin = bounceInt(g.minute_trend_bias_window_min, 1, 1, 20, dir);
+  const mtbTrendBiasColorVotes = bounceInt(g.minute_trend_bias_color_votes, 1, 1, 20, dir);
+  const mindPressureDelta = bounceInt(g.mind_pressure_delta, 1, 0, 5, dir);
+  const mindSessionKnifeSoftMin = bounceInt(g.mind_session_knife_soft_min, 1, 1, 10, dir);
+  const mindSessionSoftLossesMin = bounceInt(g.mind_session_soft_losses_min, 1, 1, 10, dir);
+  const mindSessionSoftSizedMin = bounceInt(g.mind_session_soft_sized_min, 1, 1, 10, dir);
+  const mindSessionSoftCapAbs = bounceNum(g.mind_session_soft_cap_abs, 0.1, 0.2, 8, dir);
   const manageFadeSoft = bounceNum(g.manage_path_fade_soft_mult, 0.02, 0.05, 0.5, dir);
   const manageStallMfe = bounceNum(g.manage_path_stall_mfe_soft_mult, 0.05, 0.1, 0.9, dir);
   const manageStallUpl = bounceNum(g.manage_path_stall_upl_soft_mult, 0.02, 0.05, 0.5, dir);
@@ -1796,6 +1877,87 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         auto_cal_soft_dom_loss_count_min: acSoftDomLossN,
         auto_cal_soft_dom_loss_vs_hardinv: acSoftDomLossVs,
         auto_cal_demote_recover_e_min: acDemoteRecoverE,
+        auto_cal_soft_loss_abs_floor: acSoftLossAbsFloor,
+        auto_cal_micro_win_abs_floor: acMicroWinAbsFloor,
+        auto_cal_peak_exits_min: acPeakExitsMin,
+        auto_cal_high_mfe_tiny_count_min: acHighMfeTinyCountMin,
+        auto_cal_micro_wins_min: acMicroWinsMin,
+        auto_cal_avg_loss_abs_floor: acAvgLossAbsFloor,
+        auto_cal_already_tall_soft_mult: acAlreadyTallSoftMult,
+        auto_cal_soft_tight_soft_losses_min: acSoftTightSoftLossesMin,
+        auto_cal_soft_tight_high_mfe_min: acSoftTightHighMfeMin,
+        auto_cal_soft_tight_hardinv_max: acSoftTightHardinvMax,
+        auto_cal_regime_promote_n_min: acRegimePromoteNMin,
+        auto_cal_regime_promote_sum_min: acRegimePromoteSumMin,
+        auto_cal_regime_keep_n_max: acRegimeKeepNMax,
+        auto_cal_regime_keep_sum_min: acRegimeKeepSumMin,
+        auto_cal_regime_demote_sum_max: acRegimeDemoteSumMax,
+        auto_cal_mut_soft_plus_giveback_step: acMutSoftPlusGivebackStep,
+        auto_cal_mut_peak_arm_step: acMutPeakArmStep,
+        auto_cal_mut_soft_layer_unlock_step: acMutSoftLayerUnlockStep,
+        auto_cal_mut_pb_episode_arm_step: acMutPbEpisodeArmStep,
+        auto_cal_mut_pb_episode_mfe_step: acMutPbEpisodeMfeStep,
+        auto_cal_mut_soft_plus_runner_step: acMutSoftPlusRunnerStep,
+        auto_cal_mut_soft_plus_leg_step: acMutSoftPlusLegStep,
+        auto_cal_mut_soft_plus_giveback_min: acMutSoftPlusGivebackMin,
+        auto_cal_mut_soft_plus_giveback_max: acMutSoftPlusGivebackMax,
+        auto_cal_mut_peak_arm_min: acMutPeakArmMin,
+        auto_cal_mut_peak_arm_max: acMutPeakArmMax,
+        auto_cal_mut_soft_layer_unlock_min: acMutSoftLayerUnlockMin,
+        auto_cal_mut_soft_layer_unlock_max: acMutSoftLayerUnlockMax,
+        auto_cal_mut_pb_episode_arm_min: acMutPbEpisodeArmMin,
+        auto_cal_mut_pb_episode_arm_max: acMutPbEpisodeArmMax,
+        auto_cal_mut_pb_episode_mfe_min: acMutPbEpisodeMfeMin,
+        auto_cal_mut_pb_episode_mfe_max: acMutPbEpisodeMfeMax,
+        auto_cal_mut_soft_plus_runner_min: acMutSoftPlusRunnerMin,
+        auto_cal_mut_soft_plus_runner_max: acMutSoftPlusRunnerMax,
+        auto_cal_mut_soft_plus_leg_min: acMutSoftPlusLegMin,
+        auto_cal_mut_soft_plus_leg_max: acMutSoftPlusLegMax,
+        auto_cal_range_soft_min: acRangeSoftMin,
+        auto_cal_range_wins_min: acRangeWinsMin,
+        auto_cal_pb_soft_min: acPbSoftMin,
+        auto_cal_mut_range_chop_down: acMutRangeChopDown,
+        auto_cal_mut_range_share_down: acMutRangeShareDown,
+        auto_cal_mut_range_eff_down: acMutRangeEffDown,
+        auto_cal_mut_range_chop_up: acMutRangeChopUp,
+        auto_cal_mut_range_chop_min: acMutRangeChopMin,
+        auto_cal_mut_range_chop_max: acMutRangeChopMax,
+        auto_cal_mut_range_share_min: acMutRangeShareMin,
+        auto_cal_mut_range_share_max: acMutRangeShareMax,
+        auto_cal_mut_range_eff_min: acMutRangeEffMin,
+        auto_cal_mut_range_eff_max: acMutRangeEffMax,
+        auto_cal_same_side_pause_max: acSameSidePauseMax,
+        auto_cal_same_side_pause_soft_min: acSameSidePauseSoftMin,
+        auto_cal_same_side_pause_step: acSameSidePauseStep,
+        auto_cal_choppy_green_lo: acChoppyGreenLo,
+        auto_cal_choppy_green_hi: acChoppyGreenHi,
+        auto_cal_mut_trek_flat_mult: acMutTrekFlatMult,
+        auto_cal_mut_trek_flat_min: acMutTrekFlatMin,
+        auto_cal_mut_trek_flat_max: acMutTrekFlatMax,
+        auto_cal_mut_story_conf_step: acMutStoryConfStep,
+        auto_cal_mut_story_conf_min: acMutStoryConfMin,
+        auto_cal_mut_story_conf_max: acMutStoryConfMax,
+        auto_cal_mut_confirm_bars_min: acMutConfirmBarsMin,
+        auto_cal_mut_confirm_bars_max: acMutConfirmBarsMax,
+        auto_cal_mut_confirm_bars_step: acMutConfirmBarsStep,
+        auto_cal_mut_dwell_bars_min: acMutDwellBarsMin,
+        auto_cal_mut_dwell_bars_max: acMutDwellBarsMax,
+        auto_cal_mut_dwell_bars_step: acMutDwellBarsStep,
+        story_recent_mins: stRecentMins,
+        story_recent_color_min: stRecentColorMin,
+        story_bounce_green_lo: stBounceGreenLo,
+        story_bounce_green_hi: stBounceGreenHi,
+        story_bounce_red_min: stBounceRedMin,
+        story_dip_red_lo: stDipRedLo,
+        story_dip_red_hi: stDipRedHi,
+        story_dip_green_min: stDipGreenMin,
+        minute_trend_bias_window_min: mtbTrendBiasWindowMin,
+        minute_trend_bias_color_votes: mtbTrendBiasColorVotes,
+        mind_pressure_delta: mindPressureDelta,
+        mind_session_knife_soft_min: mindSessionKnifeSoftMin,
+        mind_session_soft_losses_min: mindSessionSoftLossesMin,
+        mind_session_soft_sized_min: mindSessionSoftSizedMin,
+        mind_session_soft_cap_abs: mindSessionSoftCapAbs,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
         last_lesson: `Explore tip+manage wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
@@ -1918,6 +2080,87 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('auto_cal_soft_dom_loss_count_min', acSoftDomLossN, `explore ac_soft_dom_loss_n ${acSoftDomLossN}`),
         genomePatch('auto_cal_soft_dom_loss_vs_hardinv', acSoftDomLossVs, `explore ac_soft_dom_loss_vs ${acSoftDomLossVs}`),
         genomePatch('auto_cal_demote_recover_e_min', acDemoteRecoverE, `explore ac_demote_recover_e ${acDemoteRecoverE}`),
+        genomePatch('auto_cal_soft_loss_abs_floor', acSoftLossAbsFloor, `explore ac_soft_loss_abs_floor ${acSoftLossAbsFloor}`),
+        genomePatch('auto_cal_micro_win_abs_floor', acMicroWinAbsFloor, `explore ac_micro_win_abs_floor ${acMicroWinAbsFloor}`),
+        genomePatch('auto_cal_peak_exits_min', acPeakExitsMin, `explore ac_peak_exits_min ${acPeakExitsMin}`),
+        genomePatch('auto_cal_high_mfe_tiny_count_min', acHighMfeTinyCountMin, `explore ac_high_mfe_tiny_count_min ${acHighMfeTinyCountMin}`),
+        genomePatch('auto_cal_micro_wins_min', acMicroWinsMin, `explore ac_micro_wins_min ${acMicroWinsMin}`),
+        genomePatch('auto_cal_avg_loss_abs_floor', acAvgLossAbsFloor, `explore ac_avg_loss_abs_floor ${acAvgLossAbsFloor}`),
+        genomePatch('auto_cal_already_tall_soft_mult', acAlreadyTallSoftMult, `explore ac_already_tall_soft_mult ${acAlreadyTallSoftMult}`),
+        genomePatch('auto_cal_soft_tight_soft_losses_min', acSoftTightSoftLossesMin, `explore ac_soft_tight_soft_losses_min ${acSoftTightSoftLossesMin}`),
+        genomePatch('auto_cal_soft_tight_high_mfe_min', acSoftTightHighMfeMin, `explore ac_soft_tight_high_mfe_min ${acSoftTightHighMfeMin}`),
+        genomePatch('auto_cal_soft_tight_hardinv_max', acSoftTightHardinvMax, `explore ac_soft_tight_hardinv_max ${acSoftTightHardinvMax}`),
+        genomePatch('auto_cal_regime_promote_n_min', acRegimePromoteNMin, `explore ac_regime_promote_n_min ${acRegimePromoteNMin}`),
+        genomePatch('auto_cal_regime_promote_sum_min', acRegimePromoteSumMin, `explore ac_regime_promote_sum_min ${acRegimePromoteSumMin}`),
+        genomePatch('auto_cal_regime_keep_n_max', acRegimeKeepNMax, `explore ac_regime_keep_n_max ${acRegimeKeepNMax}`),
+        genomePatch('auto_cal_regime_keep_sum_min', acRegimeKeepSumMin, `explore ac_regime_keep_sum_min ${acRegimeKeepSumMin}`),
+        genomePatch('auto_cal_regime_demote_sum_max', acRegimeDemoteSumMax, `explore ac_regime_demote_sum_max ${acRegimeDemoteSumMax}`),
+        genomePatch('auto_cal_mut_soft_plus_giveback_step', acMutSoftPlusGivebackStep, `explore ac_mut_soft_plus_giveback_step ${acMutSoftPlusGivebackStep}`),
+        genomePatch('auto_cal_mut_peak_arm_step', acMutPeakArmStep, `explore ac_mut_peak_arm_step ${acMutPeakArmStep}`),
+        genomePatch('auto_cal_mut_soft_layer_unlock_step', acMutSoftLayerUnlockStep, `explore ac_mut_soft_layer_unlock_step ${acMutSoftLayerUnlockStep}`),
+        genomePatch('auto_cal_mut_pb_episode_arm_step', acMutPbEpisodeArmStep, `explore ac_mut_pb_episode_arm_step ${acMutPbEpisodeArmStep}`),
+        genomePatch('auto_cal_mut_pb_episode_mfe_step', acMutPbEpisodeMfeStep, `explore ac_mut_pb_episode_mfe_step ${acMutPbEpisodeMfeStep}`),
+        genomePatch('auto_cal_mut_soft_plus_runner_step', acMutSoftPlusRunnerStep, `explore ac_mut_soft_plus_runner_step ${acMutSoftPlusRunnerStep}`),
+        genomePatch('auto_cal_mut_soft_plus_leg_step', acMutSoftPlusLegStep, `explore ac_mut_soft_plus_leg_step ${acMutSoftPlusLegStep}`),
+        genomePatch('auto_cal_mut_soft_plus_giveback_min', acMutSoftPlusGivebackMin, `explore ac_mut_soft_plus_giveback_min ${acMutSoftPlusGivebackMin}`),
+        genomePatch('auto_cal_mut_soft_plus_giveback_max', acMutSoftPlusGivebackMax, `explore ac_mut_soft_plus_giveback_max ${acMutSoftPlusGivebackMax}`),
+        genomePatch('auto_cal_mut_peak_arm_min', acMutPeakArmMin, `explore ac_mut_peak_arm_min ${acMutPeakArmMin}`),
+        genomePatch('auto_cal_mut_peak_arm_max', acMutPeakArmMax, `explore ac_mut_peak_arm_max ${acMutPeakArmMax}`),
+        genomePatch('auto_cal_mut_soft_layer_unlock_min', acMutSoftLayerUnlockMin, `explore ac_mut_soft_layer_unlock_min ${acMutSoftLayerUnlockMin}`),
+        genomePatch('auto_cal_mut_soft_layer_unlock_max', acMutSoftLayerUnlockMax, `explore ac_mut_soft_layer_unlock_max ${acMutSoftLayerUnlockMax}`),
+        genomePatch('auto_cal_mut_pb_episode_arm_min', acMutPbEpisodeArmMin, `explore ac_mut_pb_episode_arm_min ${acMutPbEpisodeArmMin}`),
+        genomePatch('auto_cal_mut_pb_episode_arm_max', acMutPbEpisodeArmMax, `explore ac_mut_pb_episode_arm_max ${acMutPbEpisodeArmMax}`),
+        genomePatch('auto_cal_mut_pb_episode_mfe_min', acMutPbEpisodeMfeMin, `explore ac_mut_pb_episode_mfe_min ${acMutPbEpisodeMfeMin}`),
+        genomePatch('auto_cal_mut_pb_episode_mfe_max', acMutPbEpisodeMfeMax, `explore ac_mut_pb_episode_mfe_max ${acMutPbEpisodeMfeMax}`),
+        genomePatch('auto_cal_mut_soft_plus_runner_min', acMutSoftPlusRunnerMin, `explore ac_mut_soft_plus_runner_min ${acMutSoftPlusRunnerMin}`),
+        genomePatch('auto_cal_mut_soft_plus_runner_max', acMutSoftPlusRunnerMax, `explore ac_mut_soft_plus_runner_max ${acMutSoftPlusRunnerMax}`),
+        genomePatch('auto_cal_mut_soft_plus_leg_min', acMutSoftPlusLegMin, `explore ac_mut_soft_plus_leg_min ${acMutSoftPlusLegMin}`),
+        genomePatch('auto_cal_mut_soft_plus_leg_max', acMutSoftPlusLegMax, `explore ac_mut_soft_plus_leg_max ${acMutSoftPlusLegMax}`),
+        genomePatch('auto_cal_range_soft_min', acRangeSoftMin, `explore ac_range_soft_min ${acRangeSoftMin}`),
+        genomePatch('auto_cal_range_wins_min', acRangeWinsMin, `explore ac_range_wins_min ${acRangeWinsMin}`),
+        genomePatch('auto_cal_pb_soft_min', acPbSoftMin, `explore ac_pb_soft_min ${acPbSoftMin}`),
+        genomePatch('auto_cal_mut_range_chop_down', acMutRangeChopDown, `explore ac_mut_range_chop_down ${acMutRangeChopDown}`),
+        genomePatch('auto_cal_mut_range_share_down', acMutRangeShareDown, `explore ac_mut_range_share_down ${acMutRangeShareDown}`),
+        genomePatch('auto_cal_mut_range_eff_down', acMutRangeEffDown, `explore ac_mut_range_eff_down ${acMutRangeEffDown}`),
+        genomePatch('auto_cal_mut_range_chop_up', acMutRangeChopUp, `explore ac_mut_range_chop_up ${acMutRangeChopUp}`),
+        genomePatch('auto_cal_mut_range_chop_min', acMutRangeChopMin, `explore ac_mut_range_chop_min ${acMutRangeChopMin}`),
+        genomePatch('auto_cal_mut_range_chop_max', acMutRangeChopMax, `explore ac_mut_range_chop_max ${acMutRangeChopMax}`),
+        genomePatch('auto_cal_mut_range_share_min', acMutRangeShareMin, `explore ac_mut_range_share_min ${acMutRangeShareMin}`),
+        genomePatch('auto_cal_mut_range_share_max', acMutRangeShareMax, `explore ac_mut_range_share_max ${acMutRangeShareMax}`),
+        genomePatch('auto_cal_mut_range_eff_min', acMutRangeEffMin, `explore ac_mut_range_eff_min ${acMutRangeEffMin}`),
+        genomePatch('auto_cal_mut_range_eff_max', acMutRangeEffMax, `explore ac_mut_range_eff_max ${acMutRangeEffMax}`),
+        genomePatch('auto_cal_same_side_pause_max', acSameSidePauseMax, `explore ac_same_side_pause_max ${acSameSidePauseMax}`),
+        genomePatch('auto_cal_same_side_pause_soft_min', acSameSidePauseSoftMin, `explore ac_same_side_pause_soft_min ${acSameSidePauseSoftMin}`),
+        genomePatch('auto_cal_same_side_pause_step', acSameSidePauseStep, `explore ac_same_side_pause_step ${acSameSidePauseStep}`),
+        genomePatch('auto_cal_choppy_green_lo', acChoppyGreenLo, `explore ac_choppy_green_lo ${acChoppyGreenLo}`),
+        genomePatch('auto_cal_choppy_green_hi', acChoppyGreenHi, `explore ac_choppy_green_hi ${acChoppyGreenHi}`),
+        genomePatch('auto_cal_mut_trek_flat_mult', acMutTrekFlatMult, `explore ac_mut_trek_flat_mult ${acMutTrekFlatMult}`),
+        genomePatch('auto_cal_mut_trek_flat_min', acMutTrekFlatMin, `explore ac_mut_trek_flat_min ${acMutTrekFlatMin}`),
+        genomePatch('auto_cal_mut_trek_flat_max', acMutTrekFlatMax, `explore ac_mut_trek_flat_max ${acMutTrekFlatMax}`),
+        genomePatch('auto_cal_mut_story_conf_step', acMutStoryConfStep, `explore ac_mut_story_conf_step ${acMutStoryConfStep}`),
+        genomePatch('auto_cal_mut_story_conf_min', acMutStoryConfMin, `explore ac_mut_story_conf_min ${acMutStoryConfMin}`),
+        genomePatch('auto_cal_mut_story_conf_max', acMutStoryConfMax, `explore ac_mut_story_conf_max ${acMutStoryConfMax}`),
+        genomePatch('auto_cal_mut_confirm_bars_min', acMutConfirmBarsMin, `explore ac_mut_confirm_bars_min ${acMutConfirmBarsMin}`),
+        genomePatch('auto_cal_mut_confirm_bars_max', acMutConfirmBarsMax, `explore ac_mut_confirm_bars_max ${acMutConfirmBarsMax}`),
+        genomePatch('auto_cal_mut_confirm_bars_step', acMutConfirmBarsStep, `explore ac_mut_confirm_bars_step ${acMutConfirmBarsStep}`),
+        genomePatch('auto_cal_mut_dwell_bars_min', acMutDwellBarsMin, `explore ac_mut_dwell_bars_min ${acMutDwellBarsMin}`),
+        genomePatch('auto_cal_mut_dwell_bars_max', acMutDwellBarsMax, `explore ac_mut_dwell_bars_max ${acMutDwellBarsMax}`),
+        genomePatch('auto_cal_mut_dwell_bars_step', acMutDwellBarsStep, `explore ac_mut_dwell_bars_step ${acMutDwellBarsStep}`),
+        genomePatch('story_recent_mins', stRecentMins, `explore story_recent_mins ${stRecentMins}`),
+        genomePatch('story_recent_color_min', stRecentColorMin, `explore story_recent_color_min ${stRecentColorMin}`),
+        genomePatch('story_bounce_green_lo', stBounceGreenLo, `explore story_bounce_green_lo ${stBounceGreenLo}`),
+        genomePatch('story_bounce_green_hi', stBounceGreenHi, `explore story_bounce_green_hi ${stBounceGreenHi}`),
+        genomePatch('story_bounce_red_min', stBounceRedMin, `explore story_bounce_red_min ${stBounceRedMin}`),
+        genomePatch('story_dip_red_lo', stDipRedLo, `explore story_dip_red_lo ${stDipRedLo}`),
+        genomePatch('story_dip_red_hi', stDipRedHi, `explore story_dip_red_hi ${stDipRedHi}`),
+        genomePatch('story_dip_green_min', stDipGreenMin, `explore story_dip_green_min ${stDipGreenMin}`),
+        genomePatch('minute_trend_bias_window_min', mtbTrendBiasWindowMin, `explore mtb_window_min ${mtbTrendBiasWindowMin}`),
+        genomePatch('minute_trend_bias_color_votes', mtbTrendBiasColorVotes, `explore mtb_color_votes ${mtbTrendBiasColorVotes}`),
+        genomePatch('mind_pressure_delta', mindPressureDelta, `explore mind_pressure_delta ${mindPressureDelta}`),
+        genomePatch('mind_session_knife_soft_min', mindSessionKnifeSoftMin, `explore mind_knife_soft_min ${mindSessionKnifeSoftMin}`),
+        genomePatch('mind_session_soft_losses_min', mindSessionSoftLossesMin, `explore mind_soft_losses_min ${mindSessionSoftLossesMin}`),
+        genomePatch('mind_session_soft_sized_min', mindSessionSoftSizedMin, `explore mind_soft_sized_min ${mindSessionSoftSizedMin}`),
+        genomePatch('mind_session_soft_cap_abs', mindSessionSoftCapAbs, `explore mind_soft_cap_abs ${mindSessionSoftCapAbs}`),
         genomePatch(
           'entry_learner_override_margin',
           entryLearnerMargin,

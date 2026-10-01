@@ -412,13 +412,15 @@ export function minuteTrendBias(
 ): 'UP' | 'DOWN' | 'FLAT' {
   const g = getBrainGenome();
   const lb = lookback ?? g.minute_trend_bias_lookback ?? 5;
+  const winMin = g.minute_trend_bias_window_min ?? 3;
+  const colorVotes = g.minute_trend_bias_color_votes ?? 3;
   const mins = aggregateTenSecToMinutes(bars);
   if (!mins.length) return 'FLAT';
   const lastBucket = tapeBucketMs(bars, 60_000);
   const minBars = Math.max(1, g.m1_aggregate_min_bars ?? 3);
   const closed = mins.filter((m) => m.open_time_ms < lastBucket && m.bars >= minBars);
-  const window = closed.slice(-Math.max(3, lb));
-  if (window.length < 3) return 'FLAT';
+  const window = closed.slice(-Math.max(winMin, lb));
+  if (window.length < winMin) return 'FLAT';
 
   let up = 0;
   let down = 0;
@@ -438,8 +440,8 @@ export function minuteTrendBias(
   if (trek < minPath) return 'FLAT';
 
   // Color majority + real trek wins even when net≈0 (dump→bounce)
-  if (down >= 3 && (net < 0 || down > up)) return 'DOWN';
-  if (up >= 3 && (net > 0 || up > down)) return 'UP';
+  if (down >= colorVotes && (net < 0 || down > up)) return 'DOWN';
+  if (up >= colorVotes && (net > 0 || up > down)) return 'UP';
   if (down > up) return 'DOWN';
   if (up > down) return 'UP';
   // Tie colors: fall back to net only if it agrees with trek direction from mid

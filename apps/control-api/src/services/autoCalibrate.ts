@@ -144,6 +144,72 @@ function calBounds() {
     softDomLossCountMin: g.auto_cal_soft_dom_loss_count_min ?? 3,
     softDomLossVsHardinv: g.auto_cal_soft_dom_loss_vs_hardinv ?? 0.7,
     demoteRecoverEMin: g.auto_cal_demote_recover_e_min ?? 0.1,
+    softLossAbsFloor: g.auto_cal_soft_loss_abs_floor ?? 1.0,
+    microWinAbsFloor: g.auto_cal_micro_win_abs_floor ?? 1.0,
+    peakExitsMin: g.auto_cal_peak_exits_min ?? 2,
+    highMfeTinyCountMin: g.auto_cal_high_mfe_tiny_count_min ?? 2,
+    microWinsMin: g.auto_cal_micro_wins_min ?? 2,
+    avgLossAbsFloor: g.auto_cal_avg_loss_abs_floor ?? 1.0,
+    alreadyTallSoftMult: g.auto_cal_already_tall_soft_mult ?? 2.8,
+    softTightSoftLossesMin: g.auto_cal_soft_tight_soft_losses_min ?? 2,
+    softTightHighMfeMin: g.auto_cal_soft_tight_high_mfe_min ?? 1,
+    softTightHardinvMax: g.auto_cal_soft_tight_hardinv_max ?? 2.0,
+    regimePromoteNMin: g.auto_cal_regime_promote_n_min ?? 1,
+    regimePromoteSumMin: g.auto_cal_regime_promote_sum_min ?? 0.4,
+    regimeKeepNMax: g.auto_cal_regime_keep_n_max ?? 2,
+    regimeKeepSumMin: g.auto_cal_regime_keep_sum_min ?? -0.35,
+    regimeDemoteSumMax: g.auto_cal_regime_demote_sum_max ?? -0.8,
+    mutSoftPlusGivebackStep: g.auto_cal_mut_soft_plus_giveback_step ?? 0.03,
+    mutPeakArmStep: g.auto_cal_mut_peak_arm_step ?? 0.05,
+    mutSoftLayerUnlockStep: g.auto_cal_mut_soft_layer_unlock_step ?? 0.05,
+    mutPbEpisodeArmStep: g.auto_cal_mut_pb_episode_arm_step ?? 0.05,
+    mutPbEpisodeMfeStep: g.auto_cal_mut_pb_episode_mfe_step ?? 0.05,
+    mutSoftPlusRunnerStep: g.auto_cal_mut_soft_plus_runner_step ?? 0.05,
+    mutSoftPlusLegStep: g.auto_cal_mut_soft_plus_leg_step ?? 0.05,
+    mutSoftPlusGivebackMin: g.auto_cal_mut_soft_plus_giveback_min ?? 0.55,
+    mutSoftPlusGivebackMax: g.auto_cal_mut_soft_plus_giveback_max ?? 0.85,
+    mutPeakArmMin: g.auto_cal_mut_peak_arm_min ?? 0.5,
+    mutPeakArmMax: g.auto_cal_mut_peak_arm_max ?? 2.0,
+    mutSoftLayerUnlockMin: g.auto_cal_mut_soft_layer_unlock_min ?? 0.5,
+    mutSoftLayerUnlockMax: g.auto_cal_mut_soft_layer_unlock_max ?? 1.5,
+    mutPbEpisodeArmMin: g.auto_cal_mut_pb_episode_arm_min ?? 0.5,
+    mutPbEpisodeArmMax: g.auto_cal_mut_pb_episode_arm_max ?? 1.35,
+    mutPbEpisodeMfeMin: g.auto_cal_mut_pb_episode_mfe_min ?? 0.25,
+    mutPbEpisodeMfeMax: g.auto_cal_mut_pb_episode_mfe_max ?? 1.0,
+    mutSoftPlusRunnerMin: g.auto_cal_mut_soft_plus_runner_min ?? 1.0,
+    mutSoftPlusRunnerMax: g.auto_cal_mut_soft_plus_runner_max ?? 2.0,
+    mutSoftPlusLegMin: g.auto_cal_mut_soft_plus_leg_min ?? 1.0,
+    mutSoftPlusLegMax: g.auto_cal_mut_soft_plus_leg_max ?? 2.0,
+    rangeSoftMin: g.auto_cal_range_soft_min ?? 2,
+    rangeWinsMin: g.auto_cal_range_wins_min ?? 2,
+    pbSoftMin: g.auto_cal_pb_soft_min ?? 2,
+    mutRangeChopDown: g.auto_cal_mut_range_chop_down ?? 0.03,
+    mutRangeShareDown: g.auto_cal_mut_range_share_down ?? 0.03,
+    mutRangeEffDown: g.auto_cal_mut_range_eff_down ?? 0.03,
+    mutRangeChopUp: g.auto_cal_mut_range_chop_up ?? 0.02,
+    mutRangeChopMin: g.auto_cal_mut_range_chop_min ?? 0.08,
+    mutRangeChopMax: g.auto_cal_mut_range_chop_max ?? 0.55,
+    mutRangeShareMin: g.auto_cal_mut_range_share_min ?? 0.12,
+    mutRangeShareMax: g.auto_cal_mut_range_share_max ?? 0.55,
+    mutRangeEffMin: g.auto_cal_mut_range_eff_min ?? 0.15,
+    mutRangeEffMax: g.auto_cal_mut_range_eff_max ?? 0.7,
+    sameSidePauseMax: g.auto_cal_same_side_pause_max ?? 12,
+    sameSidePauseSoftMin: g.auto_cal_same_side_pause_soft_min ?? 2,
+    sameSidePauseStep: g.auto_cal_same_side_pause_step ?? 1,
+    choppyGreenLo: g.auto_cal_choppy_green_lo ?? 0.35,
+    choppyGreenHi: g.auto_cal_choppy_green_hi ?? 0.65,
+    mutTrekFlatMult: g.auto_cal_mut_trek_flat_mult ?? 1.08,
+    mutTrekFlatMin: g.auto_cal_mut_trek_flat_min ?? 1.5,
+    mutTrekFlatMax: g.auto_cal_mut_trek_flat_max ?? 12,
+    mutStoryConfStep: g.auto_cal_mut_story_conf_step ?? 0.03,
+    mutStoryConfMin: g.auto_cal_mut_story_conf_min ?? 0.35,
+    mutStoryConfMax: g.auto_cal_mut_story_conf_max ?? 0.8,
+    mutConfirmBarsMin: g.auto_cal_mut_confirm_bars_min ?? 1,
+    mutConfirmBarsMax: g.auto_cal_mut_confirm_bars_max ?? 8,
+    mutConfirmBarsStep: g.auto_cal_mut_confirm_bars_step ?? 1,
+    mutDwellBarsMin: g.auto_cal_mut_dwell_bars_min ?? 2,
+    mutDwellBarsMax: g.auto_cal_mut_dwell_bars_max ?? 12,
+    mutDwellBarsStep: g.auto_cal_mut_dwell_bars_step ?? 1,
   };
 }
 
@@ -916,7 +982,12 @@ function proposeGenomePatch(
   }
 
   if (softDominates || intent === 'protect_sooner') {
-    const give = roundRet(Math.min(0.85, Math.max(0.55, g.soft_plus_giveback + 0.03)));
+    const give = roundRet(
+      Math.min(
+        calB.mutSoftPlusGivebackMax,
+        Math.max(calB.mutSoftPlusGivebackMin, g.soft_plus_giveback + calB.mutSoftPlusGivebackStep)
+      )
+    );
     if (give !== roundRet(g.soft_plus_giveback)) {
       patch.soft_plus_giveback = give;
       changes.push(
@@ -926,7 +997,12 @@ function proposeGenomePatch(
         )
       );
     }
-    const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult - 0.05)));
+    const arm = roundRet(
+      Math.min(
+        calB.mutPeakArmMax,
+        Math.max(calB.mutPeakArmMin, g.peak_arm_soft_mult - calB.mutPeakArmStep)
+      )
+    );
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
       changes.push(
@@ -936,7 +1012,12 @@ function proposeGenomePatch(
         )
       );
     }
-    const unlock = roundRet(Math.min(1.5, Math.max(0.5, g.soft_layer_unlock_mult + 0.05)));
+    const unlock = roundRet(
+      Math.min(
+        calB.mutSoftLayerUnlockMax,
+        Math.max(calB.mutSoftLayerUnlockMin, g.soft_layer_unlock_mult + calB.mutSoftLayerUnlockStep)
+      )
+    );
     if (unlock !== roundRet(g.soft_layer_unlock_mult)) {
       patch.soft_layer_unlock_mult = unlock;
       changes.push(
@@ -961,7 +1042,7 @@ function proposeGenomePatch(
         reg.includes('TREND') || reg.includes('PULLBACK');
       return bounce || trendish;
     }).length;
-    if (pbSoft >= 2) {
+    if (pbSoft >= calB.pbSoftMin) {
       if (!g.pullback_episode_enabled) {
         patch.pullback_episode_enabled = true;
         changes.push(
@@ -972,7 +1053,13 @@ function proposeGenomePatch(
         );
       }
       const epArm = roundRet(
-        Math.min(1.35, Math.max(0.5, g.pullback_episode_peak_arm_soft_mult - 0.05))
+        Math.min(
+          calB.mutPbEpisodeArmMax,
+          Math.max(
+            calB.mutPbEpisodeArmMin,
+            g.pullback_episode_peak_arm_soft_mult - calB.mutPbEpisodeArmStep
+          )
+        )
       );
       if (epArm !== roundRet(g.pullback_episode_peak_arm_soft_mult)) {
         patch.pullback_episode_peak_arm_soft_mult = epArm;
@@ -984,7 +1071,13 @@ function proposeGenomePatch(
         );
       }
       const epMin = roundRet(
-        Math.min(1.0, Math.max(0.25, g.pullback_episode_min_mfe_soft_mult - 0.05))
+        Math.min(
+          calB.mutPbEpisodeMfeMax,
+          Math.max(
+            calB.mutPbEpisodeMfeMin,
+            g.pullback_episode_min_mfe_soft_mult - calB.mutPbEpisodeMfeStep
+          )
+        )
       );
       if (epMin !== roundRet(g.pullback_episode_min_mfe_soft_mult)) {
         patch.pullback_episode_min_mfe_soft_mult = epMin;
@@ -1002,9 +1095,12 @@ function proposeGenomePatch(
       if (reg !== 'RANGE' && reg !== 'COMPRESSION' && reg !== 'TRANSITION') return false;
       return t.pnl_pts < -1e-9;
     }).length;
-    if (rangeSoft >= 2) {
+    if (rangeSoft >= calB.rangeSoftMin) {
       const persist = roundRet(
-        Math.min(0.55, Math.max(0.08, g.regime_range_chop_persist_max - 0.03))
+        Math.min(
+          calB.mutRangeChopMax,
+          Math.max(calB.mutRangeChopMin, g.regime_range_chop_persist_max - calB.mutRangeChopDown)
+        )
       );
       if (persist !== roundRet(g.regime_range_chop_persist_max)) {
         patch.regime_range_chop_persist_max = persist;
@@ -1016,7 +1112,10 @@ function proposeGenomePatch(
         );
       }
       const share = roundRet(
-        Math.min(0.55, Math.max(0.12, g.regime_range_trek_share_max - 0.03))
+        Math.min(
+          calB.mutRangeShareMax,
+          Math.max(calB.mutRangeShareMin, g.regime_range_trek_share_max - calB.mutRangeShareDown)
+        )
       );
       if (share !== roundRet(g.regime_range_trek_share_max)) {
         patch.regime_range_trek_share_max = share;
@@ -1028,7 +1127,10 @@ function proposeGenomePatch(
         );
       }
       const eff = roundRet(
-        Math.min(0.7, Math.max(0.15, g.regime_range_trek_eff_max - 0.03))
+        Math.min(
+          calB.mutRangeEffMax,
+          Math.max(calB.mutRangeEffMin, g.regime_range_trek_eff_max - calB.mutRangeEffDown)
+        )
       );
       if (eff !== roundRet(g.regime_range_trek_eff_max)) {
         patch.regime_range_trek_eff_max = eff;
@@ -1040,8 +1142,11 @@ function proposeGenomePatch(
         );
       }
     }
-    const pause = Math.min(12, g.soft_same_side_pause_closes + 1);
-    if (pause !== g.soft_same_side_pause_closes && softLosses >= 2) {
+    const pause = Math.min(
+      calB.sameSidePauseMax,
+      g.soft_same_side_pause_closes + calB.sameSidePauseStep
+    );
+    if (pause !== g.soft_same_side_pause_closes && softLosses >= calB.sameSidePauseSoftMin) {
       patch.soft_same_side_pause_closes = pause;
       changes.push(
         autotuneLog(
@@ -1051,7 +1156,12 @@ function proposeGenomePatch(
       );
     }
   } else if (intent === 'let_winners_run' || expectancy > calB.letWinnersEMin) {
-    const arm = roundRet(Math.min(2.0, Math.max(0.5, g.peak_arm_soft_mult + 0.05)));
+    const arm = roundRet(
+      Math.min(
+        calB.mutPeakArmMax,
+        Math.max(calB.mutPeakArmMin, g.peak_arm_soft_mult + calB.mutPeakArmStep)
+      )
+    );
     if (arm !== roundRet(g.peak_arm_soft_mult)) {
       patch.peak_arm_soft_mult = arm;
       changes.push(
@@ -1061,7 +1171,12 @@ function proposeGenomePatch(
         )
       );
     }
-    const unlockEase = roundRet(Math.min(1.5, Math.max(0.5, g.soft_layer_unlock_mult - 0.05)));
+    const unlockEase = roundRet(
+      Math.min(
+        calB.mutSoftLayerUnlockMax,
+        Math.max(calB.mutSoftLayerUnlockMin, g.soft_layer_unlock_mult - calB.mutSoftLayerUnlockStep)
+      )
+    );
     if (unlockEase !== roundRet(g.soft_layer_unlock_mult)) {
       patch.soft_layer_unlock_mult = unlockEase;
       changes.push(
@@ -1072,7 +1187,13 @@ function proposeGenomePatch(
       );
     }
     const epArmUp = roundRet(
-      Math.min(1.35, Math.max(0.5, g.pullback_episode_peak_arm_soft_mult + 0.05))
+      Math.min(
+        calB.mutPbEpisodeArmMax,
+        Math.max(
+          calB.mutPbEpisodeArmMin,
+          g.pullback_episode_peak_arm_soft_mult + calB.mutPbEpisodeArmStep
+        )
+      )
     );
     if (
       g.pullback_episode_enabled &&
@@ -1096,9 +1217,12 @@ function proposeGenomePatch(
         /PeakProtection|MindBank|Target|TimeDecay/i.test(String(t.exit_reason || ''))
       );
     }).length;
-    if (rangeWins >= 2) {
+    if (rangeWins >= calB.rangeWinsMin) {
       const persist = roundRet(
-        Math.min(0.55, Math.max(0.08, g.regime_range_chop_persist_max + 0.02))
+        Math.min(
+          calB.mutRangeChopMax,
+          Math.max(calB.mutRangeChopMin, g.regime_range_chop_persist_max + calB.mutRangeChopUp)
+        )
       );
       if (persist !== roundRet(g.regime_range_chop_persist_max)) {
         patch.regime_range_chop_persist_max = persist;
@@ -1110,7 +1234,12 @@ function proposeGenomePatch(
         );
       }
     }
-    const runner = roundRet(Math.min(2.0, Math.max(1.0, g.soft_plus_runner_mult + 0.05)));
+    const runner = roundRet(
+      Math.min(
+        calB.mutSoftPlusRunnerMax,
+        Math.max(calB.mutSoftPlusRunnerMin, g.soft_plus_runner_mult + calB.mutSoftPlusRunnerStep)
+      )
+    );
     if (runner !== roundRet(g.soft_plus_runner_mult)) {
       patch.soft_plus_runner_mult = runner;
       changes.push(
@@ -1120,7 +1249,12 @@ function proposeGenomePatch(
         )
       );
     }
-    const leg = roundRet(Math.min(2.0, Math.max(1.0, g.soft_plus_leg_mult + 0.05)));
+    const leg = roundRet(
+      Math.min(
+        calB.mutSoftPlusLegMax,
+        Math.max(calB.mutSoftPlusLegMin, g.soft_plus_leg_mult + calB.mutSoftPlusLegStep)
+      )
+    );
     if (leg !== roundRet(g.soft_plus_leg_mult)) {
       patch.soft_plus_leg_mult = leg;
       changes.push(
@@ -1136,13 +1270,19 @@ function proposeGenomePatch(
   const choppyCtx = windowTrades.filter((t) => {
     const ctx = t.exit_ctx || t.entry_ctx;
     if (!ctx) return false;
-    const midShare = ctx.green_share > 0.35 && ctx.green_share < 0.65;
+    const midShare =
+      ctx.green_share > calB.choppyGreenLo && ctx.green_share < calB.choppyGreenHi;
     return midShare && !ctx.expanding;
   }).length;
   if (choppyCtx >= calB.choppyCtxMin && expectancy < calB.choppyEMax) {
     // Trek flat is bp (min 0.1) — step 0.1, never 0.00008 dust
     const trek =
-      Math.round(Math.min(12, Math.max(1.5, g.mtf_trek_flat_frac * 1.08)) * 10) / 10;
+      Math.round(
+        Math.min(
+          calB.mutTrekFlatMax,
+          Math.max(calB.mutTrekFlatMin, g.mtf_trek_flat_frac * calB.mutTrekFlatMult)
+        ) * 10
+      ) / 10;
     if (Math.abs(trek - g.mtf_trek_flat_frac) > 0.05) {
       patch.mtf_trek_flat_frac = trek;
       changes.push(
@@ -1152,7 +1292,12 @@ function proposeGenomePatch(
         )
       );
     }
-    const storyMin = roundRet(Math.min(0.8, Math.max(0.35, g.entry_story_conf_min - 0.03)));
+    const storyMin = roundRet(
+      Math.min(
+        calB.mutStoryConfMax,
+        Math.max(calB.mutStoryConfMin, g.entry_story_conf_min - calB.mutStoryConfStep)
+      )
+    );
     if (storyMin !== roundRet(g.entry_story_conf_min)) {
       patch.entry_story_conf_min = storyMin;
       changes.push(
@@ -1178,7 +1323,10 @@ function proposeGenomePatch(
   // Expanding market pressure → slightly faster regime confirm (self-build perception)
   const expandingCtx = windowTrades.filter((t) => (t.exit_ctx || t.entry_ctx)?.expanding).length;
   if (expandingCtx >= calB.expandCtxMin && expectancy > calB.expandEMin) {
-    const confirm = Math.max(1, Math.min(8, g.regime_confirm_bars - 1));
+    const confirm = Math.max(
+      calB.mutConfirmBarsMin,
+      Math.min(calB.mutConfirmBarsMax, g.regime_confirm_bars - calB.mutConfirmBarsStep)
+    );
     if (confirm !== g.regime_confirm_bars) {
       patch.regime_confirm_bars = confirm;
       changes.push(
@@ -1189,7 +1337,10 @@ function proposeGenomePatch(
       );
     }
   } else if (choppyCtx >= calB.choppyCtxMin && expectancy < calB.choppyDwellEMax) {
-    const dwell = Math.max(2, Math.min(12, g.regime_min_dwell_bars + 1));
+    const dwell = Math.max(
+      calB.mutDwellBarsMin,
+      Math.min(calB.mutDwellBarsMax, g.regime_min_dwell_bars + calB.mutDwellBarsStep)
+    );
     if (dwell !== g.regime_min_dwell_bars) {
       patch.regime_min_dwell_bars = dwell;
       changes.push(
@@ -1270,18 +1421,18 @@ export function proposeAutoCalibration(
     (t) =>
       /HardInvalidation|HardInv/i.test(summarizeExitReason(t.exit_reason)) &&
       t.pnl_pts < -1e-9 &&
-      Math.abs(t.pnl_pts) >= Math.max(1.0, current.hardinv_abs * softFrac)
+      Math.abs(t.pnl_pts) >= Math.max(bounds.softLossAbsFloor, current.hardinv_abs * softFrac)
   ).length;
   /** Soft-sized cuts even when exit_reason is MindCut/Structure/EXTERNAL — still Soft R:R. */
   const softSizedLosses = windowTrades.filter(
     (t) =>
       t.pnl_pts < -1e-9 &&
-      Math.abs(t.pnl_pts) >= Math.max(1.0, current.hardinv_abs * softFrac)
+      Math.abs(t.pnl_pts) >= Math.max(bounds.softLossAbsFloor, current.hardinv_abs * softFrac)
   ).length;
   const microWins = windowTrades.filter(
     (t) =>
       t.pnl_pts > 1e-9 &&
-      t.pnl_pts < Math.max(1.0, avgLossAbs * bounds.microWinVsLoss)
+      t.pnl_pts < Math.max(bounds.microWinAbsFloor, avgLossAbs * bounds.microWinVsLoss)
   ).length;
 
   const peakExits = windowTrades.filter((t) =>
@@ -1295,8 +1446,8 @@ export function proposeAutoCalibration(
       t.mfe >= avgLossAbs * bounds.highMfeVsLoss
   ).length;
   const leftWinnerOnTable =
-    peakExits.length >= 2 &&
-    highMfeTinyPnl >= 2 &&
+    peakExits.length >= bounds.peakExitsMin &&
+    highMfeTinyPnl >= bounds.highMfeTinyCountMin &&
     expectancy < bounds.leftWinnerEMax;
 
   const human = reviewSessionLikeHuman(windowTrades);
@@ -1314,18 +1465,18 @@ export function proposeAutoCalibration(
     rrNow >= bounds.maxSafetyRr - 0.01 ||
     next.target_abs >= bounds.maxTargetAbs - 0.01 ||
     next.peak_mfe_abs >= bounds.maxPeakMfeAbs - 0.01 ||
-    next.target_abs >= next.hardinv_abs * 2.8;
+    next.target_abs >= next.hardinv_abs * bounds.alreadyTallSoftMult;
 
   const asymmetryBad =
     avgWin > 0 &&
     avgLossAbs > 0 &&
     avgWin < avgLossAbs * bounds.asymWinVsLoss &&
-    microWins >= 2;
+    microWins >= bounds.microWinsMin;
 
   const softLossMin = bounds.softSizedLossDetectMin;
   const softDominates =
     expectancy < bounds.softDomEMax &&
-    avgLossAbs >= 1.0 &&
+    avgLossAbs >= bounds.avgLossAbsFloor &&
     (wins.length === 0 || avgWin < avgLossAbs * bounds.softDomWinVsLoss) &&
     (softLosses >= softLossMin ||
       softSizedLosses >= softLossMin ||
@@ -1365,17 +1516,17 @@ export function proposeAutoCalibration(
     raiseStreak < bounds.raiseStreakBeforePullback &&
     (expectancy < bounds.legacyRaiseEMax ||
       (avgWin > 0 && avgLossAbs > 0 && avgWin < avgLossAbs * bounds.legacyRaiseWinVsLoss) ||
-      microWins >= 2);
+      microWins >= bounds.microWinsMin);
 
   const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
 
   // Soft too tight: many Soft cuts but avg Soft distance looks small vs MFE left on table
   const softTooTight =
     !softDominates &&
-    softLosses >= 2 &&
-    highMfeTinyPnl >= 1 &&
+    softLosses >= bounds.softTightSoftLossesMin &&
+    highMfeTinyPnl >= bounds.softTightHighMfeMin &&
     expectancy < bounds.softTightEMax &&
-    next.hardinv_abs <= 2.0;
+    next.hardinv_abs <= bounds.softTightHardinvMax;
 
   if (needPullBack) {
     // Soft-heavy — tighten Soft CAP + pct so Soft chops cost less (live Soft follows both)
@@ -1713,7 +1864,11 @@ export function proposeAutoCalibration(
   );
 
   for (const [r, st] of byRegime) {
-    if (st.n >= 1 && st.sum > 0.4 && !enabled.has(r)) {
+    if (
+      st.n >= bounds.regimePromoteNMin &&
+      st.sum > bounds.regimePromoteSumMin &&
+      !enabled.has(r)
+    ) {
       enabled.add(r);
       softOff.delete(r);
       demotedSession.delete(r);
@@ -1725,8 +1880,8 @@ export function proposeAutoCalibration(
   // Prefer satellites first; cores only with stronger evidence (n≥2, sum<-0.8)
   const offenders = [...byRegime.entries()]
     .filter(([r, st]) => {
-      if (st.n < 2 || st.sum >= -0.35) return false;
-      if (isCoreAlwaysOnRegime(r)) return st.sum < -0.8;
+      if (st.n < bounds.regimeKeepNMax || st.sum >= bounds.regimeKeepSumMin) return false;
+      if (isCoreAlwaysOnRegime(r)) return st.sum < bounds.regimeDemoteSumMax;
       return true;
     })
     .sort((a, b) => {

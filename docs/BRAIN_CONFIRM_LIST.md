@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **322/322** schema + consumer-wire + hypothesize (tip 213–220; manage/mind/auto-cal 221–322).
+**STATUS 2026-10-01:** **403/403** schema + consumer-wire + hypothesize (tip 213–220; manage/mind/auto-cal 221–322; AutoCal learning + story/mind residual 323–403).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`
 (consumer corpus **excl.** `brainGenome.ts` + `hypothesize.ts`; `ok` prasa arī hypoGaps=0; gap_* = sanitize-owned ladder).
 **Proof:** `genomeWireCut.proof.test.ts` = **representative** live flip tests (ne 1:1 uz katru knob).
@@ -319,6 +319,90 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
 
 311–322. auto_cal_let_winners_e_min / choppy_ctx_min / choppy_e_max / neg_e_align_max / expand_ctx_min / expand_e_min / choppy_dwell_e_max / fight_ctx_min / fight_e_max / soft_dom_loss_count_min / soft_dom_loss_vs_hardinv / demote_recover_e_min — genome-path + softDominates residual thresholds
+
+
+### AutoCal learning policy + MarketStory/Mind residual (323–403)
+323. auto_cal_soft_loss_abs_floor
+324. auto_cal_micro_win_abs_floor
+325. auto_cal_peak_exits_min
+326. auto_cal_high_mfe_tiny_count_min
+327. auto_cal_micro_wins_min
+328. auto_cal_avg_loss_abs_floor
+329. auto_cal_already_tall_soft_mult
+330. auto_cal_soft_tight_soft_losses_min
+331. auto_cal_soft_tight_high_mfe_min
+332. auto_cal_soft_tight_hardinv_max
+333. auto_cal_regime_promote_n_min
+334. auto_cal_regime_promote_sum_min
+335. auto_cal_regime_keep_n_max
+336. auto_cal_regime_keep_sum_min
+337. auto_cal_regime_demote_sum_max
+338. auto_cal_mut_soft_plus_giveback_step
+339. auto_cal_mut_peak_arm_step
+340. auto_cal_mut_soft_layer_unlock_step
+341. auto_cal_mut_pb_episode_arm_step
+342. auto_cal_mut_pb_episode_mfe_step
+343. auto_cal_mut_soft_plus_runner_step
+344. auto_cal_mut_soft_plus_leg_step
+345. auto_cal_mut_soft_plus_giveback_min
+346. auto_cal_mut_soft_plus_giveback_max
+347. auto_cal_mut_peak_arm_min
+348. auto_cal_mut_peak_arm_max
+349. auto_cal_mut_soft_layer_unlock_min
+350. auto_cal_mut_soft_layer_unlock_max
+351. auto_cal_mut_pb_episode_arm_min
+352. auto_cal_mut_pb_episode_arm_max
+353. auto_cal_mut_pb_episode_mfe_min
+354. auto_cal_mut_pb_episode_mfe_max
+355. auto_cal_mut_soft_plus_runner_min
+356. auto_cal_mut_soft_plus_runner_max
+357. auto_cal_mut_soft_plus_leg_min
+358. auto_cal_mut_soft_plus_leg_max
+359. auto_cal_range_soft_min
+360. auto_cal_range_wins_min
+361. auto_cal_pb_soft_min
+362. auto_cal_mut_range_chop_down
+363. auto_cal_mut_range_share_down
+364. auto_cal_mut_range_eff_down
+365. auto_cal_mut_range_chop_up
+366. auto_cal_mut_range_chop_min
+367. auto_cal_mut_range_chop_max
+368. auto_cal_mut_range_share_min
+369. auto_cal_mut_range_share_max
+370. auto_cal_mut_range_eff_min
+371. auto_cal_mut_range_eff_max
+372. auto_cal_same_side_pause_max
+373. auto_cal_same_side_pause_soft_min
+374. auto_cal_same_side_pause_step
+375. auto_cal_choppy_green_lo
+376. auto_cal_choppy_green_hi
+377. auto_cal_mut_trek_flat_mult
+378. auto_cal_mut_trek_flat_min
+379. auto_cal_mut_trek_flat_max
+380. auto_cal_mut_story_conf_step
+381. auto_cal_mut_story_conf_min
+382. auto_cal_mut_story_conf_max
+383. auto_cal_mut_confirm_bars_min
+384. auto_cal_mut_confirm_bars_max
+385. auto_cal_mut_confirm_bars_step
+386. auto_cal_mut_dwell_bars_min
+387. auto_cal_mut_dwell_bars_max
+388. auto_cal_mut_dwell_bars_step
+389. story_recent_mins
+390. story_recent_color_min
+391. story_bounce_green_lo
+392. story_bounce_green_hi
+393. story_bounce_red_min
+394. story_dip_red_lo
+395. story_dip_red_hi
+396. story_dip_green_min
+397. minute_trend_bias_window_min
+398. minute_trend_bias_color_votes
+399. mind_pressure_delta
+400. mind_session_knife_soft_min
+401. mind_session_soft_losses_min
+402. mind_session_soft_sized_min
+403. mind_session_soft_cap_abs
 
 
 ## NEDRĪKST (ārpus saraksta)

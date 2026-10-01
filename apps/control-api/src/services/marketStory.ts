@@ -77,6 +77,14 @@ function storyKnobs() {
     confChopThin: g.story_conf_chop_thin ?? 0.35,
     confChop: g.story_conf_chop ?? 0.4,
     scalpWick: g.scalp_wick_confirm !== false,
+    recentMins: g.story_recent_mins ?? 5,
+    recentColorMin: g.story_recent_color_min ?? 3,
+    bounceGreenLo: g.story_bounce_green_lo ?? 1,
+    bounceGreenHi: g.story_bounce_green_hi ?? 2,
+    bounceRedMin: g.story_bounce_red_min ?? 2,
+    dipRedLo: g.story_dip_red_lo ?? 1,
+    dipRedHi: g.story_dip_red_hi ?? 2,
+    dipGreenMin: g.story_dip_green_min ?? 2,
   };
 }
 
@@ -241,7 +249,8 @@ export function readMarketStory(
   const last1m = last;
   const net = last.close - first.open;
   const { red, green } = countColors(mins);
-  const recent = mins.slice(-5);
+  const knobs = storyKnobs();
+  const recent = mins.slice(-Math.max(1, knobs.recentMins));
   const { red: redR, green: greenR } = countColors(recent);
   const recentNet = recent[recent.length - 1]!.close - recent[0]!.open;
   const swing = swingLabel(mins);
@@ -256,13 +265,12 @@ export function readMarketStory(
   const windowLo = Math.min(...mins.map((m) => m.low));
   const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
   const midPx = Math.abs(last.close) || 1;
-  const knobs = storyKnobs();
   const trekAbs = getBrainGenome().trek_min_path_abs_pts ?? 3;
   const minPath = Math.max(trekAbs, midPx * knobs.minPathFrac);
   const midZone = (windowHi + windowLo) / 2;
 
-  const recentSell = recentNet < 0 && redR >= 3;
-  const recentBuy = recentNet > 0 && greenR >= 3;
+  const recentSell = recentNet < 0 && redR >= knobs.recentColorMin;
+  const recentBuy = recentNet > 0 && greenR >= knobs.recentColorMin;
 
   // Require firm trek for ALL directional calls — ±1.5pt sine / HH_HL noise ≠ RALLY/EXHAUST.
   // minPath alone (~3pt) still lets thin mid-zone chop look like HH_HL → fake EXHAUST_HI.
@@ -280,9 +288,19 @@ export function readMarketStory(
     (trekFirm && green >= red + d && pos >= knobs.buyStructPos);
 
   const bounceInSell =
-    sellStruct && !brokeUp && greenR >= 1 && greenR <= 2 && redR >= 2 && recentNet >= 0;
+    sellStruct &&
+    !brokeUp &&
+    greenR >= knobs.bounceGreenLo &&
+    greenR <= knobs.bounceGreenHi &&
+    redR >= knobs.bounceRedMin &&
+    recentNet >= 0;
   const dipInRally =
-    buyStruct && !brokeDown && redR >= 1 && redR <= 2 && greenR >= 2 && recentNet <= 0;
+    buyStruct &&
+    !brokeDown &&
+    redR >= knobs.dipRedLo &&
+    redR <= knobs.dipRedHi &&
+    greenR >= knobs.dipGreenMin &&
+    recentNet <= 0;
 
   let chapter: StoryChapter;
   let allow: StorySide;

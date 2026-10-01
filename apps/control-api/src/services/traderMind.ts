@@ -290,18 +290,19 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   let why: string;
   let confidence = 0.5;
 
+  const pressureDelta = genome.mind_pressure_delta ?? 1;
   const buyStory =
     allow === 'BUY' ||
     chapter === 'RALLY' ||
     chapter === 'DIP_IN_RALLY' ||
     chapter === 'BREAK_UP' ||
-    g > r + 1;
+    g > r + pressureDelta;
   const sellStory =
     allow === 'SELL' ||
     chapter === 'SELLOFF' ||
     chapter === 'BOUNCE_IN_SELL' ||
     chapter === 'BREAK_DOWN' ||
-    r > g + 1;
+    r > g + pressureDelta;
   const regimeLong =
     regime === 'TREND_UP' ||
     regime === 'BREAKOUT_UP' ||
@@ -649,6 +650,10 @@ export function reviewSessionLikeHuman(
       t.pnl_pts < t.mfe * (genome.max_mfe_giveback ?? 0.35)
   );
   const leftOnTable = peakTiny.length >= leftOnTableMin;
+  const knifeSoftMin = genome.mind_session_knife_soft_min ?? 2;
+  const softLossesMin = genome.mind_session_soft_losses_min ?? 2;
+  const softSizedMin = genome.mind_session_soft_sized_min ?? 2;
+  const softCap = genome.mind_session_soft_cap_abs ?? 2.2;
   const knifeSoft =
     softLosses.filter((t) => {
       const ch = String(t.entry_ctx?.chapter || '').toUpperCase();
@@ -659,10 +664,10 @@ export function reviewSessionLikeHuman(
         ch === 'EXHAUST_LO' ||
         ch === 'RANGE_CHOP'
       );
-    }).length >= 2;
+    }).length >= knifeSoftMin;
 
   // Knife/chop Soft entries first — filters are the right lever (before Peak ease)
-  if (knifeSoft && softLosses.length >= 2) {
+  if (knifeSoft && softLosses.length >= softLossesMin) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi pēc sliktām 30m nodaļām (knife/chop) — ienācu pret stāstu.`,
       lesson:
@@ -680,7 +685,7 @@ export function reviewSessionLikeHuman(
     };
   }
 
-  if (e < 0 && softLosses.length >= 2) {
+  if (e < 0 && softLosses.length >= softLossesMin) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi lielāki par to, ko Peak/Target atnes — R:R apgriezts.`,
       lesson:
@@ -690,11 +695,10 @@ export function reviewSessionLikeHuman(
   }
 
   // Soft-sized losses without HardInv tag (MindCut/Structure/EXTERNAL) — still Soft R:R invert
-  const softCap = 2.2; // diagnosis only; auto-cal owns live Soft abs
   const softSized = trades.filter(
     (t) => t.pnl_pts < -1e-9 && Math.abs(t.pnl_pts) >= softCap * softSizedFrac
   ).length;
-  if (e < 0 && softSized >= 2 && softLosses.length < 2) {
+  if (e < 0 && softSized >= softSizedMin && softLosses.length < softLossesMin) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft-lieluma zaudējumi ×${softSized} (bez HardInv tag) — R:R apgriezts.`,
       lesson:
