@@ -11,13 +11,10 @@ import {
   styleFromClassification,
   currentRegime,
   MIN_BARS_FOR_ZONE,
-  getZoneBars,
-  getMinBarsForZone,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { formatTradeLabel } from './tradePresentation.js';
-import { _resetBrainGenomeForTests, getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 function bar(open: number, high: number, low: number, close: number, i = 0): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
@@ -141,37 +138,6 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(tight)).toBe('COMPRESSION');
   });
 
-  it('directional grind inside wide zone is TREND — not inRange default RANGE', () => {
-    // Steady down leg: must not fall through to RANGE just because close is still in 30m box
-    const prices: number[] = [];
-    let p = 100;
-    for (let i = 0; i < 40; i++) {
-      p -= 0.08;
-      prices.push(p);
-    }
-    expect(run(prices)).toBe('TREND_DOWN');
-  });
-
-  it('sticky TREND prior kept when tip in zone but not proven chop (no invent RANGE)', () => {
-    // After TREND_DOWN: mixed tip with enough persistence that chop gate fails → sticky prior
-    const bars: TenSecBar[] = [];
-    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
-      bars.push(bar(100, 100.8, 99.2, 100, i));
-    }
-    // persistence ≈ -0.5 (more than RANGE_CHOP_PERSIST_MAX 0.25) but below TREND stay
-    const seq = [-1, -1, -1, 1, -1, -1];
-    let px = 100;
-    for (const s of seq) {
-      const o = px;
-      const c = o + s * 0.03;
-      bars.push(bar(o, Math.max(o, c) + 0.02, Math.min(o, c) - 0.02, c, bars.length));
-      px = c;
-    }
-    const r = classifyRegime(bars, 'TREND_DOWN');
-    expect(r).not.toBe('RANGE');
-    expect(r).toBe('TREND_DOWN');
-  });
-
   it('BREAKOUT_UP when expanding close leaves the prior range', () => {
     const bars = padBars([
       bar(100, 100.3, 99.8, 100.1, 0),
@@ -190,32 +156,6 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(99.85, 99.9, 97.6, 97.8, 3),
     ]);
     expect(classifyRegime(bars)).toBe('BREAKOUT_DOWN');
-  });
-
-  it('Gold local sell-break of shelf → BREAKOUT_DOWN even if still inside wider 30m box', () => {
-    // Wider 30m already contains earlier dump (zone lo low). Local 10m shelf
-    // 4149–4154 then pierce → human sell-breakout must not stay RANGE.
-    const bars: TenSecBar[] = [];
-    const n = MIN_BARS_FOR_ZONE + 80;
-    for (let i = 0; i < n; i++) {
-      let c: number;
-      if (i < 40) {
-        c = 4160 - (i / 39) * 10; // early dump 4160→4150 — sets wide zone lo
-      } else if (i < n - 8) {
-        // local shelf chop ~4149.5–4153.5
-        c = 4151.5 + ((i % 5) - 2) * 0.35;
-      } else {
-        // pierce shelf
-        c = 4148.5 - (i - (n - 8)) * 0.4;
-      }
-      const o = c + 0.05;
-      bars.push(bar(o, Math.max(o, c) + 0.2, Math.min(o, c) - 0.15, c, i));
-    }
-    // Strong expanding red tip below local shelf (real Capital dump body)
-    const tip = bars[bars.length - 1]!.close;
-    bars.push(bar(tip + 0.4, tip + 0.5, tip - 3.5, tip - 3.2, n));
-    const r = classifyRegime(bars, 'RANGE');
-    expect(r).toBe('BREAKOUT_DOWN');
   });
 
   it('FAILED_BREAKOUT_UP after a breakout fades back inside', () => {
@@ -260,82 +200,6 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
   });
 
-  it('Gold grind: quiet 10s tips inside expanding zone → TREND_UP not RANGE', () => {
-    // Simulate ~30m Gold HH/HL rally: each 10s bar is quiet (body << TREND_ENTER)
-    // but the rolling zone walks ~20 pts — same shape as Capital 1m 4154→4175.
-    const bars: TenSecBar[] = [];
-    const start = 4154;
-    const n = MIN_BARS_FOR_ZONE + 40;
-    for (let i = 0; i < n; i++) {
-      const c = start + (i / (n - 1)) * 20; // ~20pt grind
-      const o = c - 0.05; // body ~0.0012% << TREND_ENTER 0.038%
-      bars.push(bar(o, c + 0.3, o - 0.2, c, i));
-    }
-    // Tip slightly red (1m↓ pullback noise) but still in zone
-    const tipOpen = bars[bars.length - 1]!.close;
-    bars.push(bar(tipOpen, tipOpen + 0.2, tipOpen - 0.8, tipOpen - 0.05, n));
-    const r = classifyRegime(bars, 'RANGE');
-    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
-    expect(r).not.toBe('RANGE');
-  });
-
-  it('Gold V-recovery: dump then rally → TREND_UP/PULLBACK not RANGE fade', () => {
-    // Capital 15:20–16:05 Gold: ~12pt dump then ~9pt rally. Story correctly
-    // says "30m rally · trek 9.6pt · BUY", but early→late NET is small while
-    // PATH is huge → old efficiency gate kept RANGE + fade playbook.
-    const bars: TenSecBar[] = [];
-    const n = MIN_BARS_FOR_ZONE + 50;
-    const dumpN = Math.floor(n * 0.55);
-    for (let i = 0; i < n; i++) {
-      let c: number;
-      if (i < dumpN) {
-        c = 4175 - (i / (dumpN - 1)) * 12; // 4175 → 4163
-      } else {
-        c = 4163 + ((i - dumpN) / (n - dumpN - 1)) * 9; // 4163 → 4172
-      }
-      const o = c - 0.04;
-      bars.push(bar(o, c + 0.25, o - 0.2, c, i));
-    }
-    const tip = bars[bars.length - 1]!.close;
-    bars.push(bar(tip, tip + 0.15, tip - 0.4, tip - 0.08, n)); // quiet tip
-    const r = classifyRegime(bars, 'RANGE');
-    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
-    expect(r).not.toBe('RANGE');
-  });
-
-  it('Gold dump then side box → RANGE not fake TREND_UP from mid→late leg', () => {
-    // Capital ~08:00–11:19: dump 4192→4152, sit near low, then box ~4155–4172.
-    // Mid third ≈ dump low; late mean ~+12pt higher → recentLegOk would fire
-    // TREND_UP, but late window path ≫ net (real tape = chop) → RANGE.
-    const bars: TenSecBar[] = [];
-    const n = getZoneBars() + 40;
-    for (let i = 0; i < n; i++) {
-      const z = i - (n - getZoneBars());
-      let c: number;
-      if (z < 0) {
-        c = 4192;
-      } else if (z < 60) {
-        c = 4192 - (z / 59) * 40; // dump
-      } else if (z < 120) {
-        c = 4152.5 + ((z % 5) - 2) * 0.35; // sit near low (mid third)
-      } else {
-        const t = z - 120;
-        // Reclaim into higher box then hard oscillate (late path ≫ net)
-        c =
-          t < 10
-            ? 4152.5 + (t / 9) * 12
-            : 4164 + Math.sin((t - 10) / 1.8) * 8 + ((t % 5) - 2) * 0.55;
-      }
-      const o = c + ((i % 3) - 1) * 0.06;
-      bars.push(bar(o, Math.max(o, c) + 0.3, Math.min(o, c) - 0.25, c, i));
-    }
-    const tip = bars[bars.length - 1]!.close;
-    bars.push(bar(tip, tip + 0.2, tip - 0.25, tip + 0.04, n));
-    expect(classifyRegime(bars, 'UNKNOWN')).toBe('RANGE');
-    expect(classifyRegime(bars, 'TREND_UP')).toBe('RANGE');
-    expect(classifyRegime(bars, 'PULLBACK_UPTREND')).toBe('RANGE');
-  });
-
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = padBars([
       bar(100.0, 101.0, 99.6, 100.7, 0),
@@ -357,25 +221,6 @@ describe('classifyRegime from 10s OHLC', () => {
 });
 
 describe('stabilizeRegime — no flicker inside 1m', () => {
-  beforeEach(() => {
-    _resetBrainGenomeForTests({});
-  });
-
-  it('factory zone/trek residual knobs match prior hardcodes', () => {
-    const g = getBrainGenome();
-    expect(getZoneBars()).toBe(180);
-    expect(getMinBarsForZone()).toBe(90);
-    expect(g.switch_gap_bars).toBe(2);
-    expect(g.trek_full_enter_mult).toBe(4);
-    expect(g.trek_share_min).toBe(0.35);
-    expect(g.trek_eff_min).toBe(0.4);
-    expect(g.trek_recent_enter_mult).toBe(2);
-    expect(g.trek_recent_share_min).toBe(0.25);
-    expect(g.soft_move_trek_pullback_shortcut).toBe(true);
-    expect(g.chop_to_trend_confirm_bars).toBe(1);
-    expect(g.local_breakout_frac_floor).toBe(0.12);
-  });
-
   it('holds TREND_UP through noisy 10s bars until dwell + confirm', () => {
     const book = {
       current: 'TREND_UP' as RegimeName,
@@ -408,7 +253,7 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND'); // 5 + pend
   });
 
-  it('RANGE → TREND_UP is strong switch — flips at the right moment (no dwell lag)', () => {
+  it('does not freeze — pending survives dwell so RANGE can become TREND_UP', () => {
     const book = {
       current: 'RANGE' as RegimeName,
       previous: 'UNKNOWN' as RegimeName,
@@ -417,53 +262,12 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
       pending_count: 0,
       since: new Date().toISOString(),
     };
-    // Chop→trend must not wait CONFIRM_BARS — live stayed RANGE while classify already saw TREND
+    // dwell=5 + confirm=3 — switch on 5th agreeing candidate
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
-    expect(book.current).toBe('TREND_UP');
-  });
-
-  it('RANGE → TREND_DOWN / PULLBACK also strong-switch immediately', () => {
-    for (const to of ['TREND_DOWN', 'PULLBACK_UPTREND', 'PULLBACK_DOWNTREND'] as RegimeName[]) {
-      const book = {
-        current: 'RANGE' as RegimeName,
-        previous: 'UNKNOWN' as RegimeName,
-        bars_in_current: 2,
-        pending: null as RegimeName | null,
-        pending_count: 0,
-        since: new Date().toISOString(),
-      };
-      expect(stabilizeRegime(book, to)).toBe(to);
-    }
-  });
-
-  it('post-switch gap: opposite TREND cannot chain on the next 10s bar', () => {
-    const book = {
-      current: 'RANGE' as RegimeName,
-      previous: 'UNKNOWN' as RegimeName,
-      bars_in_current: 8,
-      pending: null as RegimeName | null,
-      pending_count: 0,
-      since: new Date().toISOString(),
-    };
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
-    expect(book.bars_in_current).toBe(1);
-    // Immediate opposite family would be “viena svece visi režīmi”
-    expect(stabilizeRegime(book, 'TREND_DOWN')).toBe('TREND_UP');
-    expect(book.bars_in_current).toBe(2);
-    // After 2×10s gap, strong opposite may flip
-    expect(stabilizeRegime(book, 'TREND_DOWN')).toBe('TREND_DOWN');
-  });
-
-  it('BREAKOUT still pierces post-switch gap (structure)', () => {
-    const book = {
-      current: 'TREND_UP' as RegimeName,
-      previous: 'RANGE' as RegimeName,
-      bars_in_current: 1,
-      pending: null as RegimeName | null,
-      pending_count: 0,
-      since: new Date().toISOString(),
-    };
-    expect(stabilizeRegime(book, 'BREAKOUT_UP')).toBe('BREAKOUT_UP');
   });
 
   it('observeClosedBars does not visit every regime in one minute of 10s bars', () => {

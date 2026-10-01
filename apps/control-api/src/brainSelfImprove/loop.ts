@@ -21,13 +21,7 @@ import {
   wasAlreadyTried,
   type BrainCycleRecord,
 } from './experience.js';
-import {
-  getBrainGenome,
-  reloadBrainGenome,
-  setBrainGenome,
-  TRADING_INTEL_GENOME_KEYS,
-  PEAK_MEMORY_SAFE_KEYS,
-} from './brainGenome.js';
+import { getBrainGenome, reloadBrainGenome, setBrainGenome } from './brainGenome.js';
 import { requestBrainCodeReload } from './brainReload.js';
 import { brainDecision, brainLog, brainSection } from './consoleUi.js';
 
@@ -203,7 +197,7 @@ export async function runBrainCycle(opts?: {
   }
 
   brainSection('5) TESTI + REPLAY');
-  const report = evaluateCandidate(baseline, { genome_delta: hypo.genome_delta });
+  const report = evaluateCandidate(baseline);
   brainLog(report.test_detail.split('\n').slice(0, 8).join(' | '));
   brainLog(report.reason);
 
@@ -215,8 +209,14 @@ export async function runBrainCycle(opts?: {
     'mind_bank_on_turn',
     'last_lesson',
   ]);
-  const peakSafeKeys = new Set<string>(PEAK_MEMORY_SAFE_KEYS as readonly string[]);
-  const tradingIntelKeys = new Set<string>(TRADING_INTEL_GENOME_KEYS as readonly string[]);
+  const evolveKeys = new Set([
+    ...memoryKeys,
+    'peak_keep',
+    'soft_plus_giveback',
+    'peak_arm_soft_mult',
+    'explore_step',
+    'version',
+  ]);
   const deltaKeys = Object.keys(hypo.genome_delta || {}).filter((k) => k !== 'last_lesson');
   const eFlatOk =
     report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
@@ -226,31 +226,23 @@ export async function runBrainCycle(opts?: {
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k));
-  const touchesTradingIntel = deltaKeys.some((k) => tradingIntelKeys.has(k));
-  // Peak/Soft explore may ACCEPT on E-flat. Trading-intel MUST have report.improved
-  // (measurable lift vs baseline — never ACCEPT intel solely because E did not fall >0.01).
+  // Genome explore / Keep nudge with tests OK and E not worse — keep learning (don't thrash rollback)
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
-    !touchesTradingIntel &&
     deltaKeys.length > 0 &&
-    deltaKeys.every((k) => peakSafeKeys.has(k)) &&
+    deltaKeys.every((k) => evolveKeys.has(k)) &&
     (hypo.pattern_id === 'explore' ||
-      deltaKeys.some(
-        (k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'
-      ));
+      deltaKeys.some((k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'));
 
   const accept =
     (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
   if ((defensiveMemory || safeGenomeEvolve) && !report.improved) {
     brainLog(
       safeGenomeEvolve
-        ? 'Safe peak/memory genome evolve — tests OK, E not worse → ACCEPT'
+        ? 'Safe genome evolve — tests OK, E not worse → ACCEPT'
         : 'Defensive memory knobs — tests OK, E not worse → ACCEPT'
     );
-  }
-  if (touchesTradingIntel && !report.improved && report.tests_ok) {
-    brainLog('Trading-intel delta without measurable improvement → will REJECT');
   }
 
   if (!accept) {

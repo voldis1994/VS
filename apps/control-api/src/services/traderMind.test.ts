@@ -77,37 +77,7 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/^PRĀTS HOLD/);
   });
 
-  it('BANKs Soft+ giveback on continue only for runners (Soft×1.5) — not Soft ceiling', () => {
-    // Soft-sized mild giveback on CONTINUE used to bank every Gold winner at Soft £0.50
-    const ceiling = thinkLikeTrader(
-      base({
-        minute_policy: 'continue',
-        unrealized: 3.4,
-        mfe: 3.8, // only Soft×1.09 — not a runner
-        soft_sl: 3.5,
-        peak_retention: 0.55,
-        next_entry_side: 'BUY',
-      })
-    );
-    expect(ceiling.decision).not.toBe('BANK');
-    expect(['HOLD', 'TRAIL']).toContain(ceiling.decision);
-
-    // Runner Soft×1.5+ giving back on continue — still protect plus
-    const runner = thinkLikeTrader(
-      base({
-        minute_policy: 'continue',
-        unrealized: 4,
-        mfe: 6, // Soft×1.71
-        soft_sl: 3.5,
-        peak_retention: 0.55,
-        next_entry_side: 'BUY',
-      })
-    );
-    expect(runner.decision).toBe('BANK');
-    expect(runner.why).toMatch(/plus|bankoju|Soft\+/i);
-  });
-
-  it('BANKs Soft+ giveback even on 1m continue when runner Soft×1.5 — plus before Soft eats it', () => {
+  it('BANKs Soft+ giveback even on 1m continue — plus before Soft eats it', () => {
     // Was: continue → HOLD forever → Soft later closed the winner as a minus
     const t = thinkLikeTrader(
       base({
@@ -145,7 +115,7 @@ describe('traderMind', () => {
     expect(t.why).toMatch(/Bankoju|peļņ/i);
   });
 
-  it('reviews knife Soft session — may tighten filters', () => {
+  it('reviews session with diagnosis — never suggests filters', () => {
     const lesson = reviewSessionLikeHuman([
       {
         pnl_pts: -2,
@@ -166,20 +136,10 @@ describe('traderMind', () => {
       { pnl_pts: -1.5, exit_reason: 'HardInvalidation', mfe: 0.2, mae: 1.7 },
     ]);
     expect(lesson.diagnosis.length).toBeGreaterThan(10);
-    expect(lesson.intent).toBe('tighten_filters');
-    expect(lesson.lesson).toMatch(/filtr/i);
-  });
-
-  it('positive window lesson allows Soft/Peak/filters — no ban text', () => {
-    const lesson = reviewSessionLikeHuman([
-      { pnl_pts: 4, exit_reason: 'PeakProtection', mfe: 5, mae: 0.5 },
-      { pnl_pts: 3, exit_reason: 'Target', mfe: 4, mae: 0.4 },
-      { pnl_pts: -1, exit_reason: 'HardInvalidation', mfe: 0.2, mae: 1.2 },
-      { pnl_pts: 5, exit_reason: 'PeakProtection', mfe: 6, mae: 0.3 },
-      { pnl_pts: 2, exit_reason: 'TimeDecay', mfe: 3, mae: 0.5 },
-    ]);
-    expect(lesson.intent).toBe('let_winners_run');
-    expect(lesson.lesson).not.toMatch(/neaiztieku|netieku/i);
+    expect(lesson.lesson).not.toMatch(/filtr/i);
+    expect(['ease_peak_target', 'protect_sooner', 'hold_course', 'let_winners_run']).toContain(
+      lesson.intent
+    );
   });
 
   it('ENTRY mind chooses SELL on selloff — not blind BUY fade', () => {
@@ -280,28 +240,6 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/30m↑/);
   });
 
-  it('ENTRY never SELLs when story allow is BUY (tikai BUY · nepārdot)', () => {
-    const t = thinkEntryLikeTrader({
-      regime: 'RANGE',
-      chapter: 'RALLY',
-      allow: 'BUY',
-      story_conf: 0.75,
-      story_summary: 'STĀSTS · 30m rally · trek 13.7pt · tikai BUY · nepārdot',
-      red_1m: 8,
-      green_1m: 14,
-      zone_pos: 0.68,
-      bar_body_sign: -1,
-      m1_dir: 'DOWN',
-      bias: 'DOWN',
-      tf5_dir: 'DOWN',
-      tf15_dir: 'DOWN',
-      tf30_dir: 'DOWN',
-    });
-    expect(t.choice).not.toBe('SELL');
-    expect(t.choice).toBe('WAIT');
-    expect(t.thesis + t.why).toMatch(/BUY|nepārdot|aizliegts/i);
-  });
-
   it('ENTRY mind SELLs when full stack is DOWN', () => {
     const t = thinkEntryLikeTrader({
       regime: 'TREND_DOWN',
@@ -340,48 +278,7 @@ describe('traderMind', () => {
       tf30_dir: 'DOWN',
     });
     expect(t.choice).toBe('WAIT');
-    expect(t.why).toMatch(/1m|bounce|Soft|trigger|kustību|bias/i);
-  });
-
-  it('ENTRY WAITs first bounce after sell breakout until 1m DOWN resume', () => {
-    // Gold 17:45 case: dump then first green — pullback OR bias change
-    const t = thinkEntryLikeTrader({
-      regime: 'RANGE',
-      chapter: 'BOUNCE_IN_SELL',
-      allow: 'SELL',
-      story_conf: 0.85,
-      red_1m: 14,
-      green_1m: 6,
-      zone_pos: 0.2,
-      bar_body_sign: 1,
-      m1_dir: 'FLAT',
-      bias: 'DOWN',
-      tf5_dir: 'DOWN',
-      tf15_dir: 'DOWN',
-      tf30_dir: 'DOWN',
-    });
-    expect(t.choice).toBe('WAIT');
-    expect(t.thesis + t.why).toMatch(/bounce|gaidu|1m DOWN|kustību|bias/i);
-  });
-
-  it('ENTRY SELL after bounce only when 1m DOWN resumes', () => {
-    const t = thinkEntryLikeTrader({
-      regime: 'TREND_DOWN',
-      chapter: 'BOUNCE_IN_SELL',
-      allow: 'SELL',
-      story_conf: 0.85,
-      red_1m: 14,
-      green_1m: 6,
-      zone_pos: 0.35,
-      bar_body_sign: -1,
-      m1_dir: 'DOWN',
-      m1_strong: true,
-      bias: 'DOWN',
-      tf5_dir: 'DOWN',
-      tf15_dir: 'DOWN',
-      tf30_dir: 'DOWN',
-    });
-    expect(t.choice).toBe('SELL');
+    expect(t.why).toMatch(/1m|bounce|Soft|trigger/i);
   });
 
   it('ENTRY WAITs same-side after Soft SELL without fresh 1m DOWN', () => {

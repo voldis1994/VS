@@ -5,9 +5,8 @@
  * is still alive — that takes a tiny slice of the move and lets the rest go.
  *
  * Before any soft profit exit:
- * 1) Closed 1m still with our side → HOLD (when soft_exit_require_1m_change)
+ * 1) Closed 1m still with our side → HOLD
  * 2) Peek next entry on the last full closed 10s candle — same side → HOLD
- *    (when soft_exit_block_same_next_entry)
  * 3) Soft exit only when the market changed (1m reverse and/or opposite next entry)
  *
  * HardInv / structure kill are NEVER gated here.
@@ -19,7 +18,6 @@ import {
 } from './exitManage.js';
 import { decideEntryWithStructure } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 
 export type SoftExitGateResult = {
   /** true → Peak/Target/TimeDecay may fire */
@@ -63,13 +61,9 @@ export function peekNextEntrySide(input: {
 /**
  * Soft profit exits only when the market has changed on a full candle.
  * Same-side continuation → HOLD so the larger part of the move is not abandoned.
- * Policy flags from BrainGenome (factory = prior hardcode: both true).
  */
 export function softExitMarketGate(input: SoftExitGateInput): SoftExitGateResult {
   const { openSide } = input;
-  const g = getBrainGenome();
-  const require1m = g.soft_exit_require_1m_change !== false;
-  const blockSame = g.soft_exit_block_same_next_entry !== false;
 
   let minute_policy: SoftExitGateResult['minute_policy'] = 'unknown';
   if (input.closed1m) {
@@ -80,8 +74,8 @@ export function softExitMarketGate(input: SoftExitGateInput): SoftExitGateResult
     );
   }
 
-  // Full 1m still prints with our side — never soft-exit mid-leg (genome flag)
-  if (require1m && minute_policy === 'continue') {
+  // Full 1m still prints with our side — never soft-exit mid-leg
+  if (minute_policy === 'continue') {
     return {
       allow: false,
       hold_reason: `SOFT HOLD · 1m continue ${openSide} · wait market change`,
@@ -99,7 +93,7 @@ export function softExitMarketGate(input: SoftExitGateInput): SoftExitGateResult
   const next_entry_setup = next?.setup ?? null;
 
   // Next full-candle entry would still be our side — thesis continues
-  if (blockSame && next_entry_side === openSide) {
+  if (next_entry_side === openSide) {
     return {
       allow: false,
       hold_reason: `SOFT HOLD · next entry still ${next_entry_side} ${next_entry_setup || ''} · ${next?.reason || 'same thesis'}`.trim(),
@@ -122,17 +116,6 @@ export function softExitMarketGate(input: SoftExitGateInput): SoftExitGateResult
 
   // No opposite signal: only allow soft exit after a clear reverse 1m
   if (minute_policy === 'reverse') {
-    return {
-      allow: true,
-      hold_reason: '',
-      next_entry_side,
-      next_entry_setup,
-      minute_policy,
-    };
-  }
-
-  // When require_1m_change is off and no opposite entry — allow soft exit
-  if (!require1m) {
     return {
       allow: true,
       hold_reason: '',

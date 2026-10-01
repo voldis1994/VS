@@ -28,8 +28,6 @@ type FeedLeg = {
 
 type EntryWatch = {
   regime: string;
-  live_regime?: string;
-  lane?: string;
   regime_enabled: boolean;
   status: string;
   looking_for: string;
@@ -84,8 +82,6 @@ type RobotSession = {
   unrealized: number | null;
   mode: string;
   regime?: string;
-  live_regime?: string;
-  entry_regime?: string | null;
   feed_source?: string;
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -115,8 +111,6 @@ type RobotSession = {
   cycle_busy?: boolean;
   cycle_busy_age_ms?: number;
   last_tick_at?: string | null;
-  last_quote_at?: string | null;
-  last_activity_at?: string | null;
 };
 
 function fmt(n: number | null | undefined, d = 5) {
@@ -243,7 +237,6 @@ export function RobotUnitPage() {
 
   const saveCalibration = async (patch: Partial<DeskCalibration>) => {
     if (!cal) return;
-    // Soft/Peak/Target = BrainGenome SoT — only operator knobs (regimes) go on PUT.
     setCalBusy(true);
     setCalMsg(null);
     try {
@@ -251,7 +244,7 @@ export function RobotUnitPage() {
         `/api/desk/calibration${unitCalQs}`,
         {
           method: 'PUT',
-          body: JSON.stringify({ ...patch, client_id: unitClientId }),
+          body: JSON.stringify({ ...cal, ...patch, client_id: unitClientId }),
         }
       );
       setCal(res.calibration);
@@ -367,36 +360,20 @@ export function RobotUnitPage() {
         </header>
 
         {error && <div className="error-state">{error}</div>}
-        {(() => {
-          if (!session?.running) return null;
-          const busyAge = session.cycle_busy ? session.cycle_busy_age_ms || 0 : 0;
-          // Multi-account Capital lock often holds 15–40s — that is a queue, not a hang.
-          if (session.cycle_busy && busyAge >= 40_000) {
-            return (
-              <div className="error-state">
-                CYCLE STUCK {Math.round(busyAge / 1000)}s — Capital/feed hang · gaida UNSTUCK
-              </div>
-            );
-          }
-          if (session.cycle_busy && busyAge >= 15_000) {
-            return (
-              <div className="warn-state">
-                Capital aizņemts {Math.round(busyAge / 1000)}s — rinda / lēns API (citi konti OK) · nav hang
-              </div>
-            );
-          }
-          // While cycle_busy, LIVE LOG pauses by design — do not double-alarm.
-          if (session.cycle_busy) return null;
-          const activityIso = session.last_activity_at || session.last_tick_at || session.last_quote_at;
-          if (!activityIso) return null;
-          const age = Date.now() - new Date(activityIso).getTime();
-          if (age <= 45_000) return null;
-          return (
-            <div className="warn-state">
-              LIVE LOG stale — pēdējā aktivitāte {Math.round(age / 1000)}s atpakaļ
+        {session?.cycle_busy && (session.cycle_busy_age_ms || 0) > 8_000 && (
+          <div className="error-state">
+            CYCLE STUCK {Math.round((session.cycle_busy_age_ms || 0) / 1000)}s — Capital/feed hang ·
+            gaida UNSTUCK
+          </div>
+        )}
+        {session?.last_tick_at &&
+          Date.now() - new Date(session.last_tick_at).getTime() > 15_000 &&
+          session.running && (
+            <div className="error-state">
+              LIVE LOG stale — pēdējais tick{' '}
+              {Math.round((Date.now() - new Date(session.last_tick_at).getTime()) / 1000)}s atpakaļ
             </div>
-          );
-        })()}
+          )}
 
         <div className="robot-unit-grid">
           <section className="robot-unit-panel robot-unit-status">
@@ -584,30 +561,29 @@ export function RobotUnitPage() {
                 {!cal && <div className="muted">Loading calibration…</div>}
                 {cal && (
                   <div className="robot-unit-settings-fields">
-                    <p className="hint-line" style={{ margin: '0 0 6px' }}>
-                      Soft / Peak / Target / SAFETY — BrainGenome SoT (read-only).
-                    </p>
                     <label className="field-label">HardInv abs</label>
                     <input
                       className="input"
                       type="number"
                       step="0.1"
                       value={cal.hardinv_abs}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
                     />
                     <label className="field-label">Peak keep % (75=25% giveback)</label>
                     <input
                       className="input"
                       type="number"
                       step="1"
-                      min={10}
+                      min={50}
                       max={95}
                       value={Math.round(cal.peak_retention * 100)}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) =>
+                        setCal({ ...cal, peak_retention: Number(e.target.value) / 100 })
+                      }
+                      onBlur={() => void saveCalibration({ peak_retention: cal.peak_retention })}
                     />
                     <label className="field-label">Peak MFE floor</label>
                     <input
@@ -615,9 +591,9 @@ export function RobotUnitPage() {
                       type="number"
                       step="0.1"
                       value={cal.peak_mfe_abs}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
                     />
                     <label className="field-label">Peak min giveback</label>
                     <input
@@ -625,9 +601,13 @@ export function RobotUnitPage() {
                       type="number"
                       step="0.05"
                       value={cal.peak_min_giveback_abs}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) =>
+                        setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
+                      }
+                      onBlur={() =>
+                        void saveCalibration({ peak_min_giveback_abs: cal.peak_min_giveback_abs })
+                      }
                     />
                     <label className="field-label">Target abs</label>
                     <input
@@ -635,9 +615,9 @@ export function RobotUnitPage() {
                       type="number"
                       step="0.1"
                       value={cal.target_abs}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
+                      onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
                     />
                     <label className="field-label">Broker TP R:R (vs SL)</label>
                     <input
@@ -647,10 +627,22 @@ export function RobotUnitPage() {
                       min={1.5}
                       max={4}
                       value={cal.safety_tp_rr ?? 1.5}
-                      readOnly
-                      disabled
-                      title="BrainGenome SoT"
+                      disabled={calBusy}
+                      onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
+                      onBlur={() =>
+                        void saveCalibration({ safety_tp_rr: cal.safety_tp_rr ?? 1.5 })
+                      }
                     />
+                    <div className="actions" style={{ marginTop: 4 }}>
+                      <button
+                        className="btn btn-primary"
+                        type="button"
+                        disabled={calBusy}
+                        onClick={() => void saveCalibration({})}
+                      >
+                        Save knobs
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

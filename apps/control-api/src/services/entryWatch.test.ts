@@ -63,7 +63,7 @@ describe('entryWatch', () => {
 
   it('COMPRESSION recipe: OPEN fade (no wait-only)', () => {
     const r = watchRecipe('COMPRESSION');
-    expect(r.looking_for).toMatch(/fade|reject|LO BUY/i);
+    expect(r.looking_for).toMatch(/OPEN fade/i);
     expect(r.setup).toBe('FADE');
     const b = bar(2000, 2000.2, 1998.5, 1999);
     const w = buildEntryWatch({
@@ -77,7 +77,7 @@ describe('entryWatch', () => {
       closed_bar_count: 100,
     });
     expect(w.looking_for).toMatch(/COMPRESSION/);
-    expect(w.looking_for).toMatch(/fade|reject|LO BUY/i);
+    expect(w.looking_for).toMatch(/OPEN fade/i);
   });
 
   it('FLIP LOCK blocks same direction after close (win lock)', () => {

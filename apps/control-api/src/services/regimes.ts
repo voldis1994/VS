@@ -1,8 +1,23 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
-import { getActiveRegimeBands } from './regimeBands.js';
-import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
+import {
+  CLEAR_BREAK_FRAC,
+  COMPRESS_ABS,
+  COMPRESS_AVG_MULT,
+  EXPAND_ABS,
+  EXPAND_AVG_MULT,
+  MOVE,
+  MOVE_RANGE,
+  NEAR_ZONE_MID,
+  PERSIST_ENTER,
+  PERSIST_PULLBACK,
+  PERSIST_STAY,
+  PULLBACK,
+  REVERSAL,
+  TREND_ENTER,
+  TREND_STAY,
+} from './regimeBands.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -111,30 +126,19 @@ type Book = {
 
 const MAX_BARS = 216;
 const books = new Map<string, Book>();
-/**
- * Structure zone ≈ 30 minutes of 10s bars (180 × 10s) — factory default.
- * Live classify reads getZoneBars() from BrainGenome.zone_bars.
- */
+/** Structure zone ≈ 30 minutes of 10s bars (180 × 10s) — not last micro-candle only */
 export const ZONE_BARS = 180;
 /**
  * Do not trust zone hi/lo / BREAKOUT / RANGE until we have enough history.
  * 90 × 10s = 15m — half zone; thinner books stay UNKNOWN (or sticky prior).
- * Live classify reads getMinBarsForZone() from BrainGenome.min_bars_for_zone.
  */
 export const MIN_BARS_FOR_ZONE = 90;
-
-/** Live zone window (10s bars) from BrainGenome — factory = ZONE_BARS. */
-export function getZoneBars(): number {
-  return Math.max(30, getBrainGenome().zone_bars || ZONE_BARS);
-}
-
-/** Live min bars before zone classify — factory = MIN_BARS_FOR_ZONE. */
-export function getMinBarsForZone(): number {
-  const minNeed = getBrainGenome().min_bars_for_zone || MIN_BARS_FOR_ZONE;
-  return Math.min(getZoneBars(), Math.max(10, minNeed));
-}
-
-/** Factory mom length — live path reads BrainGenome via getActiveRegimeBands(). */
+/** Momentum window (still short — direction of the last ~80s inside the 30m zone) */
+const MOM_BARS = 8;
+/** Stay in a regime ≥50s before soft switches — room between % bands to settle */
+const MIN_DWELL_BARS = 5;
+/** Cross-family soft switches need this many agreeing candidates after dwell */
+const CONFIRM_BARS = 3;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -180,48 +184,12 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
   if (to === 'REVERSAL_CANDIDATE') return true;
   if (to === 'FAILED_BREAKOUT_UP' || to === 'FAILED_BREAKOUT_DOWN') return true;
   if (to === 'BREAKOUT_UP' || to === 'BREAKOUT_DOWN') return true;
-  // Chop → trend/pullback must flip at the right moment (Gold grind / selloff).
-  // Waiting CONFIRM_BARS left live=RANGE while classify already saw TREND.
-  if (
-    (from === 'RANGE' || from === 'COMPRESSION') &&
-    (to === 'TREND_UP' ||
-      to === 'TREND_DOWN' ||
-      to === 'PULLBACK_UPTREND' ||
-      to === 'PULLBACK_DOWNTREND')
-  ) {
-    return true;
-  }
   const a = regimeFamily(from);
   const b = regimeFamily(to);
   // Opposite trend family
   if ((a === 'UP' || a === 'BRK_UP') && (b === 'DOWN' || b === 'BRK_DOWN')) return true;
   if ((a === 'DOWN' || a === 'BRK_DOWN') && (b === 'UP' || b === 'BRK_UP')) return true;
   return false;
-}
-
-/** Structure pierce / fail — may flip even inside the post-switch gap. */
-function isStructureFlip(to: RegimeName): boolean {
-  return (
-    to === 'BREAKOUT_UP' ||
-    to === 'BREAKOUT_DOWN' ||
-    to === 'FAILED_BREAKOUT_UP' ||
-    to === 'FAILED_BREAKOUT_DOWN' ||
-    to === 'REVERSAL_CANDIDATE'
-  );
-}
-
-/**
- * Chop→trend may skip dwell (right moment) even with short bars_in_current.
- * Other strong flips need a short gap so one candle does not walk every regime.
- */
-function isChopToTrend(from: RegimeName, to: RegimeName): boolean {
-  return (
-    (from === 'RANGE' || from === 'COMPRESSION') &&
-    (to === 'TREND_UP' ||
-      to === 'TREND_DOWN' ||
-      to === 'PULLBACK_UPTREND' ||
-      to === 'PULLBACK_DOWNTREND')
-  );
 }
 
 /**
@@ -232,41 +200,13 @@ function isChopToTrend(from: RegimeName, to: RegimeName): boolean {
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
 
-  const genome = getBrainGenome();
-  const zoneBars = getZoneBars();
-  const minBarsForZone = getMinBarsForZone();
-
   // Thin book ≠ 30m zone — avoid false RANGE/BREAKOUT on a few SECOND/MINUTE seeds
-  if (bars.length < minBarsForZone) {
-    if (genome.sticky_prior_enabled !== false) {
-      if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
-    }
-    return genome.transition_detect_enabled ? 'TRANSITION' : 'UNKNOWN';
+  if (bars.length < MIN_BARS_FOR_ZONE) {
+    if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+    return 'UNKNOWN';
   }
 
-  const {
-    MOVE,
-    TREND_STAY,
-    TREND_ENTER,
-    PULLBACK,
-    REVERSAL,
-    COMPRESS_ABS,
-    EXPAND_ABS,
-    COMPRESS_AVG_MULT,
-    EXPAND_AVG_MULT,
-    NEAR_ZONE_MID,
-    CLEAR_BREAK_FRAC,
-    PERSIST_ENTER,
-    PERSIST_STAY,
-    PERSIST_PULLBACK,
-    MOM_BARS,
-    PERSIST_WINDOW,
-    RANGE_CHOP_PERSIST_MAX,
-    RANGE_CHOP_TREK_SHARE_MAX,
-    RANGE_CHOP_TREK_EFF_MAX,
-  } = getActiveRegimeBands();
-
-  const zone = bars.slice(-zoneBars);
+  const zone = bars.slice(-ZONE_BARS);
   const mom = bars.slice(-MOM_BARS);
   const last = mom[mom.length - 1]!;
   const zonePrior = zone.slice(0, -1);
@@ -279,7 +219,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
   const lastVel = bodyPct(last);
   const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-PERSIST_WINDOW);
+  const persistWindow = velocities.slice(-6);
   const persistence = mean(
     persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );
@@ -319,40 +259,12 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     fromChop && breakoutUp && (last.close - hi) / zoneWidth >= CLEAR_BREAK_FRAC;
   const clearBreakDown =
     fromChop && breakoutDown && (lo - last.close) / zoneWidth >= CLEAR_BREAK_FRAC;
-
-  // Local consolidation break (last ~10m), independent of full 30m box.
-  // Gold 17:45: dump pierced 4149–4154 shelf while still "inRange" of the wider
-  // 30m zone that already contained the earlier 4160→… selloff → false RANGE.
-  const localLookback = Math.min(60, Math.max(18, zonePrior.length - 6));
-  const localStruct = zonePrior.slice(0, -6).slice(-localLookback);
-  let localBreakUp = false;
-  let localBreakDown = false;
-  if (localStruct.length >= 12) {
-    const lHi = Math.max(...localStruct.map((b) => b.high));
-    const lLo = Math.min(...localStruct.map((b) => b.low));
-    const lW = Math.max(lHi - lLo, 1e-9);
-    const localFrac = Math.max(
-      genome.local_breakout_frac_floor || 0.12,
-      CLEAR_BREAK_FRAC * 0.5
-    );
-    localBreakUp =
-      fromChop && last.close > lHi && (last.close - lHi) / lW >= localFrac;
-    localBreakDown =
-      fromChop && last.close < lLo && (lLo - last.close) / lW >= localFrac;
-  }
-
-  // V-flip: TREND prior, or BREAKOUT prior when genome allows (dump pierce → violent reclaim)
-  const revFromBreak = genome.reversal_from_breakout_prior !== false;
-  const rallyPrior =
-    previous === 'TREND_UP' || (revFromBreak && previous === 'BREAKOUT_UP');
-  const dumpPrior =
-    previous === 'TREND_DOWN' || (revFromBreak && previous === 'BREAKOUT_DOWN');
   const reversal =
-    (rallyPrior &&
+    (previous === 'TREND_UP' &&
       lastVel < -REVERSAL &&
       lastRange > avgRange &&
       !breakoutDown) ||
-    (dumpPrior &&
+    (previous === 'TREND_DOWN' &&
       lastVel > REVERSAL &&
       lastRange > avgRange &&
       !breakoutUp);
@@ -368,28 +280,6 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (trendingDown || lastVel < -TREND_ENTER)
   )
     return 'BREAKOUT_DOWN';
-
-  // Local shelf pierce while STILL inside the wider 30m box (Gold 17:45).
-  // Without this, dump through a 10m shelf stays "RANGE" because zone.lo already
-  // includes the earlier selloff. Require expanding + enter-band body.
-  if (
-    inRange &&
-    fromChop &&
-    localBreakUp &&
-    expanding &&
-    lastVel > TREND_ENTER
-  ) {
-    return 'BREAKOUT_UP';
-  }
-  if (
-    inRange &&
-    fromChop &&
-    localBreakDown &&
-    expanding &&
-    lastVel < -TREND_ENTER
-  ) {
-    return 'BREAKOUT_DOWN';
-  }
 
   // Violent in-range flip (≥ REVERSAL) before soft pullback / bare EXPANSION
   if (reversal) return 'REVERSAL_CANDIDATE';
@@ -425,135 +315,18 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   )
     return 'TREND_DOWN';
 
-  if (expanding) {
-    if (!genome.expansion_before_trend) {
-      if (trendingUp) return 'TREND_UP';
-      if (trendingDown) return 'TREND_DOWN';
-    }
-    return 'EXPANSION';
-  }
+  if (expanding) return 'EXPANSION';
 
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
 
-  // Zone trek — multi-minute directional grind (Gold HH/HL rally).
-  // Quiet 10s tips stay inside the rolling hi/lo box → old code always fell
-  // through to RANGE even when 30m↑15m↑5m↑ and the zone itself walked up.
-  // Use early vs late thirds + path efficiency so sideways oscillation ≠ trend.
-  //
-  // V-recovery (dump then sharp rally): early→late NET is small while PATH is
-  // huge → efficiency fails and we wrongly stayed RANGE (Capital Gold 16:05).
-  // Also score the *recent leg* (late vs mid third) so the recovery counts.
-  const third = Math.max(1, Math.floor(zonePrior.length / 3));
-  const earlyMean = mean(zonePrior.slice(0, third).map((b) => b.close));
-  const midMean = mean(zonePrior.slice(third, third * 2).map((b) => b.close));
-  const lateMean = mean(zonePrior.slice(-third).map((b) => b.close));
-  const zoneTrekPts = lateMean - earlyMean;
-  const recentLegPts = lateMean - midMean;
-  const zoneTrekRef = Math.max(Math.abs(earlyMean), Math.abs(zoneMid), 1e-9);
-  const zoneTrek = zoneTrekPts / zoneTrekRef;
-  const recentLeg = recentLegPts / zoneTrekRef;
-  let zonePath = 0;
-  for (let i = 1; i < zonePrior.length; i++) {
-    zonePath += Math.abs(zonePrior[i]!.close - zonePrior[i - 1]!.close);
-  }
-  const trekEfficiency = zonePath > 1e-9 ? Math.abs(zoneTrekPts) / zonePath : 0;
-  const trekShare = Math.abs(zoneTrekPts) / zoneWidth;
-  const recentShare = Math.abs(recentLegPts) / zoneWidth;
-  const trekFullMult = genome.trek_full_enter_mult || 4;
-  const trekShareMin = genome.trek_share_min || 0.35;
-  const trekEffMin = genome.trek_eff_min || 0.4;
-  const trekRecentMult = genome.trek_recent_enter_mult || 2;
-  const trekRecentShareMin = genome.trek_recent_share_min || 0.25;
-  const fullTrekOk =
-    Math.abs(zoneTrek) >= TREND_ENTER * trekFullMult &&
-    trekShare >= trekShareMin &&
-    trekEfficiency >= trekEffMin;
-  // Recent leg: after a V, mid sits near the low and late has climbed.
-  // Use a softer abs gate (×2 not ×4) — Gold recovery legs are often 3–5pt
-  // inside a 10–15pt dump/rally box, which fails the full-trek ×4 floor.
-  const recentLegOk =
-    Math.abs(recentLeg) >= TREND_ENTER * trekRecentMult &&
-    recentShare >= trekRecentShareMin;
-  // Late-window efficiency: side oscillation after V has path ≫ net → not a trek.
-  // Without this, mid=dump-low + late=box-mid keeps inventing TREND_UP for hours.
-  let latePath = 0;
-  const lateSlice = zonePrior.slice(-third);
-  for (let i = 1; i < lateSlice.length; i++) {
-    latePath += Math.abs(lateSlice[i]!.close - lateSlice[i - 1]!.close);
-  }
-  const lateNet =
-    lateSlice.length >= 2
-      ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
-      : 0;
-  const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
-  // Late third is chop when path ≫ net — mid→late NET after a dump is NOT a trek
-  // (Capital Gold 08:00 dump → 09:00–11:19 side box still looked like TREND_UP).
-  const lateChop = latePath > 1e-9 && lateEff < trekEffMin;
-  const recentLegIsDirectional = recentLegOk && !lateChop;
-  const trekDirPts = recentLegIsDirectional
-    ? recentLegPts
-    : fullTrekOk
-      ? zoneTrekPts
-      : 0;
-
-  const absPersist = Math.abs(persistence);
-  const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
-  const chopTrek =
-    trekShare <= RANGE_CHOP_TREK_SHARE_MAX &&
-    recentShare <= RANGE_CHOP_TREK_SHARE_MAX &&
-    trekEfficiency <= RANGE_CHOP_TREK_EFF_MAX;
-  const quietTip = !expanding && Math.abs(lastVel) < TREND_ENTER;
-  const quietMid = nearZoneMid && quietTip;
-
-  // Compression before late-chop RANGE — ultra-tight squeeze must not fall to RANGE
+  // Compression only in the tight absolute band near mid — dead zone above → RANGE
   if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
+  if (inRange) return 'RANGE';
 
-  // Proven late-window chop beats soft recent-leg TREND (and sticky TREND prior).
-  // Do NOT early-return on full-zone chopTrek alone — V-recovery has low trekEff
-  // while the late leg is still directional (must remain TREND_UP).
-  if (inRange && chopPersist && lateChop && quietTip) return 'RANGE';
-
-  const softMovePullback = genome.soft_move_trek_pullback_shortcut !== false;
-  if (
-    inRange &&
-    (fullTrekOk || recentLegIsDirectional) &&
-    trekDirPts !== 0
-  ) {
-    if (trekDirPts > 0) {
-      // Soft tip against the trek → pullback in uptrend (1m↓ while HTF↑)
-      if (
-        lastVel <= -PULLBACK ||
-        (softMovePullback && lastVel < -MOVE && last.close < zoneMid)
-      ) {
-        return 'PULLBACK_UPTREND';
-      }
-      return 'TREND_UP';
-    }
-    if (trekDirPts < 0) {
-      if (
-        lastVel >= PULLBACK ||
-        (softMovePullback && lastVel > MOVE && last.close > zoneMid)
-      ) {
-        return 'PULLBACK_DOWNTREND';
-      }
-      return 'TREND_DOWN';
-    }
-  }
-
-  // Positive RANGE — proven chop inside the box. NOT "inRange ⇒ RANGE".
-  // Violent spike/dump that still sits in a wide 30m hi/lo must NOT become fade.
-  // Genome: regime_range_chop_persist_max / trek_share_max / trek_eff_max.
-  // Cold-start: quiet mid + chop trek may enter RANGE even when micro-bodies
-  // above MOVE nudge |persistence| slightly over the chop max (Gold 0.35pt sine).
-  if (inRange && chopPersist && (chopTrek || quietMid)) return 'RANGE';
-  if (inRange && quietMid && chopTrek && previous === 'UNKNOWN') return 'RANGE';
-
-  // Sticky prior instead of inventing RANGE / dead TRANSITION
-  if (genome.sticky_prior_enabled !== false) {
-    if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
-  }
-  return genome.transition_detect_enabled ? 'TRANSITION' : 'UNKNOWN';
+  // Sticky prior instead of dead TRANSITION
+  if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
+  return 'UNKNOWN';
 }
 
 /**
@@ -563,8 +336,6 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
  * - After dwell, 2 agreeing bars switch; same-family / strong = 1 bar after dwell
  * - Strong (opposite family / breakout) may switch before dwell completes
  * - Same-family (TREND↔PULLBACK) no longer bypasses dwell — that caused 10s recipe flicker
- * - Post-switch gap (2×10s): no rapid chain of regimes on consecutive bars
- *   (except structure BREAKOUT/FAILED and first chop→trend)
  */
 export function stabilizeRegime(
   book: {
@@ -594,28 +365,11 @@ export function stabilizeRegime(
 
   const sameFamily = regimeFamily(candidate) === regimeFamily(book.current);
   const strong = isStrongSwitch(book.current, candidate);
-  const chopToTrend = isChopToTrend(book.current, candidate);
-  const genome = getBrainGenome();
-  const { MIN_DWELL_BARS, CONFIRM_BARS } = getActiveRegimeBands();
-  /** ≥N×10s between flips — stops “viena svece visi režīmi” chains */
-  const SWITCH_GAP_BARS = Math.max(1, genome.switch_gap_bars || 2);
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
-  // Chop→trend: genome confirm (factory 1 = immediate strong flip, matches prior)
-  const need = chopToTrend
-    ? Math.max(1, genome.chop_to_trend_confirm_bars || 1)
-    : sameFamily || strong
-      ? 1
-      : CONFIRM_BARS;
+  const need = sameFamily || strong ? 1 : CONFIRM_BARS;
   // sameFamily must still wait for dwell — only strong structure breaks skip it
-  const spacingOk =
-    book.current === 'UNKNOWN' ||
-    book.current === 'TRANSITION' ||
-    book.bars_in_current >= SWITCH_GAP_BARS ||
-    isStructureFlip(candidate) ||
-    chopToTrend;
-  const canSwitch =
-    (dwellOk || strong) && book.pending_count >= need && spacingOk;
+  const canSwitch = (dwellOk || strong) && book.pending_count >= need;
 
   if (canSwitch) {
     book.previous = book.current;
@@ -647,18 +401,12 @@ export function regimeBookKey(epic: string, accountId?: number | string | null):
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   if (regime === 'UNKNOWN' || bars.length < 2) return 0;
   const last = bars[bars.length - 1]!;
-  const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
-  const g = getBrainGenome();
   // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
   const strength = Math.min(
     1,
     Math.abs(bodyPct(last)) / (MOVE * 4) + rangePct(last) / (MOVE_RANGE * 4)
   );
-  const base = g.regime_conf_base ?? 0.35;
-  const scale = g.regime_conf_strength_scale ?? 0.5;
-  const lo = g.regime_conf_min ?? 0.2;
-  const hi = g.regime_conf_max ?? 0.95;
-  return Math.max(lo, Math.min(hi, base + strength * scale));
+  return Math.max(0.2, Math.min(0.95, 0.35 + strength * 0.5));
 }
 
 function toSnapshot(epic: string, b: Book): RegimeSnapshot {
@@ -757,10 +505,7 @@ export function notePipelineRegime(
   if (scoped) {
     // Account-scoped: display/confidence only — never touch pending_count.
     // Fanout stamps must not soft-confirm a stabilize flip on the next OHLC bar.
-    if (next !== 'UNKNOWN') {
-      const floor = getBrainGenome().book_confidence_floor_after_switch || 0.55;
-      b.confidence = Math.max(b.confidence, floor);
-    }
+    if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
   } else if (next !== b.current) {
     b.previous = b.current;
     b.current = next;
@@ -772,10 +517,7 @@ export function notePipelineRegime(
     b.bars_in_current += 1;
   }
   b.last_update = now;
-  if (!scoped && next !== 'UNKNOWN') {
-    const floor = getBrainGenome().book_confidence_floor_after_switch || 0.55;
-    b.confidence = Math.max(b.confidence, floor);
-  }
+  if (!scoped && next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
   return toSnapshot(epicKey(epic), b);
 }
 
