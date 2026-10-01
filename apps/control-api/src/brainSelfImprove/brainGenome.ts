@@ -626,6 +626,13 @@ export type BrainGenome = {
   regime_runner_success_mfe_retain: number;
   /** Eligible fill regimes (no SIDE) */
   regime_runner_eligible_regimes: string[];
+  /**
+   * Block entry when recent mid→late leg already ran into the tip
+   * (dump/V then BUY@HI / SELL@LO = "kustība beigusies").
+   */
+  entry_block_post_impulse_tip: boolean;
+  /** Min |mid→late| / zoneWidth to treat as impulse (factory 0.22) */
+  entry_post_impulse_share_min: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1072,6 +1079,8 @@ const DEFAULT_GENOME: BrainGenome = {
     'BREAKOUT_DOWN',
     'EXPANSION',
   ],
+  entry_block_post_impulse_tip: true,
+  entry_post_impulse_share_min: 0.22,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1662,6 +1671,10 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       p.regime_runner_eligible_regimes,
       d.regime_runner_eligible_regimes
     ),
+    entry_block_post_impulse_tip: p.entry_block_post_impulse_tip !== false,
+    entry_post_impulse_share_min: round2(
+      clamp(Number(p.entry_post_impulse_share_min ?? d.entry_post_impulse_share_min), 0.08, 0.55)
+    ),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2131,6 +2144,8 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'regime_runner_min_target_layer',
   'regime_runner_success_mfe_retain',
   'regime_runner_eligible_regimes',
+  'entry_block_post_impulse_tip',
+  'entry_post_impulse_share_min',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

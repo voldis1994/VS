@@ -348,9 +348,11 @@ const MAP: Record<number, string[]> = {
   210: ['regime_runner_min_target_layer'],
   211: ['regime_runner_success_mfe_retain'],
   212: ['regime_runner_eligible_regimes'],
+  213: ['entry_block_post_impulse_tip'],
+  214: ['entry_post_impulse_share_min'],
 };
 
-const MAX_ITEM = 212;
+const MAX_ITEM = 214;
 
 // Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();

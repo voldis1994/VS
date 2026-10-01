@@ -14,6 +14,7 @@ import {
   structureGate,
   structureStartEntry,
   tipChaseBlocksEntry,
+  postImpulseTipBlocksEntry,
   zoneGeometry,
 } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -722,7 +723,7 @@ describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', 
     ).toBe(true);
   });
 
-  it('tipChaseBlocksEntry: true live TREND_PULLBACK does not use chop tip knife', () => {
+  it('tipChaseBlocksEntry: true live TREND_PULLBACK also blocks BUY at HI tip', () => {
     expect(
       tipChaseBlocksEntry({
         liveRegime: 'TREND_UP',
@@ -731,6 +732,17 @@ describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', 
         side: 'BUY',
         zpos: 0.85,
         barSign: 1,
+      })
+    ).toBe(true);
+    // Mid-zone pullback resume still allowed
+    expect(
+      tipChaseBlocksEntry({
+        liveRegime: 'TREND_UP',
+        lane: 'TREND_PULLBACK',
+        chapter: 'DIP_IN_RALLY',
+        side: 'BUY',
+        zpos: 0.35,
+        barSign: -1,
       })
     ).toBe(false);
   });
@@ -744,6 +756,59 @@ describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', 
         side: 'BUY',
         zpos: 0.85,
         barSign: 1,
+      })
+    ).toBe(false);
+  });
+
+  it('postImpulseTipBlocksEntry: V-recovery into HI tip blocks BUY (kustība beigusies)', () => {
+    const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 10 * 60_000;
+    const book: TenSecBar[] = [];
+    // Early/mid: dump into lows
+    for (let i = 0; i < 40; i++) {
+      const px = 4340 - i * 0.35;
+      book.push(bar(px + 0.1, px, m0 + i * 10_000, 0.15));
+    }
+    // Late: sharp V rally to tip
+    for (let i = 0; i < 40; i++) {
+      const px = 4326 + i * 0.4;
+      book.push(bar(px - 0.1, px, m0 + (40 + i) * 10_000, 0.15));
+    }
+    const tip = bar(4341.5, 4342.2, m0 + 80 * 10_000, 0.2);
+    book.push(tip);
+    const z = zoneGeometry(book, tip)!;
+    expect(z.pos).toBeGreaterThanOrEqual(0.8);
+    expect(
+      postImpulseTipBlocksEntry({
+        closedBars: book,
+        side: 'BUY',
+        zpos: z.pos,
+        lane: 'TREND_PULLBACK',
+        barSign: 1,
+      })
+    ).toBe(true);
+    // BREAKOUT may still pierce
+    expect(
+      postImpulseTipBlocksEntry({
+        closedBars: book,
+        side: 'BUY',
+        zpos: z.pos,
+        lane: 'BREAKOUT',
+        barSign: 1,
+      })
+    ).toBe(false);
+  });
+
+  it('postImpulseTipBlocksEntry: flat chop mid-zone does not block', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4330.2 });
+    const entry = book[book.length - 1]!;
+    const z = zoneGeometry(book, entry)!;
+    expect(
+      postImpulseTipBlocksEntry({
+        closedBars: book,
+        side: 'BUY',
+        zpos: z.pos,
+        lane: 'RANGE_FADE',
+        barSign: 0,
       })
     ).toBe(false);
   });

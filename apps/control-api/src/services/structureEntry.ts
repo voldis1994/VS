@@ -49,9 +49,8 @@ const LIVE_CHOP = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
 
 /**
  * Tip-chase knife (genome exhaust_*).
- * Runs on RANGE_FADE and on false-RANGE promote (chop live → TREND_PULLBACK),
- * so HTF promote cannot skip tip safety. BREAKOUT lane still may pierce.
- * Independent of entry_filter_level (L0) — this is thesis safety, not soft structure.
+ * Runs on RANGE_FADE, TREND_PULLBACK (incl. false-RANGE promote), and LIVE chop.
+ * BREAKOUT lane still may pierce. Independent of L0 — thesis safety.
  */
 export function tipChaseBlocksEntry(input: {
   /** Raw classify (not thesis) — false-RANGE promote tip knife */
@@ -71,7 +70,8 @@ export function tipChaseBlocksEntry(input: {
   const live = input.liveRegime;
   const applies =
     lane === 'RANGE_FADE' ||
-    (LIVE_CHOP.has(live) && lane === 'TREND_PULLBACK');
+    lane === 'TREND_PULLBACK' ||
+    (LIVE_CHOP.has(live) && lane === 'LIVE');
   if (!applies) return false;
   if (lane === 'RANGE_FADE' && (ch === 'BREAK_UP' || ch === 'BREAK_DOWN')) return true;
   if (exhaustTipBlock) {
@@ -90,10 +90,8 @@ export function tipChaseBlocksEntry(input: {
   ) {
     return true;
   }
-  // False RANGE promote: never arm tip knives (BUY@HI / SELL@LO) even if story ≠ RALLY
+  // Never arm tip knives with the finished move (BUY@HI / SELL@LO)
   if (
-    LIVE_CHOP.has(live) &&
-    lane === 'TREND_PULLBACK' &&
     zpos != null &&
     ((input.side === 'BUY' && zpos >= tipHi) || (input.side === 'SELL' && zpos <= tipLo))
   ) {
@@ -105,6 +103,84 @@ export function tipChaseBlocksEntry(input: {
     zpos != null &&
     ((input.side === 'BUY' && zpos >= 0.85 && input.barSign > 0) ||
       (input.side === 'SELL' && zpos <= 0.15 && input.barSign < 0))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Post-impulse tip block — do not arm when the recent leg already ran to the tip
+ * (Capital Gold: dump then V → BUY at highs = "tirgo kad kustība beigusies").
+ * Genome: entry_block_post_impulse_tip / entry_post_impulse_share_min.
+ * BREAKOUT lane exempt (pierce owns); Peak/HardInv untouched.
+ */
+export function postImpulseTipBlocksEntry(input: {
+  closedBars: TenSecBar[];
+  side: 'BUY' | 'SELL';
+  zpos: number | null | undefined;
+  lane: string;
+  barSign: -1 | 0 | 1;
+}): boolean {
+  const g = getBrainGenome();
+  if (g.entry_block_post_impulse_tip === false) return false;
+  if (input.lane === 'BREAKOUT' || input.lane === 'REVERSAL') return false;
+  const zpos = input.zpos;
+  if (zpos == null || !input.closedBars.length) return false;
+
+  const tipHi = g.exhaust_pos_hi || 0.8;
+  const tipLo = g.exhaust_pos_lo || 0.2;
+  const shareMin = g.entry_post_impulse_share_min || 0.22;
+  const zoneBars = getZoneBars();
+  const zone = input.closedBars.slice(-zoneBars);
+  const zonePrior = zone.length >= 3 ? zone.slice(0, -1) : zone;
+  if (zonePrior.length < 12) return false;
+
+  const hi = Math.max(...zonePrior.map((b) => b.high));
+  const lo = Math.min(...zonePrior.map((b) => b.low));
+  const zoneWidth = Math.max(hi - lo, 1e-9);
+  const third = Math.max(1, Math.floor(zonePrior.length / 3));
+  const mean = (xs: TenSecBar[]) =>
+    xs.reduce((s, b) => s + b.close, 0) / Math.max(1, xs.length);
+  const midMean = mean(zonePrior.slice(third, third * 2));
+  const lateMean = mean(zonePrior.slice(-third));
+  const recentLegPts = lateMean - midMean;
+  const recentShare = Math.abs(recentLegPts) / zoneWidth;
+  if (recentShare < shareMin) return false;
+
+  // Late path efficiency — side oscillation after V still has mid→late NET
+  let latePath = 0;
+  const lateSlice = zonePrior.slice(-third);
+  for (let i = 1; i < lateSlice.length; i++) {
+    latePath += Math.abs(lateSlice[i]!.close - lateSlice[i - 1]!.close);
+  }
+  const lateNet =
+    lateSlice.length >= 2
+      ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
+      : 0;
+  const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
+  const lateChop = latePath > 1e-9 && lateEff < (g.trek_eff_min || 0.4);
+
+  // Up-leg into HI tip → block BUY (chase finished rally / V top)
+  if (recentLegPts > 0 && zpos >= tipHi && input.side === 'BUY') return true;
+  // Down-leg into LO tip → block SELL (chase finished dump)
+  if (recentLegPts < 0 && zpos <= tipLo && input.side === 'SELL') return true;
+  // Same tip, fade without reject bar (still printing with the finished leg)
+  if (
+    recentLegPts > 0 &&
+    zpos >= tipHi &&
+    input.side === 'SELL' &&
+    input.barSign > 0 &&
+    !lateChop
+  ) {
+    return true;
+  }
+  if (
+    recentLegPts < 0 &&
+    zpos <= tipLo &&
+    input.side === 'BUY' &&
+    input.barSign < 0 &&
+    !lateChop
   ) {
     return true;
   }
@@ -576,12 +652,12 @@ export function structureGate(
     }
 
     case 'TREND_UP':
-      // Dip-buy: allow anywhere except extreme HI chase without a real dip context
+      // Dip-buy only — never BUY the HI tip after the leg already printed
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `TREND_UP only BUY (${posTag})` };
       }
-      if (zone.pos >= extremeHi && md === 'UP' && sig.setup !== 'PULLBACK') {
-        return { ok: false, reason: `TREND_UP chase HI (${posTag})` };
+      if (zone.pos >= extremeHi && !dip(bar)) {
+        return { ok: false, reason: `TREND_UP chase HI tip (${posTag})` };
       }
       return { ok: true, tag: `TREND_UP OK · ${posTag}` };
 
@@ -589,18 +665,18 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `TREND_DOWN only SELL (${posTag})` };
       }
-      if (zone.pos <= extremeLo && md === 'DOWN' && sig.setup !== 'PULLBACK') {
-        return { ok: false, reason: `TREND_DOWN chase LO (${posTag})` };
+      if (zone.pos <= extremeLo && !rally(bar)) {
+        return { ok: false, reason: `TREND_DOWN chase LO tip (${posTag})` };
       }
       return { ok: true, tag: `TREND_DOWN OK · ${posTag}` };
 
     case 'PULLBACK_UPTREND':
-      // Resume long — mid-zone is normal; only block extreme HI melt-up
+      // Resume long on dip — never BUY the HI tip after the rally already printed
       if (sig.direction !== 'BUY') {
         return { ok: false, reason: `PULLBACK_UPTREND only BUY (${posTag})` };
       }
-      if (zone.pos >= extremeHi && !rally(bar)) {
-        return { ok: false, reason: `PULLBACK_UPTREND late HI (${posTag})` };
+      if (zone.pos >= extremeHi && !dip(bar)) {
+        return { ok: false, reason: `PULLBACK_UPTREND chase HI tip (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_UPTREND OK · ${posTag}` };
 
@@ -608,8 +684,8 @@ export function structureGate(
       if (sig.direction !== 'SELL') {
         return { ok: false, reason: `PULLBACK_DOWNTREND only SELL (${posTag})` };
       }
-      if (zone.pos <= extremeLo && !dip(bar)) {
-        return { ok: false, reason: `PULLBACK_DOWNTREND late LO (${posTag})` };
+      if (zone.pos <= extremeLo && !rally(bar)) {
+        return { ok: false, reason: `PULLBACK_DOWNTREND chase LO tip (${posTag})` };
       }
       return { ok: true, tag: `PULLBACK_DOWNTREND OK · ${posTag}` };
 
@@ -837,6 +913,18 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       chapter: ch,
       side,
       zpos,
+      barSign,
+    })
+  ) {
+    return null;
+  }
+  // Post-impulse tip — dump/V already ran to the edge; do not arm "kustība beigusies"
+  if (
+    postImpulseTipBlocksEntry({
+      closedBars: input.closedBars,
+      side,
+      zpos,
+      lane: playbook.lane,
       barSign,
     })
   ) {

@@ -725,6 +725,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const compressLo = bounceNum(g.compression_entry_pos_lo, 0.02, 0.2, 0.5, dir);
   const compressHi = bounceNum(g.compression_entry_pos_hi, 0.02, 0.5, 0.8, dir);
   const flipExhaustTip = !g.exhaust_tip_chase_block;
+  const flipPostImpulseTip = !g.entry_block_post_impulse_tip;
+  const postImpulseShare = bounceNum(g.entry_post_impulse_share_min, 0.02, 0.1, 0.45, dir);
   const entryLearnerMargin = bounceNum(g.entry_learner_override_margin, 0.01, 0.02, 0.2, dir);
   // Story
   const storyPathBp = bounceBp(g.story_min_path_bp, 0.5, 3.0, 20.0, dir);
@@ -1574,9 +1576,11 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         compression_entry_pos_lo: compressLo,
         compression_entry_pos_hi: compressHi,
         exhaust_tip_chase_block: flipExhaustTip,
+        entry_block_post_impulse_tip: flipPostImpulseTip,
+        entry_post_impulse_share_min: postImpulseShare,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
-        last_lesson: `Explore structure half/zone`,
+        last_lesson: `Explore structure half/zone post_impulse=${flipPostImpulseTip}`,
       },
       patches: [
         genomePatch('struct_half_lo', halfLo, `explore half_lo ${halfLo}`),
@@ -1599,6 +1603,16 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('compression_entry_pos_lo', compressLo, `explore compress_lo ${compressLo}`),
         genomePatch('compression_entry_pos_hi', compressHi, `explore compress_hi ${compressHi}`),
         genomePatch('exhaust_tip_chase_block', flipExhaustTip, `flip exhaust_tip ${flipExhaustTip}`),
+        genomePatch(
+          'entry_block_post_impulse_tip',
+          flipPostImpulseTip,
+          `flip post_impulse_tip ${flipPostImpulseTip}`
+        ),
+        genomePatch(
+          'entry_post_impulse_share_min',
+          postImpulseShare,
+          `explore post_impulse_share ${postImpulseShare}`
+        ),
         genomePatch(
           'entry_learner_override_margin',
           entryLearnerMargin,

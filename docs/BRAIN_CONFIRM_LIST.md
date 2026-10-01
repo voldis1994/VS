@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **212/212** schema+wire+hypothesize (one-market 200–203 + regime runner 204–212).
+**STATUS 2026-10-01:** **214/214** schema+wire+hypothesize (one-market 200–203 + regime runner 204–212 + post-impulse tip 213–214).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
@@ -276,6 +276,10 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 210. regime_runner_min_target_layer — arm pēc T1/T2/T3
 211. regime_runner_success_mfe_retain — “strādā” = pnl/mfe ≥
 212. regime_runner_eligible_regimes — TREND/PULLBACK/BREAKOUT/EXPANSION (ne RANGE)
+
+### Post-impulse tip (nearmēt kad kustība jau beigusies)
+213. entry_block_post_impulse_tip — ON: mid→late leg + tip → block BUY@HI / SELL@LO
+214. entry_post_impulse_share_min — min |mid→late|/zoneWidth (factory 0.22)
 
 ---
 
