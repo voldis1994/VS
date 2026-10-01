@@ -1,14 +1,23 @@
 /**
  * CLI: learn-from-scratch reset (keeps Capital API + clients).
  *
- *   npx tsx scripts/factoryResetLearning.ts
- *   npx tsx scripts/factoryResetLearning.ts --force-open
- *   npx tsx scripts/factoryResetLearning.ts --keep-db-history
+ *   npx tsx scripts/factoryResetLearning.ts --yes
+ *   npx tsx scripts/factoryResetLearning.ts --yes --force-open
+ *   npx tsx scripts/factoryResetLearning.ts --yes --keep-db-history
  */
+import dotenv from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   FACTORY_RESET_CONFIRM,
   factoryResetLearning,
 } from '../src/services/factoryResetLearning.js';
+import { pool } from '../src/db/pool.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, '../../..');
+dotenv.config({ path: path.join(ROOT, '.env') });
+dotenv.config({ path: path.join(HERE, '../.env') });
 
 async function main(): Promise<void> {
   const args = new Set(process.argv.slice(2));
@@ -22,16 +31,29 @@ async function main(): Promise<void> {
     );
     process.exit(2);
   }
+  console.log('[1/3] Loading .env + factory reset…');
   const result = await factoryResetLearning({
     confirm: FACTORY_RESET_CONFIRM,
     wipe_db_history: !args.has('--keep-db-history'),
     force_open_trades: args.has('--force-open'),
     wipe_brain_history: !args.has('--keep-brain-history'),
   });
+  console.log('[2/3] Done.');
   console.log(JSON.stringify(result, null, 2));
+  console.log('[3/3] Closing DB pool…');
+  try {
+    await pool.end();
+  } catch {
+    /* ignore */
+  }
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error(e instanceof Error ? e.message : e);
+  try {
+    await pool.end();
+  } catch {
+    /* ignore */
+  }
   process.exit(1);
 });
