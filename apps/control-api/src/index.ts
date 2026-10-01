@@ -33,6 +33,8 @@ import {
   extractClientToken,
   resolveClientSession,
 } from './security/clientSession.js';
+import { restorePersistedRobotSessions } from './services/robotDesk.js';
+import { countPersistedClients } from './services/robotDeskPersist.js';
 
 // Load repo-root .env first (VS.bat writes there), then local override.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -205,6 +207,24 @@ async function main() {
     if (n > 0) console.log(`Restored ${n} robot session(s) after BRAIN code reload`);
   } catch (err) {
     console.error('BRAIN robot restore failed:', err);
+  }
+
+  try {
+    const stats = await countPersistedClients();
+    console.log(
+      `[persist] DB clients=${stats.clients} · panel RUNNING=${stats.running_panel} · brokers=${stats.brokers}`
+    );
+  } catch (err) {
+    console.warn('[persist] client count failed', err);
+  }
+
+  try {
+    const resume = await restorePersistedRobotSessions();
+    console.log(
+      `[persist] robot desk restored=${resume.restored} failed=${resume.failed}`
+    );
+  } catch (err) {
+    console.warn('[persist] robot restore failed', err);
   }
 
   setInterval(() => {
