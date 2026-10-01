@@ -320,6 +320,8 @@ export type BuildWatchInput = {
   open_side: 'BUY' | 'SELL' | null;
   entry_enabled: boolean;
   regime: string | null | undefined;
+  /** Frozen fill thesis — MANAGE UI must not show opposite live "meklē SELL" */
+  entry_regime?: string | null;
   last_closed: TenSecBar | null | undefined;
   forming_c: number | null | undefined;
   just_closed: boolean;
@@ -396,7 +398,12 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     story: storySnap,
     htf: htfSnap,
   });
-  const entryRegime = playbook.regime;
+  // Open trade: authoritative thesis = frozen fill (one truth with manage log)
+  const frozenEntry =
+    input.open_side && input.entry_regime
+      ? normalizeRegime(input.entry_regime)
+      : null;
+  const entryRegime = frozenEntry ?? playbook.regime;
   const recipe = watchRecipe(entryRegime);
   const regimeOn = regimeAllowedForEntry(entryRegime);
   const softOff = regimeIsSoftOff(entryRegime);
@@ -522,6 +529,50 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     capital_tf15_dir: input.capital_tf15_dir,
     capital_tf30_dir: input.capital_tf30_dir,
   });
+  // MANAGE: one thesis — open side + frozen regime; no live opposite "meklē SELL"
+  if (input.open_side && status === 'MANAGE') {
+    const manageLook = `MANAGE ${input.open_side} · thesis ${entryRegime} · live ${liveRegime} · ${tfLine.summary} · Peak/Soft path · no new orders`;
+    return {
+      regime: entryRegime,
+      live_regime: liveRegime,
+      lane: frozenEntry ? 'LIVE' : playbook.lane,
+      regime_enabled: regimeOn,
+      enabled_regimes: [...enabled],
+      status,
+      looking_for: lookingForWithZone(manageLook, zone, entryRegime),
+      bar_vs_trigger: 'MANAGE',
+      market_story: `${tfLine.summary} · ${story.summary_lv}`,
+      story_chapter: story.chapter,
+      story_allow: story.allow,
+      story_detail: `${tfLine.thesis} · ${story.detail}`,
+      direction: input.open_side,
+      setup: input.open_side ? 'MANAGE' : null,
+      armed: false,
+      last_closed_side: lastClosedSide,
+      need_side: needSide,
+      lock_left_s: lockLeft,
+      zone_bars: zone.zone_bars,
+      zone_need: zone.zone_need,
+      zone_full: zone.zone_full,
+      zone_left: zone.zone_left,
+      zone_ready: zone.zone_ready,
+      zone_progress: zone.zone_progress,
+      threshold_body_pct: recipe.threshold_body_pct,
+      bar: {
+        o: bar?.open ?? null,
+        h: bar?.high ?? null,
+        l: bar?.low ?? null,
+        c: bar?.close ?? null,
+        forming_c: input.forming_c ?? null,
+        body_pct: body,
+        range_pct: rng,
+        market: mkt,
+        closed: Boolean(input.just_closed && bar),
+      },
+      last_reason: last_reason || `Pozīcija ${input.open_side} — manage ${entryRegime}`,
+    };
+  }
+
   // Lead with Capital multi-TF stack — not the old story-only "meklē SELL"
   const mindSide =
     sig?.direction ??

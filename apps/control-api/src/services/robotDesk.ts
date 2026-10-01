@@ -467,6 +467,7 @@ function refreshEntryWatch(
     open_side: s.open_side,
     entry_enabled: s.entry_enabled,
     regime: s.regime,
+    entry_regime: s.entry_regime,
     last_closed: s.ohlcState.last_closed,
     forming_c: ohlc.forming_c,
     just_closed: Boolean(s.ohlcState.just_closed),

@@ -116,7 +116,7 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     }
   });
 
-  it('Capital HTF UP/DOWN promotes off false RANGE — not 10s chop story', () => {
+  it('live chop keeps SIDE even with full HTF UP/DOWN (no false TREND steal)', () => {
     const chop = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
     expect(
       effectiveEntryRegime('RANGE', chop, {
@@ -124,14 +124,14 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
         tf15: 'UP',
         tf5: 'UP',
       })
-    ).toBe('TREND_UP');
+    ).toBe('RANGE');
     expect(
       effectiveEntryRegime('RANGE', chop, {
         tf30: 'DOWN',
         tf15: 'DOWN',
         tf5: 'FLAT',
       })
-    ).toBe('TREND_DOWN');
+    ).toBe('RANGE');
     expect(
       effectiveEntryRegime('COMPRESSION', chop, {
         tf30: 'UP',
@@ -139,11 +139,11 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
         tf5: 'DOWN',
         m1: 'DOWN',
       })
-    ).toBe('PULLBACK_UPTREND');
+    ).toBe('COMPRESSION');
   });
 
-  it('promotes RANGE→TREND_UP on RALLY / allow=BUY when HTF flat', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
+  it('BREAK story still owns pierce; RALLY/SELLOFF on live chop stay SIDE', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('RANGE');
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
       'BREAKOUT_UP'
     );
@@ -154,10 +154,8 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'EXHAUST_HI' })).toBe('RANGE');
   });
 
-  it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL when HTF flat', () => {
-    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
-      'TREND_DOWN'
-    );
+  it('SELLOFF on live chop stays SIDE; BREAK_DOWN still BREAKOUT', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe('RANGE');
     expect(effectiveEntryRegime('COMPRESSION', { allow: 'SELL', chapter: 'BREAK_DOWN' })).toBe(
       'BREAKOUT_DOWN'
     );
@@ -185,8 +183,7 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     ).toBe('RANGE');
   });
 
-  it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {
-    // pos > 0.5 → RANGE fade blocks BUY; TREND_UP still allows
+  it('live chop RALLY stays RANGE thesis — half-fade still blocks mid/HI BUY', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
     const entry = book[book.length - 1]!;
     const zone = zoneGeometry(book, entry)!;
@@ -196,12 +193,12 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
       setup: 'CONTINUATION' as const,
       reason: 'mind BUY',
     };
-    const rawGate = structureGate(sig, 'RANGE', entry, zone, null, 'UP');
-    expect(rawGate.ok).toBe(false);
-    const promoted = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
-    expect(promoted).toBe('TREND_UP');
-    const trendGate = structureGate(sig, promoted, entry, zone, null, 'UP');
-    expect(trendGate.ok).toBe(true);
+    const thesis = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
+    expect(thesis).toBe('RANGE');
+    const gate = structureGate(sig, thesis, entry, zone, null, 'UP');
+    expect(gate.ok).toBe(false);
+    // True TREND_UP live still allows upper-half BUY at gate
+    expect(structureGate(sig, 'TREND_UP', entry, zone, null, 'UP').ok).toBe(true);
   });
 });
 

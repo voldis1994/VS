@@ -330,15 +330,22 @@ const MAP: Record<number, string[]> = {
   192: ['gap_pullback_reversal'],
   193: ['gap_compress_expand'],
   194: ['persist_enter_stay_min_gap'],
+  195: ['playbook_require_full_htf_stack'],
+  196: ['playbook_block_htf_promote_on_live_chop'],
+  197: ['playbook_block_story_promote_on_live_chop'],
+  198: ['playbook_chop_overrides_sticky_trend'],
+  199: ['reversal_from_breakout_prior'],
 };
 
-// Extract labels for items 1-194 from confirm list (first occurrence)
+const MAX_ITEM = 199;
+
+// Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();
 for (const line of confirm.split('\n')) {
   const m = line.match(/^(\d+)\.\s+(.+)$/);
   if (!m) continue;
   const n = Number(m[1]);
-  if (n >= 1 && n <= 194 && !labels.has(n)) labels.set(n, m[2]!.trim());
+  if (n >= 1 && n <= MAX_ITEM && !labels.has(n)) labels.set(n, m[2]!.trim());
 }
 
 const servicesDir = join(HERE, '../src/services');
@@ -369,7 +376,7 @@ type Row = {
 };
 
 const rows: Row[] = [];
-for (let n = 1; n <= 194; n++) {
+for (let n = 1; n <= MAX_ITEM; n++) {
   const keys = MAP[n] ?? [];
   const label = labels.get(n) || `item ${n}`;
   const inFactory = keys.filter((k) => factoryKeys.has(k));
@@ -390,7 +397,11 @@ const unwiredRows = rows.filter((r) => r.unwired.length);
 const hypoGaps = rows.filter((r) => r.notInHypo.length && r.inFactory.length);
 
 console.log('=== SCHEMA ===');
-console.log('items with mapped keys', rows.filter((r) => r.keys.length).length, '/194');
+console.log(
+  'items with mapped keys',
+  rows.filter((r) => r.keys.length).length,
+  `/${MAX_ITEM}`
+);
 console.log('items with NO mapped keys', noKeys.length);
 for (const r of noKeys) console.log(`  #${r.n} ${r.label}`);
 console.log('items with keys missing from factory', missingSchema.length);
@@ -418,11 +429,11 @@ const ok =
 console.log('\n=== VERDICT ===');
 console.log(
   ok
-    ? 'SCHEMA+WIRE complete for 194 mapped knobs'
+    ? `SCHEMA+WIRE complete for ${MAX_ITEM} mapped knobs`
     : 'GAPS remain — see above'
 );
 console.log(
-  `hypothesize/auto-cal coverage: ${194 - hypoGaps.length}/194 items have ≥1 key explored`
+  `hypothesize/auto-cal coverage: ${MAX_ITEM - hypoGaps.length}/${MAX_ITEM} items have ≥1 key explored`
 );
 
 const report = {

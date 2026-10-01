@@ -801,6 +801,11 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipStickyPrior = !g.sticky_prior_enabled;
   const flipTransition = !g.transition_detect_enabled;
   const flipPlaybookUnify = !g.playbook_promote_vs_live_unify;
+  const flipRequireFullHtf = !g.playbook_require_full_htf_stack;
+  const flipBlockHtfChop = !g.playbook_block_htf_promote_on_live_chop;
+  const flipBlockStoryChop = !g.playbook_block_story_promote_on_live_chop;
+  const flipChopOverrideTrend = !g.playbook_chop_overrides_sticky_trend;
+  const flipRevFromBreak = !g.reversal_from_breakout_prior;
   const flipExpansionBefore = !g.expansion_before_trend;
   const enabledRegimes = toggleInArray(g.enabled_regimes, 'TRANSITION');
   const softOffRegimes = toggleInArray(g.soft_off_regimes, 'COMPRESSION');
@@ -1803,7 +1808,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     },
     {
       title: `Explore regimes flags/chop (step #${nextStep + 37})`,
-      rationale: 'Toggle sticky_prior, transition_detect, playbook unify, expansion_before_trend.',
+      rationale:
+        'Toggle sticky_prior, transition, playbook SIDE/HTF gates, reversal-from-breakout.',
       task: `soft_move=${flipSoftMoveShortcut} chop_trend=${chopToTrend} sticky=${flipStickyPrior}`,
       genome_delta: {
         soft_move_trek_pullback_shortcut: flipSoftMoveShortcut,
@@ -1811,6 +1817,11 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         sticky_prior_enabled: flipStickyPrior,
         transition_detect_enabled: flipTransition,
         playbook_promote_vs_live_unify: flipPlaybookUnify,
+        playbook_require_full_htf_stack: flipRequireFullHtf,
+        playbook_block_htf_promote_on_live_chop: flipBlockHtfChop,
+        playbook_block_story_promote_on_live_chop: flipBlockStoryChop,
+        playbook_chop_overrides_sticky_trend: flipChopOverrideTrend,
+        reversal_from_breakout_prior: flipRevFromBreak,
         expansion_before_trend: flipExpansionBefore,
         core_always_on_regimes: coreAlwaysOn,
         explore_step: nextStep + 37,
@@ -1833,6 +1844,31 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           'playbook_promote_vs_live_unify',
           flipPlaybookUnify,
           `flip playbook_unify ${flipPlaybookUnify}`
+        ),
+        genomePatch(
+          'playbook_require_full_htf_stack',
+          flipRequireFullHtf,
+          `flip require_full_htf ${flipRequireFullHtf}`
+        ),
+        genomePatch(
+          'playbook_block_htf_promote_on_live_chop',
+          flipBlockHtfChop,
+          `flip block_htf_chop ${flipBlockHtfChop}`
+        ),
+        genomePatch(
+          'playbook_block_story_promote_on_live_chop',
+          flipBlockStoryChop,
+          `flip block_story_chop ${flipBlockStoryChop}`
+        ),
+        genomePatch(
+          'playbook_chop_overrides_sticky_trend',
+          flipChopOverrideTrend,
+          `flip chop_override_trend ${flipChopOverrideTrend}`
+        ),
+        genomePatch(
+          'reversal_from_breakout_prior',
+          flipRevFromBreak,
+          `flip rev_from_break ${flipRevFromBreak}`
         ),
         genomePatch(
           'expansion_before_trend',
