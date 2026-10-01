@@ -1,6 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
+import { logAudit } from '../services/audit.js';
+import {
+  FACTORY_RESET_CONFIRM,
+  factoryResetLearning,
+} from '../services/factoryResetLearning.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
@@ -108,5 +113,40 @@ export async function registerSystemRoutes(
       'SELECT * FROM system_events ORDER BY created_at DESC LIMIT 100'
     );
     return rows;
+  });
+
+  /**
+   * Learn-from-scratch: genome/learners/auto-cal/desk Soft+Peak+Target + optional DB history.
+   * KEEP Capital credentials + clients. Requires confirm: "LEARN_FROM_SCRATCH".
+   */
+  app.post('/api/system/factory-reset-learning', async (request, reply) => {
+    const body = (request.body || {}) as {
+      confirm?: string;
+      wipe_db_history?: boolean;
+      force_open_trades?: boolean;
+      wipe_brain_history?: boolean;
+    };
+    try {
+      const result = await factoryResetLearning({
+        confirm: String(body.confirm || ''),
+        wipe_db_history: body.wipe_db_history,
+        force_open_trades: body.force_open_trades,
+        wipe_brain_history: body.wipe_brain_history,
+      });
+      await logAudit('admin', 'factory_reset_learning', 'system', 'learning', null, {
+        clients_reset: result.clients_reset,
+        db_history_wiped: result.db_history_wiped,
+        robots_stopped: result.robots_stopped,
+        robots_manage_only: result.robots_manage_only,
+      });
+      return { success: true, ...result, confirm_phrase: FACTORY_RESET_CONFIRM };
+    } catch (e) {
+      const err = e as Error & { statusCode?: number };
+      const code = err.statusCode || 500;
+      return reply.code(code).send({
+        error: err.message || 'factory reset failed',
+        confirm_phrase: FACTORY_RESET_CONFIRM,
+      });
+    }
   });
 }

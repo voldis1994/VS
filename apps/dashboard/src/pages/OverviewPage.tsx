@@ -222,6 +222,43 @@ export function OverviewPage() {
       .catch((e) => setMsg(e instanceof Error ? e.message : 'Reset failed'));
   };
 
+  /** Full wipe: genome + learners + history → factory. Keeps Capital + clients. */
+  const factoryLearnFromScratch = () => {
+    const ok = window.confirm(
+      'LEARN FROM SCRATCH?\n\n' +
+        'WIPE: genome, Soft/Peak/Target, learners, auto-cal, trade history.\n' +
+        'KEEP: Capital API, clients, broker accounts.\n\n' +
+        'Close/FLAT robots first (open deals block unless you force).'
+    );
+    if (!ok) return;
+    const phrase = window.prompt('Ieraksti apstiprinājumu: LEARN_FROM_SCRATCH');
+    if (phrase !== 'LEARN_FROM_SCRATCH') {
+      setMsg('Atcelts — nepareiza frāze');
+      return;
+    }
+    setBusy(true);
+    void apiFetch<{ success?: boolean; error?: string; genome_path?: string }>(
+      '/api/system/factory-reset-learning',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          confirm: 'LEARN_FROM_SCRATCH',
+          wipe_db_history: true,
+          wipe_brain_history: true,
+        }),
+      }
+    )
+      .then((r) => {
+        setMsg(
+          r.success
+            ? 'FACTORY RESET · genome+learners+history wiped · Capital/clients kept · restart robots'
+            : r.error || 'Factory reset failed'
+        );
+      })
+      .catch((e) => setMsg(e instanceof Error ? e.message : 'Factory reset failed'))
+      .finally(() => setBusy(false));
+  };
+
   const modeNow = (status?.mode || 'LIVE').toUpperCase();
   const ePts = auto?.session_expectancy_pts ?? 0;
   const sumPts = auto?.session_sum_pts ?? 0;
@@ -292,6 +329,15 @@ export function OverviewPage() {
           <div className="actions" style={{ margin: 0 }}>
             <button type="button" className="btn" onClick={factoryOpen}>
               SĀKT NO JAUNA
+            </button>
+            <button
+              type="button"
+              className="btn btn-stop"
+              disabled={busy}
+              title="Genome + learners + history → factory. Capital/clients kept."
+              onClick={factoryLearnFromScratch}
+            >
+              LEARN FROM SCRATCH
             </button>
             <Link className="btn" to="/trades">
               TRADES
