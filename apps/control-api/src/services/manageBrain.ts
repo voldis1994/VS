@@ -104,6 +104,7 @@ export const MANAGE_SCORE_M1_CONTINUE = 0.85;
 export const MANAGE_SCORE_NEXT_ENTRY_OPP = 0.7;
 export const MANAGE_SCORE_THESIS_FIGHT = 0.55;
 export const MANAGE_SCORE_CLAMP = 2.5;
+/** @deprecated One-brain: Learner never overrides manage action (features only). */
 export const MANAGE_LEARNER_OVERRIDE_MARGIN = 0.08;
 export const SESSION_E_BANK_HI = 0.25;
 export const SESSION_E_BANK_LO = -0.15;
@@ -139,8 +140,6 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   const wNextOpp = g.manage_score_next_entry_opp || MANAGE_SCORE_NEXT_ENTRY_OPP;
   const wThesis = g.manage_score_thesis_fight || MANAGE_SCORE_THESIS_FIGHT;
   const scoreClamp = g.manage_score_clamp || MANAGE_SCORE_CLAMP;
-  const learnerMargin =
-    g.manage_learner_override_margin || MANAGE_LEARNER_OVERRIDE_MARGIN;
   const pressureBuy = g.pressure_with_us_buy || PRESSURE_WITH_US_BUY;
   const pressureSell = g.pressure_with_us_sell || PRESSURE_WITH_US_SELL;
   const nearTarget = g.near_target_lean_bank || NEAR_TARGET_LEAN_BANK;
@@ -301,12 +300,10 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
 
   score = clamp(score, -scoreClamp, scoreClamp);
 
-  // --- PRĀTS decides; LEARNER advises once it has enough closes ---
+  // --- ONE BRAIN: Mind/Genome decides. Learner features only (no action override). ---
   const learned = learnerChooseAction(input, input.client_id);
   const thought = thinkLikeTrader(input);
-  const learnerReady =
-    learned.updates >= 20 && learned.confidence >= thought.confidence + learnerMargin;
-  const action = learnerReady && !learned.explored ? learned.action : thought.decision;
+  const action = thought.decision;
 
   let soft_gate_override: boolean | null = null;
   let peak_retention_override: number | null = null;
@@ -337,8 +334,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     if (!input.soft_gate_allow && !marketChanged) soft_gate_override = false;
   }
 
-  const who = learnerReady ? learned.detail : thought.spoken;
-  const reason = `${who} · ${thought.thesis.slice(0, 90)}${
+  const reason = `${thought.spoken} · ${thought.thesis.slice(0, 90)}${
     thought.thesis.length > 90 ? '…' : ''
   } · E ${score.toFixed(2)}`;
 

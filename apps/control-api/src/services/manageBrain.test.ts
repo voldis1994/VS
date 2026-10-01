@@ -153,8 +153,40 @@ describe('manageBrain', () => {
       })
     );
     expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
-    expect(r.reason).toMatch(/PRĀTS|LEARNER/);
+    expect(r.reason).toMatch(/PRĀTS/);
     expect(r.learner_features?.length).toBeGreaterThan(10);
+  });
+
+  it('Learner never overrides manage action — Mind/Genome only (one brain)', () => {
+    // Seed learner with many updates so old path would have overridden
+    for (let i = 0; i < 25; i++) {
+      scoreManageAction(
+        base({
+          minute_policy: 'reverse',
+          soft_gate_allow: false,
+          next_entry_side: 'SELL',
+          mfe: 5,
+          unrealized: 4.0,
+          soft_sl: 3.5,
+          session_expectancy_pts: -0.5,
+          closes_in_session: 6,
+        })
+      );
+    }
+    const r = scoreManageAction(
+      base({
+        minute_policy: 'continue',
+        mfe: 5,
+        unrealized: 4.5,
+        soft_sl: 3.5,
+        soft_gate_allow: false,
+        next_entry_side: 'BUY',
+      })
+    );
+    expect(r.reason).toMatch(/PRĀTS/);
+    expect(r.reason).not.toMatch(/^LEARNER/);
+    expect(r.learner_features?.length).toBeGreaterThan(0);
+    expect(['TRAIL', 'HOLD', 'CUT', 'BANK']).toContain(r.action);
   });
 
   it('applyManageBrainToExit forces Peak arm and softGate override', () => {
