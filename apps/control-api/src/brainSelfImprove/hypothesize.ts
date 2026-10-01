@@ -810,6 +810,15 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipBreakOverTrend = !g.playbook_break_overrides_sticky_trend;
   const flipHtfUnanimous = !g.playbook_htf_require_unanimous;
   const flipRequireSetup = !g.entry_require_regime_setup;
+  const flipRegimeRunner = !g.regime_runner_enabled;
+  const runnerScore = bounceInt(g.regime_runner_score, 1, 0, g.regime_runner_score_max || 10, dir);
+  const runnerMinScore = bounceInt(g.regime_runner_active_min_score, 1, 0, 10, dir);
+  const runnerEvalN = bounceInt(g.regime_runner_eval_every_n, 1, 2, 12, dir);
+  const runnerDeduct = bounceInt(g.regime_runner_deduct_pts, 1, 1, 5, dir);
+  const runnerRecover = bounceInt(g.regime_runner_recover_pts, 1, 1, 5, dir);
+  const runnerMinLayer = bounceInt(g.regime_runner_min_target_layer, 1, 1, 3, dir);
+  const runnerRetain = bounceNum(g.regime_runner_success_mfe_retain, 0.05, 0.2, 0.85, dir);
+  const runnerEligible = toggleInArray(g.regime_runner_eligible_regimes, 'EXPANSION');
   const flipExpansionBefore = !g.expansion_before_trend;
   const enabledRegimes = toggleInArray(g.enabled_regimes, 'TRANSITION');
   const softOffRegimes = toggleInArray(g.soft_off_regimes, 'COMPRESSION');
@@ -1830,10 +1839,19 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         playbook_break_overrides_sticky_trend: flipBreakOverTrend,
         playbook_htf_require_unanimous: flipHtfUnanimous,
         entry_require_regime_setup: flipRequireSetup,
+        regime_runner_enabled: flipRegimeRunner,
+        regime_runner_score: runnerScore,
+        regime_runner_active_min_score: runnerMinScore,
+        regime_runner_eval_every_n: runnerEvalN,
+        regime_runner_deduct_pts: runnerDeduct,
+        regime_runner_recover_pts: runnerRecover,
+        regime_runner_min_target_layer: runnerMinLayer,
+        regime_runner_success_mfe_retain: runnerRetain,
+        regime_runner_eligible_regimes: runnerEligible,
         expansion_before_trend: flipExpansionBefore,
         core_always_on_regimes: coreAlwaysOn,
         explore_step: nextStep + 37,
-        last_lesson: `Explore regimes flags one_market=${flipOneMarket}`,
+        last_lesson: `Explore regimes flags one_market=${flipOneMarket} runner=${flipRegimeRunner}`,
       },
       patches: [
         genomePatch(
@@ -1897,6 +1915,47 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           'entry_require_regime_setup',
           flipRequireSetup,
           `flip require_setup ${flipRequireSetup}`
+        ),
+        genomePatch(
+          'regime_runner_enabled',
+          flipRegimeRunner,
+          `flip regime_runner ${flipRegimeRunner}`
+        ),
+        genomePatch('regime_runner_score', runnerScore, `explore runner_score ${runnerScore}`),
+        genomePatch(
+          'regime_runner_active_min_score',
+          runnerMinScore,
+          `explore runner_min_score ${runnerMinScore}`
+        ),
+        genomePatch(
+          'regime_runner_eval_every_n',
+          runnerEvalN,
+          `explore runner_eval_n ${runnerEvalN}`
+        ),
+        genomePatch(
+          'regime_runner_deduct_pts',
+          runnerDeduct,
+          `explore runner_deduct ${runnerDeduct}`
+        ),
+        genomePatch(
+          'regime_runner_recover_pts',
+          runnerRecover,
+          `explore runner_recover ${runnerRecover}`
+        ),
+        genomePatch(
+          'regime_runner_min_target_layer',
+          runnerMinLayer,
+          `explore runner_min_layer ${runnerMinLayer}`
+        ),
+        genomePatch(
+          'regime_runner_success_mfe_retain',
+          runnerRetain,
+          `explore runner_retain ${runnerRetain}`
+        ),
+        genomeArrayPatch(
+          'regime_runner_eligible_regimes',
+          runnerEligible,
+          `explore runner_eligible toggle EXPANSION`
         ),
         genomePatch(
           'expansion_before_trend',

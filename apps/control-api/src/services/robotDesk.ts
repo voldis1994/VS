@@ -88,6 +88,7 @@ import {
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry, effectiveEntryRegime } from './structureEntry.js';
 import { readMarketStory } from './marketStory.js';
+import { regimeRunnerShouldHoldTarget } from './regimeRunner.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -256,6 +257,13 @@ type Internal = RobotSession & {
    * Peak Soft× drops; Soft+ may bank Soft×1 before Soft HardInv.
    */
   pullback_episode_active: boolean;
+  /**
+   * Regime runner armed — Target T1–T3 touched; hold until live leaves thesis family.
+   * Not used for SIDE entries.
+   */
+  regime_runner_armed: boolean;
+  /** Live left thesis family while runner was armed (release / good exit path) */
+  regime_runner_released: boolean;
   /** Last Capital 1m close key already evaluated for profit policy */
   last_1m_profit_exit_key: string;
   /** Cached live entry watch for board UI */
@@ -953,6 +961,8 @@ async function persistClosedTradeLedger(
         epic: s.epic,
         entry_ctx: compactMarketContext(s.entry_market),
         exit_ctx: exitCtx,
+        regime_runner_used: Boolean(s.regime_runner_armed),
+        regime_runner_released: Boolean(s.regime_runner_released),
       },
       s.client_id
     );
@@ -1037,6 +1047,8 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.peak_protect_armed = false;
   s.pullback_episode_active = false;
+  s.regime_runner_armed = false;
+  s.regime_runner_released = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
   s.broker_flat_streak = 0;
@@ -2236,6 +2248,8 @@ async function enterTradeLocked(
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
   s.pullback_episode_active = false;
+  s.regime_runner_armed = false;
+  s.regime_runner_released = false;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
@@ -2861,8 +2875,66 @@ function decideOpenManageExit(
         // Target/TimeDecay wait — brain HOLD or softGate continue
         return null;
       }
+      // Regime runner: after T1–T3, hold Target while live family matches thesis
+      // (not SIDE). HardInv / Peak / MindBank already ran above.
+      const softSlRunner = activeSoftStopDistance(
+        s.entry_price,
+        s.mfe,
+        s.entry_regime || s.regime
+      );
+      const execFavRunner = executableFavorable(
+        s.open_side,
+        s.entry_price,
+        quote.bid,
+        quote.ask,
+        quote.mid
+      );
+      const runner = regimeRunnerShouldHoldTarget({
+        entryRegime: s.entry_regime || s.regime,
+        liveRegime: s.regime,
+        armed: Boolean(s.regime_runner_armed),
+        fav: favNow,
+        mfe: s.mfe,
+        execFav: execFavRunner,
+        minBank: minProfitBank(softSlRunner),
+        absEntry: Math.abs(s.entry_price),
+        targetAbs: getDeskCalibration(s.client_id).target_abs,
+      });
+      if (runner.arm && !s.regime_runner_armed) {
+        s.regime_runner_armed = true;
+        pushTick(s, {
+          phase: 'MANAGE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `Regime runner ARMED · ${runner.why}`,
+        });
+      }
+      if (s.regime_runner_armed && !runner.hold) {
+        s.regime_runner_released = true;
+      }
+      if (runner.hold) {
+        if (s.last_brain_action !== 'REGIME_RUNNER_HOLD') {
+          s.last_brain_action = 'REGIME_RUNNER_HOLD';
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: runner.why,
+          });
+        }
+        return null;
+      }
       const tpDec = decideBestOutcomeExit(s, quote.mid, 'target_time', Date.now(), quote);
-      if (tpDec.exit) return `${tpDec.reason} · ${brain.action}`;
+      if (tpDec.exit) {
+        const releaseTag = s.regime_runner_armed
+          ? s.regime_runner_released
+            ? ' · RegimeRunner release'
+            : ' · RegimeRunner'
+          : '';
+        return `${tpDec.reason}${releaseTag} · ${brain.action}`;
+      }
     }
   }
   return null;
@@ -4180,6 +4252,8 @@ export async function startRobotSession(input: {
     last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
     pullback_episode_active: false,
+    regime_runner_armed: false,
+    regime_runner_released: false,
     last_1m_profit_exit_key: '',
     entry_watch: null,
     exit_deal_fails: 0,

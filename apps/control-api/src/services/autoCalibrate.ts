@@ -31,6 +31,7 @@ import {
   readSoftTargetLayers,
   suggestLayersFromExcursions,
 } from './profitLayers.js';
+import { evaluateRegimeRunnerScore } from './regimeRunner.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
 /** After an applied calibrate — space next cycle; entries stay open. */
@@ -191,6 +192,10 @@ export type SessionTrade = {
   entry_ctx?: MarketContextCompact | null;
   /** Market context at exit */
   exit_ctx?: MarketContextCompact | null;
+  /** Regime runner held Target past T1–T3 this trade */
+  regime_runner_used?: boolean;
+  /** Released because live left thesis family */
+  regime_runner_released?: boolean;
 };
 
 export type AutoCalCycleRecord = {
@@ -1152,6 +1157,25 @@ function proposeGenomePatch(
     changes.push(
       autotuneLog('genome mtf_htf_veto false→true', `feed fight ×${fightCtx} — HTF veto on`)
     );
+  }
+
+  // Regime runner score — every auto-cal window (factory 5 closes); SIDE trades ignored
+  if (g.regime_runner_enabled !== false) {
+    const notes = windowTrades.map((t) => ({
+      used_runner: Boolean(t.regime_runner_used),
+      regime_released: Boolean(t.regime_runner_released),
+      pnl_pts: Number(t.pnl_pts) || 0,
+      mfe: Number(t.mfe) || 0,
+    }));
+    const evalN = Math.max(2, g.regime_runner_eval_every_n || AUTO_CALIBRATE_EVERY_N);
+    const runnerN = notes.filter((n) => n.used_runner).length;
+    if (runnerN > 0 && windowTrades.length >= Math.min(evalN, AUTO_CALIBRATE_EVERY_N)) {
+      const { score, change } = evaluateRegimeRunnerScore(notes, g);
+      if (score !== g.regime_runner_score) {
+        patch.regime_runner_score = score;
+      }
+      if (change) changes.push(autotuneLog(change, 'regime runner hold Target until regime change'));
+    }
   }
 
   return { patch, changes };
