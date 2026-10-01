@@ -596,6 +596,36 @@ export type BrainGenome = {
   playbook_chop_overrides_sticky_trend: boolean;
   /** REVERSAL_CANDIDATE also from BREAKOUT_UP/DOWN prior (V after pierce dump) */
   reversal_from_breakout_prior: boolean;
+  /**
+   * One-market truth: live classify owns regime; HTF/story do not invent TREND
+   * on chop/UNKNOWN. Soft OFF / decide / watch share that thesis.
+   */
+  playbook_one_market_truth: boolean;
+  /** Story BREAK_UP/DOWN before sticky TREND keep (structure pierce owns) */
+  playbook_break_overrides_sticky_trend: boolean;
+  /** HTF bias MIXED if any 30/15/5 fight (no majority steal) */
+  playbook_htf_require_unanimous: boolean;
+  /** Entry needs 10s recipe or structure-start — no mind CONTINUATION invent */
+  entry_require_regime_setup: boolean;
+  /**
+   * Regime runner: after T1–T3, hold Target while live family matches thesis.
+   * Not for SIDE (RANGE/COMPRESSION/TRANSITION). Score auto-cal every N closes.
+   */
+  regime_runner_enabled: boolean;
+  /** Live score 0…max — below active_min → fallback to normal Target exit */
+  regime_runner_score: number;
+  regime_runner_score_max: number;
+  regime_runner_active_min_score: number;
+  /** Closes between score evaluations (factory 5) */
+  regime_runner_eval_every_n: number;
+  regime_runner_deduct_pts: number;
+  regime_runner_recover_pts: number;
+  /** Min Target layer touched before arm (1–3) */
+  regime_runner_min_target_layer: number;
+  /** Win needs pnl/mfe ≥ this retain fraction */
+  regime_runner_success_mfe_retain: number;
+  /** Eligible fill regimes (no SIDE) */
+  regime_runner_eligible_regimes: string[];
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1020,6 +1050,28 @@ const DEFAULT_GENOME: BrainGenome = {
   playbook_block_story_promote_on_live_chop: true,
   playbook_chop_overrides_sticky_trend: true,
   reversal_from_breakout_prior: true,
+  playbook_one_market_truth: true,
+  playbook_break_overrides_sticky_trend: true,
+  playbook_htf_require_unanimous: true,
+  entry_require_regime_setup: true,
+  regime_runner_enabled: true,
+  regime_runner_score: 10,
+  regime_runner_score_max: 10,
+  regime_runner_active_min_score: 5,
+  regime_runner_eval_every_n: 5,
+  regime_runner_deduct_pts: 2,
+  regime_runner_recover_pts: 1,
+  regime_runner_min_target_layer: 1,
+  regime_runner_success_mfe_retain: 0.45,
+  regime_runner_eligible_regimes: [
+    'TREND_UP',
+    'TREND_DOWN',
+    'PULLBACK_UPTREND',
+    'PULLBACK_DOWNTREND',
+    'BREAKOUT_UP',
+    'BREAKOUT_DOWN',
+    'EXPANSION',
+  ],
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1571,6 +1623,45 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       p.playbook_block_story_promote_on_live_chop !== false,
     playbook_chop_overrides_sticky_trend: p.playbook_chop_overrides_sticky_trend !== false,
     reversal_from_breakout_prior: p.reversal_from_breakout_prior !== false,
+    playbook_one_market_truth: p.playbook_one_market_truth !== false,
+    playbook_break_overrides_sticky_trend: p.playbook_break_overrides_sticky_trend !== false,
+    playbook_htf_require_unanimous: p.playbook_htf_require_unanimous !== false,
+    entry_require_regime_setup: p.entry_require_regime_setup !== false,
+    regime_runner_enabled: p.regime_runner_enabled !== false,
+    regime_runner_score: clampInt(p.regime_runner_score, d.regime_runner_score, 0, 20),
+    regime_runner_score_max: clampInt(p.regime_runner_score_max, d.regime_runner_score_max, 1, 20),
+    regime_runner_active_min_score: clampInt(
+      p.regime_runner_active_min_score,
+      d.regime_runner_active_min_score,
+      0,
+      20
+    ),
+    regime_runner_eval_every_n: clampInt(
+      p.regime_runner_eval_every_n,
+      d.regime_runner_eval_every_n,
+      2,
+      20
+    ),
+    regime_runner_deduct_pts: clampInt(p.regime_runner_deduct_pts, d.regime_runner_deduct_pts, 1, 10),
+    regime_runner_recover_pts: clampInt(
+      p.regime_runner_recover_pts,
+      d.regime_runner_recover_pts,
+      1,
+      10
+    ),
+    regime_runner_min_target_layer: clampInt(
+      p.regime_runner_min_target_layer,
+      d.regime_runner_min_target_layer,
+      1,
+      3
+    ),
+    regime_runner_success_mfe_retain: round2(
+      clamp(Number(p.regime_runner_success_mfe_retain ?? d.regime_runner_success_mfe_retain), 0.15, 0.95)
+    ),
+    regime_runner_eligible_regimes: sanitizeStringArray(
+      p.regime_runner_eligible_regimes,
+      d.regime_runner_eligible_regimes
+    ),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2026,6 +2117,20 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'playbook_block_story_promote_on_live_chop',
   'playbook_chop_overrides_sticky_trend',
   'reversal_from_breakout_prior',
+  'playbook_one_market_truth',
+  'playbook_break_overrides_sticky_trend',
+  'playbook_htf_require_unanimous',
+  'entry_require_regime_setup',
+  'regime_runner_enabled',
+  'regime_runner_score',
+  'regime_runner_score_max',
+  'regime_runner_active_min_score',
+  'regime_runner_eval_every_n',
+  'regime_runner_deduct_pts',
+  'regime_runner_recover_pts',
+  'regime_runner_min_target_layer',
+  'regime_runner_success_mfe_retain',
+  'regime_runner_eligible_regimes',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

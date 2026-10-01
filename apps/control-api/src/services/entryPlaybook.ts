@@ -1,13 +1,15 @@
 /**
  * Entry thesis router — one canonical regime/lane for this bar.
  *
- * Priority (clean tape read — not predict future):
- * 1. REVERSAL (V flip) / BREAKOUT / FAILED / EXPANSION — live owns
- * 2. BREAK story → BREAKOUT
- * 3. SIDE / RANGE_FADE when live chop (or sticky TREND demoted on proven chop)
- * 4. TREND/PULLBACK only on clean full HTF stack (or live TREND when not demoted)
+ * One-market truth (factory / playbook_one_market_truth):
+ *   Live classify owns the regime. Story/HTF gate or confirm — they do NOT invent
+ *   a different trade type. BREAK story may re-label pierce (structure). Sticky
+ *   TREND demotes to SIDE when chop story + HTF not unanimous.
  *
- * Genome owns promote/chop/reversal gates — brains may evolve; lot/API/system off-limits.
+ * Legacy explore path (genome flips one_market off): HTF/story promote restored.
+ *
+ * Genome owns promote/chop/reversal/one-market gates — brains may evolve;
+ * lot / API / system off-limits.
  */
 import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { normalizeRegime, type RegimeName } from './regimes.js';
@@ -42,12 +44,7 @@ const TRENDISH = new Set<RegimeName>([
   'PULLBACK_UPTREND',
   'PULLBACK_DOWNTREND',
 ]);
-const SIDE_STORY = new Set([
-  'RANGE_CHOP',
-  'MIXED',
-  'SEEDING',
-  '',
-]);
+const SIDE_STORY = new Set(['RANGE_CHOP', 'MIXED', 'SEEDING', '']);
 
 /** 30+15+5 all present (FLAT counts; null = not loaded yet). */
 export function htfStackComplete(htf?: EffectiveRegimeHtf | null): boolean {
@@ -57,7 +54,8 @@ export function htfStackComplete(htf?: EffectiveRegimeHtf | null): boolean {
 
 /**
  * Capital HTF bias from 30→15→5 (m1 only when HTF empty).
- * Majority wins — one opposing TF must not freeze as MIXED.
+ * Genome playbook_htf_require_unanimous: any UP+DOWN fight → MIXED (no majority steal).
+ * Else majority wins.
  */
 export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
   if (!htf) return 'FLAT';
@@ -71,6 +69,8 @@ export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' |
   }
   const up = stack.filter((d) => d === 'UP').length;
   const down = stack.filter((d) => d === 'DOWN').length;
+  const unanimous = getBrainGenome().playbook_htf_require_unanimous !== false;
+  if (unanimous && up > 0 && down > 0) return 'MIXED';
   if (up > down) return 'UP';
   if (down > up) return 'DOWN';
   return 'MIXED';
@@ -102,9 +102,35 @@ function isSideStory(ch: string, allow: string): boolean {
   );
 }
 
+function laneForLive(live: RegimeName): PlaybookLane {
+  if (live === 'REVERSAL_CANDIDATE') return 'REVERSAL';
+  if (live === 'BREAKOUT_UP' || live === 'BREAKOUT_DOWN') return 'BREAKOUT';
+  if (TRENDISH.has(live)) return 'TREND_PULLBACK';
+  if (CHOP.has(live)) return 'RANGE_FADE';
+  return 'LIVE';
+}
+
+function breakStoryPlaybook(ch: string): EntryPlaybook | null {
+  if (ch === 'BREAK_UP') {
+    return {
+      lane: 'BREAKOUT',
+      regime: 'BREAKOUT_UP',
+      why_lv: 'BREAKOUT smadzenes · stāsts BREAK_UP (ne RANGE fade)',
+    };
+  }
+  if (ch === 'BREAK_DOWN') {
+    return {
+      lane: 'BREAKOUT',
+      regime: 'BREAKOUT_DOWN',
+      why_lv: 'BREAKOUT smadzenes · stāsts BREAK_DOWN (ne RANGE fade)',
+    };
+  }
+  return null;
+}
+
 /**
  * Pick the entry thesis for this bar (lane + regime).
- * Priority: REVERSAL/BREAKOUT → SIDE → TREND (clean HTF only).
+ * Factory: one market — live regime is truth; entry recipes follow that regime.
  */
 export function pickEntryPlaybook(input: {
   liveRegime: RegimeName | string | null | undefined;
@@ -115,13 +141,14 @@ export function pickEntryPlaybook(input: {
   const ch = chapterOf(input.story);
   const allow = allowOf(input.story);
   const g = getBrainGenome();
+  const oneMarket = g.playbook_one_market_truth !== false;
   const stackOk = !g.playbook_require_full_htf_stack || htfStackComplete(input.htf);
-  // Incomplete stack → no directional HTF bias for promote (m1 alone must not invent TREND)
   const bias = stackOk ? capitalHtfBias(input.htf) : 'FLAT';
   const m1 = input.htf?.m1;
   const blockHtfOnChop = g.playbook_block_htf_promote_on_live_chop !== false;
   const blockStoryOnChop = g.playbook_block_story_promote_on_live_chop !== false;
   const chopOverridesTrend = g.playbook_chop_overrides_sticky_trend !== false;
+  const breakOverridesTrend = g.playbook_break_overrides_sticky_trend !== false;
 
   // 1) Live structural owners
   if (live === 'REVERSAL_CANDIDATE') {
@@ -137,7 +164,14 @@ export function pickEntryPlaybook(input: {
     return { lane: 'LIVE', regime: live, why_lv: 'EXPANSION smadzenes · live impulse' };
   }
 
-  // 2) Sticky TREND demote → SIDE when proven chop + no clean HTF direction
+  // 2) BREAK pierce owns — before sticky TREND keep (one-market / genome)
+  if (breakOverridesTrend) {
+    const brk = breakStoryPlaybook(ch);
+    if (brk) return brk;
+  }
+
+  // 3) Sticky TREND demote → SIDE when proven chop story + no clean unanimous HTF.
+  // EXHAUST tip alone is not chop demote — that is pullback/reject inside TREND.
   if (
     chopOverridesTrend &&
     TRENDISH.has(live) &&
@@ -150,29 +184,32 @@ export function pickEntryPlaybook(input: {
     );
   }
 
-  // 3) Live TREND/PULLBACK (when not demoted) — before story BREAK (resume owns)
+  // 4) Live TREND/PULLBACK (when not demoted)
   if (TRENDISH.has(live)) {
     return { lane: 'TREND_PULLBACK', regime: live, why_lv: `TREND smadzenes · live ${live}` };
   }
 
-  // 4) Break story on chop/unknown — pierce owns (before side / HTF)
-  if (ch === 'BREAK_UP') {
-    return {
-      lane: 'BREAKOUT',
-      regime: 'BREAKOUT_UP',
-      why_lv: 'BREAKOUT smadzenes · stāsts BREAK_UP (ne RANGE fade)',
-    };
-  }
-  if (ch === 'BREAK_DOWN') {
-    return {
-      lane: 'BREAKOUT',
-      regime: 'BREAKOUT_DOWN',
-      why_lv: 'BREAKOUT smadzenes · stāsts BREAK_DOWN (ne RANGE fade)',
-    };
+  // 5) BREAK when not already handled above (legacy order: after TREND keep)
+  if (!breakOverridesTrend) {
+    const brk = breakStoryPlaybook(ch);
+    if (brk) return brk;
   }
 
-  // 5) SIDE first on live chop — before HTF / story TREND promote
+  // 6) Live chop — one-market: SIDE always (no HTF/story/DIP invent TREND)
   if (CHOP.has(live)) {
+    if (oneMarket) {
+      if (
+        (bias === 'FLAT' || bias === 'MIXED') &&
+        (ch === 'EXHAUST_HI' || ch === 'EXHAUST_LO')
+      ) {
+        return rangeFade(live, `RANGE · ${ch} tip · gaida reject (ne fade knife / ne fake TREND)`);
+      }
+      return rangeFade(
+        live,
+        'RANGE smadzenes · one-market · live chop = SIDE (HTF/stāsts neizdomā TREND)'
+      );
+    }
+
     if (
       (bias === 'FLAT' || bias === 'MIXED') &&
       (ch === 'EXHAUST_HI' || ch === 'EXHAUST_LO')
@@ -180,7 +217,6 @@ export function pickEntryPlaybook(input: {
       return rangeFade(live, `RANGE · ${ch} tip · gaida reject (ne fade knife / ne fake TREND)`);
     }
     if (isSideStory(ch, allow) || blockHtfOnChop || blockStoryOnChop) {
-      // Explicit side chapters always RANGE_FADE on live chop
       if (
         ch === 'RANGE_CHOP' ||
         ch === 'MIXED' ||
@@ -198,8 +234,6 @@ export function pickEntryPlaybook(input: {
             : 'RANGE smadzenes · live chop · SIDE pirms HTF/stāsta promote'
         );
       }
-      // RALLY/SELLOFF/EXHAUST on live chop: stay SIDE when story promote blocked
-      // (not DIP_IN_RALLY / BOUNCE_IN_SELL — those keep pullback handlers below)
       if (
         blockStoryOnChop &&
         (ch === 'RALLY' ||
@@ -216,7 +250,6 @@ export function pickEntryPlaybook(input: {
         );
       }
     }
-    // HTF promote off live chop only when explicitly allowed + full stack + clear bias
     if (!blockHtfOnChop && stackOk && bias === 'UP') {
       const regime: RegimeName =
         ch === 'DIP_IN_RALLY' || m1 === 'DOWN' ? 'PULLBACK_UPTREND' : 'TREND_UP';
@@ -271,7 +304,19 @@ export function pickEntryPlaybook(input: {
     return rangeFade(live, 'RANGE smadzenes · live chop · nav skaidra HTF/stāsta');
   }
 
-  // 6) Non-chop live (UNKNOWN etc.): HTF / story with full-stack gate
+  // 7) Non-chop (UNKNOWN etc.)
+  if (oneMarket) {
+    // Live label is truth — do not invent TREND from HTF/story while classify is UNKNOWN
+    return {
+      lane: laneForLive(live),
+      regime: live,
+      why_lv:
+        live === 'UNKNOWN'
+          ? 'WAIT · one-market · live UNKNOWN · HTF/stāsts neizdomā TREND'
+          : `one-market · live ${live}`,
+    };
+  }
+
   if (ch === 'DIP_IN_RALLY') {
     return {
       lane: 'TREND_PULLBACK',

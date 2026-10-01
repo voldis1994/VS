@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-09-30:** **194/194** schema+wire+hypothesize. Suite green (542).
+**STATUS 2026-10-01:** **212/212** schema+wire+hypothesize (one-market 200–203 + regime runner 204–212).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
@@ -259,6 +259,23 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 197. playbook_block_story_promote_on_live_chop — SIDE pirms stāsta TREND uz chop
 198. playbook_chop_overrides_sticky_trend — sticky TREND→SIDE uz proven chop
 199. reversal_from_breakout_prior — REVERSAL arī no BREAKOUT prior (V)
+
+### One-market truth (visi lasa vienu tirgu)
+200. playbook_one_market_truth — live classify = regime; HTF/stāsts neizdomā TREND
+201. playbook_break_overrides_sticky_trend — BREAK pierce pirms sticky TREND
+202. playbook_htf_require_unanimous — 30/15/5 fight → MIXED (ne majority)
+203. entry_require_regime_setup — entry tikai ar 10s/structure recipe (ne PRĀTS invent)
+
+### Regime runner (hold Target līdz režīma maiņai — ne SIDE)
+204. regime_runner_enabled — ON/OFF
+205. regime_runner_score — live 0…max (start 10)
+206. regime_runner_score_max — score griesti
+207. regime_runner_active_min_score — zemāk → fallback uz parastu Target
+208. regime_runner_eval_every_n — ik N close (factory 5 ar auto-cal)
+209. regime_runner_deduct_pts / regime_runner_recover_pts — score soļi
+210. regime_runner_min_target_layer — arm pēc T1/T2/T3
+211. regime_runner_success_mfe_retain — “strādā” = pnl/mfe ≥
+212. regime_runner_eligible_regimes — TREND/PULLBACK/BREAKOUT/EXPANSION (ne RANGE)
 
 ---
 

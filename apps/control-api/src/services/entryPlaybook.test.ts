@@ -1,11 +1,79 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   pickEntryPlaybook,
   setupAllowedOnLane,
   capitalHtfBias,
 } from './entryPlaybook.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
+
+describe('entryPlaybook — one-market truth (factory)', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
+  it('live chop stays SIDE even with full HTF UP — no invent TREND', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'RANGE',
+      story: { allow: 'BUY', chapter: 'RALLY' },
+      htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+    });
+    expect(p.lane).toBe('RANGE_FADE');
+    expect(p.regime).toBe('RANGE');
+    expect(p.why_lv).toMatch(/one-market/i);
+  });
+
+  it('DIP_IN_RALLY on live chop does not invent PULLBACK', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'RANGE',
+      story: { allow: 'BUY', chapter: 'DIP_IN_RALLY' },
+      htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+    });
+    expect(p.lane).toBe('RANGE_FADE');
+    expect(p.regime).toBe('RANGE');
+  });
+
+  it('UNKNOWN waits — HTF does not invent TREND', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'UNKNOWN',
+      story: { allow: 'BUY', chapter: 'RALLY' },
+      htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+    });
+    expect(p.regime).toBe('UNKNOWN');
+    expect(p.why_lv).toMatch(/one-market|WAIT/i);
+  });
+
+  it('BREAK story overrides sticky TREND_UP', () => {
+    const p = pickEntryPlaybook({
+      liveRegime: 'TREND_UP',
+      story: { allow: 'SELL', chapter: 'BREAK_DOWN' },
+      htf: { tf30: 'UP', tf15: 'UP', tf5: 'UP' },
+    });
+    expect(p.lane).toBe('BREAKOUT');
+    expect(p.regime).toBe('BREAKOUT_DOWN');
+  });
+
+  it('sticky TREND demotes on chop when HTF fights (unanimous→MIXED)', () => {
+    // 30m DOWN vs 15/5 UP — unanimous gate → MIXED → demote
+    const p = pickEntryPlaybook({
+      liveRegime: 'TREND_UP',
+      story: { allow: 'NONE', chapter: 'RANGE_CHOP' },
+      htf: { tf30: 'DOWN', tf15: 'UP', tf5: 'UP' },
+    });
+    expect(p.lane).toBe('RANGE_FADE');
+    expect(p.regime).toBe('RANGE');
+  });
+
+  it('capitalHtfBias unanimous: fight → MIXED (not majority UP)', () => {
+    expect(capitalHtfBias({ tf30: 'UP', tf15: 'UP', tf5: 'DOWN' })).toBe('MIXED');
+    expect(capitalHtfBias({ tf30: 'UP', tf15: 'UP', tf5: 'UP' })).toBe('UP');
+  });
+});
 
 describe('entryPlaybook — split brains (who looks at what)', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
+
   it('BREAKOUT lane owns BREAK_DOWN story even when live says RANGE', () => {
     const p = pickEntryPlaybook({
       liveRegime: 'RANGE',
@@ -73,9 +141,10 @@ describe('entryPlaybook — split brains (who looks at what)', () => {
     ).toBe('BREAKOUT');
   });
 
-  it('capitalHtfBias uses majority of 30/15/5', () => {
-    expect(capitalHtfBias({ tf30: 'UP', tf15: 'UP', tf5: 'DOWN' })).toBe('UP');
+  it('capitalHtfBias: unanimous factory — fight MIXED; clean stack directional', () => {
+    expect(capitalHtfBias({ tf30: 'UP', tf15: 'UP', tf5: 'DOWN' })).toBe('MIXED');
     expect(capitalHtfBias({ tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT' })).toBe('MIXED');
+    expect(capitalHtfBias({ tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN' })).toBe('DOWN');
     expect(capitalHtfBias({ tf30: 'FLAT', tf15: 'FLAT', tf5: 'FLAT', m1: 'DOWN' })).toBe(
       'DOWN'
     );

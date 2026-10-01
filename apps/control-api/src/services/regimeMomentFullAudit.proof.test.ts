@@ -345,16 +345,19 @@ describe('PROOF AUDIT: regime at the right market moment — full stack', () => 
       expect(setupAllowedOnLane(pb.lane, 'FADE')).toBe(false);
     });
 
-    it('E bounce then 1m DOWN resume → TREND_DOWN lane (not RANGE fade)', () => {
+    it('E bounce then 1m DOWN resume → TREND or BREAKOUT (not RANGE fade)', () => {
       const bars = dumpBounceResume();
       const { live } = liveFrom(bars, 'TREND_DOWN');
       expect(live).toBe('TREND_DOWN');
+      const story = readMarketStory(bars, bars[bars.length - 1]!);
       const pb = pickEntryPlaybook({
         liveRegime: live,
-        story: readMarketStory(bars, bars[bars.length - 1]!),
+        story,
         htf: HTF_DOWN,
       });
-      expect(pb.lane).toBe('TREND_PULLBACK');
+      // One-market: BREAK story may own pierce over sticky TREND; else TREND_PULLBACK
+      expect(['TREND_PULLBACK', 'BREAKOUT']).toContain(pb.lane);
+      expect(pb.lane).not.toBe('RANGE_FADE');
       expect(setupAllowedOnLane(pb.lane, 'FADE')).toBe(false);
     });
   });
@@ -403,24 +406,24 @@ describe('PROOF AUDIT: regime at the right market moment — full stack', () => 
         fadeOk: true,
       },
       {
-        name: 'BOUNCE_IN_SELL → PULLBACK_DOWNTREND',
+        name: 'BOUNCE_IN_SELL on live chop → RANGE_FADE (one-market)',
         live: 'RANGE',
         chapter: 'BOUNCE_IN_SELL',
         allow: 'SELL',
         htf: HTF_FLAT,
-        lane: 'TREND_PULLBACK',
-        regime: 'PULLBACK_DOWNTREND',
-        fadeOk: false,
+        lane: 'RANGE_FADE',
+        regime: 'RANGE',
+        fadeOk: true,
       },
       {
-        name: 'DIP_IN_RALLY → PULLBACK_UPTREND',
+        name: 'DIP_IN_RALLY on live chop → RANGE_FADE (one-market)',
         live: 'RANGE',
         chapter: 'DIP_IN_RALLY',
         allow: 'BUY',
         htf: HTF_FLAT,
-        lane: 'TREND_PULLBACK',
-        regime: 'PULLBACK_UPTREND',
-        fadeOk: false,
+        lane: 'RANGE_FADE',
+        regime: 'RANGE',
+        fadeOk: true,
       },
       {
         name: 'true chop only → RANGE_FADE',

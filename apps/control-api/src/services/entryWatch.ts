@@ -1,8 +1,8 @@
 /** Live ENTRY WATCH — what the robot is reading / waiting for (all regimes). */
 import type { RegimeName } from './regimes.js';
 import {
-  MIN_BARS_FOR_ZONE,
-  ZONE_BARS,
+  getMinBarsForZone,
+  getZoneBars,
   normalizeRegime,
 } from './regimes.js';
 import type { RegimeEntry } from './entryFromRegime.js';
@@ -122,21 +122,23 @@ export function zoneBarProgress(have: number): {
   zone_progress: string;
 } {
   const n = Math.max(0, Math.floor(Number(have) || 0));
-  const left = Math.max(0, MIN_BARS_FOR_ZONE - n);
+  const need = getMinBarsForZone();
+  const full = getZoneBars();
+  const left = Math.max(0, need - n);
   const ready = left === 0;
   let zone_progress: string;
   if (!ready) {
     const mins = Math.max(1, Math.ceil((left * 10) / 60));
-    zone_progress = `${n}/${MIN_BARS_FOR_ZONE} sveces · vēl ${left} (≈${mins}m)`;
-  } else if (n < ZONE_BARS) {
-    zone_progress = `${n}/${ZONE_BARS} sveces · min OK · pilna zona vēl ${ZONE_BARS - n}`;
+    zone_progress = `${n}/${need} sveces · vēl ${left} (≈${mins}m)`;
+  } else if (n < full) {
+    zone_progress = `${n}/${full} sveces · min OK · pilna zona vēl ${full - n}`;
   } else {
-    zone_progress = `${n}/${ZONE_BARS} sveces · zona pilna`;
+    zone_progress = `${n}/${full} sveces · zona pilna`;
   }
   return {
     zone_bars: n,
-    zone_need: MIN_BARS_FOR_ZONE,
-    zone_full: ZONE_BARS,
+    zone_need: need,
+    zone_full: full,
     zone_left: left,
     zone_ready: ready,
     zone_progress,
@@ -433,7 +435,9 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const rawSig = mayEvalEntry
     ? decideEntryWithStructure({
         bar,
-        regime: liveRegime,
+        // Same thesis Soft OFF / looking_for already use — one market
+        regime: entryRegime,
+        classify_live: liveRegime,
         closedBars: bars,
         last_closed_side: lastClosedSide,
         last_close_was_loss: wasLoss,
