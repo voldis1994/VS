@@ -16,8 +16,9 @@ echo   KEEP  : Capital API, klienti, broker konti, capital_markets, lot
 echo   WIPE  : genome, Soft/Peak/Target, auto-cal, learners, experience
 echo           trades / positions / executions / audit (DB)
 echo.
-echo   PIRMS TAM: apturi robotus / FLAT (atverti deali blokē, ja nav --force-open)
-echo   Pec tam:  restart VS.bat un startē robotus no jauna
+echo   PIRMS TAM: apturi robotus / FLAT (atverti deali bloke, ja nav --force-open)
+echo   Pec tam:  restart VS.bat un starte robotus no jauna
+echo   TIP: ja DB nav augsa, genome/learners tomer notiras; DB skip ar timeout
 echo.
 
 if not exist "%ROOT%\apps\control-api\package.json" (
@@ -51,20 +52,28 @@ if /I "%~2"=="--force-open" set "EXTRA=!EXTRA! --force-open"
 if /I "%~2"=="--keep-db-history" set "EXTRA=!EXTRA! --keep-db-history"
 
 cd /d "%ROOT%\apps\control-api"
-if not exist "node_modules\tsx" (
-  echo [..] npm install control-api...
-  call npm install --registry https://registry.npmjs.org/
-  if errorlevel 1 (
-    color 0C
-    echo [KLUDA] npm install
-    pause
-    exit /b 1
+if not exist "node_modules\tsx\dist\cli.mjs" (
+  if not exist "node_modules\tsx\package.json" (
+    echo [..] npm install control-api...
+    call npm install --registry https://registry.npmjs.org/
+    if errorlevel 1 (
+      color 0C
+      echo [KLUDA] npm install
+      pause
+      exit /b 1
+    )
   )
 )
 
 echo.
-echo [..] Factory reset...
-call npx --yes tsx scripts/factoryResetLearning.ts --yes !EXTRA!
+echo [..] Factory reset (local tsx, bez npx hang)...
+if exist "node_modules\.bin\tsx.cmd" (
+  call "node_modules\.bin\tsx.cmd" scripts\factoryResetLearning.ts --yes !EXTRA!
+) else if exist "node_modules\tsx\dist\cli.mjs" (
+  call node "node_modules\tsx\dist\cli.mjs" scripts\factoryResetLearning.ts --yes !EXTRA!
+) else (
+  call npx --yes tsx scripts/factoryResetLearning.ts --yes !EXTRA!
+)
 set "EC=%ERRORLEVEL%"
 echo.
 if not "%EC%"=="0" (
@@ -72,6 +81,7 @@ if not "%EC%"=="0" (
   echo [KLUDA] factory reset code=%EC%
   echo         Ja open trade: aizver deali, vai palaid:
   echo         LEARN_FROM_SCRATCH.bat --force-open
+  echo         Ja DB timeout: palaid Docker/Postgres ^(VS.bat^) un mēģini velreiz
   pause
   exit /b %EC%
 )
@@ -79,7 +89,7 @@ if not "%EC%"=="0" (
 color 0A
 echo [OK] LEARN FROM SCRATCH pabeigts.
 echo     Capital + klienti paliek. Soft/Peak/Target = factory.
-echo     Tagad: VS.bat ^(restart^) un startē robotus.
+echo     Tagad: VS.bat ^(restart^) un starte robotus.
 echo.
 pause
 exit /b 0
