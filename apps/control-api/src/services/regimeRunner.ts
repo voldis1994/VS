@@ -175,14 +175,16 @@ export function evaluateRegimeRunnerScore(
   notes: RegimeRunnerCloseNote[],
   g: BrainGenome = getBrainGenome()
 ): { score: number; change: string | null } {
-  const max = Math.max(1, g.regime_runner_score_max ?? 10);
-  const min = 0;
+  const max = g.regime_runner_score_max ?? 10;
+  const min = g.regime_runner_score_floor ?? 0;
   let score = Math.max(min, Math.min(max, Number(g.regime_runner_score ?? max)));
   const runnerCloses = notes.filter((n) => n.used_runner);
-  if (runnerCloses.length < 1) {
+  const sampleMin = g.regime_runner_sample_min ?? 1;
+  if (runnerCloses.length < sampleMin) {
     return { score, change: null };
   }
-  const retainFloor = Math.max(0.2, Math.min(0.95, g.regime_runner_success_mfe_retain ?? 0.45));
+  // Sanitizer owns retain bounds — no consumer Math.max/min
+  const retainFloor = g.regime_runner_success_mfe_retain ?? 0.45;
   let good = 0;
   let bad = 0;
   for (const n of runnerCloses) {
@@ -194,8 +196,8 @@ export function evaluateRegimeRunnerScore(
     )
       bad += 1;
   }
-  const deduct = Math.max(1, g.regime_runner_deduct_pts ?? 2);
-  const recover = Math.max(1, g.regime_runner_recover_pts ?? 1);
+  const deduct = g.regime_runner_deduct_pts ?? 2;
+  const recover = g.regime_runner_recover_pts ?? 1;
   if (bad > good) {
     const next = Math.max(min, score - deduct);
     return {

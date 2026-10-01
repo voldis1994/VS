@@ -1279,13 +1279,17 @@ export function safetyAbsFloorForMid(mid: number): number {
   // Sanitizer owns bp floors (0.1+) — no consumer Math.max
   const floorTiny = abs * ((g.safety_abs_floor_tiny_bp ?? 5) * 1e-4);
   const floorNano = abs * ((g.safety_abs_floor_nano_bp ?? 0.5) * 1e-4);
-  return abs >= 1000
+  const bHi = g.safety_bucket_hi ?? 1000;
+  const bMid = g.safety_bucket_mid ?? 100;
+  const bLo = g.safety_bucket_lo ?? 10;
+  const bTiny = g.safety_bucket_tiny ?? 1;
+  return abs >= bHi
     ? floorHi
-    : abs >= 100
+    : abs >= bMid
       ? floorMid
-      : abs >= 10
+      : abs >= bLo
         ? floorLo
-        : abs >= 1
+        : abs >= bTiny
           ? floorTiny
           : floorNano;
 }
@@ -1331,16 +1335,28 @@ function safetyStopLevel(
   const floorLo = g.safety_abs_floor_lo ?? 0.05;
   const floorTiny = abs * ((g.safety_abs_floor_tiny_bp ?? 5) * 1e-4);
   const floorNano = abs * ((g.safety_abs_floor_nano_bp ?? 0.5) * 1e-4);
+  const bHi = g.safety_bucket_hi ?? 1000;
+  const bMid = g.safety_bucket_mid ?? 100;
+  const bLo = g.safety_bucket_lo ?? 10;
+  const bTiny = g.safety_bucket_tiny ?? 1;
   const floor =
-    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? floorTiny : floorNano;
+    abs >= bHi
+      ? floorHi
+      : abs >= bMid
+        ? floorMid
+        : abs >= bLo
+          ? floorLo
+          : abs >= bTiny
+            ? floorTiny
+            : floorNano;
   const dist =
     Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
     Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  if (abs >= bHi) return Math.round(raw * 10) / 10;
+  if (abs >= bMid) return Math.round(raw * 100) / 100;
+  if (abs >= bTiny) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
 }
 
@@ -1809,10 +1825,13 @@ async function stripBrokerTpIfPresent(
     });
     return;
   }
+  const gTp = getBrainGenome();
+  const tpFrac = gTp.safety_tp_fallback_frac ?? 0.05;
+  const tpAbs = gTp.safety_tp_fallback_abs ?? 80;
   const far =
     s.open_side === 'BUY'
-      ? entry + Math.max(Math.abs(entry) * 0.05, 80)
-      : entry - Math.max(Math.abs(entry) * 0.05, 80);
+      ? entry + Math.max(Math.abs(entry) * tpFrac, tpAbs)
+      : entry - Math.max(Math.abs(entry) * tpFrac, tpAbs);
   const push = await updateCapitalPosition(session, broker.deal_id, {
     profitLevel: far,
   });
@@ -2118,7 +2137,15 @@ async function enterTradeLocked(
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0];
+  const gLoose = getBrainGenome();
+  const loosenSteps = [
+    gLoose.safety_loosen_mult_1 ?? 1,
+    gLoose.safety_loosen_mult_2 ?? 1.15,
+    gLoose.safety_loosen_mult_3 ?? 1.35,
+    gLoose.safety_loosen_mult_4 ?? 1.6,
+    gLoose.safety_loosen_mult_5 ?? 2.0,
+  ];
+  const minPtsMult = gLoose.safety_loosen_min_pts_mult ?? 3;
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
@@ -2132,7 +2159,7 @@ async function enterTradeLocked(
         return;
       }
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 3);
+      const distPts = Math.max(basePts * loosen, minPts! * minPtsMult);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -2316,10 +2343,13 @@ async function enterTradeLocked(
         } else {
           // Fallback: shove TP absurdly far so Limit cannot scratch this minute
           const entry = s.entry_price ?? mid;
+          const gFar = getBrainGenome();
+          const farFrac = gFar.safety_tp_fallback_frac ?? 0.05;
+          const farAbs = gFar.safety_tp_fallback_abs ?? 80;
           const far =
             direction === 'BUY'
-              ? entry + Math.max(Math.abs(entry) * 0.05, 80)
-              : entry - Math.max(Math.abs(entry) * 0.05, 80);
+              ? entry + Math.max(Math.abs(entry) * farFrac, farAbs)
+              : entry - Math.max(Math.abs(entry) * farFrac, farAbs);
           const push = await updateCapitalPosition(session, dealId, {
             profitLevel: far,
           });

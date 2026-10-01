@@ -10,11 +10,11 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **403/403** schema + consumer-wire + hypothesize (tip 213–220; manage/mind/auto-cal 221–322; AutoCal learning + story/mind residual 323–403).
+**STATUS 2026-10-01:** **431/431** schema + consumer-wire + hypothesize (…403; AutoCal Soft/Peak floors + filter + SAFETY buckets/loosen/TP + RegimeRunner/switch 404–431).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`
 (consumer corpus **excl.** `brainGenome.ts` + `hypothesize.ts`; `ok` prasa arī hypoGaps=0; gap_* = sanitize-owned ladder).
 **Proof:** `genomeWireCut.proof.test.ts` = **representative** live flip tests (ne 1:1 uz katru knob).
-**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors; AutoCal decision/learning + MarketStory/Mind session thresholds Genome.
+**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors (no consumer Math.max); AutoCal/SAFETY/RegimeRunner/switch learning Genome.
 
 ---
 
@@ -403,6 +403,37 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 401. mind_session_soft_losses_min
 402. mind_session_soft_sized_min
 403. mind_session_soft_cap_abs
+
+
+### AutoCal Soft/Peak floors + SAFETY/RegimeRunner residual (404–431)
+404. auto_cal_peak_vs_soft_floor_add
+405. auto_cal_target_vs_soft_floor_add
+406. auto_cal_peak_soft_gap_trigger
+407. auto_cal_peak_soft_gap_raise
+408. auto_cal_target_soft_gap_trigger
+409. auto_cal_target_soft_gap_raise
+410. auto_cal_safety_rr_floor
+411. auto_cal_giveback_ease_floor
+412. auto_cal_giveback_raise_ceil
+413. auto_cal_entry_filter_min
+414. auto_cal_entry_filter_max
+415. auto_cal_entry_filter_step
+416. mind_manage_session_closes_min
+417. regime_runner_score_floor
+418. regime_runner_sample_min
+419. regime_same_family_confirm_bars
+420. safety_bucket_hi
+421. safety_bucket_mid
+422. safety_bucket_lo
+423. safety_bucket_tiny
+424. safety_loosen_mult_1
+425. safety_loosen_mult_2
+426. safety_loosen_mult_3
+427. safety_loosen_mult_4
+428. safety_loosen_mult_5
+429. safety_loosen_min_pts_mult
+430. safety_tp_fallback_frac
+431. safety_tp_fallback_abs
 
 
 ## NEDRĪKST (ārpus saraksta)

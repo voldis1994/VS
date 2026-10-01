@@ -937,6 +937,34 @@ export type BrainGenome = {
   mind_session_soft_losses_min: number;
   mind_session_soft_sized_min: number;
   mind_session_soft_cap_abs: number;
+  auto_cal_peak_vs_soft_floor_add: number;
+  auto_cal_target_vs_soft_floor_add: number;
+  auto_cal_peak_soft_gap_trigger: number;
+  auto_cal_peak_soft_gap_raise: number;
+  auto_cal_target_soft_gap_trigger: number;
+  auto_cal_target_soft_gap_raise: number;
+  auto_cal_safety_rr_floor: number;
+  auto_cal_giveback_ease_floor: number;
+  auto_cal_giveback_raise_ceil: number;
+  auto_cal_entry_filter_min: number;
+  auto_cal_entry_filter_max: number;
+  auto_cal_entry_filter_step: number;
+  mind_manage_session_closes_min: number;
+  regime_runner_score_floor: number;
+  regime_runner_sample_min: number;
+  regime_same_family_confirm_bars: number;
+  safety_bucket_hi: number;
+  safety_bucket_mid: number;
+  safety_bucket_lo: number;
+  safety_bucket_tiny: number;
+  safety_loosen_mult_1: number;
+  safety_loosen_mult_2: number;
+  safety_loosen_mult_3: number;
+  safety_loosen_mult_4: number;
+  safety_loosen_mult_5: number;
+  safety_loosen_min_pts_mult: number;
+  safety_tp_fallback_frac: number;
+  safety_tp_fallback_abs: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1577,6 +1605,34 @@ const DEFAULT_GENOME: BrainGenome = {
   mind_session_soft_losses_min: 2,
   mind_session_soft_sized_min: 2,
   mind_session_soft_cap_abs: 2.2,
+  auto_cal_peak_vs_soft_floor_add: 0.5,
+  auto_cal_target_vs_soft_floor_add: 1.5,
+  auto_cal_peak_soft_gap_trigger: 0.5,
+  auto_cal_peak_soft_gap_raise: 1.5,
+  auto_cal_target_soft_gap_trigger: 1.0,
+  auto_cal_target_soft_gap_raise: 3.0,
+  auto_cal_safety_rr_floor: 1.5,
+  auto_cal_giveback_ease_floor: 0.5,
+  auto_cal_giveback_raise_ceil: 2.0,
+  auto_cal_entry_filter_min: 0,
+  auto_cal_entry_filter_max: 3,
+  auto_cal_entry_filter_step: 1,
+  mind_manage_session_closes_min: 3,
+  regime_runner_score_floor: 0,
+  regime_runner_sample_min: 1,
+  regime_same_family_confirm_bars: 1,
+  safety_bucket_hi: 1000,
+  safety_bucket_mid: 100,
+  safety_bucket_lo: 10,
+  safety_bucket_tiny: 1,
+  safety_loosen_mult_1: 1.0,
+  safety_loosen_mult_2: 1.15,
+  safety_loosen_mult_3: 1.35,
+  safety_loosen_mult_4: 1.6,
+  safety_loosen_mult_5: 2.0,
+  safety_loosen_min_pts_mult: 3.0,
+  safety_tp_fallback_frac: 0.05,
+  safety_tp_fallback_abs: 80,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -2388,6 +2444,34 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     mind_session_soft_losses_min: clampInt(p.mind_session_soft_losses_min, d.mind_session_soft_losses_min, 1, 10),
     mind_session_soft_sized_min: clampInt(p.mind_session_soft_sized_min, d.mind_session_soft_sized_min, 1, 10),
     mind_session_soft_cap_abs: round1(clamp(Number(p.mind_session_soft_cap_abs ?? d.mind_session_soft_cap_abs), 0.5, 8)),
+    auto_cal_peak_vs_soft_floor_add: round1(clamp(Number(p.auto_cal_peak_vs_soft_floor_add ?? d.auto_cal_peak_vs_soft_floor_add), 0.1, 5)),
+    auto_cal_target_vs_soft_floor_add: round1(clamp(Number(p.auto_cal_target_vs_soft_floor_add ?? d.auto_cal_target_vs_soft_floor_add), 0.2, 8)),
+    auto_cal_peak_soft_gap_trigger: round1(clamp(Number(p.auto_cal_peak_soft_gap_trigger ?? d.auto_cal_peak_soft_gap_trigger), 0.1, 5)),
+    auto_cal_peak_soft_gap_raise: round1(clamp(Number(p.auto_cal_peak_soft_gap_raise ?? d.auto_cal_peak_soft_gap_raise), 0.2, 8)),
+    auto_cal_target_soft_gap_trigger: round1(clamp(Number(p.auto_cal_target_soft_gap_trigger ?? d.auto_cal_target_soft_gap_trigger), 0.2, 5)),
+    auto_cal_target_soft_gap_raise: round1(clamp(Number(p.auto_cal_target_soft_gap_raise ?? d.auto_cal_target_soft_gap_raise), 0.5, 12)),
+    auto_cal_safety_rr_floor: round2(clamp(Number(p.auto_cal_safety_rr_floor ?? d.auto_cal_safety_rr_floor), 1.0, 3.0)),
+    auto_cal_giveback_ease_floor: round1(clamp(Number(p.auto_cal_giveback_ease_floor ?? d.auto_cal_giveback_ease_floor), 0.1, 3)),
+    auto_cal_giveback_raise_ceil: round1(clamp(Number(p.auto_cal_giveback_raise_ceil ?? d.auto_cal_giveback_raise_ceil), 0.5, 5)),
+    auto_cal_entry_filter_min: clampInt(p.auto_cal_entry_filter_min, d.auto_cal_entry_filter_min, 0, 2),
+    auto_cal_entry_filter_max: clampInt(p.auto_cal_entry_filter_max, d.auto_cal_entry_filter_max, 1, 5),
+    auto_cal_entry_filter_step: clampInt(p.auto_cal_entry_filter_step, d.auto_cal_entry_filter_step, 1, 3),
+    mind_manage_session_closes_min: clampInt(p.mind_manage_session_closes_min, d.mind_manage_session_closes_min, 1, 20),
+    regime_runner_score_floor: clampInt(p.regime_runner_score_floor, d.regime_runner_score_floor, 0, 5),
+    regime_runner_sample_min: clampInt(p.regime_runner_sample_min, d.regime_runner_sample_min, 1, 10),
+    regime_same_family_confirm_bars: clampInt(p.regime_same_family_confirm_bars, d.regime_same_family_confirm_bars, 1, 8),
+    safety_bucket_hi: clampInt(p.safety_bucket_hi, d.safety_bucket_hi, 100, 10000),
+    safety_bucket_mid: clampInt(p.safety_bucket_mid, d.safety_bucket_mid, 10, 1000),
+    safety_bucket_lo: clampInt(p.safety_bucket_lo, d.safety_bucket_lo, 1, 100),
+    safety_bucket_tiny: clampInt(p.safety_bucket_tiny, d.safety_bucket_tiny, 0, 10),
+    safety_loosen_mult_1: round2(clamp(Number(p.safety_loosen_mult_1 ?? d.safety_loosen_mult_1), 1.0, 1.5)),
+    safety_loosen_mult_2: round2(clamp(Number(p.safety_loosen_mult_2 ?? d.safety_loosen_mult_2), 1.0, 2.0)),
+    safety_loosen_mult_3: round2(clamp(Number(p.safety_loosen_mult_3 ?? d.safety_loosen_mult_3), 1.0, 2.5)),
+    safety_loosen_mult_4: round2(clamp(Number(p.safety_loosen_mult_4 ?? d.safety_loosen_mult_4), 1.0, 3.0)),
+    safety_loosen_mult_5: round2(clamp(Number(p.safety_loosen_mult_5 ?? d.safety_loosen_mult_5), 1.2, 4.0)),
+    safety_loosen_min_pts_mult: round2(clamp(Number(p.safety_loosen_min_pts_mult ?? d.safety_loosen_min_pts_mult), 1.0, 8.0)),
+    safety_tp_fallback_frac: round2(clamp(Number(p.safety_tp_fallback_frac ?? d.safety_tp_fallback_frac), 0.01, 0.25)),
+    safety_tp_fallback_abs: round1(clamp(Number(p.safety_tp_fallback_abs ?? d.safety_tp_fallback_abs), 10, 500)),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -3049,6 +3133,34 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'mind_session_soft_losses_min',
   'mind_session_soft_sized_min',
   'mind_session_soft_cap_abs',
+  'auto_cal_peak_vs_soft_floor_add',
+  'auto_cal_target_vs_soft_floor_add',
+  'auto_cal_peak_soft_gap_trigger',
+  'auto_cal_peak_soft_gap_raise',
+  'auto_cal_target_soft_gap_trigger',
+  'auto_cal_target_soft_gap_raise',
+  'auto_cal_safety_rr_floor',
+  'auto_cal_giveback_ease_floor',
+  'auto_cal_giveback_raise_ceil',
+  'auto_cal_entry_filter_min',
+  'auto_cal_entry_filter_max',
+  'auto_cal_entry_filter_step',
+  'mind_manage_session_closes_min',
+  'regime_runner_score_floor',
+  'regime_runner_sample_min',
+  'regime_same_family_confirm_bars',
+  'safety_bucket_hi',
+  'safety_bucket_mid',
+  'safety_bucket_lo',
+  'safety_bucket_tiny',
+  'safety_loosen_mult_1',
+  'safety_loosen_mult_2',
+  'safety_loosen_mult_3',
+  'safety_loosen_mult_4',
+  'safety_loosen_mult_5',
+  'safety_loosen_min_pts_mult',
+  'safety_tp_fallback_frac',
+  'safety_tp_fallback_abs',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

@@ -802,6 +802,60 @@ describe('genome wire-cut proof — flip knob → live behavior flips', () => {
     expect(out.next).toBeTruthy();
   });
 
+  it('auto_cal_peak_vs_soft_floor_add / target gap — Genome owns Soft/Peak ladder', () => {
+    _resetBrainGenomeForTests({
+      auto_cal_peak_vs_soft_floor_add: 0.5,
+      auto_cal_target_vs_soft_floor_add: 1.5,
+      auto_cal_peak_soft_gap_raise: 1.5,
+      auto_cal_target_soft_gap_raise: 3,
+      auto_cal_safety_rr_floor: 1.5,
+      auto_cal_entry_filter_max: 3,
+    });
+    expect(getBrainGenome().auto_cal_peak_vs_soft_floor_add).toBe(0.5);
+    _resetBrainGenomeForTests({
+      auto_cal_peak_vs_soft_floor_add: 1.2,
+      auto_cal_target_soft_gap_raise: 4.5,
+      auto_cal_entry_filter_max: 4,
+      auto_cal_entry_filter_step: 2,
+    });
+    expect(getBrainGenome().auto_cal_peak_vs_soft_floor_add).toBe(1.2);
+    expect(getBrainGenome().auto_cal_target_soft_gap_raise).toBe(4.5);
+    expect(getBrainGenome().auto_cal_entry_filter_max).toBe(4);
+  });
+
+  it('safety_bucket_* + safety_tp_fallback — floor/bucket follow Genome', () => {
+    _resetBrainGenomeForTests({
+      safety_bucket_hi: 1000,
+      safety_abs_floor_hi: 0.5,
+      safety_abs_floor_mid: 0.2,
+    });
+    expect(safetyAbsFloorForMid(2500)).toBeCloseTo(0.5, 5);
+    _resetBrainGenomeForTests({
+      safety_bucket_hi: 5000,
+      safety_bucket_mid: 100,
+      safety_abs_floor_hi: 0.5,
+      safety_abs_floor_mid: 0.2,
+    });
+    // mid=2500 now under hi-bucket → mid floor
+    expect(safetyAbsFloorForMid(2500)).toBeCloseTo(0.2, 5);
+    _resetBrainGenomeForTests({
+      safety_tp_fallback_frac: 0.1,
+      safety_tp_fallback_abs: 120,
+    });
+    expect(getBrainGenome().safety_tp_fallback_frac).toBe(0.1);
+    expect(getBrainGenome().safety_tp_fallback_abs).toBe(120);
+  });
+
+  it('regime_same_family_confirm_bars + runner score floor on Genome', () => {
+    _resetBrainGenomeForTests({
+      regime_same_family_confirm_bars: 2,
+      regime_runner_score_floor: 1,
+      regime_runner_sample_min: 2,
+    });
+    expect(getBrainGenome().regime_same_family_confirm_bars).toBe(2);
+    expect(getBrainGenome().regime_runner_sample_min).toBe(2);
+  });
+
   it('minute_trend_bias_color_votes — DOWN needs Genome vote count', () => {
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 10 * 60_000;
     const book: TenSecBar[] = [];

@@ -898,6 +898,34 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const mindSessionSoftLossesMin = bounceInt(g.mind_session_soft_losses_min, 1, 1, 10, dir);
   const mindSessionSoftSizedMin = bounceInt(g.mind_session_soft_sized_min, 1, 1, 10, dir);
   const mindSessionSoftCapAbs = bounceNum(g.mind_session_soft_cap_abs, 0.1, 0.2, 8, dir);
+  const acPeakVsSoftFloorAdd = bounceNum(g.auto_cal_peak_vs_soft_floor_add, 0.1, 0.1, 12, dir);
+  const acTargetVsSoftFloorAdd = bounceNum(g.auto_cal_target_vs_soft_floor_add, 0.1, 0.1, 12, dir);
+  const acPeakSoftGapTrigger = bounceNum(g.auto_cal_peak_soft_gap_trigger, 0.1, 0.1, 12, dir);
+  const acPeakSoftGapRaise = bounceNum(g.auto_cal_peak_soft_gap_raise, 0.1, 0.1, 12, dir);
+  const acTargetSoftGapTrigger = bounceNum(g.auto_cal_target_soft_gap_trigger, 0.1, 0.1, 12, dir);
+  const acTargetSoftGapRaise = bounceNum(g.auto_cal_target_soft_gap_raise, 0.1, 0.1, 12, dir);
+  const acSafetyRrFloor = bounceNum(g.auto_cal_safety_rr_floor, 0.1, 1.0, 3.0, dir);
+  const acGivebackEaseFloor = bounceNum(g.auto_cal_giveback_ease_floor, 0.1, 0.1, 12, dir);
+  const acGivebackRaiseCeil = bounceNum(g.auto_cal_giveback_raise_ceil, 0.1, 0.1, 12, dir);
+  const acEntryFilterMin = bounceInt(g.auto_cal_entry_filter_min, 1, 0, 20, dir);
+  const acEntryFilterMax = bounceInt(g.auto_cal_entry_filter_max, 1, 0, 20, dir);
+  const acEntryFilterStep = bounceInt(g.auto_cal_entry_filter_step, 1, 0, 20, dir);
+  const mindManageSessionClosesMin = bounceInt(g.mind_manage_session_closes_min, 1, 0, 20, dir);
+  const rrScoreFloor = bounceInt(g.regime_runner_score_floor, 1, 0, 20, dir);
+  const rrSampleMin = bounceInt(g.regime_runner_sample_min, 1, 0, 20, dir);
+  const regSameFamilyConfirmBars = bounceInt(g.regime_same_family_confirm_bars, 1, 0, 20, dir);
+  const sfBucketHi = bounceInt(g.safety_bucket_hi, 100, 100, 10000, dir);
+  const sfBucketMid = bounceInt(g.safety_bucket_mid, 10, 10, 1000, dir);
+  const sfBucketLo = bounceInt(g.safety_bucket_lo, 1, 1, 100, dir);
+  const sfBucketTiny = bounceInt(g.safety_bucket_tiny, 1, 0, 10, dir);
+  const sfLoosenMult1 = bounceNum(g.safety_loosen_mult_1, 0.05, 1.0, 4.0, dir);
+  const sfLoosenMult2 = bounceNum(g.safety_loosen_mult_2, 0.05, 1.0, 4.0, dir);
+  const sfLoosenMult3 = bounceNum(g.safety_loosen_mult_3, 0.05, 1.0, 4.0, dir);
+  const sfLoosenMult4 = bounceNum(g.safety_loosen_mult_4, 0.05, 1.0, 4.0, dir);
+  const sfLoosenMult5 = bounceNum(g.safety_loosen_mult_5, 0.05, 1.0, 4.0, dir);
+  const sfLoosenMinPtsMult = bounceNum(g.safety_loosen_min_pts_mult, 0.05, 1.0, 4.0, dir);
+  const sfTpFallbackFrac = bounceNum(g.safety_tp_fallback_frac, 0.01, 0.01, 0.25, dir);
+  const sfTpFallbackAbs = bounceNum(g.safety_tp_fallback_abs, 5, 10, 500, dir);
   const manageFadeSoft = bounceNum(g.manage_path_fade_soft_mult, 0.02, 0.05, 0.5, dir);
   const manageStallMfe = bounceNum(g.manage_path_stall_mfe_soft_mult, 0.05, 0.1, 0.9, dir);
   const manageStallUpl = bounceNum(g.manage_path_stall_upl_soft_mult, 0.02, 0.05, 0.5, dir);
@@ -1958,6 +1986,34 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         mind_session_soft_losses_min: mindSessionSoftLossesMin,
         mind_session_soft_sized_min: mindSessionSoftSizedMin,
         mind_session_soft_cap_abs: mindSessionSoftCapAbs,
+        auto_cal_peak_vs_soft_floor_add: acPeakVsSoftFloorAdd,
+        auto_cal_target_vs_soft_floor_add: acTargetVsSoftFloorAdd,
+        auto_cal_peak_soft_gap_trigger: acPeakSoftGapTrigger,
+        auto_cal_peak_soft_gap_raise: acPeakSoftGapRaise,
+        auto_cal_target_soft_gap_trigger: acTargetSoftGapTrigger,
+        auto_cal_target_soft_gap_raise: acTargetSoftGapRaise,
+        auto_cal_safety_rr_floor: acSafetyRrFloor,
+        auto_cal_giveback_ease_floor: acGivebackEaseFloor,
+        auto_cal_giveback_raise_ceil: acGivebackRaiseCeil,
+        auto_cal_entry_filter_min: acEntryFilterMin,
+        auto_cal_entry_filter_max: acEntryFilterMax,
+        auto_cal_entry_filter_step: acEntryFilterStep,
+        mind_manage_session_closes_min: mindManageSessionClosesMin,
+        regime_runner_score_floor: rrScoreFloor,
+        regime_runner_sample_min: rrSampleMin,
+        regime_same_family_confirm_bars: regSameFamilyConfirmBars,
+        safety_bucket_hi: sfBucketHi,
+        safety_bucket_mid: sfBucketMid,
+        safety_bucket_lo: sfBucketLo,
+        safety_bucket_tiny: sfBucketTiny,
+        safety_loosen_mult_1: sfLoosenMult1,
+        safety_loosen_mult_2: sfLoosenMult2,
+        safety_loosen_mult_3: sfLoosenMult3,
+        safety_loosen_mult_4: sfLoosenMult4,
+        safety_loosen_mult_5: sfLoosenMult5,
+        safety_loosen_min_pts_mult: sfLoosenMinPtsMult,
+        safety_tp_fallback_frac: sfTpFallbackFrac,
+        safety_tp_fallback_abs: sfTpFallbackAbs,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
         last_lesson: `Explore tip+manage wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
@@ -2161,6 +2217,34 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('mind_session_soft_losses_min', mindSessionSoftLossesMin, `explore mind_soft_losses_min ${mindSessionSoftLossesMin}`),
         genomePatch('mind_session_soft_sized_min', mindSessionSoftSizedMin, `explore mind_soft_sized_min ${mindSessionSoftSizedMin}`),
         genomePatch('mind_session_soft_cap_abs', mindSessionSoftCapAbs, `explore mind_soft_cap_abs ${mindSessionSoftCapAbs}`),
+        genomePatch('auto_cal_peak_vs_soft_floor_add', acPeakVsSoftFloorAdd, `explore auto_cal_peak_vs_soft_floor_add ${acPeakVsSoftFloorAdd}`),
+        genomePatch('auto_cal_target_vs_soft_floor_add', acTargetVsSoftFloorAdd, `explore auto_cal_target_vs_soft_floor_add ${acTargetVsSoftFloorAdd}`),
+        genomePatch('auto_cal_peak_soft_gap_trigger', acPeakSoftGapTrigger, `explore auto_cal_peak_soft_gap_trigger ${acPeakSoftGapTrigger}`),
+        genomePatch('auto_cal_peak_soft_gap_raise', acPeakSoftGapRaise, `explore auto_cal_peak_soft_gap_raise ${acPeakSoftGapRaise}`),
+        genomePatch('auto_cal_target_soft_gap_trigger', acTargetSoftGapTrigger, `explore auto_cal_target_soft_gap_trigger ${acTargetSoftGapTrigger}`),
+        genomePatch('auto_cal_target_soft_gap_raise', acTargetSoftGapRaise, `explore auto_cal_target_soft_gap_raise ${acTargetSoftGapRaise}`),
+        genomePatch('auto_cal_safety_rr_floor', acSafetyRrFloor, `explore auto_cal_safety_rr_floor ${acSafetyRrFloor}`),
+        genomePatch('auto_cal_giveback_ease_floor', acGivebackEaseFloor, `explore auto_cal_giveback_ease_floor ${acGivebackEaseFloor}`),
+        genomePatch('auto_cal_giveback_raise_ceil', acGivebackRaiseCeil, `explore auto_cal_giveback_raise_ceil ${acGivebackRaiseCeil}`),
+        genomePatch('auto_cal_entry_filter_min', acEntryFilterMin, `explore auto_cal_entry_filter_min ${acEntryFilterMin}`),
+        genomePatch('auto_cal_entry_filter_max', acEntryFilterMax, `explore auto_cal_entry_filter_max ${acEntryFilterMax}`),
+        genomePatch('auto_cal_entry_filter_step', acEntryFilterStep, `explore auto_cal_entry_filter_step ${acEntryFilterStep}`),
+        genomePatch('mind_manage_session_closes_min', mindManageSessionClosesMin, `explore mind_manage_session_closes_min ${mindManageSessionClosesMin}`),
+        genomePatch('regime_runner_score_floor', rrScoreFloor, `explore regime_runner_score_floor ${rrScoreFloor}`),
+        genomePatch('regime_runner_sample_min', rrSampleMin, `explore regime_runner_sample_min ${rrSampleMin}`),
+        genomePatch('regime_same_family_confirm_bars', regSameFamilyConfirmBars, `explore regime_same_family_confirm_bars ${regSameFamilyConfirmBars}`),
+        genomePatch('safety_bucket_hi', sfBucketHi, `explore safety_bucket_hi ${sfBucketHi}`),
+        genomePatch('safety_bucket_mid', sfBucketMid, `explore safety_bucket_mid ${sfBucketMid}`),
+        genomePatch('safety_bucket_lo', sfBucketLo, `explore safety_bucket_lo ${sfBucketLo}`),
+        genomePatch('safety_bucket_tiny', sfBucketTiny, `explore safety_bucket_tiny ${sfBucketTiny}`),
+        genomePatch('safety_loosen_mult_1', sfLoosenMult1, `explore safety_loosen_mult_1 ${sfLoosenMult1}`),
+        genomePatch('safety_loosen_mult_2', sfLoosenMult2, `explore safety_loosen_mult_2 ${sfLoosenMult2}`),
+        genomePatch('safety_loosen_mult_3', sfLoosenMult3, `explore safety_loosen_mult_3 ${sfLoosenMult3}`),
+        genomePatch('safety_loosen_mult_4', sfLoosenMult4, `explore safety_loosen_mult_4 ${sfLoosenMult4}`),
+        genomePatch('safety_loosen_mult_5', sfLoosenMult5, `explore safety_loosen_mult_5 ${sfLoosenMult5}`),
+        genomePatch('safety_loosen_min_pts_mult', sfLoosenMinPtsMult, `explore safety_loosen_min_pts_mult ${sfLoosenMinPtsMult}`),
+        genomePatch('safety_tp_fallback_frac', sfTpFallbackFrac, `explore safety_tp_fallback_frac ${sfTpFallbackFrac}`),
+        genomePatch('safety_tp_fallback_abs', sfTpFallbackAbs, `explore safety_tp_fallback_abs ${sfTpFallbackAbs}`),
         genomePatch(
           'entry_learner_override_margin',
           entryLearnerMargin,

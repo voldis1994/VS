@@ -235,7 +235,8 @@ export function safetyTakeProfitLevel(
   });
   const abs = Math.max(Math.abs(entry), 1e-9);
   const raw = side === 'BUY' ? entry + dist : entry - dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  const bHi = getBrainGenome().safety_bucket_hi ?? 1000;
+  if (abs >= bHi) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
@@ -527,7 +528,8 @@ export function layeredHardInvDistance(
   let sl = Math.min(Math.max(pct * (layer / 3), floor), cap);
   const profile = regimeExitProfile(regime);
   sl *= profile.hardinv_mult;
-  const postCap = Math.max(1, g.layered_soft_post_mult_cap ?? 1.3);
+  // Sanitizer owns layered_soft_post_mult_cap range — no consumer floor
+  const postCap = g.layered_soft_post_mult_cap ?? 1.3;
   sl = Math.min(sl, cap * postCap);
   return { dist: sl, layer, abs };
 }
@@ -573,7 +575,8 @@ export function beLockMinExec(sl: number): number {
  * Live: BrainGenome.min_profit_bank_soft_mult (factory 1.0).
  */
 export function minProfitBank(sl: number): number {
-  const mult = Math.max(0.5, getBrainGenome().min_profit_bank_soft_mult ?? 1);
+  // Sanitizer owns min_profit_bank_soft_mult range — no consumer floor
+  const mult = getBrainGenome().min_profit_bank_soft_mult ?? 1;
   return Math.max(sl * mult, sl * 1e-9);
 }
 
@@ -815,9 +818,8 @@ export function decideBestOutcomeExit(
       };
     }
 
-    // bp only — min step 0.1 (factory timedecay_fav_pct_bp=3.5), no 0.00035 frac
-    const timedecayFavPct =
-      Math.max(0.1, genome.timedecay_fav_pct_bp ?? 3.5) * 1e-4;
+    // bp only — sanitizer owns timedecay_fav_pct_bp range (no consumer floor)
+    const timedecayFavPct = (genome.timedecay_fav_pct_bp ?? 3.5) * 1e-4;
     const tdTargetFrac = genome.timedecay_target_frac ?? 0.4;
     const minFav =
       Math.max(

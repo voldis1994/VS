@@ -210,6 +210,18 @@ function calBounds() {
     mutDwellBarsMin: g.auto_cal_mut_dwell_bars_min ?? 2,
     mutDwellBarsMax: g.auto_cal_mut_dwell_bars_max ?? 12,
     mutDwellBarsStep: g.auto_cal_mut_dwell_bars_step ?? 1,
+    peakVsSoftFloorAdd: g.auto_cal_peak_vs_soft_floor_add ?? 0.5,
+    targetVsSoftFloorAdd: g.auto_cal_target_vs_soft_floor_add ?? 1.5,
+    peakSoftGapTrigger: g.auto_cal_peak_soft_gap_trigger ?? 0.5,
+    peakSoftGapRaise: g.auto_cal_peak_soft_gap_raise ?? 1.5,
+    targetSoftGapTrigger: g.auto_cal_target_soft_gap_trigger ?? 1,
+    targetSoftGapRaise: g.auto_cal_target_soft_gap_raise ?? 3,
+    safetyRrFloor: g.auto_cal_safety_rr_floor ?? 1.5,
+    givebackEaseFloor: g.auto_cal_giveback_ease_floor ?? 0.5,
+    givebackRaiseCeil: g.auto_cal_giveback_raise_ceil ?? 2.0,
+    entryFilterMin: g.auto_cal_entry_filter_min ?? 0,
+    entryFilterMax: g.auto_cal_entry_filter_max ?? 3,
+    entryFilterStep: g.auto_cal_entry_filter_step ?? 1,
   };
 }
 
@@ -1552,8 +1564,11 @@ export function proposeAutoCalibration(
       }
     }
 
-    const rrBefore = next.safety_tp_rr || 1.5;
-    next.safety_tp_rr = Math.max(1.5, roundRr(rrBefore - bounds.safetyTpRrPullbackStep));
+    const rrBefore = next.safety_tp_rr || bounds.safetyRrFloor;
+    next.safety_tp_rr = Math.max(
+      bounds.safetyRrFloor,
+      roundRr(rrBefore - bounds.safetyTpRrPullbackStep)
+    );
     if (next.safety_tp_rr !== rrBefore) {
       changes.push(
         autotuneLog(
@@ -1566,7 +1581,7 @@ export function proposeAutoCalibration(
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     const easedPeak = roundAbs(next.peak_mfe_abs - bounds.peakEaseAbsStep);
-    const peakFloor = roundAbs(next.hardinv_abs + 0.5);
+    const peakFloor = roundAbs(next.hardinv_abs + bounds.peakVsSoftFloorAdd);
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
     if (softDominates) {
       next.peak_retention = roundRet(
@@ -1578,10 +1593,13 @@ export function proposeAutoCalibration(
       );
     }
     next.peak_min_giveback_abs = roundAbs(
-      Math.max(0.5, next.peak_min_giveback_abs - bounds.peakEaseGivebackStep)
+      Math.max(
+        bounds.givebackEaseFloor,
+        next.peak_min_giveback_abs - bounds.peakEaseGivebackStep
+      )
     );
     const easedTgt = roundAbs(next.target_abs - bounds.targetEaseAbs);
-    const tgtFloor = roundAbs(next.hardinv_abs + 1.5);
+    const tgtFloor = roundAbs(next.hardinv_abs + bounds.targetVsSoftFloorAdd);
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
     next.target_pct = roundPct(
       Math.max(bounds.minTargetPct, next.target_pct / bounds.targetPctEaseDiv)
@@ -1663,7 +1681,7 @@ export function proposeAutoCalibration(
       Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
     );
     next.peak_min_giveback_abs = roundAbs(
-      Math.min(2.0, next.peak_min_giveback_abs + bounds.givebackRaiseAbs)
+      Math.min(bounds.givebackRaiseCeil, next.peak_min_giveback_abs + bounds.givebackRaiseAbs)
     );
     next.target_abs = Math.min(
       bounds.maxTargetAbs,
@@ -1742,9 +1760,12 @@ export function proposeAutoCalibration(
 
   // Peak above Soft CAP (never raise during pullback)
   if (!needPullBack) {
-    if (next.peak_mfe_abs <= next.hardinv_abs + 0.5) {
+    if (next.peak_mfe_abs <= next.hardinv_abs + bounds.peakSoftGapTrigger) {
       const b = next.peak_mfe_abs;
-      next.peak_mfe_abs = Math.min(bounds.maxPeakMfeAbs, roundAbs(next.hardinv_abs + 1.5));
+      next.peak_mfe_abs = Math.min(
+        bounds.maxPeakMfeAbs,
+        roundAbs(next.hardinv_abs + bounds.peakSoftGapRaise)
+      );
       if (next.peak_mfe_abs !== b) {
         changes.push(
           autotuneLog(
@@ -1754,9 +1775,12 @@ export function proposeAutoCalibration(
         );
       }
     }
-    if (next.target_abs <= next.hardinv_abs + 1) {
+    if (next.target_abs <= next.hardinv_abs + bounds.targetSoftGapTrigger) {
       const b = next.target_abs;
-      next.target_abs = Math.min(bounds.maxTargetAbs, roundAbs(next.hardinv_abs + 3));
+      next.target_abs = Math.min(
+        bounds.maxTargetAbs,
+        roundAbs(next.hardinv_abs + bounds.targetSoftGapRaise)
+      );
       if (next.target_abs !== b) {
         changes.push(
           autotuneLog(
@@ -1823,20 +1847,23 @@ export function proposeAutoCalibration(
     Math.max(bounds.minHardinvPct, softPctFromAbs(next.hardinv_abs))
   );
 
-  // Entry filters L0–L3 — full freedom (tighten on knife/chop, ease when winning)
+  // Entry filters — Genome owns min/max/step (tighten on knife/chop, ease when winning)
   {
-    const b = Math.max(0, Math.min(3, Math.round(Number(next.entry_filter_level) || 0)));
+    const b = Math.max(
+      bounds.entryFilterMin,
+      Math.min(bounds.entryFilterMax, Math.round(Number(next.entry_filter_level) || 0))
+    );
     let lvl = b;
-    if (needTightenFilters && lvl < 3) {
-      lvl = Math.min(3, lvl + 1);
+    if (needTightenFilters && lvl < bounds.entryFilterMax) {
+      lvl = Math.min(bounds.entryFilterMax, lvl + bounds.entryFilterStep);
       changes.push(
         autotuneLog(
           `entry_filter_level ${b}→${lvl}`,
           'knife/chop Soft entries — tighten FLIP/structure filters'
         )
       );
-    } else if (needEaseFilters && lvl > 0) {
-      lvl = Math.max(0, lvl - 1);
+    } else if (needEaseFilters && lvl > bounds.entryFilterMin) {
+      lvl = Math.max(bounds.entryFilterMin, lvl - bounds.entryFilterStep);
       changes.push(
         autotuneLog(
           `entry_filter_level ${b}→${lvl}`,

@@ -134,7 +134,11 @@ export function thinkLikeTrader(input: ManageBrainInput): TraderThought {
   if (mkt?.feed?.agreement === 'DIVERGENT') {
     risks.push('feedi nesakrīt — cena var būt maldīga');
   }
-  if (input.session_expectancy_pts < sessionECut && input.closes_in_session >= 3) {
+  const sessionClosesMin = genome.mind_manage_session_closes_min ?? 3;
+  if (
+    input.session_expectancy_pts < sessionECut &&
+    input.closes_in_session >= sessionClosesMin
+  ) {
     risks.push(`šodien E=${input.session_expectancy_pts.toFixed(2)} — sesija vāja`);
   }
   if (

@@ -539,9 +539,37 @@ const MAP: Record<number, string[]> = {
   401: ['mind_session_soft_losses_min'],
   402: ['mind_session_soft_sized_min'],
   403: ['mind_session_soft_cap_abs'],
+  404: ['auto_cal_peak_vs_soft_floor_add'],
+  405: ['auto_cal_target_vs_soft_floor_add'],
+  406: ['auto_cal_peak_soft_gap_trigger'],
+  407: ['auto_cal_peak_soft_gap_raise'],
+  408: ['auto_cal_target_soft_gap_trigger'],
+  409: ['auto_cal_target_soft_gap_raise'],
+  410: ['auto_cal_safety_rr_floor'],
+  411: ['auto_cal_giveback_ease_floor'],
+  412: ['auto_cal_giveback_raise_ceil'],
+  413: ['auto_cal_entry_filter_min'],
+  414: ['auto_cal_entry_filter_max'],
+  415: ['auto_cal_entry_filter_step'],
+  416: ['mind_manage_session_closes_min'],
+  417: ['regime_runner_score_floor'],
+  418: ['regime_runner_sample_min'],
+  419: ['regime_same_family_confirm_bars'],
+  420: ['safety_bucket_hi'],
+  421: ['safety_bucket_mid'],
+  422: ['safety_bucket_lo'],
+  423: ['safety_bucket_tiny'],
+  424: ['safety_loosen_mult_1'],
+  425: ['safety_loosen_mult_2'],
+  426: ['safety_loosen_mult_3'],
+  427: ['safety_loosen_mult_4'],
+  428: ['safety_loosen_mult_5'],
+  429: ['safety_loosen_min_pts_mult'],
+  430: ['safety_tp_fallback_frac'],
+  431: ['safety_tp_fallback_abs'],
 };
 
-const MAX_ITEM = 403;
+const MAX_ITEM = 431;
 
 // Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();

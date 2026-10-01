@@ -123,15 +123,15 @@ export const ZONE_BARS = 180;
  */
 export const MIN_BARS_FOR_ZONE = 90;
 
-/** Live zone window (10s bars) from BrainGenome — factory = ZONE_BARS. */
+/** Live zone window (10s bars) from BrainGenome — factory = ZONE_BARS. Sanitizer owns range. */
 export function getZoneBars(): number {
-  return Math.max(30, getBrainGenome().zone_bars ?? ZONE_BARS);
+  return getBrainGenome().zone_bars ?? ZONE_BARS;
 }
 
-/** Live min bars before zone classify — factory = MIN_BARS_FOR_ZONE. */
+/** Live min bars before zone classify — factory = MIN_BARS_FOR_ZONE. Sanitizer owns range. */
 export function getMinBarsForZone(): number {
   const minNeed = getBrainGenome().min_bars_for_zone ?? MIN_BARS_FOR_ZONE;
-  return Math.min(getZoneBars(), Math.max(10, minNeed));
+  return Math.min(getZoneBars(), minNeed);
 }
 
 /** Factory mom length — live path reads BrainGenome via getActiveRegimeBands(). */
@@ -606,11 +606,12 @@ export function stabilizeRegime(
   const SWITCH_GAP_BARS = Math.max(1, genome.switch_gap_bars ?? 2);
   const dwellOk =
     book.current === 'UNKNOWN' || book.bars_in_current >= MIN_DWELL_BARS;
-  // Chop→trend: genome confirm (factory 1 = immediate strong flip, matches prior)
+  // Chop→trend / same-family / strong: Genome confirm bars (not hardcoded 1)
+  const sameFamilyNeed = genome.regime_same_family_confirm_bars ?? 1;
   const need = chopToTrend
-    ? Math.max(1, genome.chop_to_trend_confirm_bars ?? 1)
+    ? genome.chop_to_trend_confirm_bars ?? 1
     : sameFamily || strong
-      ? 1
+      ? sameFamilyNeed
       : CONFIRM_BARS;
   // sameFamily must still wait for dwell — only strong structure breaks skip it
   const spacingOk =
