@@ -733,6 +733,64 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipTipFinished = !g.entry_tip_block_finished_move;
   const flipTrendTipReject = !g.entry_trend_tip_require_reject;
   const flipPeakKeepOwns = !g.peak_keep_genome_owns;
+  const manageDeepGreen = bounceNum(g.manage_path_deep_green_soft_mult, 0.05, 0.5, 1.2, dir);
+  const manageFadeScore = bounceNum(g.manage_path_fade_score, 0.05, 0.1, 2.0, dir);
+  const manageStoryFight = bounceNum(g.manage_score_story_fight, 0.05, 0.1, 2.0, dir);
+  const manageNearTarget = bounceNum(g.manage_score_near_target, 0.05, 0.05, 1.5, dir);
+  const manageLearnerMin = bounceInt(g.manage_learner_min_updates, 2, 5, 80, dir);
+  const mindConfBank = bounceNum(g.mind_manage_conf_bank, 0.02, 0.5, 0.99, dir);
+  const mindConfCut = bounceNum(g.mind_manage_conf_cut, 0.02, 0.4, 0.99, dir);
+  const mindConfTrail = bounceNum(g.mind_manage_conf_trail, 0.02, 0.3, 0.95, dir);
+  const mindDeepGreen = bounceNum(g.mind_deep_green_soft_mult, 0.05, 0.5, 1.2, dir);
+  const tdTargetFrac = bounceNum(g.timedecay_target_frac, 0.05, 0.1, 0.9, dir);
+  const peakTrailMinBank = bounceNum(g.peak_trail_minbank_frac, 0.05, 0.2, 1.0, dir);
+  const scalpWick = bounceNum(g.scalp_wick_frac, 0.05, 0.2, 0.8, dir);
+  const scalpWickBody = bounceNum(g.scalp_wick_body_frac, 0.02, 0.05, 0.4, dir);
+  const localLbMax = bounceInt(g.local_breakout_lookback_max, 5, 20, 120, dir);
+  const localLbMin = bounceInt(g.local_breakout_lookback_min, 2, 8, 60, dir);
+  const localSkip = bounceInt(g.local_breakout_skip_bars, 1, 2, 20, dir);
+  const localMinStruct = bounceInt(g.local_breakout_min_struct_bars, 2, 6, 40, dir);
+  const localClearMult = bounceNum(g.local_breakout_clear_frac_mult, 0.05, 0.2, 1.0, dir);
+  const regimeConfDiv = bounceInt(g.regime_conf_move_div, 1, 2, 10, dir);
+  const entryM1Strong = bounceNum(g.entry_m1_strong_move_mult, 0.05, 0.2, 1.0, dir);
+  const trekAbsPts = bounceNum(g.trek_min_path_abs_pts, 0.5, 0.5, 20, dir);
+  const safetySpreadBp = bounceBp(g.safety_spread_fallback_bp, 0.1, 0.1, 20, dir);
+  const safetyTinyBp = bounceBp(g.safety_abs_floor_tiny_bp, 0.5, 0.1, 50, dir);
+  const safetyNanoBp = bounceBp(g.safety_abs_floor_nano_bp, 0.1, 0.1, 20, dir);
+  const runnerBadFrac = bounceNum(g.regime_runner_bad_retain_frac, 0.05, 0.2, 0.9, dir);
+  const autoCalEvery = bounceInt(g.auto_calibrate_every_n, 1, 2, 20, dir);
+  const autoCalMinHardBp = bounceBp(g.auto_cal_min_hardinv_pct_bp, 0.5, 0.1, 50, dir);
+  const autoCalMaxHardBp = bounceBp(g.auto_cal_max_hardinv_pct_bp, 2, 1, 200, dir);
+  const autoCalMinTgtBp = bounceBp(g.auto_cal_min_target_pct_bp, 1, 0.1, 100, dir);
+  const autoCalMaxTgtBp = bounceBp(g.auto_cal_max_target_pct_bp, 5, 10, 500, dir);
+  const autoCalMinPeakBp = bounceBp(g.auto_cal_min_peak_mfe_pct_bp, 0.5, 0.1, 50, dir);
+  const autoCalMaxPeakBp = bounceBp(g.auto_cal_max_peak_mfe_pct_bp, 2, 1, 200, dir);
+  const entryConfAligned = bounceNum(g.mind_entry_conf_aligned, 0.02, 0.5, 0.99, dir);
+  const entryConfStrong = bounceNum(g.mind_entry_conf_aligned_strong, 0.02, 0.5, 0.99, dir);
+  const entryConfM1 = bounceNum(g.mind_entry_conf_strong_m1, 0.02, 0.5, 0.99, dir);
+  const entryConfBias = bounceNum(g.mind_entry_conf_bias, 0.02, 0.4, 0.95, dir);
+  const entryConfWeak = bounceNum(g.mind_entry_conf_weak, 0.02, 0.3, 0.9, dir);
+  const entryConfBoost = bounceNum(g.mind_entry_conf_regime_boost, 0.01, 0.02, 0.2, dir);
+  const entryConfCap = bounceNum(g.mind_entry_conf_cap, 0.01, 0.7, 0.99, dir);
+  const manageFadeSoft = bounceNum(g.manage_path_fade_soft_mult, 0.02, 0.05, 0.5, dir);
+  const manageStallMfe = bounceNum(g.manage_path_stall_mfe_soft_mult, 0.05, 0.1, 0.9, dir);
+  const manageStallUpl = bounceNum(g.manage_path_stall_upl_soft_mult, 0.02, 0.05, 0.5, dir);
+  const manageStallScore = bounceNum(g.manage_path_stall_score, 0.05, 0.05, 1.0, dir);
+  const manageMaeMult = bounceNum(g.manage_mae_deep_soft_mult, 0.05, 0.5, 1.2, dir);
+  const manageMaeScore = bounceNum(g.manage_mae_deep_score, 0.05, 0.1, 1.5, dir);
+  const manageM1Wait = bounceNum(g.manage_score_m1_wait, 0.05, 0.05, 1.0, dir);
+  const manageNextSame = bounceNum(g.manage_score_next_same, 0.05, 0.1, 1.5, dir);
+  const manageThesisBonus = bounceNum(g.manage_score_thesis_bonus, 0.05, 0.05, 1.0, dir);
+  const manageSoftGate = bounceNum(g.manage_score_soft_gate_open, 0.05, 0.05, 1.0, dir);
+  const manageStoryWith = bounceNum(g.manage_score_story_with, 0.05, 0.05, 1.5, dir);
+  const managePressureWith = bounceNum(g.manage_score_pressure_with, 0.05, 0.05, 1.5, dir);
+  const manageExpandCont = bounceNum(g.manage_score_expand_continue, 0.05, 0.05, 1.5, dir);
+  const manageExpandRev = bounceNum(g.manage_score_expand_reverse, 0.05, 0.05, 1.5, dir);
+  const manageFeedDiv = bounceNum(g.manage_score_feed_divergent, 0.05, 0.05, 1.5, dir);
+  const manageFeedStrong = bounceNum(g.manage_score_feed_strong, 0.05, 0.05, 1.0, dir);
+  const manageChapter = bounceNum(g.manage_score_chapter_change, 0.05, 0.05, 1.5, dir);
+  const mindConfHoldCont = bounceNum(g.mind_manage_conf_hold_continue, 0.02, 0.4, 0.99, dir);
+  const mindConfHoldAgainst = bounceNum(g.mind_manage_conf_hold_against, 0.02, 0.3, 0.95, dir);
   const entryLearnerMargin = bounceNum(g.entry_learner_override_margin, 0.01, 0.02, 0.2, dir);
   // Story
   const storyPathBp = bounceBp(g.story_min_path_bp, 0.5, 3.0, 20.0, dir);
@@ -1590,9 +1648,67 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         entry_tip_block_finished_move: flipTipFinished,
         entry_trend_tip_require_reject: flipTrendTipReject,
         peak_keep_genome_owns: flipPeakKeepOwns,
+        manage_path_deep_green_soft_mult: manageDeepGreen,
+        manage_path_fade_soft_mult: manageFadeSoft,
+        manage_path_fade_score: manageFadeScore,
+        manage_path_stall_mfe_soft_mult: manageStallMfe,
+        manage_path_stall_upl_soft_mult: manageStallUpl,
+        manage_path_stall_score: manageStallScore,
+        manage_mae_deep_soft_mult: manageMaeMult,
+        manage_mae_deep_score: manageMaeScore,
+        manage_score_m1_wait: manageM1Wait,
+        manage_score_next_same: manageNextSame,
+        manage_score_thesis_bonus: manageThesisBonus,
+        manage_score_soft_gate_open: manageSoftGate,
+        manage_score_story_fight: manageStoryFight,
+        manage_score_story_with: manageStoryWith,
+        manage_score_pressure_with: managePressureWith,
+        manage_score_expand_continue: manageExpandCont,
+        manage_score_expand_reverse: manageExpandRev,
+        manage_score_feed_divergent: manageFeedDiv,
+        manage_score_feed_strong: manageFeedStrong,
+        manage_score_chapter_change: manageChapter,
+        manage_score_near_target: manageNearTarget,
+        manage_learner_min_updates: manageLearnerMin,
+        mind_manage_conf_bank: mindConfBank,
+        mind_manage_conf_cut: mindConfCut,
+        mind_manage_conf_hold_continue: mindConfHoldCont,
+        mind_manage_conf_hold_against: mindConfHoldAgainst,
+        mind_manage_conf_trail: mindConfTrail,
+        mind_deep_green_soft_mult: mindDeepGreen,
+        timedecay_target_frac: tdTargetFrac,
+        peak_trail_minbank_frac: peakTrailMinBank,
+        scalp_wick_frac: scalpWick,
+        scalp_wick_body_frac: scalpWickBody,
+        local_breakout_lookback_max: localLbMax,
+        local_breakout_lookback_min: localLbMin,
+        local_breakout_skip_bars: localSkip,
+        local_breakout_min_struct_bars: localMinStruct,
+        local_breakout_clear_frac_mult: localClearMult,
+        regime_conf_move_div: regimeConfDiv,
+        entry_m1_strong_move_mult: entryM1Strong,
+        trek_min_path_abs_pts: trekAbsPts,
+        safety_spread_fallback_bp: safetySpreadBp,
+        safety_abs_floor_tiny_bp: safetyTinyBp,
+        safety_abs_floor_nano_bp: safetyNanoBp,
+        regime_runner_bad_retain_frac: runnerBadFrac,
+        auto_calibrate_every_n: autoCalEvery,
+        auto_cal_min_hardinv_pct_bp: autoCalMinHardBp,
+        auto_cal_max_hardinv_pct_bp: autoCalMaxHardBp,
+        auto_cal_min_target_pct_bp: autoCalMinTgtBp,
+        auto_cal_max_target_pct_bp: autoCalMaxTgtBp,
+        auto_cal_min_peak_mfe_pct_bp: autoCalMinPeakBp,
+        auto_cal_max_peak_mfe_pct_bp: autoCalMaxPeakBp,
+        mind_entry_conf_aligned_strong: entryConfStrong,
+        mind_entry_conf_aligned: entryConfAligned,
+        mind_entry_conf_strong_m1: entryConfM1,
+        mind_entry_conf_bias: entryConfBias,
+        mind_entry_conf_weak: entryConfWeak,
+        mind_entry_conf_regime_boost: entryConfBoost,
+        mind_entry_conf_cap: entryConfCap,
         entry_learner_override_margin: entryLearnerMargin,
         explore_step: nextStep + 30,
-        last_lesson: `Explore tip wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
+        last_lesson: `Explore tip+manage wires post_impulse=${flipPostImpulseTip} keep_owns=${flipPeakKeepOwns}`,
       },
       patches: [
         genomePatch('struct_half_lo', halfLo, `explore half_lo ${halfLo}`),

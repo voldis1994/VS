@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-10-01:** **220/220** schema+wire+hypothesize (cut desk/tip wires 215–220; post-impulse 213–214; runner 204–212).
+**STATUS 2026-10-01:** **278/278** schema+wire+hypothesize (manage/mind/exit/scalp/local/safety/auto-cal bp 221–278; tip wires 215–220).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
@@ -288,6 +288,21 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 218. entry_tip_block_finished_move — BUY@HI / SELL@LO finished-move
 219. entry_trend_tip_require_reject — TREND/PULLBACK tip tikai ar dip/rally
 220. peak_keep_genome_owns — Peak Keep = genome (nav desk Math.max floor)
+
+### Manage / Mind / Exit / Safety residual → genome (221–278)
+221–242. manage_path_* / manage_score_* / manage_learner_min_updates — manage score Soft× & additives
+243–247. mind_manage_conf_* — PRĀTS manage confidence BANK/CUT/HOLD/TRAIL
+248. mind_deep_green_soft_mult — deep green Soft×
+249–250. timedecay_target_frac / peak_trail_minbank_frac
+251–252. scalp_wick_frac / scalp_wick_body_frac
+253–257. local_breakout_* lookback/skip/min/clear_mult
+258. regime_conf_move_div
+259–260. entry_m1_strong_move_mult / trek_min_path_abs_pts
+261–263. safety_spread_fallback_bp / safety_abs_floor_tiny_bp / nano_bp (bp, ne 0.0000)
+264. regime_runner_bad_retain_frac
+265. auto_calibrate_every_n
+266–271. auto_cal_*_pct_bp (min/max hardinv/target/peak — bp skala)
+272–278. mind_entry_conf_* ladder + boost/cap
 
 ---
 

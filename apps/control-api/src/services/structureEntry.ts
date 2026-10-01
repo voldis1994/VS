@@ -431,7 +431,8 @@ export function minuteTrendBias(
   const midPx = Math.abs(last.close) || 1;
   const trekFrac =
     Math.max(0.1, g.minute_trend_bias_trek_min_path_bp || 7) * 1e-4 || TREK_MIN_PATH_FRAC;
-  const minPath = Math.max(3, midPx * trekFrac);
+  const trekAbs = getBrainGenome().trek_min_path_abs_pts || 3;
+  const minPath = Math.max(trekAbs, midPx * trekFrac);
   if (trek < minPath) return 'FLAT';
 
   // Color majority + real trek wins even when net≈0 (dump→bounce)
@@ -833,8 +834,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     htf: htfSnap,
   });
   const gateRegime = playbook.regime;
+  const m1StrongMult = getBrainGenome().entry_m1_strong_move_mult || 0.5;
   const m1Strong =
-    m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * 0.5
+    m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * m1StrongMult
       ? true
       : md !== 'FLAT' && md === bias;
 

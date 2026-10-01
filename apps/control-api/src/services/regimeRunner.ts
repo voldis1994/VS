@@ -188,7 +188,11 @@ export function evaluateRegimeRunnerScore(
   for (const n of runnerCloses) {
     const retain = n.mfe > 1e-9 ? n.pnl_pts / n.mfe : n.pnl_pts > 0 ? 1 : 0;
     if (n.pnl_pts > 0 && retain >= retainFloor) good += 1;
-    else if (n.pnl_pts < -1e-9 || retain < retainFloor * 0.5) bad += 1;
+    else if (
+      n.pnl_pts < -1e-9 ||
+      retain < retainFloor * (g.regime_runner_bad_retain_frac || 0.5)
+    )
+      bad += 1;
   }
   const deduct = Math.max(1, g.regime_runner_deduct_pts || 2);
   const recover = Math.max(1, g.regime_runner_recover_pts || 1);

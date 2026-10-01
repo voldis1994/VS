@@ -225,4 +225,30 @@ describe('genome wire-cut proof — flip knob → behavior flips', () => {
     expect(softLossLearnerCutMfe(1.0, 2.0)).toBe(true);
     expect(softLossLearnerCutMfe(0.9, 2.0)).toBe(false);
   });
+
+  it('auto_calibrate_every_n + soft_sized_loss_frac + pct_bp are genome (bp scale)', () => {
+    const g = getBrainGenome();
+    expect(g.auto_calibrate_every_n).toBe(5);
+    expect(g.soft_sized_loss_frac).toBe(0.65);
+    // bp — one decimal step, not 0.0002 frac
+    expect(g.auto_cal_min_hardinv_pct_bp).toBe(2);
+    expect(g.auto_cal_min_hardinv_pct_bp * 1e-4).toBeCloseTo(0.0002, 8);
+    _resetBrainGenomeForTests({ auto_calibrate_every_n: 7, auto_cal_min_hardinv_pct_bp: 3 });
+    expect(getBrainGenome().auto_calibrate_every_n).toBe(7);
+    expect(getBrainGenome().auto_cal_min_hardinv_pct_bp).toBe(3);
+  });
+
+  it('scalp_wick_frac + timedecay_target_frac + trek_min_path_abs_pts on genome', () => {
+    expect(getBrainGenome().scalp_wick_frac).toBe(0.45);
+    expect(getBrainGenome().timedecay_target_frac).toBe(0.4);
+    expect(getBrainGenome().trek_min_path_abs_pts).toBe(3);
+    _resetBrainGenomeForTests({
+      scalp_wick_frac: 0.55,
+      timedecay_target_frac: 0.3,
+      trek_min_path_abs_pts: 4,
+    });
+    expect(getBrainGenome().scalp_wick_frac).toBe(0.55);
+    expect(getBrainGenome().timedecay_target_frac).toBe(0.3);
+    expect(getBrainGenome().trek_min_path_abs_pts).toBe(4);
+  });
 });

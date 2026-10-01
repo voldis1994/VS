@@ -177,30 +177,42 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     }
   }
 
-  // --- Live path quality ---
+  // --- Live path quality (genome Soft× / score knobs) ---
+  const deepGreenMult = g.manage_path_deep_green_soft_mult || 0.85;
+  const fadeMult = g.manage_path_fade_soft_mult || 0.15;
+  const fadeScore = g.manage_path_fade_score || 0.75;
+  const stallMfeMult = g.manage_path_stall_mfe_soft_mult || 0.4;
+  const stallUplMult = g.manage_path_stall_upl_soft_mult || 0.15;
+  const stallScore = g.manage_path_stall_score || 0.2;
+  const maeDeepMult = g.manage_mae_deep_soft_mult || 0.85;
+  const maeDeepScore = g.manage_mae_deep_score || 0.45;
   if (mfe >= soft) {
     bits.push(`Soft-MFE ${mfe.toFixed(2)}`);
-    if (upl >= soft * 0.85) {
+    if (upl >= soft * deepGreenMult) {
       score -= wPathGreen;
       bits.push('deep green');
     } else if (upl > 0 && retention < cutRetention) {
       score += wGiveback;
       bits.push(`giveback ret=${(retention * 100).toFixed(0)}%`);
-    } else if (upl <= soft * 0.15 && upl > 0) {
-      score += 0.75;
+    } else if (upl <= soft * fadeMult && upl > 0) {
+      score += fadeScore;
       bits.push('green fading → Soft');
     }
-  } else if (mfe > soft * 0.4 && upl < soft * 0.15) {
-    score += 0.2;
+  } else if (mfe > soft * stallMfeMult && upl < soft * stallUplMult) {
+    score += stallScore;
     bits.push('sub-Soft stall');
   }
 
-  if (mae >= soft * 0.85 && upl > 0) {
-    score += 0.45;
+  if (mae >= soft * maeDeepMult && upl > 0) {
+    score += maeDeepScore;
     bits.push(`MAE ${mae.toFixed(2)} deep then green`);
   }
 
   // --- Market change / thesis ---
+  const wM1Wait = g.manage_score_m1_wait || 0.15;
+  const wNextSame = g.manage_score_next_same || 0.55;
+  const wThesisBonus = g.manage_score_thesis_bonus || 0.25;
+  const wSoftGate = g.manage_score_soft_gate_open || 0.2;
   if (input.minute_policy === 'continue') {
     score -= wM1Cont;
     bits.push('1m continue');
@@ -208,7 +220,7 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     score += wM1Rev;
     bits.push('1m reverse');
   } else if (input.minute_policy === 'wait') {
-    score += 0.15;
+    score += wM1Wait;
     bits.push('1m wait');
   }
 
@@ -216,13 +228,13 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     score += wNextOpp;
     bits.push(`next ${input.next_entry_side} vs open`);
   } else if (input.next_entry_side && input.next_entry_side === input.open_side) {
-    score -= 0.55;
+    score -= wNextSame;
     bits.push('next same-side');
   }
 
   const thesisFail = thesisFailureReason(input.open_side, input.live_regime);
   if (thesisFail) {
-    score += wThesis + 0.25;
+    score += wThesis + wThesisBonus;
     bits.push(thesisFail.replace('ThesisFailure · ', 'thesis '));
   } else if (
     input.entry_regime &&
@@ -230,27 +242,36 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
     input.entry_regime !== input.live_regime &&
     input.live_regime !== 'UNKNOWN'
   ) {
-    score += 0.25;
+    score += wThesisBonus;
     bits.push(`regime ${input.entry_regime}→${input.live_regime}`);
   }
 
   if (input.soft_gate_allow) {
-    score += 0.2;
+    score += wSoftGate;
     bits.push('softGate open');
   }
 
   // --- Mega market context (30m story / pressure / velocity / feed) ---
+  const wStoryFight = g.manage_score_story_fight || 0.85;
+  const wStoryWith = g.manage_score_story_with || 0.35;
+  const wPressureWith = g.manage_score_pressure_with || 0.4;
+  const wExpandCont = g.manage_score_expand_continue || 0.35;
+  const wExpandRev = g.manage_score_expand_reverse || 0.45;
+  const wFeedDiv = g.manage_score_feed_divergent || 0.5;
+  const wFeedStrong = g.manage_score_feed_strong || 0.15;
+  const wChapter = g.manage_score_chapter_change || 0.35;
+  const wNearTarget = g.manage_score_near_target || 0.4;
   const mkt = input.market;
   if (mkt) {
     bits.push(mkt.summary);
     if (storyFightsSide(mkt.story?.allow, input.open_side)) {
-      score += 0.85;
+      score += wStoryFight;
       bits.push(`story fights (${mkt.story?.chapter})`);
     } else if (
       mkt.story?.allow === input.open_side ||
       mkt.story?.allow === 'BOTH'
     ) {
-      score -= 0.35;
+      score -= wStoryWith;
       bits.push('story with us');
     }
     if (pressureFightsSide(mkt.pressure.green_share, input.open_side)) {
@@ -262,23 +283,23 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
       (input.open_side === 'BUY' && mkt.pressure.green_share >= pressureBuy) ||
       (input.open_side === 'SELL' && mkt.pressure.green_share <= pressureSell)
     ) {
-      score -= 0.4;
+      score -= wPressureWith;
       bits.push('pressure with us');
     }
     if (mkt.velocity.expanding && mkt.velocity.moving) {
       if (input.minute_policy === 'continue') {
-        score -= 0.35;
+        score -= wExpandCont;
         bits.push('EXPAND continue');
       } else if (input.minute_policy === 'reverse') {
-        score += 0.45;
+        score += wExpandRev;
         bits.push('EXPAND reverse → protect');
       }
     }
     if (mkt.feed?.agreement === 'DIVERGENT') {
-      score += 0.5;
+      score += wFeedDiv;
       bits.push('feed DIVERGENT');
     } else if (mkt.feed?.agreement === 'STRONG') {
-      score -= 0.15;
+      score -= wFeedStrong;
     }
     const entryM = input.entry_market;
     if (
@@ -286,14 +307,14 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
       mkt.story?.chapter &&
       entryM.story.chapter !== mkt.story.chapter
     ) {
-      score += 0.35;
+      score += wChapter;
       bits.push(`chapter ${entryM.story.chapter}→${mkt.story.chapter}`);
     }
   }
 
   // Near Target → lean BANK when market already changed
   if (upl >= input.target_dist * nearTarget && input.soft_gate_allow) {
-    score += 0.4;
+    score += wNearTarget;
     bits.push('near Target');
   }
 
@@ -302,8 +323,10 @@ export function scoreManageAction(input: ManageBrainInput): ManageBrainResult {
   // --- PRĀTS decides; LEARNER advises once it has enough closes ---
   const learned = learnerChooseAction(input, input.client_id);
   const thought = thinkLikeTrader(input);
+  const learnerMinUpdates = g.manage_learner_min_updates || 20;
   const learnerReady =
-    learned.updates >= 20 && learned.confidence >= thought.confidence + learnerMargin;
+    learned.updates >= learnerMinUpdates &&
+    learned.confidence >= thought.confidence + learnerMargin;
   const action = learnerReady && !learned.explored ? learned.action : thought.decision;
 
   let soft_gate_override: boolean | null = null;

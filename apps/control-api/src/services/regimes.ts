@@ -323,17 +323,22 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   // Local consolidation break (last ~10m), independent of full 30m box.
   // Gold 17:45: dump pierced 4149–4154 shelf while still "inRange" of the wider
   // 30m zone that already contained the earlier 4160→… selloff → false RANGE.
-  const localLookback = Math.min(60, Math.max(18, zonePrior.length - 6));
-  const localStruct = zonePrior.slice(0, -6).slice(-localLookback);
+  const lbMax = genome.local_breakout_lookback_max || 60;
+  const lbMin = genome.local_breakout_lookback_min || 18;
+  const lbSkip = genome.local_breakout_skip_bars || 6;
+  const lbMinStruct = genome.local_breakout_min_struct_bars || 12;
+  const lbClearMult = genome.local_breakout_clear_frac_mult || 0.5;
+  const localLookback = Math.min(lbMax, Math.max(lbMin, zonePrior.length - lbSkip));
+  const localStruct = zonePrior.slice(0, -lbSkip).slice(-localLookback);
   let localBreakUp = false;
   let localBreakDown = false;
-  if (localStruct.length >= 12) {
+  if (localStruct.length >= lbMinStruct) {
     const lHi = Math.max(...localStruct.map((b) => b.high));
     const lLo = Math.min(...localStruct.map((b) => b.low));
     const lW = Math.max(lHi - lLo, 1e-9);
     const localFrac = Math.max(
       genome.local_breakout_frac_floor || 0.12,
-      CLEAR_BREAK_FRAC * 0.5
+      CLEAR_BREAK_FRAC * lbClearMult
     );
     localBreakUp =
       fromChop && last.close > lHi && (last.close - lHi) / lW >= localFrac;
@@ -650,9 +655,10 @@ function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   const { MOVE, MOVE_RANGE } = getActiveRegimeBands();
   const g = getBrainGenome();
   // Scale to shared MOVE ladder — old fixed 0.08%/0.10% made strength look dead vs soft 10s move
+  const moveDiv = Math.max(2, g.regime_conf_move_div || 4);
   const strength = Math.min(
     1,
-    Math.abs(bodyPct(last)) / (MOVE * 4) + rangePct(last) / (MOVE_RANGE * 4)
+    Math.abs(bodyPct(last)) / (MOVE * moveDiv) + rangePct(last) / (MOVE_RANGE * moveDiv)
   );
   const base = g.regime_conf_base ?? 0.35;
   const scale = g.regime_conf_strength_scale ?? 0.5;

@@ -648,6 +648,122 @@ export type BrainGenome = {
    * false = legacy desk can only raise Keep.
    */
   peak_keep_genome_owns: boolean;
+  /** Manage score: deep green when upl ≥ soft×this */
+  manage_path_deep_green_soft_mult: number;
+  /** Manage score: fading green when upl ≤ soft×this */
+  manage_path_fade_soft_mult: number;
+  /** Manage score add when green fading to Soft */
+  manage_path_fade_score: number;
+  /** Manage sub-Soft stall: mfe > soft×this */
+  manage_path_stall_mfe_soft_mult: number;
+  /** Manage sub-Soft stall: upl < soft×this */
+  manage_path_stall_upl_soft_mult: number;
+  /** Manage score add on sub-Soft stall */
+  manage_path_stall_score: number;
+  /** Manage MAE deep then green: mae ≥ soft×this */
+  manage_mae_deep_soft_mult: number;
+  /** Manage score add on deep MAE then green */
+  manage_mae_deep_score: number;
+  /** Manage score add on 1m wait */
+  manage_score_m1_wait: number;
+  /** Manage score subtract when next same-side */
+  manage_score_next_same: number;
+  /** Manage score add on thesis fail / regime drift */
+  manage_score_thesis_bonus: number;
+  /** Manage score add when softGate open */
+  manage_score_soft_gate_open: number;
+  /** Manage score add when story fights open */
+  manage_score_story_fight: number;
+  /** Manage score subtract when story with us */
+  manage_score_story_with: number;
+  /** Manage score subtract when pressure with us */
+  manage_score_pressure_with: number;
+  /** Manage score subtract EXPAND+continue */
+  manage_score_expand_continue: number;
+  /** Manage score add EXPAND+reverse */
+  manage_score_expand_reverse: number;
+  /** Manage score add feed DIVERGENT */
+  manage_score_feed_divergent: number;
+  /** Manage score subtract feed STRONG */
+  manage_score_feed_strong: number;
+  /** Manage score add on chapter change */
+  manage_score_chapter_change: number;
+  /** Manage score add near Target lean BANK */
+  manage_score_near_target: number;
+  /** Learner overrides Mind after ≥N updates */
+  manage_learner_min_updates: number;
+  /** PRĀTS manage confidence BANK */
+  mind_manage_conf_bank: number;
+  /** PRĀTS manage confidence CUT */
+  mind_manage_conf_cut: number;
+  /** PRĀTS manage confidence HOLD continue */
+  mind_manage_conf_hold_continue: number;
+  /** PRĀTS manage confidence HOLD against */
+  mind_manage_conf_hold_against: number;
+  /** PRĀTS manage confidence TRAIL */
+  mind_manage_conf_trail: number;
+  /** PRĀTS thesis deep green: upl ≥ soft×this */
+  mind_deep_green_soft_mult: number;
+  /** TimeDecay minFav floor = target_abs × this */
+  timedecay_target_frac: number;
+  /** Peak trail floor lower bound = minBank × this */
+  peak_trail_minbank_frac: number;
+  /** Scalp 1m wick rejection fraction */
+  scalp_wick_frac: number;
+  /** Scalp 1m wick body tolerance fraction */
+  scalp_wick_body_frac: number;
+  /** Local shelf lookback max bars */
+  local_breakout_lookback_max: number;
+  /** Local shelf lookback min bars */
+  local_breakout_lookback_min: number;
+  /** Local shelf skip last N bars */
+  local_breakout_skip_bars: number;
+  /** Local shelf min structure bars */
+  local_breakout_min_struct_bars: number;
+  /** Local break frac = max(floor, CLEAR_BREAK × this) */
+  local_breakout_clear_frac_mult: number;
+  /** Regime confidence body/range vs MOVE×this */
+  regime_conf_move_div: number;
+  /** Entry m1Strong when |body| ≥ MOVE×this */
+  entry_m1_strong_move_mult: number;
+  /** Trek/minPath absolute Gold pts floor */
+  trek_min_path_abs_pts: number;
+  /** SAFETY spread fallback when bid/ask missing (bp) */
+  safety_spread_fallback_bp: number;
+  /** SAFETY abs floor for mid≈1…10 as bp of price */
+  safety_abs_floor_tiny_bp: number;
+  /** SAFETY abs floor for mid<1 as bp of price */
+  safety_abs_floor_nano_bp: number;
+  /** Runner score bad if retain < success×this */
+  regime_runner_bad_retain_frac: number;
+  /** Autotune every N closes */
+  auto_calibrate_every_n: number;
+  /** Auto-cal min hardinv pct (bp) — not 0.0002 */
+  auto_cal_min_hardinv_pct_bp: number;
+  /** Auto-cal max hardinv pct (bp) */
+  auto_cal_max_hardinv_pct_bp: number;
+  /** Auto-cal min target pct (bp) */
+  auto_cal_min_target_pct_bp: number;
+  /** Auto-cal max target pct (bp) */
+  auto_cal_max_target_pct_bp: number;
+  /** Auto-cal min peak mfe pct (bp) */
+  auto_cal_min_peak_mfe_pct_bp: number;
+  /** Auto-cal max peak mfe pct (bp) */
+  auto_cal_max_peak_mfe_pct_bp: number;
+  /** Entry PRĀTS conf when stack aligned + strong 1m */
+  mind_entry_conf_aligned_strong: number;
+  /** Entry PRĀTS conf when stack aligned */
+  mind_entry_conf_aligned: number;
+  /** Entry PRĀTS conf strong 1m not fully aligned */
+  mind_entry_conf_strong_m1: number;
+  /** Entry PRĀTS conf bias-side */
+  mind_entry_conf_bias: number;
+  /** Entry PRĀTS conf weak stack side */
+  mind_entry_conf_weak: number;
+  /** Entry PRĀTS conf boost on regime/story align */
+  mind_entry_conf_regime_boost: number;
+  /** Entry PRĀTS conf ceiling after boost */
+  mind_entry_conf_cap: number;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1102,6 +1218,64 @@ const DEFAULT_GENOME: BrainGenome = {
   entry_tip_block_finished_move: true,
   entry_trend_tip_require_reject: true,
   peak_keep_genome_owns: true,
+  manage_path_deep_green_soft_mult: 0.85,
+  manage_path_fade_soft_mult: 0.15,
+  manage_path_fade_score: 0.75,
+  manage_path_stall_mfe_soft_mult: 0.4,
+  manage_path_stall_upl_soft_mult: 0.15,
+  manage_path_stall_score: 0.2,
+  manage_mae_deep_soft_mult: 0.85,
+  manage_mae_deep_score: 0.45,
+  manage_score_m1_wait: 0.15,
+  manage_score_next_same: 0.55,
+  manage_score_thesis_bonus: 0.25,
+  manage_score_soft_gate_open: 0.2,
+  manage_score_story_fight: 0.85,
+  manage_score_story_with: 0.35,
+  manage_score_pressure_with: 0.4,
+  manage_score_expand_continue: 0.35,
+  manage_score_expand_reverse: 0.45,
+  manage_score_feed_divergent: 0.5,
+  manage_score_feed_strong: 0.15,
+  manage_score_chapter_change: 0.35,
+  manage_score_near_target: 0.4,
+  manage_learner_min_updates: 20,
+  mind_manage_conf_bank: 0.88,
+  mind_manage_conf_cut: 0.78,
+  mind_manage_conf_hold_continue: 0.8,
+  mind_manage_conf_hold_against: 0.6,
+  mind_manage_conf_trail: 0.65,
+  mind_deep_green_soft_mult: 0.85,
+  timedecay_target_frac: 0.4,
+  peak_trail_minbank_frac: 0.5,
+  scalp_wick_frac: 0.45,
+  scalp_wick_body_frac: 0.15,
+  local_breakout_lookback_max: 60,
+  local_breakout_lookback_min: 18,
+  local_breakout_skip_bars: 6,
+  local_breakout_min_struct_bars: 12,
+  local_breakout_clear_frac_mult: 0.5,
+  regime_conf_move_div: 4,
+  entry_m1_strong_move_mult: 0.5,
+  trek_min_path_abs_pts: 3,
+  safety_spread_fallback_bp: 0.5,
+  safety_abs_floor_tiny_bp: 5,
+  safety_abs_floor_nano_bp: 0.5,
+  regime_runner_bad_retain_frac: 0.5,
+  auto_calibrate_every_n: 5,
+  auto_cal_min_hardinv_pct_bp: 2,
+  auto_cal_max_hardinv_pct_bp: 40,
+  auto_cal_min_target_pct_bp: 8,
+  auto_cal_max_target_pct_bp: 100,
+  auto_cal_min_peak_mfe_pct_bp: 2,
+  auto_cal_max_peak_mfe_pct_bp: 60,
+  mind_entry_conf_aligned_strong: 0.9,
+  mind_entry_conf_aligned: 0.82,
+  mind_entry_conf_strong_m1: 0.85,
+  mind_entry_conf_bias: 0.75,
+  mind_entry_conf_weak: 0.68,
+  mind_entry_conf_regime_boost: 0.06,
+  mind_entry_conf_cap: 0.92,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1710,6 +1884,64 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     entry_tip_block_finished_move: p.entry_tip_block_finished_move !== false,
     entry_trend_tip_require_reject: p.entry_trend_tip_require_reject !== false,
     peak_keep_genome_owns: p.peak_keep_genome_owns !== false,
+    manage_path_deep_green_soft_mult: round2(clamp(Number(p.manage_path_deep_green_soft_mult ?? d.manage_path_deep_green_soft_mult), 0.5, 1.2)),
+    manage_path_fade_soft_mult: round2(clamp(Number(p.manage_path_fade_soft_mult ?? d.manage_path_fade_soft_mult), 0.05, 0.5)),
+    manage_path_fade_score: round2(clamp(Number(p.manage_path_fade_score ?? d.manage_path_fade_score), 0.1, 2.0)),
+    manage_path_stall_mfe_soft_mult: round2(clamp(Number(p.manage_path_stall_mfe_soft_mult ?? d.manage_path_stall_mfe_soft_mult), 0.1, 0.9)),
+    manage_path_stall_upl_soft_mult: round2(clamp(Number(p.manage_path_stall_upl_soft_mult ?? d.manage_path_stall_upl_soft_mult), 0.05, 0.5)),
+    manage_path_stall_score: round2(clamp(Number(p.manage_path_stall_score ?? d.manage_path_stall_score), 0.05, 1.0)),
+    manage_mae_deep_soft_mult: round2(clamp(Number(p.manage_mae_deep_soft_mult ?? d.manage_mae_deep_soft_mult), 0.5, 1.2)),
+    manage_mae_deep_score: round2(clamp(Number(p.manage_mae_deep_score ?? d.manage_mae_deep_score), 0.1, 1.5)),
+    manage_score_m1_wait: round2(clamp(Number(p.manage_score_m1_wait ?? d.manage_score_m1_wait), 0.05, 1.0)),
+    manage_score_next_same: round2(clamp(Number(p.manage_score_next_same ?? d.manage_score_next_same), 0.1, 1.5)),
+    manage_score_thesis_bonus: round2(clamp(Number(p.manage_score_thesis_bonus ?? d.manage_score_thesis_bonus), 0.05, 1.0)),
+    manage_score_soft_gate_open: round2(clamp(Number(p.manage_score_soft_gate_open ?? d.manage_score_soft_gate_open), 0.05, 1.0)),
+    manage_score_story_fight: round2(clamp(Number(p.manage_score_story_fight ?? d.manage_score_story_fight), 0.1, 2.0)),
+    manage_score_story_with: round2(clamp(Number(p.manage_score_story_with ?? d.manage_score_story_with), 0.05, 1.5)),
+    manage_score_pressure_with: round2(clamp(Number(p.manage_score_pressure_with ?? d.manage_score_pressure_with), 0.05, 1.5)),
+    manage_score_expand_continue: round2(clamp(Number(p.manage_score_expand_continue ?? d.manage_score_expand_continue), 0.05, 1.5)),
+    manage_score_expand_reverse: round2(clamp(Number(p.manage_score_expand_reverse ?? d.manage_score_expand_reverse), 0.05, 1.5)),
+    manage_score_feed_divergent: round2(clamp(Number(p.manage_score_feed_divergent ?? d.manage_score_feed_divergent), 0.05, 1.5)),
+    manage_score_feed_strong: round2(clamp(Number(p.manage_score_feed_strong ?? d.manage_score_feed_strong), 0.05, 1.0)),
+    manage_score_chapter_change: round2(clamp(Number(p.manage_score_chapter_change ?? d.manage_score_chapter_change), 0.05, 1.5)),
+    manage_score_near_target: round2(clamp(Number(p.manage_score_near_target ?? d.manage_score_near_target), 0.05, 1.5)),
+    manage_learner_min_updates: clampInt(p.manage_learner_min_updates, d.manage_learner_min_updates, 5, 100),
+    mind_manage_conf_bank: round2(clamp(Number(p.mind_manage_conf_bank ?? d.mind_manage_conf_bank), 0.5, 0.99)),
+    mind_manage_conf_cut: round2(clamp(Number(p.mind_manage_conf_cut ?? d.mind_manage_conf_cut), 0.4, 0.99)),
+    mind_manage_conf_hold_continue: round2(clamp(Number(p.mind_manage_conf_hold_continue ?? d.mind_manage_conf_hold_continue), 0.4, 0.99)),
+    mind_manage_conf_hold_against: round2(clamp(Number(p.mind_manage_conf_hold_against ?? d.mind_manage_conf_hold_against), 0.3, 0.95)),
+    mind_manage_conf_trail: round2(clamp(Number(p.mind_manage_conf_trail ?? d.mind_manage_conf_trail), 0.3, 0.95)),
+    mind_deep_green_soft_mult: round2(clamp(Number(p.mind_deep_green_soft_mult ?? d.mind_deep_green_soft_mult), 0.5, 1.2)),
+    timedecay_target_frac: round2(clamp(Number(p.timedecay_target_frac ?? d.timedecay_target_frac), 0.1, 0.9)),
+    peak_trail_minbank_frac: round2(clamp(Number(p.peak_trail_minbank_frac ?? d.peak_trail_minbank_frac), 0.2, 1.0)),
+    scalp_wick_frac: round2(clamp(Number(p.scalp_wick_frac ?? d.scalp_wick_frac), 0.2, 0.8)),
+    scalp_wick_body_frac: round2(clamp(Number(p.scalp_wick_body_frac ?? d.scalp_wick_body_frac), 0.05, 0.4)),
+    local_breakout_lookback_max: clampInt(p.local_breakout_lookback_max, d.local_breakout_lookback_max, 20, 120),
+    local_breakout_lookback_min: clampInt(p.local_breakout_lookback_min, d.local_breakout_lookback_min, 8, 60),
+    local_breakout_skip_bars: clampInt(p.local_breakout_skip_bars, d.local_breakout_skip_bars, 2, 20),
+    local_breakout_min_struct_bars: clampInt(p.local_breakout_min_struct_bars, d.local_breakout_min_struct_bars, 6, 40),
+    local_breakout_clear_frac_mult: round2(clamp(Number(p.local_breakout_clear_frac_mult ?? d.local_breakout_clear_frac_mult), 0.2, 1.0)),
+    regime_conf_move_div: clampInt(p.regime_conf_move_div, d.regime_conf_move_div, 2, 10),
+    entry_m1_strong_move_mult: round2(clamp(Number(p.entry_m1_strong_move_mult ?? d.entry_m1_strong_move_mult), 0.2, 1.0)),
+    trek_min_path_abs_pts: round1(clamp(Number(p.trek_min_path_abs_pts ?? d.trek_min_path_abs_pts), 0.5, 20)),
+    safety_spread_fallback_bp: clamp(coerceMicroBp(p.safety_spread_fallback_bp, d.safety_spread_fallback_bp), 0.1, 20),
+    safety_abs_floor_tiny_bp: clamp(coerceMicroBp(p.safety_abs_floor_tiny_bp, d.safety_abs_floor_tiny_bp), 0.1, 50),
+    safety_abs_floor_nano_bp: clamp(coerceMicroBp(p.safety_abs_floor_nano_bp, d.safety_abs_floor_nano_bp), 0.1, 20),
+    regime_runner_bad_retain_frac: round2(clamp(Number(p.regime_runner_bad_retain_frac ?? d.regime_runner_bad_retain_frac), 0.2, 0.9)),
+    auto_calibrate_every_n: clampInt(p.auto_calibrate_every_n, d.auto_calibrate_every_n, 2, 20),
+    auto_cal_min_hardinv_pct_bp: clamp(coerceMicroBp(p.auto_cal_min_hardinv_pct_bp, d.auto_cal_min_hardinv_pct_bp), 0.1, 50),
+    auto_cal_max_hardinv_pct_bp: clamp(coerceMicroBp(p.auto_cal_max_hardinv_pct_bp, d.auto_cal_max_hardinv_pct_bp), 1, 200),
+    auto_cal_min_target_pct_bp: clamp(coerceMicroBp(p.auto_cal_min_target_pct_bp, d.auto_cal_min_target_pct_bp), 0.1, 100),
+    auto_cal_max_target_pct_bp: clamp(coerceMicroBp(p.auto_cal_max_target_pct_bp, d.auto_cal_max_target_pct_bp), 10, 500),
+    auto_cal_min_peak_mfe_pct_bp: clamp(coerceMicroBp(p.auto_cal_min_peak_mfe_pct_bp, d.auto_cal_min_peak_mfe_pct_bp), 0.1, 50),
+    auto_cal_max_peak_mfe_pct_bp: clamp(coerceMicroBp(p.auto_cal_max_peak_mfe_pct_bp, d.auto_cal_max_peak_mfe_pct_bp), 1, 200),
+    mind_entry_conf_aligned_strong: round2(clamp(Number(p.mind_entry_conf_aligned_strong ?? d.mind_entry_conf_aligned_strong), 0.5, 0.99)),
+    mind_entry_conf_aligned: round2(clamp(Number(p.mind_entry_conf_aligned ?? d.mind_entry_conf_aligned), 0.5, 0.99)),
+    mind_entry_conf_strong_m1: round2(clamp(Number(p.mind_entry_conf_strong_m1 ?? d.mind_entry_conf_strong_m1), 0.5, 0.99)),
+    mind_entry_conf_bias: round2(clamp(Number(p.mind_entry_conf_bias ?? d.mind_entry_conf_bias), 0.4, 0.95)),
+    mind_entry_conf_weak: round2(clamp(Number(p.mind_entry_conf_weak ?? d.mind_entry_conf_weak), 0.3, 0.9)),
+    mind_entry_conf_regime_boost: round2(clamp(Number(p.mind_entry_conf_regime_boost ?? d.mind_entry_conf_regime_boost), 0.02, 0.2)),
+    mind_entry_conf_cap: round2(clamp(Number(p.mind_entry_conf_cap ?? d.mind_entry_conf_cap), 0.7, 0.99)),
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2187,6 +2419,64 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'entry_tip_block_finished_move',
   'entry_trend_tip_require_reject',
   'peak_keep_genome_owns',
+  'manage_path_deep_green_soft_mult',
+  'manage_path_fade_soft_mult',
+  'manage_path_fade_score',
+  'manage_path_stall_mfe_soft_mult',
+  'manage_path_stall_upl_soft_mult',
+  'manage_path_stall_score',
+  'manage_mae_deep_soft_mult',
+  'manage_mae_deep_score',
+  'manage_score_m1_wait',
+  'manage_score_next_same',
+  'manage_score_thesis_bonus',
+  'manage_score_soft_gate_open',
+  'manage_score_story_fight',
+  'manage_score_story_with',
+  'manage_score_pressure_with',
+  'manage_score_expand_continue',
+  'manage_score_expand_reverse',
+  'manage_score_feed_divergent',
+  'manage_score_feed_strong',
+  'manage_score_chapter_change',
+  'manage_score_near_target',
+  'manage_learner_min_updates',
+  'mind_manage_conf_bank',
+  'mind_manage_conf_cut',
+  'mind_manage_conf_hold_continue',
+  'mind_manage_conf_hold_against',
+  'mind_manage_conf_trail',
+  'mind_deep_green_soft_mult',
+  'timedecay_target_frac',
+  'peak_trail_minbank_frac',
+  'scalp_wick_frac',
+  'scalp_wick_body_frac',
+  'local_breakout_lookback_max',
+  'local_breakout_lookback_min',
+  'local_breakout_skip_bars',
+  'local_breakout_min_struct_bars',
+  'local_breakout_clear_frac_mult',
+  'regime_conf_move_div',
+  'entry_m1_strong_move_mult',
+  'trek_min_path_abs_pts',
+  'safety_spread_fallback_bp',
+  'safety_abs_floor_tiny_bp',
+  'safety_abs_floor_nano_bp',
+  'regime_runner_bad_retain_frac',
+  'auto_calibrate_every_n',
+  'auto_cal_min_hardinv_pct_bp',
+  'auto_cal_max_hardinv_pct_bp',
+  'auto_cal_min_target_pct_bp',
+  'auto_cal_max_target_pct_bp',
+  'auto_cal_min_peak_mfe_pct_bp',
+  'auto_cal_max_peak_mfe_pct_bp',
+  'mind_entry_conf_aligned_strong',
+  'mind_entry_conf_aligned',
+  'mind_entry_conf_strong_m1',
+  'mind_entry_conf_bias',
+  'mind_entry_conf_weak',
+  'mind_entry_conf_regime_boost',
+  'mind_entry_conf_cap',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

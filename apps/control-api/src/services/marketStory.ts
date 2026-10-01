@@ -257,7 +257,8 @@ export function readMarketStory(
   const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
   const midPx = Math.abs(last.close) || 1;
   const knobs = storyKnobs();
-  const minPath = Math.max(3, midPx * knobs.minPathFrac);
+  const trekAbs = getBrainGenome().trek_min_path_abs_pts || 3;
+  const minPath = Math.max(trekAbs, midPx * knobs.minPathFrac);
   const midZone = (windowHi + windowLo) / 2;
 
   const recentSell = recentNet < 0 && redR >= 3;
@@ -442,13 +443,16 @@ function oneMDir(m: MinuteBar | null): 'UP' | 'DOWN' | 'FLAT' {
   return 'FLAT';
 }
 
-/** Upper/lower wick rejection on last 1m (scalp location quality). */
+/** Upper/lower wick rejection on last 1m — genome scalp_wick_* (not literals). */
 function rejection1m(m: MinuteBar, side: 'BUY' | 'SELL'): boolean {
+  const g = getBrainGenome();
+  const wickFrac = g.scalp_wick_frac || 0.45;
+  const bodyFrac = g.scalp_wick_body_frac || 0.15;
   const span = Math.max(m.high - m.low, 1e-9);
   const upper = (m.high - Math.max(m.open, m.close)) / span;
   const lower = (Math.min(m.open, m.close) - m.low) / span;
-  if (side === 'SELL') return upper >= 0.45 && m.close <= m.open + span * 0.15;
-  return lower >= 0.45 && m.close >= m.open - span * 0.15;
+  if (side === 'SELL') return upper >= wickFrac && m.close <= m.open + span * bodyFrac;
+  return lower >= wickFrac && m.close >= m.open - span * bodyFrac;
 }
 
 function isBreakoutRegime(regime?: string | null): boolean {

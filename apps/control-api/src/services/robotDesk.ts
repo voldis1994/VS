@@ -1287,15 +1287,17 @@ function safetyStopLevel(
         ? ask
         : mid;
   const abs = Math.max(Math.abs(ref), 1e-9);
+  const g = getBrainGenome();
+  // bp → frac (min step 0.1 bp) — no 0.00005 / 0.0005 literals
+  const spreadFallbackFrac = Math.max(0.1, g.safety_spread_fallback_bp || 0.5) * 1e-4;
   const spr =
     spread != null && Number.isFinite(spread) && spread > 0
       ? spread
       : bid != null && ask != null
         ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
+        : abs * spreadFallbackFrac;
 
-  const g = getBrainGenome();
-  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp || 20) * 1e-4;
   const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
   const spreadMult = Math.max(1, g.safety_sl_spread_mult || 8);
   const pctCushion = abs * cushionFrac;
@@ -1306,8 +1308,10 @@ function safetyStopLevel(
   const floorHi = g.safety_abs_floor_hi || 0.5;
   const floorMid = g.safety_abs_floor_mid || 0.25;
   const floorLo = g.safety_abs_floor_lo || 0.05;
+  const floorTiny = abs * (Math.max(0.1, g.safety_abs_floor_tiny_bp || 5) * 1e-4);
+  const floorNano = abs * (Math.max(0.1, g.safety_abs_floor_nano_bp || 0.5) * 1e-4);
   const floor =
-    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? 0.0005 : 0.00005;
+    abs >= 1000 ? floorHi : abs >= 100 ? floorMid : abs >= 10 ? floorLo : abs >= 1 ? floorTiny : floorNano;
   const dist =
     Math.max(pctCushion, brokerMin * brokerMult, spr * spreadMult, floor) *
     Math.max(loosen, 1);
@@ -1327,7 +1331,7 @@ function safetyStopDistancePts(
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
   const g = getBrainGenome();
-  const cushionFrac = Math.max(0, g.safety_sl_cushion_bp) * 1e-4 || 0.002;
+  const cushionFrac = Math.max(0.1, g.safety_sl_cushion_bp || 20) * 1e-4;
   const brokerMult = Math.max(1, g.safety_sl_broker_min_mult || 2.5);
   const pct = abs * cushionFrac;
   let fromPct = minPts * brokerMult;

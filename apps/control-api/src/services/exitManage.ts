@@ -695,7 +695,11 @@ export function decideBestOutcomeExit(
         : null;
   const heldMs = s.entry_at ? nowMs - new Date(s.entry_at).getTime() : 0;
   // Genome peak_arm_soft_mult / peak_trail_soft_cap_mult own Soft× trail floor
-  const trailFloor = Math.max(minBank * 0.5, peakTrailMfeFloor(mfeFloor, sl, minBank));
+  const trailMinBankFrac = getBrainGenome().peak_trail_minbank_frac || 0.5;
+  const trailFloor = Math.max(
+    minBank * trailMinBankFrac,
+    peakTrailMfeFloor(mfeFloor, sl, minBank)
+  );
 
   const wantLoss = gate === 'all' || gate === 'live_loss';
   const wantPeakOnly = gate === 'peak_protect_only';
@@ -808,14 +812,16 @@ export function decideBestOutcomeExit(
       };
     }
 
+    // bp only — min step 0.1 (factory timedecay_fav_pct_bp=3.5), no 0.00035 frac
     const timedecayFavPct =
-      Math.max(0, genome.timedecay_fav_pct_bp) * 1e-4 || 0.00035;
+      Math.max(0.1, genome.timedecay_fav_pct_bp || 3.5) * 1e-4;
+    const tdTargetFrac = genome.timedecay_target_frac || 0.4;
     const minFav =
       Math.max(
         scaleDeskAbs(genomeTimedecayMinFavAbs(), absEntry),
         absEntry * timedecayFavPct,
         minBank,
-        scaleDeskAbs(cal.target_abs || genomeTargetAbsFloor(), absEntry) * 0.4
+        scaleDeskAbs(cal.target_abs || genomeTargetAbsFloor(), absEntry) * tdTargetFrac
       ) * profile.timedecay_min_fav_mult;
     const holdNeed =
       profile.timedecay_hold_ms > 0
