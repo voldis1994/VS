@@ -11,8 +11,8 @@
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { getActiveRegimeBands } from './regimeBands.js';
 import {
-  MIN_BARS_FOR_ZONE,
-  ZONE_BARS,
+  getMinBarsForZone,
+  getZoneBars,
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
@@ -35,7 +35,7 @@ export { capitalHtfBias, pickEntryPlaybook, setupAllowedOnLane } from './entryPl
 
 /**
  * Canonical entry thesis regime — one playbook result for UI / entry / exit / learn.
- * Live classify may differ; thesis is what the brain trades.
+ * Factory one-market: thesis follows live classify (+ BREAK pierce / sticky demote).
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
@@ -54,6 +54,7 @@ const LIVE_CHOP = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
  * Independent of entry_filter_level (L0) — this is thesis safety, not soft structure.
  */
 export function tipChaseBlocksEntry(input: {
+  /** Raw classify (not thesis) — false-RANGE promote tip knife */
   liveRegime: RegimeName;
   lane: string;
   chapter: string;
@@ -133,7 +134,16 @@ export type MinuteBar = {
 
 export type StructureDecideInput = {
   bar: TenSecBar;
+  /**
+   * Entry authority regime (thesis / Soft OFF / playbook).
+   * One-market desk passes the same thesis Soft OFF already used.
+   */
   regime: string | null | undefined;
+  /**
+   * Raw classify for tip-chase (false-RANGE promote knife).
+   * Defaults to `regime` when omitted.
+   */
+  classify_live?: string | null;
   closedBars: TenSecBar[];
   /** Optional — entry mind uses last Soft/manual to choose next side */
   last_closed_side?: 'BUY' | 'SELL' | null;
@@ -218,8 +228,10 @@ export function zoneGeometry(
   bars: TenSecBar[],
   entry?: TenSecBar | null
 ): ZoneGeometry | null {
-  if (!bars.length || bars.length < MIN_BARS_FOR_ZONE) return null;
-  const zone = bars.slice(-ZONE_BARS);
+  const minBars = getMinBarsForZone();
+  const zoneBars = getZoneBars();
+  if (!bars.length || bars.length < minBars) return null;
+  const zone = bars.slice(-zoneBars);
   if (zone.length < 2) return null;
 
   const entryBar = entry ?? zone[zone.length - 1]!;
@@ -676,6 +688,10 @@ export function structureGate(
 
 export function decideEntryWithStructure(input: StructureDecideInput): StructuredEntry | null {
   const regime = normalizeRegime(input.regime);
+  const classifyLive = normalizeRegime(
+    input.classify_live != null ? input.classify_live : input.regime
+  );
+  // One-market: UNKNOWN thesis waits — no HTF invent side
   if (regime === 'UNKNOWN') return null;
 
   const zone = zoneGeometry(input.closedBars, input.bar);
@@ -713,7 +729,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
         m1: input.capital_m1_dir ?? null,
       }
     : null;
-  // Split brains: HTF / breakout / range — not one RANGE label for everything
+  // Thesis in = playbook out (idempotent when desk already passed effectiveEntryRegime)
   const playbook = pickEntryPlaybook({
     liveRegime: regime,
     story,
@@ -811,12 +827,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // allow NONE: block mind-invented sides; raw SETUP NOW on non-RANGE lanes may proceed
   if (story.allow === 'NONE' && !rawFillsThinStory) return null;
 
-  // Tip-chase knife — RANGE_FADE and chop→TREND promote (false RANGE). Not skipped by L0.
+  // Tip-chase knife — uses raw classify (not thesis) so false-RANGE promote still knifes tip
   const ch = chEarly;
   const zpos = zone?.pos ?? story.zone_pos;
   if (
     tipChaseBlocksEntry({
-      liveRegime: regime,
+      liveRegime: classifyLive,
       lane: playbook.lane,
       chapter: ch,
       side,
@@ -836,6 +852,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       : started && started.direction === side
         ? started
         : null;
+  // Genome entry_require_regime_setup: no mind CONTINUATION invent without 10s/structure recipe
+  const requireSetup = getBrainGenome().entry_require_regime_setup !== false;
+  if (!matched && requireSetup) return null;
   const candidate: RegimeEntry = matched ?? {
     direction: side,
     setup: 'CONTINUATION',

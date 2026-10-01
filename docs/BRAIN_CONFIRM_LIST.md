@@ -10,7 +10,7 @@ Skala: min solis 0.1 (body/trek = bp).
 
 Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 
-**STATUS 2026-09-30:** **194/194** schema+wire+hypothesize. Suite green (542).
+**STATUS 2026-10-01:** **203/203** schema+wire+hypothesize (one-market truth 200–203).
 Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
@@ -259,6 +259,12 @@ Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
 197. playbook_block_story_promote_on_live_chop — SIDE pirms stāsta TREND uz chop
 198. playbook_chop_overrides_sticky_trend — sticky TREND→SIDE uz proven chop
 199. reversal_from_breakout_prior — REVERSAL arī no BREAKOUT prior (V)
+
+### One-market truth (visi lasa vienu tirgu)
+200. playbook_one_market_truth — live classify = regime; HTF/stāsts neizdomā TREND
+201. playbook_break_overrides_sticky_trend — BREAK pierce pirms sticky TREND
+202. playbook_htf_require_unanimous — 30/15/5 fight → MIXED (ne majority)
+203. entry_require_regime_setup — entry tikai ar 10s/structure recipe (ne PRĀTS invent)
 
 ---
 

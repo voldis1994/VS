@@ -335,9 +335,13 @@ const MAP: Record<number, string[]> = {
   197: ['playbook_block_story_promote_on_live_chop'],
   198: ['playbook_chop_overrides_sticky_trend'],
   199: ['reversal_from_breakout_prior'],
+  200: ['playbook_one_market_truth'],
+  201: ['playbook_break_overrides_sticky_trend'],
+  202: ['playbook_htf_require_unanimous'],
+  203: ['entry_require_regime_setup'],
 };
 
-const MAX_ITEM = 199;
+const MAX_ITEM = 203;
 
 // Extract labels for items 1-MAX from confirm list (first occurrence)
 const labels = new Map<number, string>();

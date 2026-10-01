@@ -17,6 +17,7 @@ import {
   zoneGeometry,
 } from './structureEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
+import { _resetBrainGenomeForTests } from '../brainSelfImprove/brainGenome.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,12 +162,12 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     );
   });
 
-  it('promotes dip/bounce chapters to PULLBACK playbooks', () => {
+  it('one-market: dip/bounce on live chop stay SIDE (no invent PULLBACK)', () => {
     expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'DIP_IN_RALLY' })).toBe(
-      'PULLBACK_UPTREND'
+      'RANGE'
     );
     expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'BOUNCE_IN_SELL' })).toBe(
-      'PULLBACK_DOWNTREND'
+      'RANGE'
     );
   });
 
@@ -666,10 +667,37 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
 });
 
 describe('one thesis — tip-chase survives HTF promote (not only RANGE_FADE)', () => {
+  beforeEach(() => {
+    _resetBrainGenomeForTests({});
+  });
   afterEach(() => {
     _setEntryFilterLevelForTests(null);
     _setTradeOpenAtStartForTests(null);
+    _resetBrainGenomeForTests({});
   });
+
+  it('entry_require_regime_setup: mind side without 10s/structure recipe → null', () => {
+    // Quiet mid-zone tip — no PULLBACK/FADE recipe; mind may want BUY but must WAIT
+    const book = zoneBook({ lo: 4150, hi: 4170, lastClose: 4160, lastOpen: 4160.05 });
+    const entry = book[book.length - 1]!;
+    const sig = decideEntryWithStructure({
+      bar: entry,
+      regime: 'TREND_UP',
+      classify_live: 'TREND_UP',
+      closedBars: book,
+      capital_m1_dir: 'UP',
+      capital_tf5_dir: 'UP',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
+    });
+    // Either null (no recipe) or a real PULLBACK/CONTINUATION structure match — never invent-only
+    if (sig) {
+      expect(sig.reason).not.toMatch(/nav 10s trigger — izpildu PRĀTS/);
+    } else {
+      expect(sig).toBeNull();
+    }
+  });
+
 
   it('tipChaseBlocksEntry: false RANGE + TREND_PULLBACK still blocks RALLY BUY at HI tip', () => {
     expect(

@@ -596,6 +596,17 @@ export type BrainGenome = {
   playbook_chop_overrides_sticky_trend: boolean;
   /** REVERSAL_CANDIDATE also from BREAKOUT_UP/DOWN prior (V after pierce dump) */
   reversal_from_breakout_prior: boolean;
+  /**
+   * One-market truth: live classify owns regime; HTF/story do not invent TREND
+   * on chop/UNKNOWN. Soft OFF / decide / watch share that thesis.
+   */
+  playbook_one_market_truth: boolean;
+  /** Story BREAK_UP/DOWN before sticky TREND keep (structure pierce owns) */
+  playbook_break_overrides_sticky_trend: boolean;
+  /** HTF bias MIXED if any 30/15/5 fight (no majority steal) */
+  playbook_htf_require_unanimous: boolean;
+  /** Entry needs 10s recipe or structure-start — no mind CONTINUATION invent */
+  entry_require_regime_setup: boolean;
   /** EXPANSION priority before TREND when both fire */
   expansion_before_trend: boolean;
   /** TREND thesis regime set for episodes */
@@ -1020,6 +1031,10 @@ const DEFAULT_GENOME: BrainGenome = {
   playbook_block_story_promote_on_live_chop: true,
   playbook_chop_overrides_sticky_trend: true,
   reversal_from_breakout_prior: true,
+  playbook_one_market_truth: true,
+  playbook_break_overrides_sticky_trend: true,
+  playbook_htf_require_unanimous: true,
+  entry_require_regime_setup: true,
   expansion_before_trend: false,
   trend_thesis_regimes: DEFAULT_TREND_THESIS,
   adverse_chapters_sell: DEFAULT_ADVERSE_SELL,
@@ -1571,6 +1586,10 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
       p.playbook_block_story_promote_on_live_chop !== false,
     playbook_chop_overrides_sticky_trend: p.playbook_chop_overrides_sticky_trend !== false,
     reversal_from_breakout_prior: p.reversal_from_breakout_prior !== false,
+    playbook_one_market_truth: p.playbook_one_market_truth !== false,
+    playbook_break_overrides_sticky_trend: p.playbook_break_overrides_sticky_trend !== false,
+    playbook_htf_require_unanimous: p.playbook_htf_require_unanimous !== false,
+    entry_require_regime_setup: p.entry_require_regime_setup !== false,
     expansion_before_trend: p.expansion_before_trend === true,
     trend_thesis_regimes: sanitizeStringArray(p.trend_thesis_regimes, d.trend_thesis_regimes),
     adverse_chapters_sell: sanitizeStringArray(p.adverse_chapters_sell, d.adverse_chapters_sell),
@@ -2026,6 +2045,10 @@ export const EVOLVABLE_GENOME_KEYS: ReadonlyArray<keyof BrainGenome> = [
   'playbook_block_story_promote_on_live_chop',
   'playbook_chop_overrides_sticky_trend',
   'reversal_from_breakout_prior',
+  'playbook_one_market_truth',
+  'playbook_break_overrides_sticky_trend',
+  'playbook_htf_require_unanimous',
+  'entry_require_regime_setup',
   'expansion_before_trend',
   'trend_thesis_regimes',
   'adverse_chapters_sell',

@@ -806,6 +806,10 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const flipBlockStoryChop = !g.playbook_block_story_promote_on_live_chop;
   const flipChopOverrideTrend = !g.playbook_chop_overrides_sticky_trend;
   const flipRevFromBreak = !g.reversal_from_breakout_prior;
+  const flipOneMarket = !g.playbook_one_market_truth;
+  const flipBreakOverTrend = !g.playbook_break_overrides_sticky_trend;
+  const flipHtfUnanimous = !g.playbook_htf_require_unanimous;
+  const flipRequireSetup = !g.entry_require_regime_setup;
   const flipExpansionBefore = !g.expansion_before_trend;
   const enabledRegimes = toggleInArray(g.enabled_regimes, 'TRANSITION');
   const softOffRegimes = toggleInArray(g.soft_off_regimes, 'COMPRESSION');
@@ -1809,8 +1813,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     {
       title: `Explore regimes flags/chop (step #${nextStep + 37})`,
       rationale:
-        'Toggle sticky_prior, transition, playbook SIDE/HTF gates, reversal-from-breakout.',
-      task: `soft_move=${flipSoftMoveShortcut} chop_trend=${chopToTrend} sticky=${flipStickyPrior}`,
+        'Toggle sticky_prior, transition, one-market/SIDE/HTF gates, reversal-from-breakout.',
+      task: `soft_move=${flipSoftMoveShortcut} one_market=${flipOneMarket} chop_trend=${chopToTrend}`,
       genome_delta: {
         soft_move_trek_pullback_shortcut: flipSoftMoveShortcut,
         chop_to_trend_confirm_bars: chopToTrend,
@@ -1822,10 +1826,14 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         playbook_block_story_promote_on_live_chop: flipBlockStoryChop,
         playbook_chop_overrides_sticky_trend: flipChopOverrideTrend,
         reversal_from_breakout_prior: flipRevFromBreak,
+        playbook_one_market_truth: flipOneMarket,
+        playbook_break_overrides_sticky_trend: flipBreakOverTrend,
+        playbook_htf_require_unanimous: flipHtfUnanimous,
+        entry_require_regime_setup: flipRequireSetup,
         expansion_before_trend: flipExpansionBefore,
         core_always_on_regimes: coreAlwaysOn,
         explore_step: nextStep + 37,
-        last_lesson: `Explore regimes flags chop=${chopToTrend}`,
+        last_lesson: `Explore regimes flags one_market=${flipOneMarket}`,
       },
       patches: [
         genomePatch(
@@ -1869,6 +1877,26 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
           'reversal_from_breakout_prior',
           flipRevFromBreak,
           `flip rev_from_break ${flipRevFromBreak}`
+        ),
+        genomePatch(
+          'playbook_one_market_truth',
+          flipOneMarket,
+          `flip one_market ${flipOneMarket}`
+        ),
+        genomePatch(
+          'playbook_break_overrides_sticky_trend',
+          flipBreakOverTrend,
+          `flip break_over_trend ${flipBreakOverTrend}`
+        ),
+        genomePatch(
+          'playbook_htf_require_unanimous',
+          flipHtfUnanimous,
+          `flip htf_unanimous ${flipHtfUnanimous}`
+        ),
+        genomePatch(
+          'entry_require_regime_setup',
+          flipRequireSetup,
+          `flip require_setup ${flipRequireSetup}`
         ),
         genomePatch(
           'expansion_before_trend',

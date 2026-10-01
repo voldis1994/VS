@@ -24,7 +24,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
-  MIN_BARS_FOR_ZONE,
+  getMinBarsForZone,
   clearRegimeBookFor,
   type RegimeName,
 } from './regimes.js';
@@ -410,7 +410,7 @@ export function shouldAttemptZoneSeed(
   nowMs = Date.now(),
   throttleMs = ZONE_SEED_THROTTLE_MS
 ): boolean {
-  if (closedBarCount >= MIN_BARS_FOR_ZONE) return false;
+  if (closedBarCount >= getMinBarsForZone()) return false;
   return nowMs - lastSeedAttemptMs >= throttleMs;
 }
 
@@ -663,13 +663,13 @@ async function seedZoneFromMinuteHistory(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ZONE SEED WAIT · book=${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · ${
+      detail: `ZONE SEED WAIT · book=${s.closedBars.length}/${getMinBarsForZone()} · ${
         mins.detail || 'no minute candles'
       } · live 10s still building`,
     });
     refreshEntryWatch(s, {
       status_override: 'SEEDING',
-      last_reason: `Lasa tirgu · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · seed: ${mins.detail || 'fail'}`,
+      last_reason: `Lasa tirgu · ${s.closedBars.length}/${getMinBarsForZone()} · seed: ${mins.detail || 'fail'}`,
     });
     return;
   }
@@ -699,7 +699,7 @@ async function seedZoneFromMinuteHistory(
     s.ohlc_10s = publicOhlc10s(s.ohlcState);
   }
   refreshEntryWatch(s, {
-    last_reason: `ZONE SEED · ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} sveces · regime=${s.regime}`,
+    last_reason: `ZONE SEED · ${s.closedBars.length}/${getMinBarsForZone()} sveces · regime=${s.regime}`,
   });
   pushTick(s, {
     phase: 'INFO',
@@ -2381,13 +2381,13 @@ function reportCapitalLeaseFail(s: Internal, result: CapitalComSessionResult) {
     detail: rateLimited
       ? `RATE LIMIT — ${result.detail}`
       : timedOut
-        ? `CAPITAL TIMEOUT — ${result.detail} · retry next tick · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+        ? `CAPITAL TIMEOUT — ${result.detail} · retry next tick · zona ${s.closedBars.length}/${getMinBarsForZone()}`
         : `Session fail: ${result.detail}`,
   });
   refreshEntryWatch(s, {
     status_override: 'SEEDING',
     last_reason: timedOut
-      ? `Capital timeout · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`
+      ? `Capital timeout · zona ${s.closedBars.length}/${getMinBarsForZone()}`
       : result.detail,
   });
   if (rateLimited) setRobotCadence(s, 5_000);
@@ -2408,8 +2408,17 @@ function decideOpenManageExit(
 ): string | null {
   if (quote.mid == null || !s.open_side) return null;
   if (s.entry_price == null) s.entry_price = quote.mid;
-  // If we attached without freeze (legacy), freeze now from live state
-  if (!s.entry_regime && s.regime) s.entry_regime = s.regime;
+  // Legacy attach: freeze playbook thesis (same as fill), not raw sticky live
+  if (!s.entry_regime && s.regime) {
+    const attachBar = s.ohlcState.last_closed;
+    const attachStory = attachBar ? readMarketStory(s.closedBars, attachBar) : null;
+    s.entry_regime = effectiveEntryRegime(s.regime, attachStory, {
+      tf30: capitalHigherTfDir(s.last_tf30_candles),
+      tf15: capitalHigherTfDir(s.last_tf15_candles),
+      tf5: capitalHigherTfDir(s.last_tf5_candles),
+      m1: capitalCandleDir(s.last_minute_candles),
+    });
+  }
   updateExcursion(s, quote.mid);
   // Seed Peak MFE from Capital 1m highs/lows — live mid alone forgets the bounce peak
   if (s.entry_price != null && s.last_minute_candles.length) {
@@ -3230,7 +3239,7 @@ async function robotCycleLocked(s: Internal) {
         s.last_market_closed_tick_ms = now;
         refreshEntryWatch(s, {
           status_override: 'SEEDING',
-          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+          last_reason: `MARKET ${quote0.market_status || 'CLOSED'} · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
         });
         pushTick(s, {
           phase: 'WAIT',
@@ -3239,7 +3248,7 @@ async function robotCycleLocked(s: Internal) {
           mid: quote0.mid,
           detail: `MARKET ${quote0.market_status || 'CLOSED'} — park robot (no entry / no position spam) · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
-          }s until TRADEABLE · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+          }s until TRADEABLE · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
         });
       }
     });
@@ -3440,14 +3449,14 @@ async function robotCycleLocked(s: Internal) {
     // Trading OFF: still manage/exit open trades; block only new entries
     if (!s.trading_enabled && !(s.open_side || brokerOpen)) {
       refreshEntryWatch(s, {
-        last_reason: `Trading OFF · lasa · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+        last_reason: `Trading OFF · lasa · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
       });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE} · regime=${sessionThesis(s)}`,
+        detail: `Trading OFF — reading only · zona ${s.closedBars.length}/${getMinBarsForZone()} · regime=${sessionThesis(s)}`,
       });
       return null;
     }
@@ -3569,14 +3578,14 @@ async function robotCycleLocked(s: Internal) {
     if (quote.mid == null) {
       refreshEntryWatch(s, {
         status_override: 'SEEDING',
-        last_reason: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+        last_reason: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
       });
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${MIN_BARS_FOR_ZONE}`,
+        detail: `ENTRY · no mid — wait quote · zona ${s.closedBars.length}/${getMinBarsForZone()}`,
       });
       return null;
     }
@@ -3686,10 +3695,12 @@ async function robotCycleLocked(s: Internal) {
           detail: `${ohlcLine} · ENTRY WATCH · ${s.entry_watch?.looking_for} · regime Hard OFF · no entry`,
         });
       } else {
-        // Mind reads Capital 30m→15m→5m→1m — BUY/SELL executes (no FORMING starve)
+        // One thesis: Soft OFF already used entryRegime — decide uses the same
+        // (not raw sticky live). classify_live keeps tip-chase on real chop.
         const sig = decideEntryWithStructure({
           bar: mindBar,
-          regime: s.regime,
+          regime: entryRegime,
+          classify_live: s.regime,
           closedBars: s.closedBars,
           last_closed_side: s.last_closed_side,
           last_close_was_loss: s.last_close_was_loss,
