@@ -678,17 +678,12 @@ export function noteClosedTradeForAutoCalibrate(
     ...(proposed.genome_patch || {}),
   };
   if (deskProposal) {
-    // Soft/Peak MFE/Target/regimes → genome. Peak Keep stays hardcode (not AutoCal).
-    const deskPatch = deskCalibrationToGenomePatch(proposed.next);
-    delete deskPatch.peak_keep;
-    delete deskPatch.peak_retention;
+    // Soft/Peak/Target/regimes from proposal → genome (even if genome_patch was thin)
     genomePatch = {
-      ...deskPatch,
+      ...deskCalibrationToGenomePatch(proposed.next),
       ...genomePatch,
     };
   }
-  delete genomePatch.peak_keep;
-  delete genomePatch.peak_retention;
   const genomeApplied =
     Object.keys(genomePatch).length > 0
       ? (() => {
@@ -816,12 +811,17 @@ function proposeGenomePatch(
   syncNum('soft_l2_abs', roundAbs(next.soft_l2_abs), 'soft_l2_abs', 'AutoCal → Genome Soft L2');
   syncNum('soft_l3_abs', roundAbs(next.soft_l3_abs), 'soft_l3_abs', 'AutoCal → Genome Soft L3');
   syncNum('peak_mfe_abs', roundAbs(next.peak_mfe_abs), 'peak_mfe_abs', 'AutoCal → Genome Peak MFE');
-  // Peak Keep is hardcode / factory SoT (MAX_MFE_GIVEBACK floor + peak_keep) — AutoCal never writes it.
+  syncNum(
+    'peak_retention',
+    roundRet(next.peak_retention),
+    'peak_retention',
+    'AutoCal → Genome Peak Keep alias'
+  );
   syncNum(
     'peak_min_giveback_abs',
     roundAbs(next.peak_min_giveback_abs),
     'peak_min_giveback_abs',
-    'AutoCal → Genome Peak giveback abs'
+    'AutoCal → Genome Peak giveback'
   );
   syncNum('target_l1_abs', roundAbs(next.target_l1_abs), 'target_l1_abs', 'AutoCal → Genome Target L1');
   syncNum('target_l2_abs', roundAbs(next.target_l2_abs), 'target_l2_abs', 'AutoCal → Genome Target L2');
@@ -877,6 +877,21 @@ function proposeGenomePatch(
         )
       );
     }
+  }
+
+  // One Peak Keep
+  const calB = calBounds();
+  const keepTarget = roundRet(
+    Math.min(calB.maxPeakRetention, Math.max(calB.minPeakRetention, next.peak_retention))
+  );
+  if (Math.abs(g.peak_keep - keepTarget) >= 0.01) {
+    patch.peak_keep = keepTarget;
+    changes.push(
+      autotuneLog(
+        `genome peak_keep ${roundRet(g.peak_keep).toFixed(2)}→${keepTarget.toFixed(2)}`,
+        'AutoCal → Genome one Keep'
+      )
+    );
   }
 
   if (softDominates || intent === 'protect_sooner') {
@@ -1356,11 +1371,20 @@ export function proposeAutoCalibration(
       );
     }
     const peakBefore = next.peak_mfe_abs;
+    const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     const easedPeak = roundAbs(next.peak_mfe_abs - bounds.peakEaseAbsStep);
     const peakFloor = roundAbs(next.hardinv_abs + 0.5);
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
-    // Peak Keep — hardcode SoT (exitManage MAX_MFE_GIVEBACK / genome.peak_keep). AutoCal never touches it.
+    if (softDominates) {
+      next.peak_retention = roundRet(
+        Math.min(bounds.maxPeakRetention, Math.max(retBefore, retBefore + bounds.peakEaseRetentionStep))
+      );
+    } else {
+      next.peak_retention = roundRet(
+        Math.max(bounds.minPeakRetention, next.peak_retention - bounds.peakEaseRetentionStep)
+      );
+    }
     next.peak_min_giveback_abs = roundAbs(
       Math.max(0.5, next.peak_min_giveback_abs - bounds.peakEaseGivebackStep)
     );
@@ -1376,6 +1400,16 @@ export function proposeAutoCalibration(
         )
       );
     }
+    if (next.peak_retention !== retBefore) {
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ${
+            softDominates ? 'protect-sooner' : 'ease'
+          }`,
+          softDominates ? 'Soft eats winners — keep more of Peak MFE' : 'ease Keep for room'
+        )
+      );
+    }
     if (next.target_abs !== tgtBefore) {
       changes.push(
         autotuneLog(
@@ -1386,13 +1420,19 @@ export function proposeAutoCalibration(
     }
     // target_pct tracks abs silently — no 0.000xx WHAT spam
   } else if (needProtectSooner) {
-    // Keep is hardcode — protect_sooner does not nudge peak_retention (was AutoCal override).
-    changes.push(
-      autotuneLog(
-        'peak_retention hold (hardcode Keep)',
-        'PRĀTS protect_sooner — Soft/Peak MFE/Target may move; Keep stays factory/hardcode'
-      )
+    const retBefore = next.peak_retention;
+    // Protect sooner = keep MORE of MFE (higher Keep), free within 10%…95%
+    next.peak_retention = roundRet(
+      Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
     );
+    if (next.peak_retention !== retBefore) {
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} protect-sooner`,
+          'PRĀTS: protect winners sooner — raise Peak Keep'
+        )
+      );
+    }
   } else if (doRaise) {
     // Soft may ease slightly so winners have room (Soft+HardInv free)
     if (softTooTight || human.intent === 'let_winners_run') {
@@ -1419,9 +1459,12 @@ export function proposeAutoCalibration(
       );
     }
     const peakBefore = next.peak_mfe_abs;
+    const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     next.peak_mfe_abs = Math.min(bounds.maxPeakMfeAbs, roundAbs(next.peak_mfe_abs + 0.4));
-    // Peak Keep hardcode — do not raise peak_retention here
+    next.peak_retention = roundRet(
+      Math.min(bounds.maxPeakRetention, next.peak_retention + bounds.peakEaseRetentionStep)
+    );
     next.peak_min_giveback_abs = roundAbs(Math.min(2.0, next.peak_min_giveback_abs + 0.1));
     next.target_abs = Math.min(bounds.maxTargetAbs, roundAbs(next.target_abs + 0.8));
     next.target_pct = roundPct(Math.min(AUTO_CAL_MAX_TARGET_PCT, next.target_pct * 1.06));
@@ -1431,6 +1474,14 @@ export function proposeAutoCalibration(
         autotuneLog(
           `peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`,
           'raise Peak arm for bigger winners'
+        )
+      );
+    }
+    if (next.peak_retention !== retBefore) {
+      changes.push(
+        autotuneLog(
+          `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)}`,
+          'keep more of Peak MFE'
         )
       );
     }

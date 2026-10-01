@@ -445,36 +445,6 @@ describe('autoCalibrate', () => {
     );
   });
 
-  it('AutoCal never mutates Peak Keep — hardcode MAX_MFE_GIVEBACK / peak_keep SoT', () => {
-    const base = { ...defaultDeskCalibration(), peak_retention: 0.75 };
-    const softHeavy = proposeAutoCalibration(
-      base,
-      [
-        trade({ pnl_pts: -2.2, exit_reason: 'HardInvalidation' }),
-        trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation' }),
-        trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection', mfe: 2.5 }),
-        trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation' }),
-        trade({ pnl_pts: 0.2, exit_reason: 'PeakProtection', mfe: 2.0 }),
-      ],
-      new Set(),
-      { raise_streak: 3 }
-    );
-    expect(softHeavy.next.peak_retention).toBe(0.75);
-    expect(softHeavy.genome_patch?.peak_keep).toBeUndefined();
-    expect(softHeavy.genome_patch?.peak_retention).toBeUndefined();
-    expect(softHeavy.changes.some((c) => /peak_retention \d/.test(c))).toBe(false);
-
-    const winners = proposeAutoCalibration(base, [
-      trade({ pnl_pts: 4, exit_reason: 'PeakProtection', mfe: 5 }),
-      trade({ pnl_pts: 3.5, exit_reason: 'Target', mfe: 4 }),
-      trade({ pnl_pts: 2, exit_reason: 'PeakProtection', mfe: 3 }),
-      trade({ pnl_pts: 5, exit_reason: 'PeakProtection', mfe: 6 }),
-      trade({ pnl_pts: 1.5, exit_reason: 'TimeDecay', mfe: 2 }),
-    ]);
-    expect(winners.next.peak_retention).toBe(0.75);
-    expect(winners.genome_patch?.peak_keep).toBeUndefined();
-  });
-
   it('isolates auto-cal per client — A closes do not count for B', () => {
     beginAutoCalibrateSession('A', 1);
     beginAutoCalibrateSession('B', 2);
