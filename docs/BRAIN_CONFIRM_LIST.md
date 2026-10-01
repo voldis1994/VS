@@ -5,16 +5,13 @@
 2. Capital dealing-rules (min stop / point size)
 3. Sistēma (session/timers/DB/WS/auth/routing)
 
-Viss zemāk = smadzenes. Režīmus smadzenes var uzlabot, ja rezultāts slikts.
+**Oficiālais ownership saraksts + audits:** [`docs/BRAIN_OWNERSHIP.md`](./BRAIN_OWNERSHIP.md)
+
 Skala: min solis 0.1 (body/trek = bp).
 
-Kopā uz smadzenēm: **187** (44 jau genome + 143 pārliekamie).
-
-**STATUS 2026-10-01:** **431/431** schema + consumer-wire + hypothesize (…403; AutoCal Soft/Peak floors + filter + SAFETY buckets/loosen/TP + RegimeRunner/switch 404–431).
-Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`
-(consumer corpus **excl.** `brainGenome.ts` + `hypothesize.ts`; `ok` prasa arī hypoGaps=0; gap_* = sanitize-owned ladder).
-**Proof:** `genomeWireCut.proof.test.ts` = **representative** live flip tests (ne 1:1 uz katru knob).
-**Review:** everyN; exempt `[]`; `??`; sanitizer-owned floors (no consumer Math.max); AutoCal/SAFETY/RegimeRunner/switch learning Genome.
+**STATUS 2026-10-01:** MAP audit **431/431** = schema+wire+hypo (ne “viss literālis = smadzenes”).
+Ownership politikā ~**101 Genome knobs ir BLOAT/BORDERLINE** (AutoCal mut meta, SAFETY broker-ops, count policy) — skatīt `BRAIN_OWNERSHIP.md`.
+Ārpusē tikai lot / dealing-rules / sistēma. Audit: `scripts/auditGenomeOwnership.ts`.
 
 ---
 
