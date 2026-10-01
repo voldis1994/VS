@@ -224,6 +224,11 @@ type Internal = RobotSession & {
   entry_watch: EntryWatch | null;
   /** Consecutive EXIT blocked (no dealId) — clear ghost after broker flat */
   exit_deal_fails: number;
+  /**
+   * Consecutive cycles where Capital list OK but epic flat while local open_side.
+   * One empty list during API blip must NOT clear MANAGE / open trade.
+   */
+  broker_flat_streak: number;
   /** Prevent overlapping robotCycle (Capital awaits > cadence) */
   cycle_busy: boolean;
   /** Wall clock when cycle_busy became true — unstick hung Capital awaits */
@@ -899,6 +904,7 @@ function clearTradeState(s: Internal) {
   s.peak_protect_armed = false;
   s.last_1m_profit_exit_key = '';
   s.exit_deal_fails = 0;
+  s.broker_flat_streak = 0;
   s.hardinv_breach_since_ms = 0;
   s.structure_breach_since_ms = 0;
   s.entry_regime = null;
@@ -908,6 +914,37 @@ function clearTradeState(s: Internal) {
   s.last_learner_features = null;
   s.last_entry_features = null;
   s.entry_market = null;
+}
+
+/** How many consecutive empty Capital lists before we trust "broker flat". */
+const BROKER_FLAT_CONFIRM = 3;
+
+/**
+ * Capital list OK but epic missing while we still hold local open_side.
+ * Returns true only after BROKER_FLAT_CONFIRM consecutive empties — one blip
+ * must not drop MANAGE / exit the open trade.
+ */
+function confirmBrokerFlatWhileLocalOpen(
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  where: 'manage' | 'entry'
+): boolean {
+  s.broker_flat_streak = (s.broker_flat_streak || 0) + 1;
+  if (s.broker_flat_streak < BROKER_FLAT_CONFIRM) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Broker list empty · keep MANAGE ${s.open_side} (confirm ${s.broker_flat_streak}/${BROKER_FLAT_CONFIRM} · ${where}) — API blip ≠ close`,
+    });
+    return false;
+  }
+  return true;
+}
+
+function noteBrokerOpenPresent(s: Internal): void {
+  s.broker_flat_streak = 0;
 }
 
 /** Mark a Capital dealId as already counted toward CLOSES / LEARNER. */
@@ -2454,35 +2491,40 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
 
   if (listedOk) {
     if (brokerOpen) {
+      noteBrokerOpenPresent(s);
       s.open_side = brokerOpen.direction;
       s.deal_id = brokerOpen.deal_id;
       syncFromBrokerOpen(s, brokerOpen, quote.mid);
       s.mode = 'MANAGE';
       if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
     } else if (s.open_side) {
-      const closedSide = s.open_side;
-      s.last_closed_side = closedSide;
-      s.last_close_was_loss = true;
-      s.closed_at_ms = Date.now();
-      const flatReason = marketAllowsTrading(quote.market_status)
-        ? 'EXTERNAL · broker flat (manage cycle)'
-        : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
-      await persistClosedTradeLedger(s, quote, flatReason, 'external');
-      clearTradeState(s);
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: marketAllowsTrading(quote.market_status)
-          ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
-          : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
-      });
-      const rec = await withCapitalAccountSession(leaseInput, async (session) => {
-        await reconcileCapitalActivityCloses(session, s, quote);
-      });
-      if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
-      return;
+      // Need N empty lists in a row — one Capital/API blip must not drop MANAGE
+      if (confirmBrokerFlatWhileLocalOpen(s, quote, 'manage')) {
+        const closedSide = s.open_side;
+        s.last_closed_side = closedSide;
+        s.last_close_was_loss = true;
+        s.closed_at_ms = Date.now();
+        const flatReason = marketAllowsTrading(quote.market_status)
+          ? 'EXTERNAL · broker flat (manage cycle)'
+          : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
+        await persistClosedTradeLedger(s, quote, flatReason, 'external');
+        clearTradeState(s);
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: marketAllowsTrading(quote.market_status)
+            ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
+            : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
+        });
+        const rec = await withCapitalAccountSession(leaseInput, async (session) => {
+          await reconcileCapitalActivityCloses(session, s, quote);
+        });
+        if (!rec.ok) reportCapitalLeaseFail(s, rec.result);
+        return;
+      }
+      // else: keep open_side + Soft/HardInv through the blip
     }
   } else {
     pushTick(s, {
@@ -2847,31 +2889,34 @@ async function robotCycleLocked(s: Internal) {
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
+        noteBrokerOpenPresent(s);
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
         syncFromBrokerOpen(s, brokerOpen, quote.mid);
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed
-        const closedSide = s.open_side;
-        s.last_closed_side = closedSide;
-        s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
-        });
-        s.closed_at_ms = Date.now();
-        await persistClosedTradeLedger(
-          s,
-          quote,
-          'EXTERNAL · broker flat (entry cycle)',
-          'external'
-        );
-        clearTradeState(s);
+        // Local open but broker flat → confirm before treating as closed (API blip ≠ exit)
+        if (confirmBrokerFlatWhileLocalOpen(s, quote, 'entry')) {
+          const closedSide = s.open_side;
+          s.last_closed_side = closedSide;
+          s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
+          });
+          s.closed_at_ms = Date.now();
+          await persistClosedTradeLedger(
+            s,
+            quote,
+            'EXTERNAL · broker flat (entry cycle)',
+            'external'
+          );
+          clearTradeState(s);
+        }
       }
     } else {
       positionsUncertain = true;
@@ -3551,6 +3596,7 @@ export async function startRobotSession(input: {
     last_1m_profit_exit_key: '',
     entry_watch: null,
     exit_deal_fails: 0,
+    broker_flat_streak: 0,
     cycle_busy: false,
     cycle_busy_since: 0,
     pending_entry: null,

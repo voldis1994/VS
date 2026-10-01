@@ -280,10 +280,13 @@ if not "!PUBLIC_OK!"=="1" (
 echo.
 
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
-start "" "http://127.0.0.1:18080"
+REM Only open ADMIN for the operator. :18080 is the Cloudflare CLIENT panel —
+REM opening it locally = 2nd dead tab (admin APIs blocked). One page only.
+echo [..] gaidu admin Vite :5173 ...
+call :wait_port 5173 40
 start http://localhost:5173/
-echo [OK] lokali panelis http://127.0.0.1:18080
-echo [OK] admin COMMAND http://localhost:5173/  (klientam NESUTI)
+echo [OK] admin COMMAND http://localhost:5173/  ^<— TAVA lapa (tikai viena)
+echo [OK] klienta panelis :18080 tikai tunelim (NEATVER pats)
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)

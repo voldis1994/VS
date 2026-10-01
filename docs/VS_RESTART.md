@@ -15,4 +15,6 @@ https://….trycloudflare.com
 
 To + access code (`http://localhost:5173/clients`) sūti klientam.
 
-Admin: `http://localhost:5173/`
+Admin: `http://localhost:5173/` — **tikai šo** atver sev.
+
+`:18080` ir klienta panelis tunelim — **neatver pats** (būtu 2. lapa / DEGRADED).
