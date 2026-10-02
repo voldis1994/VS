@@ -23,6 +23,10 @@ import {
   type BrainExperience,
 } from './experience.js';
 import { runBrainCycle } from './loop.js';
+import {
+  codePatchesExitManage,
+  codePatchesRegimeBands,
+} from './codePatches.js';
 
 describe('brainSelfImprove guards', () => {
   it('allows all trading decision paths and blocks lot/broker/security/core', () => {
@@ -196,6 +200,25 @@ describe('brainSelfImprove genome', () => {
   });
 });
 
+describe('brainSelfImprove codePatches (exitManage + regimeBands)', () => {
+  it('builds exitManage Soft/TimeDecay patches within safe clamps', () => {
+    const patches = codePatchesExitManage(0);
+    expect(patches.length).toBeGreaterThan(0);
+    expect(patches.every((p) => p.path.endsWith('exitManage.ts'))).toBe(true);
+    const fav = patches.find((p) => p.find.includes('TIMEDECAY_MIN_FAV_ABS'));
+    if (fav) {
+      const n = Number(fav.replace.match(/=\s*([0-9.]+)/)?.[1]);
+      expect(n).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('builds regimeBands PERSIST patches with stay < enter', () => {
+    const patches = codePatchesRegimeBands(0);
+    expect(patches.length).toBeGreaterThan(0);
+    expect(patches.every((p) => p.path.endsWith('regimeBands.ts'))).toBe(true);
+  });
+});
+
 describe('brainSelfImprove cycle (once)', () => {
   const prevExp = process.env.BRAIN_EXPERIENCE_PATH;
   const prevGen = process.env.BRAIN_GENOME_PATH;
@@ -248,6 +271,16 @@ describe('brainSelfImprove cycle (once)', () => {
   });
 
   it('runs one cycle and records ACCEPTED or REJECTED or SKIPPED', async () => {
+    const flipPath = path.resolve(
+      process.cwd(),
+      '../../apps/control-api/src/services/flipFilter.ts'
+    );
+    // control-api cwd is apps/control-api
+    const flipAbs = fs.existsSync(path.resolve('src/services/flipFilter.ts'))
+      ? path.resolve('src/services/flipFilter.ts')
+      : flipPath;
+    const flipBefore = fs.readFileSync(flipAbs, 'utf8');
+
     const result = await runBrainCycle({
       trades: syntheticLessonTrades(),
       once: true,
@@ -257,6 +290,10 @@ describe('brainSelfImprove cycle (once)', () => {
     expect(exp.cycles.length).toBeGreaterThanOrEqual(1);
     if (result.decision === 'REJECTED' || result.decision === 'ACCEPTED') {
       expect(wasAlreadyTried(exp, result.signature)).toBe(true);
+    }
+    // E-flat / defensive ACCEPT must not leave ride-along .ts rewrites on disk
+    if (result.decision === 'ACCEPTED' && /E flat|defensive Soft-memory/i.test(result.reason)) {
+      expect(fs.readFileSync(flipAbs, 'utf8')).toBe(flipBefore);
     }
     expect(
       hypothesisSignature({

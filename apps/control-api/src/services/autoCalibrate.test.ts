@@ -359,4 +359,28 @@ describe('autoCalibrate', () => {
     ]);
     expect(r.next.entry_filter_level).toBe(0);
   });
+
+  it('mirrors desk pct from genome bp — does not independently drift pct', async () => {
+    const { getBrainGenome, regimeBpToFrac } = await import(
+      '../brainSelfImprove/brainGenome.js'
+    );
+    const g = getBrainGenome();
+    const base = {
+      ...defaultDeskCalibration(),
+      hardinv_pct: 0.0099,
+      target_pct: 0.0099,
+      peak_mfe_pct: 0.0099,
+    };
+    const r = proposeAutoCalibration(base, [
+      trade({ pnl_pts: -2.0, exit_reason: 'HardInvalidation · Soft' }),
+      trade({ pnl_pts: 0.3, exit_reason: 'PeakProtection' }),
+      trade({ pnl_pts: -1.5, exit_reason: 'HardInvalidation · Soft' }),
+      trade({ pnl_pts: 0.4, exit_reason: 'PeakProtection' }),
+      trade({ pnl_pts: -1.8, exit_reason: 'HardInvalidation · Soft' }),
+    ]);
+    expect(r.next.hardinv_pct).toBeCloseTo(regimeBpToFrac(g.hardinv_pct_bp), 10);
+    expect(r.next.target_pct).toBeCloseTo(regimeBpToFrac(g.target_pct_bp), 10);
+    expect(r.next.peak_mfe_pct).toBeCloseTo(regimeBpToFrac(g.peak_mfe_pct_bp), 10);
+    expect(r.changes.some((c) => c.includes('genome bp SoT'))).toBe(true);
+  });
 });

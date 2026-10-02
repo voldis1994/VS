@@ -394,6 +394,13 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const trek = bounceBp(g.mtf_trek_flat_frac, 0.1, 1.5, 12.0, dir);
   const softPct = bounceBp(g.hardinv_pct_bp, 0.1, 0.1, 50, dir);
   const storyPath = bounceBp(g.story_min_path_bp, 0.1, 0.1, 20, dir);
+  // Live classify reads genome persist (not factory PERSIST_* constants alone)
+  const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.3, 0.7, dir);
+  let persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.15, 0.5, dir === 1 ? -1 : 1);
+  if (persistStay >= persistEnter) {
+    persistStay = Number((persistEnter - 0.1).toFixed(2));
+  }
+  if (persistStay < 0.15) persistStay = 0.15;
 
   return [
     {
@@ -497,21 +504,26 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
     },
     {
       title: `Explore regime MOVE→${move}bp trek→${trek}bp (step #${nextStep + 6})`,
-      rationale: 'Bounce regime ladder + trek flat in bp (min step 0.1).',
-      task: `regime_move ${g.regime_move}→${move} · mtf_trek ${g.mtf_trek_flat_frac}→${trek}`,
+      rationale:
+        'Bounce regime ladder + trek flat in bp + live persist genome (factory constants ride-along).',
+      task: `regime_move ${g.regime_move}→${move} · persist ${persistEnter}/${persistStay}`,
       genome_delta: {
         regime_move: move,
         mtf_trek_flat_frac: trek,
         hardinv_pct_bp: softPct,
         story_min_path_bp: storyPath,
+        regime_persist_enter: persistEnter,
+        regime_persist_stay: persistStay,
         explore_step: nextStep + 6,
-        last_lesson: `Explore regime bp move=${move} trek=${trek}`,
+        last_lesson: `Explore regime bp move=${move} persist=${persistEnter}/${persistStay}`,
       },
       patches: [
         genomePatch('regime_move', move, `explore regime_move ${move}bp`),
         genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
         genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
         genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
+        genomePatch('regime_persist_enter', persistEnter, `persist_enter→${persistEnter}`),
+        genomePatch('regime_persist_stay', persistStay, `persist_stay→${persistStay}`),
         genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
         ...codePatchesRegimeBands(rejectedN % 2),
       ],
