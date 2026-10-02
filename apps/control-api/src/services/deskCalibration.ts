@@ -107,6 +107,13 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
+/** Kill float dust (4.3999999999999995 / 1.7999999999999998) before store + UI. */
+function roundN(n: number, digits: number): number {
+  if (!Number.isFinite(n)) return 0;
+  const f = 10 ** digits;
+  return Math.round(n * f) / f;
+}
+
 function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCalibration {
   const base = defaultDeskCalibration();
   const p = partial || {};
@@ -123,16 +130,15 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
   ] as RegimeName[];
 
   return {
-    hardinv_abs: clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50),
-    peak_mfe_abs: clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50),
-    peak_retention: clamp(Number(p.peak_retention ?? base.peak_retention), 0.5, 0.95),
-    peak_min_giveback_abs: clamp(
-      Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs),
-      0.1,
-      20
+    hardinv_abs: roundN(clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50), 2),
+    peak_mfe_abs: roundN(clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50), 2),
+    peak_retention: roundN(clamp(Number(p.peak_retention ?? base.peak_retention), 0.5, 0.95), 2),
+    peak_min_giveback_abs: roundN(
+      clamp(Number(p.peak_min_giveback_abs ?? base.peak_min_giveback_abs), 0.1, 20),
+      2
     ),
-    target_abs: clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100),
-    safety_tp_rr: clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0),
+    target_abs: roundN(clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100), 2),
+    safety_tp_rr: roundN(clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0), 2),
     hardinv_pct: clamp(Number(p.hardinv_pct ?? base.hardinv_pct), minPctKnob(), 0.02),
     target_pct: clamp(Number(p.target_pct ?? base.target_pct), minPctKnob(), 0.05),
     peak_mfe_pct: clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), minPctKnob(), 0.02),

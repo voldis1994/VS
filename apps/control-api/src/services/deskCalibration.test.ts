@@ -58,4 +58,17 @@ describe('deskCalibration', () => {
     expect(regimeAllowedForEntry('TREND_UP')).toBe(false);
     expect(regimeAllowedForEntry('UNKNOWN')).toBe(false);
   });
+
+  it('rounds Peak / TP RR float dust (4.3999999999999995 / 1.7999999999999998)', () => {
+    const c = setDeskCalibration({
+      peak_mfe_abs: 4.3999999999999995,
+      safety_tp_rr: 1.7999999999999998,
+      target_abs: 6.75,
+    });
+    expect(c.peak_mfe_abs).toBe(4.4);
+    expect(c.safety_tp_rr).toBe(1.8);
+    expect(c.target_abs).toBe(6.75);
+    expect(String(c.peak_mfe_abs)).not.toMatch(/99999/);
+    expect(String(c.safety_tp_rr)).not.toMatch(/99999/);
+  });
 });

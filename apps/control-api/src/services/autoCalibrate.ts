@@ -828,6 +828,15 @@ export function proposeAutoCalibration(
 
   next.enabled_regimes = [...enabled] as RegimeName[];
 
+  // Kill float dust before persist/UI (4.3999999999999995 → 4.4, RR 1.80)
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  next.hardinv_abs = round2(next.hardinv_abs);
+  next.peak_mfe_abs = round2(next.peak_mfe_abs);
+  next.target_abs = round2(next.target_abs);
+  next.safety_tp_rr = round2(next.safety_tp_rr);
+  next.peak_retention = round2(next.peak_retention);
+  next.peak_min_giveback_abs = round2(next.peak_min_giveback_abs);
+
   // No forced raise — hold is OK when already capped / balanced
 
   const paramOrRegimeChanged = deskCalibrationMateriallyChanged(current, next);

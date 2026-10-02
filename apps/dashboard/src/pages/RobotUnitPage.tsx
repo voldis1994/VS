@@ -579,7 +579,7 @@ export function RobotUnitPage() {
                       className="input"
                       type="number"
                       step="0.1"
-                      value={cal.hardinv_abs}
+                      value={Number(cal.hardinv_abs).toFixed(2)}
                       disabled={calBusy}
                       onChange={(e) => setCal({ ...cal, hardinv_abs: Number(e.target.value) })}
                       onBlur={() => void saveCalibration({ hardinv_abs: cal.hardinv_abs })}
@@ -603,7 +603,7 @@ export function RobotUnitPage() {
                       className="input"
                       type="number"
                       step="0.1"
-                      value={cal.peak_mfe_abs}
+                      value={Number(cal.peak_mfe_abs).toFixed(2)}
                       disabled={calBusy}
                       onChange={(e) => setCal({ ...cal, peak_mfe_abs: Number(e.target.value) })}
                       onBlur={() => void saveCalibration({ peak_mfe_abs: cal.peak_mfe_abs })}
@@ -613,7 +613,7 @@ export function RobotUnitPage() {
                       className="input"
                       type="number"
                       step="0.05"
-                      value={cal.peak_min_giveback_abs}
+                      value={Number(cal.peak_min_giveback_abs).toFixed(2)}
                       disabled={calBusy}
                       onChange={(e) =>
                         setCal({ ...cal, peak_min_giveback_abs: Number(e.target.value) })
@@ -627,7 +627,7 @@ export function RobotUnitPage() {
                       className="input"
                       type="number"
                       step="0.1"
-                      value={cal.target_abs}
+                      value={Number(cal.target_abs).toFixed(2)}
                       disabled={calBusy}
                       onChange={(e) => setCal({ ...cal, target_abs: Number(e.target.value) })}
                       onBlur={() => void saveCalibration({ target_abs: cal.target_abs })}
@@ -639,7 +639,7 @@ export function RobotUnitPage() {
                       step="0.05"
                       min={1.5}
                       max={4}
-                      value={cal.safety_tp_rr ?? 1.5}
+                      value={Number(cal.safety_tp_rr ?? 1.5).toFixed(2)}
                       disabled={calBusy}
                       onChange={(e) => setCal({ ...cal, safety_tp_rr: Number(e.target.value) })}
                       onBlur={() =>
