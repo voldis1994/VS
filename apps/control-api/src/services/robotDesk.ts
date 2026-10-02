@@ -921,7 +921,7 @@ async function persistClosedTradeLedger(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${st.knobs_now.safety_tp_rr}`,
+        detail: `AUTO-CAL watch ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · next ${st.closes_until_next} · E=${st.session_expectancy_pts.toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · TP RR ${Number(st.knobs_now.safety_tp_rr).toFixed(2)}`,
       });
     }
     // Push live counters to COMMAND so CLOSES/LEARNER update without full refresh
@@ -3789,7 +3789,7 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `AUTO-CAL session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${st.knobs_now.hardinv_abs} · Peak ${st.knobs_now.peak_mfe_abs} · Target ${st.knobs_now.target_abs} · filters L${st.knobs_now.entry_filter_level} · (SĀKT NO JAUNA = wipe)`,
+      detail: `AUTO-CAL session · closes ${st.closes_in_session}/${AUTO_CALIBRATE_EVERY_N} · Soft ${Number(st.knobs_now.hardinv_abs).toFixed(1)} · Peak ${Number(st.knobs_now.peak_mfe_abs).toFixed(2)} · Target ${Number(st.knobs_now.target_abs).toFixed(2)} · filters L${st.knobs_now.entry_filter_level} · (SĀKT NO JAUNA = wipe)`,
     });
   }
   pushTick(session, {
