@@ -542,24 +542,27 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
             ...codePatchesSoftSpam(rejectedN % 2),
           ],
         };
-  // Soft shield gates stay ON forever — flipping them OFF re-armed Soft chase
-  const shieldExplore: Variant = {
-    title: `Explore reinforce 1m Soft shields (step #${nextStep + 4})`,
-    rationale: 'Never disable wait_on_1m_fight / require_1m_trigger — Soft spam shield.',
-    task: 'wait_on_1m_fight=true require_1m_trigger=true',
-    genome_delta: {
-      wait_on_1m_fight: true,
-      require_1m_trigger: true,
-      explore_step: nextStep + 4,
-      last_lesson: 'Explore reinforce Soft 1m shields ON',
-    },
-    patches: [
-      genomePatch('wait_on_1m_fight', true, 'Soft shield wait_on_1m_fight ON'),
-      genomePatch('require_1m_trigger', true, 'Soft shield require_1m_trigger ON'),
-      genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
-      ...codePatchesSoftSpam(rejectedN % 2),
-    ],
-  };
+  // Soft shield gates stay ON forever — flipping them OFF re-armed Soft chase.
+  // If already ON, skip — else explore_step 34000+ no-op ACCEPT thrash.
+  const shieldsAlreadyOn = Boolean(g.wait_on_1m_fight && g.require_1m_trigger);
+  const shieldExplore: Variant | null = shieldsAlreadyOn
+    ? null
+    : {
+        title: `Explore reinforce 1m Soft shields (step #${nextStep + 4})`,
+        rationale: 'Never disable wait_on_1m_fight / require_1m_trigger — Soft spam shield.',
+        task: 'wait_on_1m_fight=true require_1m_trigger=true',
+        genome_delta: {
+          wait_on_1m_fight: true,
+          require_1m_trigger: true,
+          explore_step: nextStep + 4,
+          last_lesson: 'Explore reinforce Soft 1m shields ON',
+        },
+        patches: [
+          genomePatch('wait_on_1m_fight', true, 'Soft shield wait_on_1m_fight ON'),
+          genomePatch('require_1m_trigger', true, 'Soft shield require_1m_trigger ON'),
+          genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
+        ],
+      };
   const structureExplore: Variant = {
     title: `Explore structure extremes (step #${nextStep + 5})`,
     rationale: 'Nudge structureEntry extremes when genome knobs exhausted.',
