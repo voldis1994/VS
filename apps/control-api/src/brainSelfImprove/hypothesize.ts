@@ -366,6 +366,12 @@ function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -
   return Math.min(hi, Math.max(lo, next));
 }
 
+/** Bounce regime/trek/pct bp knobs — step ≥ 0.1, one decimal (no 0.00008 dust). */
+function bounceBp(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  const s = Math.max(0.1, step);
+  return bounceNum(cur, s, Math.max(0.1, lo), hi, dir);
+}
+
 /**
  * Explore when pattern variants exhausted.
  * Always bumps explore_step so signature is unique and tryVariant never no-ops.
@@ -381,6 +387,10 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;
   const flipTrig = !g.require_1m_trigger;
+  const move = bounceBp(g.regime_move, 0.1, 0.4, 2.0, dir);
+  const trek = bounceBp(g.mtf_trek_flat_frac, 0.1, 1.5, 12.0, dir);
+  const softPct = bounceBp(g.hardinv_pct_bp, 0.1, 0.1, 50, dir);
+  const storyPath = bounceBp(g.story_min_path_bp, 0.1, 0.1, 20, dir);
 
   return [
     {
@@ -476,6 +486,26 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
         genomePatch('require_1m_trigger', true, '1m trigger'),
         ...codePatchesMicroScratch(rejectedN % 2),
+      ],
+    },
+    {
+      title: `Explore regime MOVE→${move}bp trek→${trek}bp (step #${nextStep + 6})`,
+      rationale: 'Bounce regime ladder + trek flat in bp (min step 0.1).',
+      task: `regime_move ${g.regime_move}→${move} · mtf_trek ${g.mtf_trek_flat_frac}→${trek}`,
+      genome_delta: {
+        regime_move: move,
+        mtf_trek_flat_frac: trek,
+        hardinv_pct_bp: softPct,
+        story_min_path_bp: storyPath,
+        explore_step: nextStep + 6,
+        last_lesson: `Explore regime bp move=${move} trek=${trek}`,
+      },
+      patches: [
+        genomePatch('regime_move', move, `explore regime_move ${move}bp`),
+        genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
+        genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
+        genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
+        genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
       ],
     },
   ];
