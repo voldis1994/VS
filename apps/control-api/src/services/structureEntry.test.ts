@@ -5,6 +5,7 @@ import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
   aggregateTenSecToMinutes,
   decideEntryWithStructure,
+  effectiveEntryRegime,
   lastClosed1mFromTenSec,
   minuteTrendBias,
   structureGate,
@@ -81,6 +82,112 @@ describe('zone geometry uses entry close', () => {
     const z = zoneGeometry(book, entry);
     expect(z).not.toBeNull();
     expect(z!.pos).toBeLessThan(0.5);
+  });
+});
+
+describe('effectiveEntryRegime — RANGE only when truly range; never blocks others (#649)', () => {
+  beforeEach(() => {
+    _setTradeOpenAtStartForTests(false);
+  });
+  afterEach(() => {
+    _setTradeOpenAtStartForTests(null);
+  });
+
+  it('never demotes TREND/PULLBACK/BREAKOUT/EXPANSION/REVERSAL/FAILED', () => {
+    const story = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
+    const htf = { tf30: 'DOWN' as const, tf15: 'DOWN' as const, tf5: 'DOWN' as const };
+    for (const r of [
+      'TREND_UP',
+      'TREND_DOWN',
+      'PULLBACK_UPTREND',
+      'PULLBACK_DOWNTREND',
+      'BREAKOUT_UP',
+      'BREAKOUT_DOWN',
+      'EXPANSION',
+      'REVERSAL_CANDIDATE',
+      'FAILED_BREAKOUT_UP',
+      'FAILED_BREAKOUT_DOWN',
+    ] as const) {
+      expect(effectiveEntryRegime(r, story, htf)).toBe(r);
+    }
+  });
+
+  it('Capital HTF UP/DOWN promotes off false RANGE — not 10s chop story', () => {
+    const chop = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
+    expect(
+      effectiveEntryRegime('RANGE', chop, {
+        tf30: 'UP',
+        tf15: 'UP',
+        tf5: 'UP',
+      })
+    ).toBe('TREND_UP');
+    expect(
+      effectiveEntryRegime('RANGE', chop, {
+        tf30: 'DOWN',
+        tf15: 'DOWN',
+        tf5: 'FLAT',
+      })
+    ).toBe('TREND_DOWN');
+    expect(
+      effectiveEntryRegime('COMPRESSION', chop, {
+        tf30: 'UP',
+        tf15: 'UP',
+        tf5: 'DOWN',
+        m1: 'DOWN',
+      })
+    ).toBe('PULLBACK_UPTREND');
+  });
+
+  it('promotes RANGE→TREND_UP on RALLY / allow=BUY when HTF flat', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' })).toBe('TREND_UP');
+    expect(effectiveEntryRegime('COMPRESSION', { allow: 'BUY', chapter: 'BREAK_UP' })).toBe(
+      'BREAKOUT_UP'
+    );
+  });
+
+  it('promotes RANGE→TREND_DOWN on SELLOFF / allow=SELL when HTF flat', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' })).toBe(
+      'TREND_DOWN'
+    );
+  });
+
+  it('promotes dip/bounce chapters to PULLBACK playbooks', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'DIP_IN_RALLY' })).toBe(
+      'PULLBACK_UPTREND'
+    );
+    expect(effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'BOUNCE_IN_SELL' })).toBe(
+      'PULLBACK_DOWNTREND'
+    );
+  });
+
+  it('keeps RANGE only when Capital HTF flat/mixed AND story is chop', () => {
+    expect(effectiveEntryRegime('RANGE', { allow: 'NONE', chapter: 'RANGE_CHOP' })).toBe('RANGE');
+    expect(effectiveEntryRegime('RANGE', { allow: 'BOTH', chapter: 'MIXED' })).toBe('RANGE');
+    expect(
+      effectiveEntryRegime(
+        'RANGE',
+        { allow: 'NONE', chapter: 'RANGE_CHOP' },
+        { tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT' }
+      )
+    ).toBe('RANGE');
+  });
+
+  it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
+    const entry = book[book.length - 1]!;
+    const zone = zoneGeometry(book, entry)!;
+    expect(zone.pos).toBeGreaterThan(0.5);
+    const sig = {
+      direction: 'BUY' as const,
+      setup: 'CONTINUATION' as const,
+      reason: 'mind BUY',
+    };
+    const rawGate = structureGate(sig, 'RANGE', entry, zone, null, 'UP');
+    expect(rawGate.ok).toBe(false);
+    const promoted = effectiveEntryRegime('RANGE', { allow: 'BUY', chapter: 'RALLY' });
+    expect(promoted).toBe('TREND_UP');
+    const trendGate = structureGate(sig, promoted, entry, zone, null, 'UP');
+    expect(trendGate.ok).toBe(true);
   });
 });
 
@@ -228,8 +335,13 @@ describe('executable gates (not impossible AND-stacks)', () => {
       regime: 'RANGE',
       closedBars: book,
     });
-    // RANGE fade BUY blocked into selloff
-    expect(fadeBuy).toBeNull();
+    // False RANGE + selloff story → promote / WAIT — never knife BUY
+    if (fadeBuy) {
+      expect(fadeBuy.direction).toBe('SELL');
+      expect(fadeBuy.reason).toMatch(/TREND_DOWN|PRĀTS ENTRY SELL/);
+    } else {
+      expect(fadeBuy).toBeNull();
+    }
 
     // TREND_UP into multi-1m selloff: entry brain uses the picture — may SELL/WAIT,
     // never knife a RANGE-style bounce BUY against the book.
