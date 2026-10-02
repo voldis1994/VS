@@ -100,7 +100,12 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
-import { maybeExitForBrainCodeReload } from '../brainSelfImprove/brainReload.js';
+import {
+  hasBrainReloadRequest,
+  isControlApiLiveLoop,
+  maybeExitForBrainCodeReload,
+} from '../brainSelfImprove/brainReload.js';
+import { consumeRobotResume, saveRobotResume } from './robotResume.js';
 
 export type RobotTick = {
   at: string;
@@ -917,6 +922,43 @@ function clearTradeState(s: Internal) {
   s.entry_market = null;
 }
 
+/**
+ * Combined model: genome evolves live; ACCEPTed .ts reloads only between trades.
+ * Persist robots → exit 75 → live-loop restart → resumeRobotsAfterBrainReload.
+ */
+function maybeBrainReloadAfterTradeClose(s: Internal): void {
+  if (!hasBrainReloadRequest() || !isControlApiLiveLoop()) return;
+  const anyOpen = [...sessions.values()].some(
+    (x) => x.running && Boolean(x.open_side || x.deal_id)
+  );
+  if (anyOpen) return;
+  const robots = [...sessions.values()]
+    .filter((x) => x.running)
+    .map((x) => ({
+      account_id: x.account_id,
+      epic: x.epic,
+      lot_size: x.lot_size,
+      display_name: x.display_name,
+      trading_enabled: x.trading_enabled,
+      entry_enabled: x.entry_enabled,
+    }));
+  if (robots.length) {
+    saveRobotResume(robots, 'BRAIN .ts reload after trade close');
+  }
+  pushTick(s, {
+    phase: 'INFO',
+    bid: s.last_bid,
+    ask: s.last_ask,
+    mid: s.last_mid,
+    detail:
+      'BRAIN .ts reload after CLOSE — API soft-restart · robots auto-resume with new code',
+  });
+  maybeExitForBrainCodeReload({
+    anyOpenTrade: false,
+    betweenTrades: true,
+  });
+}
+
 /** How many consecutive empty Capital lists before we trust "broker flat". */
 const BROKER_FLAT_CONFIRM = 3;
 
@@ -1233,12 +1275,48 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
+/** Soft-reload after BRAIN .ts ACCEPT — only when zero robots running. */
 export function checkBrainCodeReload(): void {
   const anyOpen = [...sessions.values()].some(
     (x) => x.running && Boolean(x.open_side || x.deal_id)
   );
-  maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+  const anyRunning = [...sessions.values()].some((x) => x.running);
+  // Never kill API during SEEDING/ARMED/ENTRY — that caused Failed to fetch
+  maybeExitForBrainCodeReload({
+    anyOpenTrade: anyOpen,
+    anyRobotRunning: anyRunning,
+  });
+}
+
+/**
+ * After live-loop BRAIN reload, restart robots that were running (in-memory sessions die on exit 75).
+ * One-shot: consumes data/brain-self-improve/robot-resume.json.
+ */
+export async function resumeRobotsAfterBrainReload(): Promise<number> {
+  const robots = consumeRobotResume();
+  if (!robots.length) return 0;
+  console.log(`[robot] resuming ${robots.length} after BRAIN code reload…`);
+  let ok = 0;
+  for (const r of robots) {
+    try {
+      await startRobotSession({
+        account_id: r.account_id,
+        epic: r.epic,
+        display_name: r.display_name,
+        lot_size: r.lot_size,
+        trading_enabled: r.trading_enabled,
+        entry_enabled: r.entry_enabled,
+      });
+      ok += 1;
+      console.log(`[robot] resumed ${r.epic} (account ${r.account_id})`);
+    } catch (e) {
+      console.error(
+        `[robot] resume FAILED ${r.epic}:`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+  return ok;
 }
 
 /** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
@@ -1512,6 +1590,7 @@ async function exitTrade(
         'external'
       );
       clearTradeState(s);
+      maybeBrainReloadAfterTradeClose(s);
       return;
     }
     pushTick(s, {
@@ -2635,11 +2714,15 @@ async function robotCycle(s: Internal) {
   } finally {
     s.cycle_busy = false;
     s.cycle_busy_since = 0;
-    // ACCEPTed BRAIN .ts → soft restart only when every robot is FLAT
+    // ACCEPTed BRAIN .ts → soft restart only when NO robot is running
     const anyOpen = [...sessions.values()].some(
       (x) => x.running && Boolean(x.open_side || x.deal_id)
     );
-    maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+    const anyRunning = [...sessions.values()].some((x) => x.running);
+    maybeExitForBrainCodeReload({
+      anyOpenTrade: anyOpen,
+      anyRobotRunning: anyRunning,
+    });
   }
 }
 
@@ -2856,7 +2939,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
+                detail: `10s enrich FAIL · Capital SECOND=${secs.detail || 'empty'} · MINUTE=${mins.detail || 'empty'} · still flat`,
               });
             }
           } else {
@@ -2865,7 +2948,7 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
+              detail: `10s enrich FAIL · Capital SECOND=${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
             });
           }
         }

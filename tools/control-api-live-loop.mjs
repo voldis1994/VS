@@ -1,6 +1,6 @@
 /**
  * Live control-api runner — NO tsx watch.
- * Exit code 75 = BRAIN accepted .ts patches while FLAT → restart to load new code.
+ * Exit code 75 = BRAIN accepted .ts patches while NO robots running → restart for new code.
  * Mid-trade file writes must NOT kill the API (that caused Failed to fetch).
  */
 import { spawn } from 'node:child_process';

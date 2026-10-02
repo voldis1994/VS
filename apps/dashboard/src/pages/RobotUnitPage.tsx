@@ -160,10 +160,23 @@ export function RobotUnitPage() {
     if (accountId) q.set('account_id', accountId);
     if (epic) q.set('epic', epic);
     const qs = q.toString() ? `?${q}` : '';
-    const s = await apiFetch<RobotSession>(`/api/robot-desk/${encodeURIComponent(robotId)}${qs}`);
-    setSession(s);
-    setLotEdit((prev) => (prev === '' ? String(s.lot_size) : prev));
-    setError(null);
+    try {
+      const s = await apiFetch<RobotSession>(
+        `/api/robot-desk/${encodeURIComponent(robotId)}${qs}`
+      );
+      setSession(s);
+      setLotEdit((prev) => (prev === '' ? String(s.lot_size) : prev));
+      setError(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Load failed';
+      // API restart (BRAIN reload / crash) wipes in-memory session — drop ghost ARMED UI
+      if (/session not found/i.test(msg)) {
+        setSession(null);
+        setError('Robot session pazudusi (API restart) — spied START');
+        return;
+      }
+      throw e;
+    }
   }, [accountId, epic]);
 
   const unitClientId = session?.client_id ?? null;
