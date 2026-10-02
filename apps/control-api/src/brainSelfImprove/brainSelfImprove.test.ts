@@ -22,7 +22,11 @@ import {
   wasAlreadyTried,
   type BrainExperience,
 } from './experience.js';
-import { isPauseOnlyGenomeThrash, runBrainCycle } from './loop.js';
+import {
+  isPauseOnlyGenomeThrash,
+  isSoftPctOnlyGenomeThrash,
+  runBrainCycle,
+} from './loop.js';
 
 describe('brainSelfImprove guards', () => {
   it('allows all trading decision paths and blocks lot/broker/security/core', () => {
@@ -247,13 +251,17 @@ describe('brainSelfImprove analyze + hypothesize', () => {
       isPauseOnlyGenomeThrash(['soft_same_side_pause_closes', 'require_1m_trigger'])
     ).toBe(false);
     expect(isPauseOnlyGenomeThrash(['hardinv_pct_bp', 'explore_step'])).toBe(false);
+    expect(isSoftPctOnlyGenomeThrash(['hardinv_pct_bp', 'explore_step'])).toBe(true);
+    expect(isSoftPctOnlyGenomeThrash(['hardinv_pct_bp', 'wait_on_1m_fight'])).toBe(
+      false
+    );
   });
 
   it('skips Soft pause explore when pause already at ceiling', () => {
     const analysis = analyzeTrades(syntheticLessonTrades());
     _resetBrainGenomeForTests({
-      soft_same_side_pause_closes: 12,
-      soft_same_side_pause_min: 6,
+      soft_same_side_pause_closes: 6,
+      soft_same_side_pause_min: 3,
       explore_step: 100,
       require_1m_trigger: true,
       wait_on_1m_fight: true,

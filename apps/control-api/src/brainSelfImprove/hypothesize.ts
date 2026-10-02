@@ -499,16 +499,17 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
       ...(softFocus ? [] : codePatchesExplore(nextStep + 2)),
     ],
   };
-  // At ceiling pause already maxed — bouncing 12↔11 is thrash, not Soft fix
+  // Pause ≥6/≥3 already enough for live Soft memory — more bounce is thrash + flipFilter spam
   const pauseAtCeiling =
-    g.soft_same_side_pause_closes >= 10 && g.soft_same_side_pause_min >= 5;
+    g.soft_same_side_pause_closes >= 6 && g.soft_same_side_pause_min >= 3;
+  // Soft pause explore: genome only — NEVER codePatchesSoftSpam (flipFilter thrash)
   const softPauseExplore: Variant | null = pauseAtCeiling
     ? null
     : {
         title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
         rationale: softFocus
           ? 'Soft spam still top — bounce Soft pause before Peak Keep.'
-          : 'Bounce Soft same-side pause knobs + flipFilter lock.',
+          : 'Bounce Soft same-side pause knobs.',
         task: `pause_closes=${pause} pause_min=${pauseMin}`,
         genome_delta: {
           soft_same_side_pause_closes: pause,
@@ -520,7 +521,6 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
           genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
           genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
           genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
-          ...codePatchesSoftSpam(rejectedN % 2),
         ],
       };
   const softPctExplore: Variant = {
