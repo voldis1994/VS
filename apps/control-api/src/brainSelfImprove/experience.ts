@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { BrainPatch } from './guards.js';
+import { getBrainGenome } from './brainGenome.js';
 
 export type BrainErrorPattern = {
   id: string;
@@ -236,4 +237,39 @@ export function getSoftPauseSide(exp?: BrainExperience | null): 'BUY' | 'SELL' |
     return e.soft_pause_side;
   }
   return null;
+}
+
+/**
+ * Live desk Soft close → Brain Soft-pause memory.
+ * Previously Soft streak only updated inside BRAIN.bat cycles, so getSoftPauseSide()
+ * almost never armed during LIVE trading (Soft spam kept firing).
+ */
+export function noteLiveSoftClose(
+  side: 'BUY' | 'SELL' | null,
+  wasSoftLoss: boolean
+): { soft_pause_side: 'BUY' | 'SELL' | null; soft_pause_left: number; armed_now: boolean } {
+  const g = getBrainGenome();
+  let exp = loadExperience();
+  const before = exp.soft_pause_side;
+  const beforeLeft = exp.soft_pause_left;
+  // Each close counts down pause_closes window
+  if (exp.soft_pause_left > 0) {
+    exp = consumeSoftPauseOnEntryAttempt(exp);
+  }
+  exp = updateSoftStreak(
+    exp,
+    side,
+    wasSoftLoss,
+    Math.max(1, g.soft_same_side_pause_min || 2),
+    Math.max(1, g.soft_same_side_pause_closes || 3)
+  );
+  saveExperience(exp);
+  const armed =
+    Boolean(exp.soft_pause_side && exp.soft_pause_left > 0) &&
+    (exp.soft_pause_side !== before || exp.soft_pause_left >= beforeLeft);
+  return {
+    soft_pause_side: exp.soft_pause_side,
+    soft_pause_left: exp.soft_pause_left,
+    armed_now: armed && wasSoftLoss,
+  };
 }

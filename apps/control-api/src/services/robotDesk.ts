@@ -73,6 +73,7 @@ import {
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import { htfBiasFromDirs, m1DirForEntry, type TfDir } from './multiTfRead.js';
+import { noteLiveSoftClose } from '../brainSelfImprove/experience.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -1735,15 +1736,23 @@ async function exitTrade(
     }
     s.last_close_was_loss = wasLoss;
   }
+  const softMem = noteLiveSoftClose(
+    s.open_side === 'BUY' || s.open_side === 'SELL' ? s.open_side : null,
+    s.last_close_was_loss
+  );
   const lockLabel = s.last_close_was_loss
     ? `last Soft ${s.last_closed_side || '—'} · mind may re-enter`
     : `last ${s.last_closed_side || '—'} · mind may re-enter`;
+  const pauseTag =
+    softMem.soft_pause_side && softMem.soft_pause_left > 0
+      ? ` · BRAIN pauzē ${softMem.soft_pause_side} ×${softMem.soft_pause_left}`
+      : '';
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · ${lockLabel}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason} · ${lockLabel}${pauseTag}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -2675,6 +2684,11 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         s.last_closed_side = closedSide;
         s.last_close_was_loss = true;
         s.closed_at_ms = Date.now();
+        const softMem = noteLiveSoftClose(closedSide, true);
+        const pauseTag =
+          softMem.soft_pause_side && softMem.soft_pause_left > 0
+            ? ` · BRAIN pauzē ${softMem.soft_pause_side} ×${softMem.soft_pause_left}`
+            : '';
         const flatReason = marketAllowsTrading(quote.market_status)
           ? 'EXTERNAL · broker flat (manage cycle)'
           : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
@@ -2686,8 +2700,8 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
           ask: quote.ask,
           mid: quote.mid,
           detail: marketAllowsTrading(quote.market_status)
-            ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`
-            : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT`,
+            ? `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}${pauseTag}`
+            : `MARKET ${quote.market_status || 'CLOSED'} · broker flat — trade closed · FLAT${pauseTag}`,
         });
         const rec = await withCapitalAccountSession(leaseInput, async (session) => {
           await reconcileCapitalActivityCloses(session, s, quote);
@@ -3102,12 +3116,17 @@ async function robotCycleLocked(s: Internal) {
           const closedSide = s.open_side;
           s.last_closed_side = closedSide;
           s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
+          const softMem = noteLiveSoftClose(closedSide, true);
+          const pauseTag =
+            softMem.soft_pause_side && softMem.soft_pause_left > 0
+              ? ` · BRAIN pauzē ${softMem.soft_pause_side} ×${softMem.soft_pause_left}`
+              : '';
           pushTick(s, {
             phase: 'INFO',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}`,
+            detail: `Broker flat on this epic — trade closed externally · FLAT · last ${closedSide}${pauseTag}`,
           });
           s.closed_at_ms = Date.now();
           await persistClosedTradeLedger(
