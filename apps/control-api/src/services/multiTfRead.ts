@@ -188,16 +188,20 @@ export function readMultiTfStack(input: {
   const waitFight = getBrainGenome().wait_on_1m_fight;
   const triggerFight =
     waitFight && bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
+  // 5m against bias = bounce/dip context. When 1m already agrees with bias,
+  // that IS the pullback entry (SELL bounce in dump / BUY dip in rally).
+  // Blocking on lone 5m color while 1m↓+30/15↓ sat out the whole Gold dump.
+  const midFightBlocks = midFight && tf1 !== bias;
   const only1m =
     tf1 !== 'FLAT' && tf5 === 'FLAT' && tf15 === 'FLAT' && tf30 === 'FLAT';
 
-  // Aligned = higher clear, 5m not fighting, 1m not fighting (trigger ready)
+  // Aligned = higher clear, 1m trigger ready; 5m bounce OK if 1m confirms side
   const aligned =
     bias !== 'FLAT' &&
     !higherFight &&
-    !midFight &&
+    !midFightBlocks &&
     !triggerFight &&
-    (only1m || tf5 === bias || tf5 === 'FLAT' || tf15 === bias || tf30 === bias);
+    (only1m || tf5 === bias || tf5 === 'FLAT' || tf15 === bias || tf30 === bias || tf1 === bias);
 
   const summary = `30m${arrow(tf30)} 15m${arrow(tf15)} 5m${arrow(tf5)} 1m${arrow(tf1)}`;
 
@@ -205,17 +209,21 @@ export function readMultiTfStack(input: {
   if (higherFight) {
     thesis_lv = `30m ${tf30} pret 15m ${tf15} — lielie TF nesakrīt, gaidu.`;
   } else if (bias === 'UP') {
-    thesis_lv = midFight
-      ? `30/15m UP, bet 5m DOWN — gaidu 5m atgriešanos pirms BUY.`
-      : triggerFight
-        ? `Augšējie TF UP · 1m vēl DOWN (pullback) — gaidu 1m zaļu / HOLD pusi BUY.`
-        : `Steks UP (${summary}) — strādāju kā pircējs.`;
+    thesis_lv = midFightBlocks
+      ? `30/15m UP, bet 5m DOWN — gaidu 5m atgriešanos / 1m UP pirms BUY.`
+      : midFight && tf1 === bias
+        ? `30/15m UP · 5m dip · 1m jau UP — ņemu BUY pullback.`
+        : triggerFight
+          ? `Augšējie TF UP · 1m vēl DOWN (pullback) — gaidu 1m zaļu / HOLD pusi BUY.`
+          : `Steks UP (${summary}) — strādāju kā pircējs.`;
   } else if (bias === 'DOWN') {
-    thesis_lv = midFight
-      ? `30/15m DOWN, bet 5m UP — gaidu 5m atgriešanos pirms SELL.`
-      : triggerFight
-        ? `Augšējie TF DOWN · 1m vēl UP (rally fade gaida) — gaidu 1m sarkanu / HOLD pusi SELL.`
-        : `Steks DOWN (${summary}) — strādāju kā pārdevējs.`;
+    thesis_lv = midFightBlocks
+      ? `30/15m DOWN, bet 5m UP — gaidu 5m atgriešanos / 1m DOWN pirms SELL.`
+      : midFight && tf1 === bias
+        ? `30/15m DOWN · 5m bounce · 1m jau DOWN — ņemu SELL pullback.`
+        : triggerFight
+          ? `Augšējie TF DOWN · 1m vēl UP (rally fade gaida) — gaidu 1m sarkanu / HOLD pusi SELL.`
+          : `Steks DOWN (${summary}) — strādāju kā pārdevējs.`;
   } else {
     thesis_lv = `Steks jauktā (${summary}) — nav skaidras puses.`;
   }
