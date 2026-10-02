@@ -194,6 +194,8 @@ export type RobotSession = {
   cycle_busy_age_ms?: number;
   /** ISO time of newest LIVE LOG tick */
   last_tick_at?: string | null;
+  /** Newest of last_tick_at / last_quote_at — UI stale banner */
+  last_activity_at?: string | null;
 };
 
 type Internal = RobotSession & {
@@ -238,6 +240,8 @@ type Internal = RobotSession & {
   cycle_busy: boolean;
   /** Wall clock when cycle_busy became true — unstick hung Capital awaits */
   cycle_busy_since: number;
+  /** Bumped on wall abort / unstuck so stale finally cannot clear a newer cycle */
+  cycle_gen: number;
   /** Retry entry after failed order on same closed 10s bar */
   pending_entry: {
     direction: 'BUY' | 'SELL';
@@ -280,9 +284,47 @@ const ACTIVE_CADENCE_MS = 1_250;
 const SECOND_OHLC_ENRICH_MS = 8_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
-/** If a Capital await hangs, force-clear so the robot keeps polling */
-const CYCLE_BUSY_STALE_MS = 50_000;
+/**
+ * If a Capital await hangs past this, force-clear cycle_busy so polling resumes.
+ * Keep above CAPITAL_LOCK_HOLD_MS (45s) — multi-account queue is not a hang.
+ */
+export const CYCLE_BUSY_STALE_MS = 55_000;
+/** Soft UI: Capital queue / slow API (multi-account same connection). Not an error yet. */
+export const CYCLE_BUSY_WARN_MS = 15_000;
+/** Hard UI STUCK: approaching real hang / unstuck. */
+export const CYCLE_BUSY_STUCK_MS = 40_000;
+/** Abort one robotCycle wall-clock so one account cannot starve the rest forever. */
+export const CYCLE_WALL_MS = 42_000;
+/** Reuse SECOND enrich across robots on same epic (cuts Capital lock queue). */
+const SECOND_ENRICH_CACHE_MS = 5_000;
 const ZONE_SEED_THROTTLE_MS = 15_000;
+
+type SecondEnrichCache = {
+  at: number;
+  ok: boolean;
+  candles: Awaited<ReturnType<typeof fetchCapitalPrices>>['candles'];
+  detail: string;
+};
+const secondEnrichByEpic = new Map<string, SecondEnrichCache>();
+
+async function fetchSecondPricesCached(
+  session: Parameters<typeof fetchCapitalPrices>[0],
+  epic: string
+): Promise<Awaited<ReturnType<typeof fetchCapitalPrices>>> {
+  const key = epic.trim().toUpperCase();
+  const hit = secondEnrichByEpic.get(key);
+  if (hit && Date.now() - hit.at < SECOND_ENRICH_CACHE_MS) {
+    return { ok: hit.ok, candles: hit.candles, detail: `${hit.detail} · cache` };
+  }
+  const secs = await fetchCapitalPrices(session, epic, 'SECOND', 50);
+  secondEnrichByEpic.set(key, {
+    at: Date.now(),
+    ok: secs.ok,
+    candles: secs.candles,
+    detail: secs.detail,
+  });
+  return secs;
+}
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
@@ -300,6 +342,8 @@ function setRobotCadence(s: Internal, ms: number) {
   s.timer = setInterval(() => {
     if (s.cycle_busy) {
       if (s.cycle_busy_since > 0 && Date.now() - s.cycle_busy_since > CYCLE_BUSY_STALE_MS) {
+        // Invalidate hung generation so its finally cannot clear a fresh cycle
+        s.cycle_gen += 1;
         s.cycle_busy = false;
         s.cycle_busy_since = 0;
         pushTick(s, {
@@ -425,6 +469,7 @@ function publicSession(s: Internal): RobotSession {
     broker_flat_streak: _bfs,
     cycle_busy: _busy,
     cycle_busy_since: _busySince,
+    cycle_gen: _cycleGen,
     pending_entry: _pend,
     ...rest
   } = s;
@@ -434,6 +479,13 @@ function publicSession(s: Internal): RobotSession {
     s.cycle_busy && s.cycle_busy_since > 0
       ? Math.max(0, Date.now() - s.cycle_busy_since)
       : 0;
+  const tickMs = lastTickAt ? Date.parse(lastTickAt) : NaN;
+  const quoteMs = s.last_quote_at ? Date.parse(s.last_quote_at) : NaN;
+  let lastActivityAt: string | null = null;
+  if (Number.isFinite(tickMs) && Number.isFinite(quoteMs)) {
+    lastActivityAt = tickMs >= quoteMs ? lastTickAt : s.last_quote_at;
+  } else if (Number.isFinite(tickMs)) lastActivityAt = lastTickAt;
+  else if (Number.isFinite(quoteMs)) lastActivityAt = s.last_quote_at;
   return {
     ...rest,
     closed_at_ms: s.closed_at_ms,
@@ -449,6 +501,7 @@ function publicSession(s: Internal): RobotSession {
     cycle_busy: s.cycle_busy,
     cycle_busy_age_ms: busyAge,
     last_tick_at: lastTickAt,
+    last_activity_at: lastActivityAt,
   };
 }
 
@@ -2707,13 +2760,39 @@ async function syncAllOpenRobotsBrokerTp(): Promise<void> {
 
 async function robotCycle(s: Internal) {
   if (!s.running || s.cycle_busy) return;
+  s.cycle_gen += 1;
+  const myGen = s.cycle_gen;
   s.cycle_busy = true;
   s.cycle_busy_since = Date.now();
   try {
-    await runWithDeskClientAsync(s.client_id || 0, () => robotCycleLocked(s));
+    await Promise.race([
+      runWithDeskClientAsync(s.client_id || 0, () => robotCycleLocked(s)),
+      new Promise<never>((_, rej) => {
+        setTimeout(() => {
+          rej(
+            new Error(
+              `CYCLE WALL ${CYCLE_WALL_MS / 1000}s — Capital cycle aborted (citi konti var turpināt)`
+            )
+          );
+        }, CYCLE_WALL_MS);
+      }),
+    ]);
+  } catch (err) {
+    if (s.cycle_gen === myGen) {
+      const detail = err instanceof Error ? err.message : String(err);
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: s.last_bid,
+        ask: s.last_ask,
+        mid: s.last_mid,
+        detail,
+      });
+    }
   } finally {
-    s.cycle_busy = false;
-    s.cycle_busy_since = 0;
+    if (s.cycle_gen === myGen) {
+      s.cycle_busy = false;
+      s.cycle_busy_since = 0;
+    }
     // ACCEPTed BRAIN .ts → soft restart only when NO robot is running
     const anyOpen = [...sessions.values()].some(
       (x) => x.running && Boolean(x.open_side || x.deal_id)
@@ -2888,7 +2967,7 @@ async function robotCycleLocked(s: Internal) {
     if (needEnrich) {
       s.last_second_ohlc_ms = Date.now();
       try {
-        const secs = await fetchCapitalPrices(session, s.epic, 'SECOND', 50);
+        const secs = await fetchSecondPricesCached(session, s.epic);
         if (secs.ok && secs.candles.length >= 2) {
           const beforeKey = s.ohlcState.last_closed
             ? closedBarKey(s.ohlcState.last_closed)
@@ -3607,6 +3686,7 @@ export async function startRobotSession(input: {
     await stopRobotSession(id);
   } else if (existing?.cycle_busy) {
     existing.running = false;
+    existing.cycle_gen += 1;
     await waitCycleIdle(existing);
     existing.cycle_busy = false;
     existing.cycle_busy_since = 0;
@@ -3683,6 +3763,7 @@ export async function startRobotSession(input: {
     broker_flat_streak: 0,
     cycle_busy: false,
     cycle_busy_since: 0,
+    cycle_gen: 0,
     pending_entry: null,
     entry_close_latch: null,
     hardinv_breach_since_ms: 0,
