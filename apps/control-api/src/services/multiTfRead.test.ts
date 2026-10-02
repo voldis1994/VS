@@ -66,7 +66,7 @@ describe('multiTfRead', () => {
     expect(stack.thesis_lv).toMatch(/nesakrīt|gaidu/i);
   });
 
-  it('5m fighting higher bias → WAIT (no knife)', () => {
+  it('5m fighting + 1m also against → WAIT (no knife)', () => {
     const stack = readMultiTfStack({
       tf30: 'UP',
       tf15: 'UP',
@@ -75,6 +75,31 @@ describe('multiTfRead', () => {
     });
     expect(stack.bias).toBe('UP');
     expect(stack.aligned).toBe(false);
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
+  });
+
+  it('5m bounce against bias but 1m already with bias → SELL pullback (not sit dump)', () => {
+    // Gold dump: 30/15 DOWN, one 5m green bounce, 1m already red → sell the bounce
+    const stack = readMultiTfStack({
+      tf30: 'DOWN',
+      tf15: 'DOWN',
+      tf5: 'UP',
+      tf1: 'DOWN',
+    });
+    expect(stack.bias).toBe('DOWN');
+    expect(stack.aligned).toBe(true);
+    expect(sideFromMultiTf(stack)).toBe('SELL');
+    expect(stack.thesis_lv).toMatch(/SELL pullback|bounce/i);
+  });
+
+  it('5m bounce + 1m not ready → still WAIT', () => {
+    const stack = readMultiTfStack({
+      tf30: 'DOWN',
+      tf15: 'DOWN',
+      tf5: 'UP',
+      tf1: 'FLAT',
+    });
+    expect(stack.bias).toBe('DOWN');
     expect(sideFromMultiTf(stack)).toBe('WAIT');
   });
 
@@ -123,6 +148,19 @@ describe('multiTfRead', () => {
       { open: 97.5, high: 98.5, low: 97, close: 98 }, // forming tip dropped
     ];
     expect(trekBiasFromCandles(candles, 4)).toBe('DOWN');
+  });
+
+  it('trekBiasFromCandles dump stays DOWN despite last green bounce', () => {
+    // Closed dump + last closed tiny green bounce (forming tip separate)
+    const candles = [
+      { open: 4190, high: 4192, low: 4180, close: 4181 },
+      { open: 4181, high: 4182, low: 4165, close: 4166 },
+      { open: 4166, high: 4168, low: 4150, close: 4152 },
+      { open: 4152, high: 4155, low: 4151, close: 4154 }, // last closed bounce UP
+      { open: 4154, high: 4155, low: 4151, close: 4152 }, // forming
+    ];
+    expect(dirFromCandles(candles)).toBe('UP'); // lone last closed
+    expect(trekBiasFromCandles(candles, 4)).toBe('DOWN'); // trek reads the dump
   });
 
   it('m1DirForEntry uses live tip only when closed 1m is with HTF or flat', () => {

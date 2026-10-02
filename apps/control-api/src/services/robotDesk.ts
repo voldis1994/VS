@@ -72,7 +72,12 @@ import {
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
-import { htfBiasFromDirs, m1DirForEntry, type TfDir } from './multiTfRead.js';
+import {
+  htfBiasFromDirs,
+  m1DirForEntry,
+  trekBiasFromCandles,
+  type TfDir,
+} from './multiTfRead.js';
 import { noteLiveSoftClose } from '../brainSelfImprove/experience.js';
 import {
   exitReasonWasLoss,
@@ -696,6 +701,20 @@ function capitalCandleDir(
   return 'FLAT';
 }
 
+/**
+ * HTF direction for entry mind — trek over last closed candles, not one print.
+ * One green 5m bounce in a dump was reading 5m↑ and blocking all SELLs.
+ */
+function capitalTfTrekDir(
+  candles: CapitalPriceCandle[],
+  lookback = 4
+): 'UP' | 'DOWN' | 'FLAT' | null {
+  if (!candles?.length) return null;
+  const trek = trekBiasFromCandles(candles, lookback);
+  if (trek === 'UP' || trek === 'DOWN') return trek;
+  return capitalCandleDir(candles);
+}
+
 function asTfDir(d: 'UP' | 'DOWN' | 'FLAT' | null | undefined): TfDir {
   return d === 'UP' || d === 'DOWN' ? d : 'FLAT';
 }
@@ -708,9 +727,10 @@ function capitalDirsForEntry(s: Internal): {
   tf30: 'UP' | 'DOWN' | 'FLAT' | null;
   m1_live: boolean;
 } {
-  const tf5 = capitalCandleDir(s.last_tf5_candles);
-  const tf15 = capitalCandleDir(s.last_tf15_candles);
-  const tf30 = capitalCandleDir(s.last_tf30_candles);
+  // 5m/15m: trek (dump ≠ one bounce UP). 30m: slower — trek 3 still OK.
+  const tf5 = capitalTfTrekDir(s.last_tf5_candles, 4);
+  const tf15 = capitalTfTrekDir(s.last_tf15_candles, 3);
+  const tf30 = capitalTfTrekDir(s.last_tf30_candles, 3);
   const htf = htfBiasFromDirs(asTfDir(tf30), asTfDir(tf15), asTfDir(tf5));
   const closedM1 = capitalCandleDir(s.last_minute_candles);
   const m1 = m1DirForEntry(s.last_minute_candles, htf);
