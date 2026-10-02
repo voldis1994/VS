@@ -61,6 +61,21 @@ describe('brainReload — soft restart when FLAT', () => {
     exitSpy.restore();
   });
 
+  it('exits after trade close even if robot still running (betweenTrades + resume)', async () => {
+    process.env[LIVE_LOOP_ENV] = '1';
+    requestBrainCodeReload({ cycle_id: 'after_close', reason: 'unit' });
+    const exitSpy = viExit();
+    maybeExitForBrainCodeReload({
+      anyOpenTrade: false,
+      anyRobotRunning: true,
+      betweenTrades: true,
+    });
+    expect(hasBrainReloadRequest()).toBe(false);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(exitSpy.code).toBe(BRAIN_RELOAD_EXIT_CODE);
+    exitSpy.restore();
+  });
+
   it('does NOT exit without live-loop — keeps API alive (Failed to fetch fix)', () => {
     delete process.env[LIVE_LOOP_ENV];
     requestBrainCodeReload({ cycle_id: 'bare', reason: 'unit' });

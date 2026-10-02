@@ -76,7 +76,7 @@ export function clearStaleBrainReloadOnBoot(): void {
   if (!hasBrainReloadRequest()) return;
   if (isControlApiLiveLoop()) {
     console.log(
-      '[brain] reload-needed present — will soft-restart when all robots FLAT (live-loop)'
+      '[brain] reload-needed present — will soft-restart after trade close or when no robots running (live-loop)'
     );
     return;
   }
@@ -88,26 +88,33 @@ export function clearStaleBrainReloadOnBoot(): void {
 }
 
 /**
- * If reload requested and desk is idle, exit so live-loop can restart with new code.
- * No-op (keeps flag) when not running under CONTROL_API_LIVE_LOOP=1.
+ * Soft-reload windows:
+ * - Idle desk (no robots running) — heartbeat / STOP
+ * - Between trades (`betweenTrades`) — right after a close, then auto-resume
  *
- * CRITICAL: block while ANY robot is running (SEEDING / ARMED / ENTRY), not only
- * open trades — exit 75 mid-watch wiped sessions → Failed to fetch / LIVE LOG stale.
+ * NEVER during open trade, and NEVER during SEEDING/ARMED unless betweenTrades.
  */
 export function maybeExitForBrainCodeReload(opts: {
   anyOpenTrade: boolean;
   /** True if any robot session is running (even FLAT / ARMED). */
   anyRobotRunning?: boolean;
+  /**
+   * After a confirmed close — allow exit even if robots still "running".
+   * Caller must persist robot-resume.json so boot restarts them.
+   */
+  betweenTrades?: boolean;
 }): void {
   if (!hasBrainReloadRequest()) return;
-  if (opts.anyOpenTrade || opts.anyRobotRunning) return;
+  if (opts.anyOpenTrade) return;
+  if (!opts.betweenTrades && opts.anyRobotRunning) return;
   if (!isControlApiLiveLoop()) {
     // Never process.exit here — that left EMPTY BOARD + Failed to fetch forever
     return;
   }
   clearBrainReloadRequest();
+  const why = opts.betweenTrades ? 'after trade close' : 'no robots running';
   console.log(
-    `[brain] code reload — no robots running · exit ${BRAIN_RELOAD_EXIT_CODE} (live-loop restart)`
+    `[brain] code reload — ${why} · exit ${BRAIN_RELOAD_EXIT_CODE} (live-loop restart)`
   );
   setTimeout(() => process.exit(BRAIN_RELOAD_EXIT_CODE), 150);
 }

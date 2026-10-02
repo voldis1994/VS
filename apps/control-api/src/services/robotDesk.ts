@@ -922,6 +922,43 @@ function clearTradeState(s: Internal) {
   s.entry_market = null;
 }
 
+/**
+ * Combined model: genome evolves live; ACCEPTed .ts reloads only between trades.
+ * Persist robots → exit 75 → live-loop restart → resumeRobotsAfterBrainReload.
+ */
+function maybeBrainReloadAfterTradeClose(s: Internal): void {
+  if (!hasBrainReloadRequest() || !isControlApiLiveLoop()) return;
+  const anyOpen = [...sessions.values()].some(
+    (x) => x.running && Boolean(x.open_side || x.deal_id)
+  );
+  if (anyOpen) return;
+  const robots = [...sessions.values()]
+    .filter((x) => x.running)
+    .map((x) => ({
+      account_id: x.account_id,
+      epic: x.epic,
+      lot_size: x.lot_size,
+      display_name: x.display_name,
+      trading_enabled: x.trading_enabled,
+      entry_enabled: x.entry_enabled,
+    }));
+  if (robots.length) {
+    saveRobotResume(robots, 'BRAIN .ts reload after trade close');
+  }
+  pushTick(s, {
+    phase: 'INFO',
+    bid: s.last_bid,
+    ask: s.last_ask,
+    mid: s.last_mid,
+    detail:
+      'BRAIN .ts reload after CLOSE — API soft-restart · robots auto-resume with new code',
+  });
+  maybeExitForBrainCodeReload({
+    anyOpenTrade: false,
+    betweenTrades: true,
+  });
+}
+
 /** How many consecutive empty Capital lists before we trust "broker flat". */
 const BROKER_FLAT_CONFIRM = 3;
 
@@ -1553,6 +1590,7 @@ async function exitTrade(
         'external'
       );
       clearTradeState(s);
+      maybeBrainReloadAfterTradeClose(s);
       return;
     }
     pushTick(s, {
