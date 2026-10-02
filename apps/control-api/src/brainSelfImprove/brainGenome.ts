@@ -250,6 +250,12 @@ function coerceMicroBp(raw: unknown, fallback: number): number {
   return roundRegimeBp(n);
 }
 
+/**
+ * Floor for Soft hardinv_pct_bp. Brain SI bounced to 0.1bp (= Soft suicide / dust).
+ * Factory default is 8; never allow live genome below this.
+ */
+export const HARDINV_PCT_BP_MIN = 4;
+
 function migrateLegacyKeys(p: Record<string, unknown>): void {
   if (p.hardinv_pct_bp == null && p.hardinv_pct != null) {
     p.hardinv_pct_bp = p.hardinv_pct;
@@ -400,7 +406,11 @@ export function sanitizeGenome(raw: Partial<BrainGenome> | null | undefined): Br
     regime_mom_bars: clampInt(p.regime_mom_bars, d.regime_mom_bars, 4, 16),
     regime_persist_window: clampInt(p.regime_persist_window, d.regime_persist_window, 3, 12),
     mtf_trek_flat_frac: clamp(coerceRegimeBp(p.mtf_trek_flat_frac, d.mtf_trek_flat_frac), 1.5, 12.0),
-    hardinv_pct_bp: clamp(coerceMicroBp(p.hardinv_pct_bp, d.hardinv_pct_bp), 0.1, 200),
+    hardinv_pct_bp: clamp(
+      coerceMicroBp(p.hardinv_pct_bp, d.hardinv_pct_bp),
+      HARDINV_PCT_BP_MIN,
+      200
+    ),
     peak_mfe_pct_bp: clamp(coerceMicroBp(p.peak_mfe_pct_bp, d.peak_mfe_pct_bp), 0.1, 200),
     target_pct_bp: clamp(coerceMicroBp(p.target_pct_bp, d.target_pct_bp), 0.1, 500),
     story_min_path_bp: clamp(coerceMicroBp(p.story_min_path_bp, d.story_min_path_bp), 0.1, 50),
