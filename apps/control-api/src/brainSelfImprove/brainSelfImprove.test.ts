@@ -22,7 +22,7 @@ import {
   wasAlreadyTried,
   type BrainExperience,
 } from './experience.js';
-import { runBrainCycle } from './loop.js';
+import { isPauseOnlyGenomeThrash, runBrainCycle } from './loop.js';
 
 describe('brainSelfImprove guards', () => {
   it('allows all trading decision paths and blocks lot/broker/security/core', () => {
@@ -233,6 +233,56 @@ describe('brainSelfImprove analyze + hypothesize', () => {
     const a1 = analyzeTrades(trades);
     const a2 = analyzeTrades(trades);
     expect(a1.top_pattern?.count).toBe(a2.top_pattern?.count);
+  });
+
+  it('flags pause-only genome thrash (invisible to replay E)', () => {
+    expect(
+      isPauseOnlyGenomeThrash([
+        'soft_same_side_pause_closes',
+        'soft_same_side_pause_min',
+        'explore_step',
+      ])
+    ).toBe(true);
+    expect(
+      isPauseOnlyGenomeThrash(['soft_same_side_pause_closes', 'require_1m_trigger'])
+    ).toBe(false);
+    expect(isPauseOnlyGenomeThrash(['hardinv_pct_bp', 'explore_step'])).toBe(false);
+  });
+
+  it('skips Soft pause explore when pause already at ceiling', () => {
+    const analysis = analyzeTrades(syntheticLessonTrades());
+    _resetBrainGenomeForTests({
+      soft_same_side_pause_closes: 12,
+      soft_same_side_pause_min: 6,
+      explore_step: 100,
+      require_1m_trigger: true,
+      wait_on_1m_fight: true,
+    });
+    const rejected: string[] = [];
+    const titles: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const exp: BrainExperience = {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: analysis.patterns,
+        rejected_signatures: [...rejected],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      };
+      const hypo = buildHypothesis(analysis, exp);
+      expect(hypo).toBeTruthy();
+      titles.push(hypo!.title);
+      rejected.push(hypo!.signature);
+    }
+    expect(titles.some((t) => /Explore Soft pause/i.test(t))).toBe(false);
+    expect(titles.some((t) => /Soft pct|reinforce 1m Soft shields|Force Soft/i.test(t))).toBe(
+      true
+    );
   });
 });
 
