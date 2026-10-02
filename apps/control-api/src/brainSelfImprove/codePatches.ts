@@ -99,6 +99,8 @@ function readConst(relPath: string, constName: string): number | null {
 const FLIP = 'apps/control-api/src/services/flipFilter.ts';
 const STRUCTURE = 'apps/control-api/src/services/structureEntry.ts';
 const MIND = 'apps/control-api/src/services/traderMind.ts';
+const EXIT = 'apps/control-api/src/services/exitManage.ts';
+const REGIME_BANDS = 'apps/control-api/src/services/regimeBands.ts';
 
 /** Soft spam / Soft loss — longer same-dir lock after Soft. */
 export function codePatchesSoftSpam(step = 0): BrainPatch[] {
@@ -200,5 +202,92 @@ export function codePatchesExplore(step: number): BrainPatch[] {
     `Explore Soft lock ${cur}→${next}ms`
   );
   if (p) out.push(p);
+  return out;
+}
+
+/**
+ * Exit timing — Soft grace / TimeDecay hold (live constants in exitManage).
+ * Clamped ranges so Soft does not go instant or multi-hour dead.
+ */
+export function codePatchesExitManage(step = 0): BrainPatch[] {
+  const out: BrainPatch[] = [];
+  const dir = step % 2 === 0 ? 1 : -1;
+
+  const grace = readConst(EXIT, 'HARDINV_GRACE_MS') ?? 12_000;
+  let nextGrace = grace + dir * 2_000;
+  if (nextGrace > 20_000) nextGrace = grace - 2_000;
+  if (nextGrace < 6_000) nextGrace = grace + 2_000;
+  const p1 = constNumPatch(
+    EXIT,
+    'HARDINV_GRACE_MS',
+    nextGrace,
+    `Soft grace ${grace}→${nextGrace}ms`
+  );
+  if (p1) out.push(p1);
+
+  const hold = readConst(EXIT, 'TIMEDECAY_MIN_HOLD_MS') ?? 720_000;
+  let nextHold = hold + dir * 60_000;
+  if (nextHold > 900_000) nextHold = hold - 60_000;
+  if (nextHold < 480_000) nextHold = hold + 60_000;
+  const p2 = constNumPatch(
+    EXIT,
+    'TIMEDECAY_MIN_HOLD_MS',
+    nextHold,
+    `TimeDecay hold ${hold}→${nextHold}ms`
+  );
+  if (p2) out.push(p2);
+
+  const fav = readConst(EXIT, 'TIMEDECAY_MIN_FAV_ABS') ?? 2.0;
+  let nextFav = Number((fav + dir * 0.2).toFixed(1));
+  if (nextFav > 3.0) nextFav = Number((fav - 0.2).toFixed(1));
+  // Floor 2.0 — exitManage.test asserts TIMEDECAY_MIN_FAV_ABS >= 2
+  if (nextFav < 2.0) nextFav = Number((fav + 0.2).toFixed(1));
+  if (nextFav < 2.0) nextFav = 2.0;
+  const p3 = constNumPatch(
+    EXIT,
+    'TIMEDECAY_MIN_FAV_ABS',
+    nextFav,
+    `TimeDecay fav ${fav}→${nextFav}`
+  );
+  if (p3) out.push(p3);
+
+  return out;
+}
+
+/**
+ * Regime persist mults (factory fallbacks). Live classify prefers genome, but
+ * consumers/tests that still import these constants stay coherent.
+ * Step ≥ 0.05; never touch 0.000x body ladder (that is genome bp).
+ */
+export function codePatchesRegimeBands(step = 0): BrainPatch[] {
+  const out: BrainPatch[] = [];
+  const dir = step % 2 === 0 ? 1 : -1;
+
+  const enter = readConst(REGIME_BANDS, 'PERSIST_ENTER') ?? 0.5;
+  let nextEnter = Number((enter + dir * 0.05).toFixed(2));
+  if (nextEnter > 0.7) nextEnter = Number((enter - 0.05).toFixed(2));
+  if (nextEnter < 0.3) nextEnter = Number((enter + 0.05).toFixed(2));
+  const p1 = constNumPatch(
+    REGIME_BANDS,
+    'PERSIST_ENTER',
+    nextEnter,
+    `PERSIST_ENTER ${enter}→${nextEnter}`
+  );
+  if (p1) out.push(p1);
+
+  const stay = readConst(REGIME_BANDS, 'PERSIST_STAY') ?? 0.3;
+  let nextStay = Number((stay + dir * -0.05).toFixed(2));
+  if (nextStay > 0.5) nextStay = Number((stay - 0.05).toFixed(2));
+  if (nextStay < 0.15) nextStay = Number((stay + 0.05).toFixed(2));
+  // stay must stay below enter
+  if (nextStay >= nextEnter) nextStay = Number((nextEnter - 0.1).toFixed(2));
+  const p2 = constNumPatch(
+    REGIME_BANDS,
+    'PERSIST_STAY',
+    nextStay,
+    `PERSIST_STAY ${stay}→${nextStay}`
+  );
+  if (p2) out.push(p2);
+
   return out;
 }

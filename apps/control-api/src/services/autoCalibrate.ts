@@ -1,14 +1,20 @@
 /**
  * Ultimate desk auto-calibrate — watches closes since robot START and
- * softly retunes Soft/Peak/Target + entry_filter_level every N closes.
+ * softly retunes Soft/Peak/Target ABS + SAFETY RR every N closes.
+ *
+ * Ownership (no fight with Brain SI):
+ * - AutoCal OWN: hardinv_abs, peak_mfe_abs, target_abs, safety_tp_rr,
+ *   peak_min_giveback_abs, peak_retention (desk), enabled_regimes ON-only
+ * - Brain SI OWN: genome bp (hardinv_pct_bp / trek / regime_*), peak_keep,
+ *   Soft-pause, entry/exit .ts patches
+ * - Pct knobs on desk are ALWAYS mirrored from genome bp (not independently tuned)
  *
  * Soft by design: never daily/% entry blocks, never empty allowlist.
- * Regimes: NEVER auto-OFF — only calibrate Soft/Peak/Target (and may ON missing).
- * Lot size untouched.
- * Entry filters start OPEN (0); auto-cal raises after bad closes.
+ * Regimes: NEVER auto-OFF. Lot size untouched.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { getBrainGenome, regimeBpToFrac } from '../brainSelfImprove/brainGenome.js';
 import {
   defaultDeskCalibration,
   getDeskCalibration,
@@ -21,6 +27,16 @@ import type { RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
 import type { MarketContextCompact } from './marketContext.js';
 import { reviewSessionLikeHuman } from './traderMind.js';
+
+/** Desk pct always follows Brain genome bp (SoT) — AutoCal does not evolve pct. */
+function deskPctFromGenome(): Pick<DeskCalibration, 'hardinv_pct' | 'peak_mfe_pct' | 'target_pct'> {
+  const g = getBrainGenome();
+  return {
+    hardinv_pct: regimeBpToFrac(g.hardinv_pct_bp),
+    peak_mfe_pct: regimeBpToFrac(g.peak_mfe_pct_bp),
+    target_pct: regimeBpToFrac(g.target_pct_bp),
+  };
+}
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
 /** After an applied calibrate — pause NEW entries so desk can settle setups. */
@@ -673,7 +689,6 @@ export function proposeAutoCalibration(
     const easedTgt = next.target_abs - 1.25;
     const tgtFloor = next.hardinv_abs + 3;
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
-    next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`);
     }
@@ -705,8 +720,6 @@ export function proposeAutoCalibration(
     next.peak_retention = Math.min(AUTO_CAL_MAX_PEAK_RETENTION, next.peak_retention + 0.03);
     next.peak_min_giveback_abs = Math.min(1.5, next.peak_min_giveback_abs + 0.1);
     next.target_abs = Math.min(AUTO_CAL_MAX_TARGET_ABS, next.target_abs + 0.75);
-    next.target_pct = Math.min(0.004, next.target_pct * 1.06);
-    next.peak_mfe_pct = Math.min(0.002, next.peak_mfe_pct * 1.05);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)}`);
     }
@@ -827,6 +840,25 @@ export function proposeAutoCalibration(
   }
 
   next.enabled_regimes = [...enabled] as RegimeName[];
+
+  // Brain SI owns pct bp — desk pct always mirrors genome (no AutoCal pct drift)
+  const pctSoT = deskPctFromGenome();
+  if (next.hardinv_pct !== pctSoT.hardinv_pct) {
+    changes.push(
+      `hardinv_pct ${next.hardinv_pct}→${pctSoT.hardinv_pct} (genome bp SoT)`
+    );
+  }
+  if (next.target_pct !== pctSoT.target_pct) {
+    changes.push(`target_pct ${next.target_pct}→${pctSoT.target_pct} (genome bp SoT)`);
+  }
+  if (next.peak_mfe_pct !== pctSoT.peak_mfe_pct) {
+    changes.push(
+      `peak_mfe_pct ${next.peak_mfe_pct}→${pctSoT.peak_mfe_pct} (genome bp SoT)`
+    );
+  }
+  next.hardinv_pct = pctSoT.hardinv_pct;
+  next.target_pct = pctSoT.target_pct;
+  next.peak_mfe_pct = pctSoT.peak_mfe_pct;
 
   // No forced raise — hold is OK when already capped / balanced
 

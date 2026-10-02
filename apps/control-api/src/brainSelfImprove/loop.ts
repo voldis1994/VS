@@ -9,6 +9,7 @@ import {
   createCandidateSession,
   ensureGenomeFile,
   promoteAcceptedVersion,
+  restoreCodeSourcesFromSnapshot,
   restoreSnapshot,
 } from './candidate.js';
 import { evaluateCandidate, measureBaseline } from './evaluate.js';
@@ -280,15 +281,31 @@ export async function runBrainCycle(opts?: {
   }
 
   brainSection('6) ACCEPT → JAUNĀ BRAIN VERSIJA');
-  // Keep ACCEPTed .ts patches — operator wants brain to rewrite trading code.
-  // Soft reload still waits until all robots are FLAT (brainReload).
-  const keptCodeFiles = [
+  /**
+   * Two lanes:
+   * - Memory / safe genome (E flat OK) → keep genome, strip ride-along .ts
+   * - Improved replay → keep genome + .ts (real trading rewrite)
+   */
+  const codePatchRels = [
     ...new Set(
       hypo.patches
         .map((p) => p.path.replace(/\\/g, '/'))
         .filter((p) => p.endsWith('.ts') && !p.includes('genome.json'))
     ),
   ];
+  let keptCodeFiles: string[] = [];
+  if (report.improved && codePatchRels.length) {
+    keptCodeFiles = codePatchRels;
+  } else if (codePatchRels.length) {
+    const rolled = restoreCodeSourcesFromSnapshot(session, codePatchRels);
+    if (rolled.length) {
+      brainLog(
+        `E-flat ACCEPT — genome kept, .ts rolled back (${rolled.length}): ${rolled
+          .map((p) => p.split('/').pop())
+          .join(', ')}`
+      );
+    }
+  }
   const versionDir = promoteAcceptedVersion(cycleId, session);
   brainLog(`Version saved: ${versionDir}`);
   if (keptCodeFiles.length) {
@@ -298,7 +315,7 @@ export async function runBrainCycle(opts?: {
       files: [...new Set(keptCodeFiles)],
     });
     brainLog(
-      `Code patches KEPT — API soft-reload when all robots FLAT (${keptCodeFiles.length} file(s))`
+      `Code patches KEPT (improved) — API soft-reload when FLAT (${keptCodeFiles.length} file(s))`
     );
   }
   const acc: CycleResult = {
@@ -311,7 +328,7 @@ export async function runBrainCycle(opts?: {
     reason:
       (defensiveMemory || safeGenomeEvolve) && !report.improved
         ? safeGenomeEvolve
-          ? `ACCEPTED — safe genome evolve (E flat, tests OK)`
+          ? `ACCEPTED — safe genome evolve (E flat, tests OK; .ts only if improved)`
           : `ACCEPTED — defensive Soft-memory genome (E flat, tests OK)`
         : report.reason,
     baseline_expectancy: report.baseline.expectancy_pts,

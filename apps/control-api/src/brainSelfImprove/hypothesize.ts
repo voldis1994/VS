@@ -12,8 +12,10 @@ import type { BrainPatch } from './guards.js';
 import type { AnalysisResult } from './analyze.js';
 import {
   codePatchesBankGreen,
+  codePatchesExitManage,
   codePatchesExplore,
   codePatchesMicroScratch,
+  codePatchesRegimeBands,
   codePatchesSoftSpam,
 } from './codePatches.js';
 
@@ -440,7 +442,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
       patches: [
         genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`),
         genomePatch('explore_step', nextStep + 2, `explore_step ${nextStep + 2}`),
-        ...codePatchesExplore(nextStep + 2),
+        ...codePatchesExitManage(nextStep + 2),
       ],
     },
     {
@@ -511,8 +513,20 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
         genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
         genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
-        ...codePatchesExplore(nextStep + 6),
-        ...codePatchesMicroScratch(rejectedN % 2),
+        ...codePatchesRegimeBands(rejectedN % 2),
+      ],
+    },
+    {
+      title: `Explore exit Soft/TimeDecay (step #${nextStep + 7})`,
+      rationale: 'Nudge exitManage Soft grace + TimeDecay — real trading rewrite path.',
+      task: `exitManage HARDINV_GRACE / TIMEDECAY`,
+      genome_delta: {
+        explore_step: nextStep + 7,
+        last_lesson: `Explore exit timing #${nextStep + 7}`,
+      },
+      patches: [
+        genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
+        ...codePatchesExitManage(nextStep + 7),
       ],
     },
   ];
@@ -542,7 +556,7 @@ function forceExploreHypothesis(
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
       genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
       ...codePatchesExplore(nextStep),
-      ...codePatchesBankGreen(),
+      ...codePatchesExitManage(nextStep),
       ...codePatchesMicroScratch(nextStep % 2),
     ]);
     const signature = hypothesisSignature({
