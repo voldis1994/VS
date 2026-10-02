@@ -66,12 +66,24 @@ type Variant = {
   patches: Array<BrainPatch | null>;
 };
 
+function isSoftSpamFocus(analysis: AnalysisResult): boolean {
+  const id = analysis.top_pattern?.id || '';
+  if (id === 'soft_sell_spam' || id === 'soft_buy_spam' || id === 'soft_loss') return true;
+  return (
+    analysis.soft_sell_losses >= 2 ||
+    analysis.soft_buy_losses >= 2 ||
+    analysis.soft_losses >= 2
+  );
+}
+
 function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
   const pause1 = Math.min(8, g.soft_same_side_pause_closes + 1);
   const pause2 = Math.min(8, g.soft_same_side_pause_closes + 2);
   const pauseMin = Math.min(6, g.soft_same_side_pause_min + 1);
   const keep = Math.min(0.85, g.peak_keep + 0.02);
   const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.05).toFixed(2)));
+  // Soft size via genome pct (desk mirrors) — Peak Keep bounce does not fix Soft spam.
+  const softPct = Math.max(0.1, Number((g.hardinv_pct_bp - 0.5).toFixed(1)));
   const pauseFirst: Variant = {
     title: 'Pause SELL spam after Soft chain + require 1m trigger',
     rationale: `Soft SELL×${softSell} in window — bias-only shorts hitting Soft.`,
@@ -108,6 +120,24 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       ...codePatchesSoftSpam(1),
     ],
   };
+  const softPctTighten: Variant = {
+    title: `Tighten Soft pct→${softPct}bp after Soft SELL spam`,
+    rationale: `Soft SELL×${softSell} — Peak Keep bounce does not cut Soft size; tighten hardinv_pct_bp.`,
+    task: `hardinv_pct_bp ${g.hardinv_pct_bp}→${softPct}; keep Soft pause armed.`,
+    genome_delta: {
+      hardinv_pct_bp: softPct,
+      soft_same_side_pause_closes: Math.max(pause1, g.soft_same_side_pause_closes),
+      require_1m_trigger: true,
+      wait_on_1m_fight: true,
+      last_lesson: `Tighten Soft pct ${softPct}bp vs SELL spam`,
+    },
+    patches: [
+      genomePatch('hardinv_pct_bp', softPct, `Soft pct ${g.hardinv_pct_bp}→${softPct}bp`),
+      genomePatch('soft_same_side_pause_closes', Math.max(pause1, g.soft_same_side_pause_closes), 'Soft pause armed'),
+      genomePatch('require_1m_trigger', true, '1m trigger'),
+      genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
+    ],
+  };
   const measurable: Variant = {
     title: 'Arm Peak earlier after Soft survivors + Keep nudge',
     rationale: 'Entry spam cut; survivors should bank sooner via Peak arm.',
@@ -124,15 +154,17 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
     ],
   };
+  // Soft pct before Peak Keep — Keep thrash was masking Soft size problem.
   if (g.soft_same_side_pause_closes >= 8) {
-    return [measurable, pauseHarder];
+    return [softPctTighten, measurable, pauseHarder];
   }
-  return [pauseFirst, pauseHarder, measurable];
+  return [pauseFirst, pauseHarder, softPctTighten, measurable];
 }
 
 function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
   const pause1 = Math.min(8, g.soft_same_side_pause_closes + 1);
   const pause2 = Math.min(8, g.soft_same_side_pause_closes + 2);
+  const softPct = Math.max(0.1, Number((g.hardinv_pct_bp - 0.5).toFixed(1)));
   return [
     {
       title: 'Pause BUY spam after Soft chain',
@@ -164,6 +196,26 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
         genomePatch('soft_same_side_pause_closes', pause2, 'BUY pause +2'),
         genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
         ...codePatchesSoftSpam(1),
+      ],
+    },
+    {
+      title: `Tighten Soft pct→${softPct}bp after Soft BUY spam`,
+      rationale: `Soft BUY×${softBuy} — tighten hardinv_pct_bp before Peak Keep bounce.`,
+      task: `hardinv_pct_bp ${g.hardinv_pct_bp}→${softPct}`,
+      genome_delta: {
+        hardinv_pct_bp: softPct,
+        soft_same_side_pause_closes: Math.max(pause1, g.soft_same_side_pause_closes),
+        require_1m_trigger: true,
+        last_lesson: `Tighten Soft pct ${softPct}bp vs BUY spam`,
+      },
+      patches: [
+        genomePatch('hardinv_pct_bp', softPct, `Soft pct ${g.hardinv_pct_bp}→${softPct}bp`),
+        genomePatch(
+          'soft_same_side_pause_closes',
+          Math.max(pause1, g.soft_same_side_pause_closes),
+          'Soft pause armed'
+        ),
+        genomePatch('require_1m_trigger', true, '1m trigger'),
       ],
     },
   ];
@@ -378,8 +430,10 @@ function bounceBp(cur: number, step: number, lo: number, hi: number, dir: 1 | -1
 /**
  * Explore when pattern variants exhausted.
  * Always bumps explore_step so signature is unique and tryVariant never no-ops.
+ * When Soft spam is still the top problem, Soft knobs come first — Keep last
+ * (and Keep must not blink flipFilter Soft lock — #629).
  */
-function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
+function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): Variant[] {
   const step = 0.02 + (rejectedN % 3) * 0.01;
   const dir: 1 | -1 = rejectedN % 2 === 0 ? 1 : -1;
   const nextStep = (g.explore_step || 0) + 1;
@@ -393,6 +447,10 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const move = bounceBp(g.regime_move, 0.1, 0.4, 2.0, dir);
   const trek = bounceBp(g.mtf_trek_flat_frac, 0.1, 1.5, 12.0, dir);
   const softPct = bounceBp(g.hardinv_pct_bp, 0.1, 0.1, 50, dir);
+  // Soft focus: prefer tightening Soft pct (down) over random bounce.
+  const softPctFocus = softFocus
+    ? Math.max(0.1, Number((g.hardinv_pct_bp - (0.3 + (rejectedN % 3) * 0.2)).toFixed(1)))
+    : softPct;
   const storyPath = bounceBp(g.story_min_path_bp, 0.1, 0.1, 20, dir);
   // Live classify reads genome persist (not factory PERSIST_* constants alone)
   const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.3, 0.7, dir);
@@ -402,145 +460,193 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   }
   if (persistStay < 0.15) persistStay = 0.15;
 
+  const keepExplore: Variant = {
+    title: `Explore Keep→${keep} (step #${nextStep})`,
+    rationale: softFocus
+      ? 'Soft knobs exhausted — Peak Keep last (no Soft-lock blink).'
+      : 'Pattern variants exhausted — bounce Peak Keep.',
+    task: `peak_keep ${g.peak_keep}→${keep}; explore_step=${nextStep}`,
+    genome_delta: {
+      peak_keep: keep,
+      explore_step: nextStep,
+      last_lesson: `Explore keep ${keep} #${nextStep}`,
+    },
+    patches: [
+      genomePatch('peak_keep', keep, `explore Keep ${keep}`),
+      genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
+      // Soft focus: do not rewrite flipFilter Soft lock with Keep (#629)
+      ...(softFocus ? [] : codePatchesExplore(nextStep)),
+      ...codePatchesBankGreen(),
+    ],
+  };
+  const givebackExplore: Variant = {
+    title: `Explore giveback→${gb} (step #${nextStep + 1})`,
+    rationale: 'Bounce Soft+ giveback bank.',
+    task: `soft_plus_giveback→${gb}`,
+    genome_delta: {
+      soft_plus_giveback: gb,
+      mind_bank_on_turn: true,
+      explore_step: nextStep + 1,
+      last_lesson: `Explore giveback ${gb}`,
+    },
+    patches: [
+      genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
+      genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
+      genomePatch('mind_bank_on_turn', true, 'mind bank on'),
+      ...codePatchesBankGreen(),
+      ...(softFocus ? [] : codePatchesExplore(nextStep + 1)),
+    ],
+  };
+  const armExplore: Variant = {
+    title: `Explore arm→${arm} (step #${nextStep + 2})`,
+    rationale: 'Bounce Peak arm mult.',
+    task: `peak_arm_soft_mult→${arm}`,
+    genome_delta: {
+      peak_arm_soft_mult: arm,
+      explore_step: nextStep + 2,
+      last_lesson: `Explore arm ${arm}`,
+    },
+    patches: [
+      genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`),
+      genomePatch('explore_step', nextStep + 2, `explore_step ${nextStep + 2}`),
+      ...codePatchesExitManage(nextStep + 2),
+    ],
+  };
+  const softPauseExplore: Variant = {
+    title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
+    rationale: softFocus
+      ? 'Soft spam still top — bounce Soft pause before Peak Keep.'
+      : 'Bounce Soft same-side pause knobs + flipFilter lock.',
+    task: `pause_closes=${pause} pause_min=${pauseMin}`,
+    genome_delta: {
+      soft_same_side_pause_closes: pause,
+      soft_same_side_pause_min: pauseMin,
+      explore_step: nextStep + 3,
+      last_lesson: `Explore pause ${pause}/${pauseMin}`,
+    },
+    patches: [
+      genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
+      genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
+      genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
+      ...codePatchesSoftSpam(rejectedN % 2),
+    ],
+  };
+  const softPctExplore: Variant = {
+    title: `Explore Soft pct→${softPctFocus}bp (step #${nextStep + 8})`,
+    rationale: softFocus
+      ? 'Soft spam top — tighten/bounce Soft pct (desk mirrors genome).'
+      : 'Bounce Soft hardinv_pct_bp.',
+    task: `hardinv_pct_bp ${g.hardinv_pct_bp}→${softPctFocus}`,
+    genome_delta: {
+      hardinv_pct_bp: softPctFocus,
+      explore_step: nextStep + 8,
+      last_lesson: `Explore Soft pct ${softPctFocus}bp`,
+    },
+    patches: [
+      genomePatch('hardinv_pct_bp', softPctFocus, `explore Soft pct ${softPctFocus}bp`),
+      genomePatch('explore_step', nextStep + 8, `explore_step ${nextStep + 8}`),
+      ...codePatchesSoftSpam(rejectedN % 2),
+    ],
+  };
+  const flipExplore: Variant = {
+    title: `Explore flip 1m gates (step #${nextStep + 4})`,
+    rationale: 'Toggle wait_on_1m_fight / require_1m_trigger to escape local maximum.',
+    task: `wait=${flipWait} trigger=${flipTrig}`,
+    genome_delta: {
+      wait_on_1m_fight: flipWait,
+      require_1m_trigger: flipTrig,
+      explore_step: nextStep + 4,
+      last_lesson: `Explore flip wait=${flipWait} trig=${flipTrig}`,
+    },
+    patches: [
+      genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
+      genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
+      genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
+      // SoftSpam only — not + Explore (both touch SAME_DIR_LOCK_AFTER_LOSS_MS)
+      ...codePatchesSoftSpam(rejectedN % 2),
+    ],
+  };
+  const structureExplore: Variant = {
+    title: `Explore structure extremes (step #${nextStep + 5})`,
+    rationale: 'Nudge structureEntry extremes when genome knobs exhausted.',
+    task: `structureEntry EXTREME/START`,
+    genome_delta: {
+      explore_step: nextStep + 5,
+      require_1m_trigger: true,
+      last_lesson: `Explore structure #${nextStep + 5}`,
+    },
+    patches: [
+      genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
+      genomePatch('require_1m_trigger', true, '1m trigger'),
+      ...codePatchesMicroScratch(rejectedN % 2),
+    ],
+  };
+  const regimeExplore: Variant = {
+    title: `Explore regime MOVE→${move}bp trek→${trek}bp (step #${nextStep + 6})`,
+    rationale:
+      'Bounce regime ladder + trek flat in bp + live persist genome (factory constants ride-along).',
+    task: `regime_move ${g.regime_move}→${move} · persist ${persistEnter}/${persistStay}`,
+    genome_delta: {
+      regime_move: move,
+      mtf_trek_flat_frac: trek,
+      hardinv_pct_bp: softPct,
+      story_min_path_bp: storyPath,
+      regime_persist_enter: persistEnter,
+      regime_persist_stay: persistStay,
+      explore_step: nextStep + 6,
+      last_lesson: `Explore regime bp move=${move} persist=${persistEnter}/${persistStay}`,
+    },
+    patches: [
+      genomePatch('regime_move', move, `explore regime_move ${move}bp`),
+      genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
+      genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
+      genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
+      genomePatch('regime_persist_enter', persistEnter, `persist_enter→${persistEnter}`),
+      genomePatch('regime_persist_stay', persistStay, `persist_stay→${persistStay}`),
+      genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
+      ...codePatchesRegimeBands(rejectedN % 2),
+    ],
+  };
+  const exitExplore: Variant = {
+    title: `Explore exit Soft/TimeDecay (step #${nextStep + 7})`,
+    rationale: softFocus
+      ? 'Soft spam top — nudge Soft grace / TimeDecay before Peak Keep.'
+      : 'Nudge exitManage Soft grace + TimeDecay — real trading rewrite path.',
+    task: `exitManage HARDINV_GRACE / TIMEDECAY`,
+    genome_delta: {
+      explore_step: nextStep + 7,
+      last_lesson: `Explore exit timing #${nextStep + 7}`,
+    },
+    patches: [
+      genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
+      ...codePatchesExitManage(nextStep + 7),
+    ],
+  };
+
+  if (softFocus) {
+    // Soft spam still the problem → Soft levers first; Keep last.
+    return [
+      softPauseExplore,
+      softPctExplore,
+      exitExplore,
+      flipExplore,
+      givebackExplore,
+      armExplore,
+      structureExplore,
+      regimeExplore,
+      keepExplore,
+    ];
+  }
   return [
-    {
-      title: `Explore Keep→${keep} (step #${nextStep})`,
-      rationale: 'Pattern variants exhausted — bounce Peak Keep.',
-      task: `peak_keep ${g.peak_keep}→${keep}; explore_step=${nextStep}`,
-      genome_delta: {
-        peak_keep: keep,
-        explore_step: nextStep,
-        last_lesson: `Explore keep ${keep} #${nextStep}`,
-      },
-      patches: [
-        genomePatch('peak_keep', keep, `explore Keep ${keep}`),
-        genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
-        ...codePatchesExplore(nextStep),
-        ...codePatchesBankGreen(),
-      ],
-    },
-    {
-      title: `Explore giveback→${gb} (step #${nextStep + 1})`,
-      rationale: 'Bounce Soft+ giveback bank.',
-      task: `soft_plus_giveback→${gb}`,
-      genome_delta: {
-        soft_plus_giveback: gb,
-        mind_bank_on_turn: true,
-        explore_step: nextStep + 1,
-        last_lesson: `Explore giveback ${gb}`,
-      },
-      patches: [
-        genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
-        genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
-        genomePatch('mind_bank_on_turn', true, 'mind bank on'),
-        ...codePatchesBankGreen(),
-        ...codePatchesExplore(nextStep + 1),
-      ],
-    },
-    {
-      title: `Explore arm→${arm} (step #${nextStep + 2})`,
-      rationale: 'Bounce Peak arm mult.',
-      task: `peak_arm_soft_mult→${arm}`,
-      genome_delta: {
-        peak_arm_soft_mult: arm,
-        explore_step: nextStep + 2,
-        last_lesson: `Explore arm ${arm}`,
-      },
-      patches: [
-        genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`),
-        genomePatch('explore_step', nextStep + 2, `explore_step ${nextStep + 2}`),
-        ...codePatchesExitManage(nextStep + 2),
-      ],
-    },
-    {
-      title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
-      rationale: 'Bounce Soft same-side pause knobs + flipFilter lock.',
-      task: `pause_closes=${pause} pause_min=${pauseMin}`,
-      genome_delta: {
-        soft_same_side_pause_closes: pause,
-        soft_same_side_pause_min: pauseMin,
-        explore_step: nextStep + 3,
-        last_lesson: `Explore pause ${pause}/${pauseMin}`,
-      },
-      patches: [
-        genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
-        genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
-        genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
-        ...codePatchesSoftSpam(rejectedN % 2),
-      ],
-    },
-    {
-      title: `Explore flip 1m gates (step #${nextStep + 4})`,
-      rationale: 'Toggle wait_on_1m_fight / require_1m_trigger to escape local maximum.',
-      task: `wait=${flipWait} trigger=${flipTrig}`,
-      genome_delta: {
-        wait_on_1m_fight: flipWait,
-        require_1m_trigger: flipTrig,
-        explore_step: nextStep + 4,
-        last_lesson: `Explore flip wait=${flipWait} trig=${flipTrig}`,
-      },
-      patches: [
-        genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
-        genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
-        genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
-        // SoftSpam only — not + Explore (both touch SAME_DIR_LOCK_AFTER_LOSS_MS)
-        ...codePatchesSoftSpam(rejectedN % 2),
-      ],
-    },
-    {
-      title: `Explore structure extremes (step #${nextStep + 5})`,
-      rationale: 'Nudge structureEntry extremes when genome knobs exhausted.',
-      task: `structureEntry EXTREME/START`,
-      genome_delta: {
-        explore_step: nextStep + 5,
-        require_1m_trigger: true,
-        last_lesson: `Explore structure #${nextStep + 5}`,
-      },
-      patches: [
-        genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
-        genomePatch('require_1m_trigger', true, '1m trigger'),
-        ...codePatchesMicroScratch(rejectedN % 2),
-      ],
-    },
-    {
-      title: `Explore regime MOVE→${move}bp trek→${trek}bp (step #${nextStep + 6})`,
-      rationale:
-        'Bounce regime ladder + trek flat in bp + live persist genome (factory constants ride-along).',
-      task: `regime_move ${g.regime_move}→${move} · persist ${persistEnter}/${persistStay}`,
-      genome_delta: {
-        regime_move: move,
-        mtf_trek_flat_frac: trek,
-        hardinv_pct_bp: softPct,
-        story_min_path_bp: storyPath,
-        regime_persist_enter: persistEnter,
-        regime_persist_stay: persistStay,
-        explore_step: nextStep + 6,
-        last_lesson: `Explore regime bp move=${move} persist=${persistEnter}/${persistStay}`,
-      },
-      patches: [
-        genomePatch('regime_move', move, `explore regime_move ${move}bp`),
-        genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
-        genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
-        genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
-        genomePatch('regime_persist_enter', persistEnter, `persist_enter→${persistEnter}`),
-        genomePatch('regime_persist_stay', persistStay, `persist_stay→${persistStay}`),
-        genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
-        ...codePatchesRegimeBands(rejectedN % 2),
-      ],
-    },
-    {
-      title: `Explore exit Soft/TimeDecay (step #${nextStep + 7})`,
-      rationale: 'Nudge exitManage Soft grace + TimeDecay — real trading rewrite path.',
-      task: `exitManage HARDINV_GRACE / TIMEDECAY`,
-      genome_delta: {
-        explore_step: nextStep + 7,
-        last_lesson: `Explore exit timing #${nextStep + 7}`,
-      },
-      patches: [
-        genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
-        ...codePatchesExitManage(nextStep + 7),
-      ],
-    },
+    keepExplore,
+    givebackExplore,
+    armExplore,
+    softPauseExplore,
+    softPctExplore,
+    flipExplore,
+    structureExplore,
+    regimeExplore,
+    exitExplore,
   ];
 }
 
@@ -550,39 +656,74 @@ function forceExploreHypothesis(
   g: BrainGenome,
   tried: Set<string>
 ): BrainHypothesis {
+  const softFocus = isSoftSpamFocus(analysis);
   const baseStep = (g.explore_step || 0) + 1;
   for (let i = 0; i < 64; i++) {
     const nextStep = baseStep + tried.size + i;
     const keep = bounceNum(g.peak_keep, 0.01, 0.65, 0.88, nextStep % 2 === 0 ? 1 : -1);
     const gb = bounceNum(g.soft_plus_giveback, 0.01, 0.55, 0.85, nextStep % 2 === 0 ? -1 : 1);
+    const pause = bounceInt(g.soft_same_side_pause_closes, 1, 1, 12, nextStep % 2 === 0 ? 1 : -1);
+    const softPct = Math.max(
+      0.1,
+      Number((g.hardinv_pct_bp - (0.2 + (i % 5) * 0.1)).toFixed(1))
+    );
     const nonce = `${Date.now().toString(36)}_${i}`;
-    const genome_delta: Record<string, unknown> = {
-      explore_step: nextStep,
-      peak_keep: keep,
-      soft_plus_giveback: gb,
-      version: (g.version || 1) + 1,
-      last_lesson: `Force explore #${nextStep} · ${nonce}`,
-    };
-    const patches = compactPatches([
-      genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
-      genomePatch('peak_keep', keep, `force Keep ${keep}`),
-      genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
-      ...codePatchesExplore(nextStep),
-      ...codePatchesExitManage(nextStep),
-      ...codePatchesMicroScratch(nextStep % 2),
-    ]);
+    const genome_delta: Record<string, unknown> = softFocus
+      ? {
+          explore_step: nextStep,
+          soft_same_side_pause_closes: pause,
+          hardinv_pct_bp: softPct,
+          require_1m_trigger: true,
+          version: (g.version || 1) + 1,
+          last_lesson: `Force Soft explore #${nextStep} · ${nonce}`,
+        }
+      : {
+          explore_step: nextStep,
+          peak_keep: keep,
+          soft_plus_giveback: gb,
+          version: (g.version || 1) + 1,
+          last_lesson: `Force explore #${nextStep} · ${nonce}`,
+        };
+    const patches = compactPatches(
+      softFocus
+        ? [
+            genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+            genomePatch('soft_same_side_pause_closes', pause, `force Soft pause ${pause}`),
+            genomePatch('hardinv_pct_bp', softPct, `force Soft pct ${softPct}bp`),
+            genomePatch('require_1m_trigger', true, '1m trigger'),
+            ...codePatchesSoftSpam(nextStep % 2),
+            ...codePatchesExitManage(nextStep),
+          ]
+        : [
+            genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
+            genomePatch('peak_keep', keep, `force Keep ${keep}`),
+            genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
+            ...codePatchesExplore(nextStep),
+            ...codePatchesExitManage(nextStep),
+            ...codePatchesMicroScratch(nextStep % 2),
+          ]
+    );
+    const patternId = softFocus
+      ? analysis.top_pattern?.id === 'soft_buy_spam'
+        ? 'soft_buy_spam'
+        : 'soft_sell_spam'
+      : 'explore';
     const signature = hypothesisSignature({
-      pattern_id: 'explore',
+      pattern_id: patternId,
       patches,
       genome_delta,
     });
     if (tried.has(signature)) continue;
     return {
-      id: `hyp_explore_${signature.slice(0, 8)}`,
-      pattern_id: 'explore',
-      title: `Force explore #${nextStep}`,
-      rationale: `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
-      task: `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
+      id: `hyp_${patternId}_${signature.slice(0, 8)}`,
+      pattern_id: patternId,
+      title: softFocus ? `Force Soft explore #${nextStep}` : `Force explore #${nextStep}`,
+      rationale: softFocus
+        ? `Soft spam still top=${analysis.top_pattern?.id || 'soft'} — Soft pause/pct, not Keep thrash`
+        : `Unstick after exhausted variants · top=${analysis.top_pattern?.id || 'none'}`,
+      task: softFocus
+        ? `Mandatory Soft explore_step=${nextStep}, pause→${pause}, Soft pct→${softPct}`
+        : `Mandatory explore_step=${nextStep}, peak_keep→${keep}`,
       patches,
       genome_delta,
       signature,
@@ -718,8 +859,15 @@ export function buildHypothesis(
   }
 
   const rejectedN = exp?.rejected_signatures?.length || 0;
-  for (const v of exploreVariants(g, rejectedN)) {
-    const hypo = tryVariant('explore', v, g, tried);
+  const softFocus = isSoftSpamFocus(analysis);
+  // Soft spam explore keeps Soft pattern_id so ACCEPT stays Soft-aware (not Keep thrash).
+  const explorePatternId = softFocus
+    ? analysis.top_pattern?.id === 'soft_buy_spam'
+      ? 'soft_buy_spam'
+      : 'soft_sell_spam'
+    : 'explore';
+  for (const v of exploreVariants(g, rejectedN, softFocus)) {
+    const hypo = tryVariant(explorePatternId, v, g, tried);
     if (hypo) return hypo;
   }
 

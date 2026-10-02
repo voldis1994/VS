@@ -232,13 +232,33 @@ export async function runBrainCycle(opts?: {
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k));
-  // Genome explore / Keep nudge with tests OK and E not worse — keep learning (don't thrash rollback)
+  // Soft spam still top → do not ACCEPT Peak Keep thrash as "safe evolve"
+  const softFocusTop =
+    analysis.top_pattern?.id === 'soft_sell_spam' ||
+    analysis.top_pattern?.id === 'soft_buy_spam' ||
+    analysis.top_pattern?.id === 'soft_loss' ||
+    analysis.soft_sell_losses >= 2 ||
+    analysis.soft_buy_losses >= 2;
+  const softKnobDelta = deltaKeys.some(
+    (k) =>
+      k === 'soft_same_side_pause_closes' ||
+      k === 'soft_same_side_pause_min' ||
+      k === 'hardinv_pct_bp' ||
+      k === 'require_1m_trigger' ||
+      k === 'wait_on_1m_fight'
+  );
+  const keepOnlyDelta =
+    deltaKeys.length > 0 &&
+    deltaKeys.every((k) => k === 'peak_keep' || k === 'explore_step' || k === 'version');
+  // Genome explore / Soft pct / Keep nudge with tests OK and E not worse — keep learning
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
+    !(softFocusTop && keepOnlyDelta && !softKnobDelta) &&
     (hypo.pattern_id === 'explore' ||
+      softKnobDelta ||
       deltaKeys.some(
         (k) =>
           k === 'peak_keep' ||
@@ -252,9 +272,14 @@ export async function runBrainCycle(opts?: {
   if ((defensiveMemory || safeGenomeEvolve) && !report.improved) {
     brainLog(
       safeGenomeEvolve
-        ? 'Safe genome evolve — tests OK, E not worse → ACCEPT'
+        ? softKnobDelta && softFocusTop
+          ? 'Safe Soft genome evolve — tests OK, E not worse → ACCEPT'
+          : 'Safe genome evolve — tests OK, E not worse → ACCEPT'
         : 'Defensive memory knobs — tests OK, E not worse → ACCEPT'
     );
+  }
+  if (softFocusTop && keepOnlyDelta && !softKnobDelta && !report.improved) {
+    brainLog('Soft spam top — Keep-only explore blocked from E-flat ACCEPT');
   }
 
   if (!accept) {
