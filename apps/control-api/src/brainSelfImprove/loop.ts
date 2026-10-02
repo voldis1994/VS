@@ -51,6 +51,20 @@ export function isSoftPctOnlyGenomeThrash(deltaKeys: string[]): boolean {
   return meaningful.length > 0 && meaningful.every((k) => k === 'hardinv_pct_bp');
 }
 
+/**
+ * Soft spam top + hardinv_pct_bp (even with pause/require sneak) = thrash.
+ * Live: CIKLS #14–17 ACCEPTed Soft pct 5.1→4bp while EntryWait 100%.
+ */
+export function isSoftPctThrashWhileSoftSpam(
+  softFocusTop: boolean,
+  deltaKeys: string[],
+  title: string
+): boolean {
+  if (!softFocusTop) return false;
+  if (/Soft pct/i.test(title)) return true;
+  return deltaKeys.includes('hardinv_pct_bp');
+}
+
 /** explore_step-only bump while Soft spam top — infinite empty ACCEPT. */
 export function isExploreStepOnlyThrash(deltaKeys: string[]): boolean {
   return (
@@ -286,8 +300,20 @@ export async function runBrainCycle(opts?: {
     report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
     report.candidate.trades >= Math.max(0, report.baseline.trades - 3);
   // Pause / Soft-pct-only knobs are invisible to EntryWait — E-flat ACCEPT = thrash
+  // Soft spam still top → do not ACCEPT Peak Keep / Soft pct thrash as "safe evolve"
+  const softFocusTop =
+    analysis.top_pattern?.id === 'soft_sell_spam' ||
+    analysis.top_pattern?.id === 'soft_buy_spam' ||
+    analysis.top_pattern?.id === 'soft_loss' ||
+    analysis.soft_sell_losses >= 2 ||
+    analysis.soft_buy_losses >= 2;
   const pauseOnlyThrash = isPauseOnlyGenomeThrash(deltaKeys);
   const softPctOnlyThrash = isSoftPctOnlyGenomeThrash(deltaKeys);
+  const softPctThrashWhileSoft = isSoftPctThrashWhileSoftSpam(
+    softFocusTop,
+    deltaKeys,
+    String(hypo.title || '')
+  );
   const titlePauseThrash = /Explore Soft pause/i.test(String(hypo.title || ''));
   const exploreStepOnly = isExploreStepOnlyThrash(deltaKeys);
   const shieldsAlreadyOn = Boolean(genome.wait_on_1m_fight && genome.require_1m_trigger);
@@ -299,6 +325,7 @@ export async function runBrainCycle(opts?: {
   const genomeThrash =
     pauseOnlyThrash ||
     softPctOnlyThrash ||
+    softPctThrashWhileSoft ||
     titlePauseThrash ||
     exploreStepOnly ||
     noopShieldThrash;
@@ -308,18 +335,10 @@ export async function runBrainCycle(opts?: {
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k)) &&
     !genomeThrash;
-  // Soft spam still top → do not ACCEPT Peak Keep thrash as "safe evolve"
-  const softFocusTop =
-    analysis.top_pattern?.id === 'soft_sell_spam' ||
-    analysis.top_pattern?.id === 'soft_buy_spam' ||
-    analysis.top_pattern?.id === 'soft_loss' ||
-    analysis.soft_sell_losses >= 2 ||
-    analysis.soft_buy_losses >= 2;
-  const softKnobDelta = deltaKeys.some(
-    (k) =>
-      k === 'require_1m_trigger' ||
-      k === 'wait_on_1m_fight'
-  );
+  // Only treat shield knobs as Soft evolve when they actually turn ON (not already true)
+  const softKnobDelta =
+    (!genome.require_1m_trigger && deltaKeys.includes('require_1m_trigger')) ||
+    (!genome.wait_on_1m_fight && deltaKeys.includes('wait_on_1m_fight'));
   // Keep + require_1m sneak used to bypass keepOnlyDelta — block any Keep while Soft spam top
   const keepThrashWhileSoft = isKeepThrashWhileSoftSpam(
     softFocusTop,
@@ -327,7 +346,7 @@ export async function runBrainCycle(opts?: {
     String(hypo.title || '')
   );
   // Genome explore with tests OK and E not worse — keep learning
-  // NEVER E-flat ACCEPT pause / Soft-pct-only / Soft-pause title / Keep while Soft spam
+  // NEVER E-flat ACCEPT pause / Soft-pct / Soft-pause title / Keep while Soft spam
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
@@ -360,13 +379,15 @@ export async function runBrainCycle(opts?: {
   }
   if (genomeThrash && !report.improved) {
     brainLog(
-      noopShieldThrash
-        ? 'No-op Soft shield reinforce blocked — already ON; REJECT'
-        : exploreStepOnly
-          ? 'explore_step-only thrash blocked — no real Soft lever; REJECT'
-          : pauseOnlyThrash || titlePauseThrash
-            ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
-            : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
+      softPctThrashWhileSoft
+        ? 'Soft pct thrash blocked while Soft spam top — hardinv does not cut entry spam; REJECT'
+        : noopShieldThrash
+          ? 'No-op Soft shield reinforce blocked — already ON; REJECT'
+          : exploreStepOnly
+            ? 'explore_step-only thrash blocked — no real Soft lever; REJECT'
+            : pauseOnlyThrash || titlePauseThrash
+              ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
+              : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
     );
   }
 

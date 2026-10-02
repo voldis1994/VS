@@ -80,8 +80,8 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
   const pauseMin = Math.min(6, g.soft_same_side_pause_min + 1);
   const keep = Math.min(0.85, g.peak_keep + 0.02);
   const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.05).toFixed(2)));
-  // Soft size via genome pct (desk mirrors) — Peak Keep bounce does not fix Soft spam.
-  const softPct = Math.max(HARDINV_PCT_BP_MIN, Number((g.hardinv_pct_bp - 0.5).toFixed(1)));
+  // Soft spam = entry spam. NEVER Soft pct tighten here — hardinv thrash (5.1→4bp)
+  // ACCEPTed via require_1m sneak while EntryWait stayed 100%.
   const pauseFirst: Variant = {
     title: 'Pause SELL spam after Soft chain + require 1m trigger',
     rationale: `Soft SELL×${softSell} in window — bias-only shorts hitting Soft.`,
@@ -118,24 +118,6 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       ...codePatchesSoftSpam(1),
     ],
   };
-  const softPctTighten: Variant = {
-    title: `Tighten Soft pct→${softPct}bp after Soft SELL spam`,
-    rationale: `Soft SELL×${softSell} — Peak Keep bounce does not cut Soft size; tighten hardinv_pct_bp.`,
-    task: `hardinv_pct_bp ${g.hardinv_pct_bp}→${softPct}; keep Soft pause armed.`,
-    genome_delta: {
-      hardinv_pct_bp: softPct,
-      soft_same_side_pause_closes: Math.max(pause1, g.soft_same_side_pause_closes),
-      require_1m_trigger: true,
-      wait_on_1m_fight: true,
-      last_lesson: `Tighten Soft pct ${softPct}bp vs SELL spam`,
-    },
-    patches: [
-      genomePatch('hardinv_pct_bp', softPct, `Soft pct ${g.hardinv_pct_bp}→${softPct}bp`),
-      genomePatch('soft_same_side_pause_closes', Math.max(pause1, g.soft_same_side_pause_closes), 'Soft pause armed'),
-      genomePatch('require_1m_trigger', true, '1m trigger'),
-      genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
-    ],
-  };
   const measurable: Variant = {
     title: 'Arm Peak earlier after Soft survivors + Keep nudge',
     rationale: 'Entry spam cut; survivors should bank sooner via Peak arm.',
@@ -152,17 +134,17 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
     ],
   };
-  // Soft pct before Peak Keep — Keep thrash was masking Soft size problem.
+  // Pause ceiling → no Soft pct dust; measurable/Keep blocked on ACCEPT while Soft top
   if (g.soft_same_side_pause_closes >= 8) {
-    return [softPctTighten, measurable, pauseHarder];
+    return [pauseHarder, measurable];
   }
-  return [pauseFirst, pauseHarder, softPctTighten, measurable];
+  return [pauseFirst, pauseHarder, measurable];
 }
 
 function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
   const pause1 = Math.min(8, g.soft_same_side_pause_closes + 1);
   const pause2 = Math.min(8, g.soft_same_side_pause_closes + 2);
-  const softPct = Math.max(HARDINV_PCT_BP_MIN, Number((g.hardinv_pct_bp - 0.5).toFixed(1)));
+  // No Soft pct tighten — same thrash as Soft SELL (hardinv + require_1m sneak ACCEPT).
   return [
     {
       title: 'Pause BUY spam after Soft chain',
@@ -194,26 +176,6 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
         genomePatch('soft_same_side_pause_closes', pause2, 'BUY pause +2'),
         genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
         ...codePatchesSoftSpam(1),
-      ],
-    },
-    {
-      title: `Tighten Soft pct→${softPct}bp after Soft BUY spam`,
-      rationale: `Soft BUY×${softBuy} — tighten hardinv_pct_bp before Peak Keep bounce.`,
-      task: `hardinv_pct_bp ${g.hardinv_pct_bp}→${softPct}`,
-      genome_delta: {
-        hardinv_pct_bp: softPct,
-        soft_same_side_pause_closes: Math.max(pause1, g.soft_same_side_pause_closes),
-        require_1m_trigger: true,
-        last_lesson: `Tighten Soft pct ${softPct}bp vs BUY spam`,
-      },
-      patches: [
-        genomePatch('hardinv_pct_bp', softPct, `Soft pct ${g.hardinv_pct_bp}→${softPct}bp`),
-        genomePatch(
-          'soft_same_side_pause_closes',
-          Math.max(pause1, g.soft_same_side_pause_closes),
-          'Soft pause armed'
-        ),
-        genomePatch('require_1m_trigger', true, '1m trigger'),
       ],
     },
   ];

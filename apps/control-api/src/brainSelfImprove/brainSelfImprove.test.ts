@@ -29,6 +29,7 @@ import {
   isNoopShieldThrash,
   isPauseOnlyGenomeThrash,
   isSoftPctOnlyGenomeThrash,
+  isSoftPctThrashWhileSoftSpam,
   runBrainCycle,
 } from './loop.js';
 
@@ -173,7 +174,8 @@ describe('brainSelfImprove analyze + hypothesize', () => {
     ).toBe(true);
   });
 
-  it('includes Soft pct tighten among Soft SELL variants (before Peak Keep thrash)', () => {
+  it('never proposes Soft pct tighten while Soft SELL spam is the lesson', () => {
+    // Live CIKLS #14–17 thrash: Soft pct 5.1→4bp ACCEPTed with require_1m sneak
     const analysis = analyzeTrades(syntheticLessonTrades());
     const rejected: string[] = [];
     const titles: string[] = [];
@@ -196,12 +198,24 @@ describe('brainSelfImprove analyze + hypothesize', () => {
       titles.push(hypo!.title);
       rejected.push(hypo!.signature);
     }
-    expect(titles.some((t) => /Soft pct/i.test(t))).toBe(true);
-    const keepIdx = titles.findIndex((t) => /Explore Keep/i.test(t));
-    const softPctIdx = titles.findIndex((t) => /Soft pct/i.test(t));
-    if (keepIdx >= 0 && softPctIdx >= 0) {
-      expect(softPctIdx).toBeLessThan(keepIdx);
-    }
+    expect(titles.some((t) => /Soft pct/i.test(t))).toBe(false);
+    expect(titles.some((t) => /Pause SELL|Harder Soft/i.test(t))).toBe(true);
+  });
+
+  it('blocks Soft pct E-flat ACCEPT while Soft spam is top', () => {
+    expect(
+      isSoftPctThrashWhileSoftSpam(
+        true,
+        ['hardinv_pct_bp', 'soft_same_side_pause_closes', 'require_1m_trigger'],
+        'Tighten Soft pct→4.1bp after Soft SELL spam'
+      )
+    ).toBe(true);
+    expect(
+      isSoftPctThrashWhileSoftSpam(false, ['hardinv_pct_bp'], 'Tighten Soft pct')
+    ).toBe(false);
+    expect(
+      isSoftPctThrashWhileSoftSpam(true, ['require_1m_trigger'], 'Pause SELL spam')
+    ).toBe(false);
   });
 
   it('never returns null while Soft losses exist (even after 50 rejects)', () => {
