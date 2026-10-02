@@ -874,15 +874,10 @@ async function persistClosedTradeLedger(
     /* DB ledger best-effort — never block auto-cal */
   }
 
-  // Auto-cal ALWAYS runs (even if DB fail / missing exit mid)
+  // Auto-cal ALWAYS runs (even if DB fail / missing exit mid).
+  // NEVER fall back to broker £ UPL — that poisoned E pts with deposit cash.
   const ptsForCal =
-    pnlPts != null && Number.isFinite(pnlPts)
-      ? pnlPts
-      : s.unrealized != null && Number.isFinite(s.unrealized)
-        ? Number(s.unrealized)
-        : Number.isFinite(s.mfe)
-          ? Number(s.mfe)
-          : 0;
+    pnlPts != null && Number.isFinite(pnlPts) ? pnlPts : 0;
   try {
     const exitCtx = compactMarketContext(
       buildMarketContext(s.closedBars, s.entry_regime || s.regime, s.multiFeed)
@@ -1151,15 +1146,12 @@ async function reconcileCapitalActivityCloses(
       item.profit_loss != null && Number.isFinite(item.profit_loss)
         ? item.profit_loss
         : 0;
-    // Approximate pts from cash when lot known — else 0 still counts the close
+    // External activity: cash £ ≠ price pts. Do not invent pts from £/lot.
     const soft = hardInvStopDistance(
       item.level != null && Number.isFinite(item.level) ? item.level : s.last_mid || 2000,
       s.regime
     );
-    const pnlPts =
-      s.lot_size > 0 && Number.isFinite(pnlCash)
-        ? pnlCash / Math.max(s.lot_size, 1e-9)
-        : pnlCash;
+    const pnlPts = 0;
 
     try {
       await recordClosedTrade({

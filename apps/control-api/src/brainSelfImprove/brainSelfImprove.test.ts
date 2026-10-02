@@ -414,6 +414,8 @@ describe('brainSelfImprove cycle (once)', () => {
       once: true,
     });
     expect(['ACCEPTED', 'REJECTED', 'SKIPPED']).toContain(result.decision);
+    // Soft spam top + Pause SELL E-flat must REJECT (was defensiveMemory ACCEPT thrash)
+    expect(result.decision).toBe('REJECTED');
     const exp = loadExperience();
     expect(exp.cycles.length).toBeGreaterThanOrEqual(1);
     if (result.decision === 'REJECTED' || result.decision === 'ACCEPTED') {
