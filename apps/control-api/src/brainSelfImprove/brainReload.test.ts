@@ -86,8 +86,16 @@ describe('brainReload — soft restart when FLAT', () => {
     exitSpy.restore();
   });
 
-  it('clears stale reload flag on boot when not in live-loop', () => {
+  it('clears reload flag on every boot (fresh process already has disk .ts)', () => {
+    process.env[LIVE_LOOP_ENV] = '1';
     requestBrainCodeReload({ cycle_id: 'stale', reason: 'unit' });
+    clearStaleBrainReloadOnBoot();
+    expect(hasBrainReloadRequest()).toBe(false);
+  });
+
+  it('clears reload flag on boot without live-loop too', () => {
+    delete process.env[LIVE_LOOP_ENV];
+    requestBrainCodeReload({ cycle_id: 'stale2', reason: 'unit' });
     clearStaleBrainReloadOnBoot();
     expect(hasBrainReloadRequest()).toBe(false);
   });

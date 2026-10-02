@@ -207,13 +207,19 @@ async function main() {
     console.error('[robot] resume after BRAIN reload failed:', err);
   });
 
+  // Do not idle-exit 75 in the first minute — user must be able to open board / START
+  // without Failed to fetch from a leftover reload race.
+  const bootAt = Date.now();
+  const BRAIN_RELOAD_BOOT_GRACE_MS = 60_000;
+
   setInterval(() => {
     telemetry.broadcast({
       type: 'heartbeat',
       timestamp: new Date().toISOString(),
       db: healthCheck(),
     });
-    // BRAIN ACCEPTed .ts while FLAT (or no robots) → soft restart via live-loop
+    if (Date.now() - bootAt < BRAIN_RELOAD_BOOT_GRACE_MS) return;
+    // Idle desk only (between-trades path is hooked on CLOSE)
     checkBrainCodeReload();
   }, 5000);
 }
