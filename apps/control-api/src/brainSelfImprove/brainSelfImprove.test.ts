@@ -23,6 +23,7 @@ import {
   type BrainExperience,
 } from './experience.js';
 import {
+  isKeepThrashWhileSoftSpam,
   isPauseOnlyGenomeThrash,
   isSoftPctOnlyGenomeThrash,
   runBrainCycle,
@@ -237,6 +238,17 @@ describe('brainSelfImprove analyze + hypothesize', () => {
     const a1 = analyzeTrades(trades);
     const a2 = analyzeTrades(trades);
     expect(a1.top_pattern?.count).toBe(a2.top_pattern?.count);
+  });
+
+  it('blocks Keep genome when Soft spam is top pattern', () => {
+    // Mirrors live bug: "Slight Keep tighten" ACCEPTed while soft_sell_spam×3
+    expect(
+      isKeepThrashWhileSoftSpam(true, ['peak_keep', 'require_1m_trigger'], 'Slight Keep tighten')
+    ).toBe(true);
+    expect(
+      isKeepThrashWhileSoftSpam(true, ['require_1m_trigger', 'wait_on_1m_fight'], '1m shields')
+    ).toBe(false);
+    expect(isKeepThrashWhileSoftSpam(false, ['peak_keep'], 'Keep nudge')).toBe(false);
   });
 
   it('flags pause-only genome thrash (invisible to replay E)', () => {

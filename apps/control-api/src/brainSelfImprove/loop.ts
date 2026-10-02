@@ -51,6 +51,21 @@ export function isSoftPctOnlyGenomeThrash(deltaKeys: string[]): boolean {
   return meaningful.length > 0 && meaningful.every((k) => k === 'hardinv_pct_bp');
 }
 
+/** Soft spam top + Peak Keep / scratch = wrong lever (was ACCEPT via require_1m sneak). */
+export function isKeepThrashWhileSoftSpam(
+  softFocusTop: boolean,
+  deltaKeys: string[],
+  title: string
+): boolean {
+  if (!softFocusTop) return false;
+  return (
+    deltaKeys.includes('peak_keep') ||
+    deltaKeys.includes('soft_plus_giveback') ||
+    deltaKeys.includes('peak_arm_soft_mult') ||
+    /Keep|scratch/i.test(title)
+  );
+}
+
 export async function runBrainCycle(opts?: {
   trades?: AnalyzedTrade[] | null;
   once?: boolean;
@@ -269,31 +284,33 @@ export async function runBrainCycle(opts?: {
       k === 'require_1m_trigger' ||
       k === 'wait_on_1m_fight'
   );
-  const keepOnlyDelta =
-    deltaKeys.length > 0 &&
-    deltaKeys.every((k) => k === 'peak_keep' || k === 'explore_step' || k === 'version');
+  // Keep + require_1m sneak used to bypass keepOnlyDelta — block any Keep while Soft spam top
+  const keepThrashWhileSoft = isKeepThrashWhileSoftSpam(
+    softFocusTop,
+    deltaKeys,
+    String(hypo.title || '')
+  );
   // Genome explore with tests OK and E not worse — keep learning
-  // NEVER E-flat ACCEPT pause / Soft-pct-only / "Explore Soft pause" titles
+  // NEVER E-flat ACCEPT pause / Soft-pct-only / Soft-pause title / Keep while Soft spam
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
     !genomeThrash &&
-    !(softFocusTop && keepOnlyDelta && !softKnobDelta) &&
+    !keepThrashWhileSoft &&
     (hypo.pattern_id === 'explore' ||
       softKnobDelta ||
       deltaKeys.some(
         (k) =>
-          k === 'peak_keep' ||
-          k === 'soft_plus_giveback' ||
-          k === 'peak_arm_soft_mult' ||
           TRADING_INTEL_GENOME_KEYS.includes(k as (typeof TRADING_INTEL_GENOME_KEYS)[number])
       ));
 
   const accept =
-    (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
-  if ((defensiveMemory || safeGenomeEvolve) && !report.improved) {
+    (report.improved && report.tests_ok) ||
+    (defensiveMemory && !keepThrashWhileSoft) ||
+    safeGenomeEvolve;
+  if ((defensiveMemory || safeGenomeEvolve) && !report.improved && accept) {
     brainLog(
       safeGenomeEvolve
         ? softKnobDelta && softFocusTop
@@ -302,8 +319,8 @@ export async function runBrainCycle(opts?: {
         : 'Defensive memory knobs — tests OK, E not worse → ACCEPT'
     );
   }
-  if (softFocusTop && keepOnlyDelta && !softKnobDelta && !report.improved) {
-    brainLog('Soft spam top — Keep-only explore blocked from E-flat ACCEPT');
+  if (keepThrashWhileSoft && !report.improved) {
+    brainLog('Soft spam top — Peak Keep / scratch blocked from E-flat ACCEPT');
   }
   if (genomeThrash && !report.improved) {
     brainLog(
