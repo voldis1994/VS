@@ -21,7 +21,12 @@ import {
   wasAlreadyTried,
   type BrainCycleRecord,
 } from './experience.js';
-import { getBrainGenome, reloadBrainGenome, setBrainGenome } from './brainGenome.js';
+import {
+  getBrainGenome,
+  reloadBrainGenome,
+  setBrainGenome,
+  TRADING_INTEL_GENOME_KEYS,
+} from './brainGenome.js';
 import { requestBrainCodeReload } from './brainReload.js';
 import { brainDecision, brainLog, brainSection } from './consoleUi.js';
 
@@ -209,13 +214,14 @@ export async function runBrainCycle(opts?: {
     'mind_bank_on_turn',
     'last_lesson',
   ]);
-  const evolveKeys = new Set([
+  const evolveKeys = new Set<string>([
     ...memoryKeys,
     'peak_keep',
     'soft_plus_giveback',
     'peak_arm_soft_mult',
     'explore_step',
     'version',
+    ...TRADING_INTEL_GENOME_KEYS,
   ]);
   const deltaKeys = Object.keys(hypo.genome_delta || {}).filter((k) => k !== 'last_lesson');
   const eFlatOk =
@@ -233,7 +239,13 @@ export async function runBrainCycle(opts?: {
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
     (hypo.pattern_id === 'explore' ||
-      deltaKeys.some((k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'));
+      deltaKeys.some(
+        (k) =>
+          k === 'peak_keep' ||
+          k === 'soft_plus_giveback' ||
+          k === 'peak_arm_soft_mult' ||
+          TRADING_INTEL_GENOME_KEYS.includes(k as (typeof TRADING_INTEL_GENOME_KEYS)[number])
+      ));
 
   const accept =
     (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
