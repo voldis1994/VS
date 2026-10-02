@@ -474,7 +474,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
         genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
         genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
-        ...codePatchesExplore(nextStep + 4),
+        // SoftSpam only — not + Explore (both touch SAME_DIR_LOCK_AFTER_LOSS_MS)
         ...codePatchesSoftSpam(rejectedN % 2),
       ],
     },
