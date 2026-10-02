@@ -1669,6 +1669,7 @@ async function exitTrade(
 
   await persistClosedTradeLedger(s, quote, reason, 'desk');
   clearTradeState(s);
+  maybeBrainReloadAfterTradeClose(s);
 }
 
 async function enterTrade(
@@ -2589,6 +2590,7 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
           : `EXTERNAL · market ${quote.market_status || 'CLOSED'} · broker flat`;
         await persistClosedTradeLedger(s, quote, flatReason, 'external');
         clearTradeState(s);
+        maybeBrainReloadAfterTradeClose(s);
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
@@ -3000,6 +3002,7 @@ async function robotCycleLocked(s: Internal) {
             'external'
           );
           clearTradeState(s);
+          maybeBrainReloadAfterTradeClose(s);
         }
       }
     } else {
