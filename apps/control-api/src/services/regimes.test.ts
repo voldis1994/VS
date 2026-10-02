@@ -11,6 +11,7 @@ import {
   styleFromClassification,
   currentRegime,
   MIN_BARS_FOR_ZONE,
+  ZONE_BARS,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -138,6 +139,102 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(tight)).toBe('COMPRESSION');
   });
 
+  it('directional grind inside wide zone is TREND — not inRange default RANGE (#642)', () => {
+    // Steady down leg: must not fall through to RANGE just because close is still in 30m box
+    const prices: number[] = [];
+    let p = 100;
+    for (let i = 0; i < 40; i++) {
+      p -= 0.08;
+      prices.push(p);
+    }
+    expect(run(prices)).toBe('TREND_DOWN');
+  });
+
+  it('sticky TREND prior kept when tip in zone but not proven chop (no invent RANGE #659)', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
+      bars.push(bar(100, 100.8, 99.2, 100, i));
+    }
+    // persistence ≈ -0.5 (more than RANGE_CHOP_PERSIST_MAX 0.25) but below TREND stay
+    const seq = [-1, -1, -1, 1, -1, -1];
+    let px = 100;
+    for (const s of seq) {
+      const o = px;
+      const c = o + s * 0.03;
+      bars.push(bar(o, Math.max(o, c) + 0.02, Math.min(o, c) - 0.02, c, bars.length));
+      px = c;
+    }
+    const r = classifyRegime(bars, 'TREND_DOWN');
+    expect(r).not.toBe('RANGE');
+    expect(r).toBe('TREND_DOWN');
+  });
+
+  it('Gold grind: quiet 10s tips inside expanding zone → TREND_UP not RANGE (#642)', () => {
+    const bars: TenSecBar[] = [];
+    const start = 4154;
+    const n = MIN_BARS_FOR_ZONE + 40;
+    for (let i = 0; i < n; i++) {
+      const c = start + (i / (n - 1)) * 20;
+      const o = c - 0.05;
+      bars.push(bar(o, c + 0.3, o - 0.2, c, i));
+    }
+    const tipOpen = bars[bars.length - 1]!.close;
+    bars.push(bar(tipOpen, tipOpen + 0.2, tipOpen - 0.8, tipOpen - 0.05, n));
+    const r = classifyRegime(bars, 'RANGE');
+    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+  });
+
+  it('Gold V-recovery: dump then rally → TREND_UP/PULLBACK not RANGE fade (#644)', () => {
+    const bars: TenSecBar[] = [];
+    const n = MIN_BARS_FOR_ZONE + 50;
+    const dumpN = Math.floor(n * 0.55);
+    for (let i = 0; i < n; i++) {
+      let c: number;
+      if (i < dumpN) {
+        c = 4175 - (i / (dumpN - 1)) * 12;
+      } else {
+        c = 4163 + ((i - dumpN) / (n - dumpN - 1)) * 9;
+      }
+      const o = c - 0.04;
+      bars.push(bar(o, c + 0.25, o - 0.2, c, i));
+    }
+    const tip = bars[bars.length - 1]!.close;
+    bars.push(bar(tip, tip + 0.15, tip - 0.4, tip - 0.08, n));
+    const r = classifyRegime(bars, 'RANGE');
+    expect(['TREND_UP', 'PULLBACK_UPTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+  });
+
+  it('Gold dump then side box → RANGE not fake TREND_UP from mid→late leg (#665)', () => {
+    const bars: TenSecBar[] = [];
+    const n = ZONE_BARS + 40;
+    for (let i = 0; i < n; i++) {
+      const z = i - (n - ZONE_BARS);
+      let c: number;
+      if (z < 0) {
+        c = 4192;
+      } else if (z < 60) {
+        c = 4192 - (z / 59) * 40;
+      } else if (z < 120) {
+        c = 4152.5 + ((z % 5) - 2) * 0.35;
+      } else {
+        const t = z - 120;
+        c =
+          t < 10
+            ? 4152.5 + (t / 9) * 12
+            : 4164 + Math.sin((t - 10) / 1.8) * 8 + ((t % 5) - 2) * 0.55;
+      }
+      const o = c + ((i % 3) - 1) * 0.06;
+      bars.push(bar(o, Math.max(o, c) + 0.3, Math.min(o, c) - 0.25, c, i));
+    }
+    const tip = bars[bars.length - 1]!.close;
+    bars.push(bar(tip, tip + 0.2, tip - 0.25, tip + 0.04, n));
+    expect(classifyRegime(bars, 'UNKNOWN')).toBe('RANGE');
+    expect(classifyRegime(bars, 'TREND_UP')).toBe('RANGE');
+    expect(classifyRegime(bars, 'PULLBACK_UPTREND')).toBe('RANGE');
+  });
+
   it('BREAKOUT_UP when expanding close leaves the prior range', () => {
     const bars = padBars([
       bar(100, 100.3, 99.8, 100.1, 0),
@@ -253,7 +350,7 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
     expect(stabilizeRegime(book, 'PULLBACK_UPTREND')).toBe('PULLBACK_UPTREND'); // 5 + pend
   });
 
-  it('does not freeze — pending survives dwell so RANGE can become TREND_UP', () => {
+  it('RANGE → TREND_UP is strong (right moment) — no dwell freeze on Gold grind', () => {
     const book = {
       current: 'RANGE' as RegimeName,
       previous: 'UNKNOWN' as RegimeName,
@@ -262,11 +359,7 @@ describe('stabilizeRegime — no flicker inside 1m', () => {
       pending_count: 0,
       since: new Date().toISOString(),
     };
-    // dwell=5 + confirm=3 — switch on 5th agreeing candidate
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
-    expect(stabilizeRegime(book, 'TREND_UP')).toBe('RANGE');
+    // Chop→trend skips dwell so live desk does not stay RANGE while classify saw TREND
     expect(stabilizeRegime(book, 'TREND_UP')).toBe('TREND_UP');
   });
 
