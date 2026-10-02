@@ -74,6 +74,22 @@ export function isKeepThrashWhileSoftSpam(
   );
 }
 
+/** Shields already ON + "reinforce" / shield-only delta = infinite explore_step ACCEPT. */
+export function isNoopShieldThrash(
+  shieldsAlreadyOn: boolean,
+  deltaKeys: string[],
+  title: string
+): boolean {
+  if (!shieldsAlreadyOn) return false;
+  if (/reinforce 1m Soft shields/i.test(title)) return true;
+  const ignorable = new Set(['explore_step', 'version']);
+  const meaningful = deltaKeys.filter((k) => !ignorable.has(k));
+  return (
+    meaningful.length > 0 &&
+    meaningful.every((k) => k === 'wait_on_1m_fight' || k === 'require_1m_trigger')
+  );
+}
+
 export async function runBrainCycle(opts?: {
   trades?: AnalyzedTrade[] | null;
   once?: boolean;
@@ -274,8 +290,18 @@ export async function runBrainCycle(opts?: {
   const softPctOnlyThrash = isSoftPctOnlyGenomeThrash(deltaKeys);
   const titlePauseThrash = /Explore Soft pause/i.test(String(hypo.title || ''));
   const exploreStepOnly = isExploreStepOnlyThrash(deltaKeys);
+  const shieldsAlreadyOn = Boolean(genome.wait_on_1m_fight && genome.require_1m_trigger);
+  const noopShieldThrash = isNoopShieldThrash(
+    shieldsAlreadyOn,
+    deltaKeys,
+    String(hypo.title || '')
+  );
   const genomeThrash =
-    pauseOnlyThrash || softPctOnlyThrash || titlePauseThrash || exploreStepOnly;
+    pauseOnlyThrash ||
+    softPctOnlyThrash ||
+    titlePauseThrash ||
+    exploreStepOnly ||
+    noopShieldThrash;
   const defensiveMemory =
     report.tests_ok &&
     eFlatOk &&
@@ -334,11 +360,13 @@ export async function runBrainCycle(opts?: {
   }
   if (genomeThrash && !report.improved) {
     brainLog(
-      exploreStepOnly
-        ? 'explore_step-only thrash blocked — no real Soft lever; REJECT'
-        : pauseOnlyThrash || titlePauseThrash
-          ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
-          : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
+      noopShieldThrash
+        ? 'No-op Soft shield reinforce blocked — already ON; REJECT'
+        : exploreStepOnly
+          ? 'explore_step-only thrash blocked — no real Soft lever; REJECT'
+          : pauseOnlyThrash || titlePauseThrash
+            ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
+            : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
     );
   }
 

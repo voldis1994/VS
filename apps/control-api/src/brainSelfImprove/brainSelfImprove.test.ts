@@ -26,6 +26,7 @@ import {
 import {
   isExploreStepOnlyThrash,
   isKeepThrashWhileSoftSpam,
+  isNoopShieldThrash,
   isPauseOnlyGenomeThrash,
   isSoftPctOnlyGenomeThrash,
   runBrainCycle,
@@ -302,9 +303,28 @@ describe('brainSelfImprove analyze + hypothesize', () => {
       rejected.push(hypo!.signature);
     }
     expect(titles.some((t) => /Explore Soft pause/i.test(t))).toBe(false);
-    expect(titles.some((t) => /Soft pct|reinforce 1m Soft shields|Force Soft/i.test(t))).toBe(
+    // Shields already ON → never re-propose reinforce (was explore_step ACCEPT thrash)
+    expect(titles.some((t) => /reinforce 1m Soft shields/i.test(t))).toBe(false);
+    expect(titles.some((t) => /structure|regime|Keep|giveback|arm|Force/i.test(t))).toBe(
       true
     );
+  });
+
+  it('blocks no-op Soft shield reinforce when already ON', () => {
+    // Live bug: CIKLS #12 ACCEPTed reinforce while wait/require already true
+    expect(
+      isNoopShieldThrash(
+        true,
+        ['wait_on_1m_fight', 'require_1m_trigger', 'explore_step'],
+        'Explore reinforce 1m Soft shields (step #34184)'
+      )
+    ).toBe(true);
+    expect(
+      isNoopShieldThrash(false, ['wait_on_1m_fight', 'require_1m_trigger'], 'reinforce')
+    ).toBe(false);
+    expect(
+      isNoopShieldThrash(true, ['hardinv_pct_bp', 'explore_step'], 'Soft pct')
+    ).toBe(false);
   });
 });
 
