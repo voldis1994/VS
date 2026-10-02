@@ -9,7 +9,7 @@
  * - Explicit rule per regime (all 14).
  */
 import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
-import { ENTRY_DIP, ENTRY_RALLY, MOVE } from './regimeBands.js';
+import { ENTRY_DIP, ENTRY_RALLY, MOVE, getActiveRegimeBands } from './regimeBands.js';
 import {
   MIN_BARS_FOR_ZONE,
   ZONE_BARS,
@@ -17,10 +17,92 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { bodyPct, isMoving10s, type TenSecBar } from './tenSecondOhlc.js';
-import { readMarketStory, scalpStoryConfirms } from './marketStory.js';
+import {
+  readMarketStory,
+  scalpStoryConfirms,
+  type MarketStory,
+} from './marketStory.js';
 import { entryStructureEnabled } from './tradeOpenPolicy.js';
 import { entryLearnerChoose, type EntryFeatures } from './entryLearner.js';
 import { thinkEntryLikeTrader } from './traderMind.js';
+
+export type TfBiasDir = 'UP' | 'DOWN' | 'FLAT';
+
+export type EffectiveRegimeHtf = {
+  /** Capital.com closed candles preferred — not 10s-book noise */
+  tf30?: TfBiasDir | null;
+  tf15?: TfBiasDir | null;
+  tf5?: TfBiasDir | null;
+  m1?: TfBiasDir | null;
+};
+
+/** Chop labels that may wrongly starve TREND/BREAKOUT/PULLBACK playbooks. */
+const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
+
+/**
+ * Capital HTF bias from 30→15→5 (m1 only for pullback tip).
+ * Majority of directional HTFs wins — one opposing TF must not freeze as MIXED.
+ */
+export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
+  if (!htf) return 'FLAT';
+  const stack: TfBiasDir[] = [];
+  for (const d of [htf.tf30, htf.tf15, htf.tf5]) {
+    if (d === 'UP' || d === 'DOWN') stack.push(d);
+  }
+  if (!stack.length) {
+    if (htf.m1 === 'UP' || htf.m1 === 'DOWN') return htf.m1;
+    return 'FLAT';
+  }
+  const up = stack.filter((d) => d === 'UP').length;
+  const down = stack.filter((d) => d === 'DOWN').length;
+  if (up > down) return 'UP';
+  if (down > up) return 'DOWN';
+  return 'MIXED';
+}
+
+/**
+ * Entry playbook regime (#649 restore).
+ *
+ * - Real TREND / PULLBACK / BREAKOUT / … → unchanged.
+ * - RANGE / COMPRESSION / TRANSITION → fade ONLY when Capital HTF flat/mixed
+ *   AND story is chop. If 30/15/5 show direction, promote to TREND/PULLBACK
+ *   so quiet 10s RANGE cannot force wrong fade BUY/SELL.
+ */
+export function effectiveEntryRegime(
+  regime: RegimeName | string | null | undefined,
+  story: Pick<MarketStory, 'allow' | 'chapter'> | null | undefined,
+  htf?: EffectiveRegimeHtf | null
+): RegimeName {
+  const r = normalizeRegime(regime);
+  if (!CHOP_LABELS.has(r)) return r;
+
+  const bias = capitalHtfBias(htf);
+  const ch = String(story?.chapter || '').toUpperCase();
+  const allow = String(story?.allow || '').toUpperCase();
+  const m1 = htf?.m1;
+
+  if (bias === 'UP') {
+    if (ch === 'DIP_IN_RALLY' || m1 === 'DOWN') return 'PULLBACK_UPTREND';
+    if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
+    return 'TREND_UP';
+  }
+  if (bias === 'DOWN') {
+    if (ch === 'BOUNCE_IN_SELL' || m1 === 'UP') return 'PULLBACK_DOWNTREND';
+    if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
+    return 'TREND_DOWN';
+  }
+
+  if (ch === 'DIP_IN_RALLY') return 'PULLBACK_UPTREND';
+  if (ch === 'BOUNCE_IN_SELL') return 'PULLBACK_DOWNTREND';
+  if (ch === 'BREAK_UP') return 'BREAKOUT_UP';
+  if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
+  const buyCh = ch === 'RALLY' || ch === 'EXHAUST_HI';
+  const sellCh = ch === 'SELLOFF' || ch === 'EXHAUST_LO';
+  if (allow === 'BUY' || buyCh) return 'TREND_UP';
+  if (allow === 'SELL' || sellCh) return 'TREND_DOWN';
+
+  return r;
+}
 
 export type ZoneBand = 'LO' | 'MID_LO' | 'MID' | 'MID_HI' | 'HI';
 
@@ -503,20 +585,38 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     book: 'UP' | 'DOWN' | 'FLAT'
   ): 'UP' | 'DOWN' | 'FLAT' =>
     capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  // Capital HTF only for promote — never promote off 10s-book buckets alone
+  const hasCapitalHtf =
+    input.capital_tf5_dir != null ||
+    input.capital_tf15_dir != null ||
+    input.capital_tf30_dir != null ||
+    input.capital_m1_dir != null;
   const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
   const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
   const tf30 = pickTf(input.capital_tf30_dir, higherTfDir(input.closedBars, 30));
+  const gateRegime = effectiveEntryRegime(
+    regime,
+    story,
+    hasCapitalHtf
+      ? {
+          tf30: input.capital_tf30_dir ?? null,
+          tf15: input.capital_tf15_dir ?? null,
+          tf5: input.capital_tf5_dir ?? null,
+          m1: input.capital_m1_dir ?? null,
+        }
+      : null
+  );
   const m1Strong =
-    m1 != null && Math.abs(bodyPct(m1)) >= MOVE * 0.5
+    m1 != null && Math.abs(bodyPct(m1)) >= getActiveRegimeBands().MOVE * 0.5
       ? true
       : md !== 'FLAT' && md === bias;
 
   const body = bodyPct(input.bar);
   const barSign: -1 | 0 | 1 = body > 1e-8 ? 1 : body < -1e-8 ? -1 : 0;
 
-  // ★ Mind first — chooses BUY/SELL/WAIT from Capital 30→15→5→1 stack
+  // ★ Mind first — promoted regime so false RANGE does not starve TREND bias
   const thought = thinkEntryLikeTrader({
-    regime,
+    regime: gateRegime,
     chapter: story.chapter,
     allow: story.allow,
     story_conf: story.confidence,
@@ -535,10 +635,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     tf30_dir: tf30,
   });
 
-  // Learner advises once it has enough closes (same pattern as manage brain)
   const learned = entryLearnerChoose(
     {
-      regime,
+      regime: gateRegime,
       story,
       bar: input.bar,
       zone_pos: zone?.pos ?? story.zone_pos,
@@ -555,7 +654,6 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     learned.updates >= 20 &&
     learned.confidence >= thought.confidence + 0.08 &&
     !learned.explored;
-  // Mind leads. Learner may reinforce the same side — never knife opposite.
   let side = thought.choice;
   if (learnerReady && learned.action === thought.choice) {
     side = learned.action;
@@ -570,9 +668,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     return null;
   }
 
-  // Setup is a preferred trigger — if none matches, mind still executes (PRĀTS side)
-  const raw = decideEntryFrom10sRegime(input.bar, regime);
-  const started = raw ? null : structureStartEntry(input.bar, regime, zone, m1, bias);
+  // Story allow veto — knife sides never; NONE only blocks chop fades (not TREND/FAILED)
+  if (story.allow === 'BUY' && side === 'SELL') return null;
+  if (story.allow === 'SELL' && side === 'BUY') return null;
+  if (story.allow === 'NONE' && CHOP_LABELS.has(gateRegime)) return null;
+
+  // Playbook uses promoted regime (not raw 10s RANGE)
+  const raw = decideEntryFrom10sRegime(input.bar, gateRegime);
+  const started = raw ? null : structureStartEntry(input.bar, gateRegime, zone, m1, bias);
   const matched =
     raw && raw.direction === side
       ? raw
@@ -582,10 +685,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const candidate: RegimeEntry = matched ?? {
     direction: side,
     setup: 'PRĀTS',
-    reason: `${regime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
+    reason: `${gateRegime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
   };
 
-  const gate = structureGate(candidate, regime, input.bar, zone, m1, bias);
+  const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
   const withMind = (reason: string): StructuredEntry => ({
@@ -609,7 +712,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
 
   if (story.chapter === 'SEEDING') return null;
 
-  const scalp = scalpStoryConfirms(story, candidate.direction, regime, input.bar);
+  const scalp = scalpStoryConfirms(story, candidate.direction, gateRegime, input.bar);
   if (!scalp.ok) return null;
   return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
 }
