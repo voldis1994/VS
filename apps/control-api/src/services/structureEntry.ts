@@ -46,6 +46,14 @@ const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
  */
 export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
   if (!htf) return 'FLAT';
+  // 30m vs 15m fight → MIXED always (do not invent TREND from 5m majority)
+  if (
+    (htf.tf30 === 'UP' || htf.tf30 === 'DOWN') &&
+    (htf.tf15 === 'UP' || htf.tf15 === 'DOWN') &&
+    htf.tf30 !== htf.tf15
+  ) {
+    return 'MIXED';
+  }
   const stack: TfBiasDir[] = [];
   for (const d of [htf.tf30, htf.tf15, htf.tf5]) {
     if (d === 'UP' || d === 'DOWN') stack.push(d);
@@ -86,7 +94,6 @@ export function effectiveEntryRegime(
   const ch = String(story?.chapter || '').toUpperCase();
   const allow = String(story?.allow || '').toUpperCase();
   const m1 = htf?.m1;
-  const tf5 = htf?.tf5;
 
   if (bias === 'UP') {
     if (ch === 'DIP_IN_RALLY' || m1 === 'DOWN') return 'PULLBACK_UPTREND';
@@ -99,8 +106,8 @@ export function effectiveEntryRegime(
     return 'TREND_DOWN';
   }
 
-  // 5m fights 30/15 majority → MIXED: stay chop. Do not invent TREND from stale story.
-  if (bias === 'MIXED' && (tf5 === 'UP' || tf5 === 'DOWN')) {
+  // MIXED (30↔15 fight or 5m turn) → stay chop. Never invent TREND from story.
+  if (bias === 'MIXED') {
     return r;
   }
 

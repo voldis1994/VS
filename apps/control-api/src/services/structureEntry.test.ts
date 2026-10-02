@@ -4,6 +4,7 @@ import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { REGIME_NAMES, MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
   aggregateTenSecToMinutes,
+  capitalHtfBias,
   decideEntryWithStructure,
   effectiveEntryRegime,
   lastClosed1mFromTenSec,
@@ -189,6 +190,18 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
         'RANGE',
         { allow: 'NONE', chapter: 'RANGE_CHOP' },
         { tf30: 'UP', tf15: 'DOWN', tf5: 'FLAT' }
+      )
+    ).toBe('RANGE');
+  });
+
+  it('30m vs 15m fight is MIXED — never invent TREND from 5m majority', () => {
+    expect(capitalHtfBias({ tf30: 'UP', tf15: 'DOWN', tf5: 'UP' })).toBe('MIXED');
+    expect(capitalHtfBias({ tf30: 'DOWN', tf15: 'UP', tf5: 'DOWN' })).toBe('MIXED');
+    expect(
+      effectiveEntryRegime(
+        'RANGE',
+        { allow: 'SELL', chapter: 'SELLOFF' },
+        { tf30: 'UP', tf15: 'DOWN', tf5: 'DOWN' }
       )
     ).toBe('RANGE');
   });
