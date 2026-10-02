@@ -295,6 +295,8 @@ export const CYCLE_BUSY_WARN_MS = 15_000;
 export const CYCLE_BUSY_STUCK_MS = 40_000;
 /** Abort one robotCycle wall-clock so one account cannot starve the rest forever. */
 export const CYCLE_WALL_MS = 42_000;
+/** LIVE LOG stale only when idle this long (ignore while cycle_busy — ticks pause by design). */
+export const LIVE_LOG_STALE_MS = 45_000;
 /** Reuse SECOND enrich across robots on same epic (cuts Capital lock queue). */
 const SECOND_ENRICH_CACHE_MS = 5_000;
 const ZONE_SEED_THROTTLE_MS = 15_000;
