@@ -119,11 +119,12 @@ describe('brainSelfImprove analyze + hypothesize', () => {
     expect(second!.signature).not.toBe(first!.signature);
   });
 
-  it('falls back to explore when all pattern variants are exhausted', () => {
+  it('falls back to Soft-first explore when Soft spam variants are exhausted', () => {
     const analysis = analyzeTrades(syntheticLessonTrades());
+    expect(analysis.top_pattern?.id).toBe('soft_sell_spam');
     const rejected: string[] = [];
-    let sawExplore = false;
-    for (let i = 0; i < 30; i++) {
+    let softExplore: ReturnType<typeof buildHypothesis> = null;
+    for (let i = 0; i < 40; i++) {
       const exp: BrainExperience = {
         version: 1,
         updated_at: new Date().toISOString(),
@@ -140,12 +141,59 @@ describe('brainSelfImprove analyze + hypothesize', () => {
       const hypo = buildHypothesis(analysis, exp);
       expect(hypo).toBeTruthy();
       rejected.push(hypo!.signature);
-      if (hypo!.pattern_id === 'explore') {
-        sawExplore = true;
-        break;
+      // Soft focus keeps Soft pattern_id — Peak Keep must not be first explore
+      if (
+        /Explore Soft (pause|pct)|Force Soft explore/i.test(hypo!.title) ||
+        (hypo!.genome_delta &&
+          ('hardinv_pct_bp' in hypo!.genome_delta ||
+            'soft_same_side_pause_closes' in hypo!.genome_delta) &&
+          !('peak_keep' in hypo!.genome_delta && Object.keys(hypo!.genome_delta).length <= 3))
+      ) {
+        // After primary Soft variants exhaust, next must be Soft lever (not Keep-only)
+        if (/Explore Soft|Force Soft/i.test(hypo!.title)) {
+          softExplore = hypo;
+          break;
+        }
       }
     }
-    expect(sawExplore).toBe(true);
+    expect(softExplore).toBeTruthy();
+    expect(softExplore!.pattern_id).toBe('soft_sell_spam');
+    expect(softExplore!.title).not.toMatch(/Explore Keep/i);
+    expect(
+      'hardinv_pct_bp' in (softExplore!.genome_delta || {}) ||
+        'soft_same_side_pause_closes' in (softExplore!.genome_delta || {})
+    ).toBe(true);
+  });
+
+  it('includes Soft pct tighten among Soft SELL variants (before Peak Keep thrash)', () => {
+    const analysis = analyzeTrades(syntheticLessonTrades());
+    const rejected: string[] = [];
+    const titles: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const exp: BrainExperience = {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: analysis.patterns,
+        rejected_signatures: [...rejected],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      };
+      const hypo = buildHypothesis(analysis, exp);
+      expect(hypo).toBeTruthy();
+      titles.push(hypo!.title);
+      rejected.push(hypo!.signature);
+    }
+    expect(titles.some((t) => /Soft pct/i.test(t))).toBe(true);
+    const keepIdx = titles.findIndex((t) => /Explore Keep/i.test(t));
+    const softPctIdx = titles.findIndex((t) => /Soft pct/i.test(t));
+    if (keepIdx >= 0 && softPctIdx >= 0) {
+      expect(softPctIdx).toBeLessThan(keepIdx);
+    }
   });
 
   it('never returns null while Soft losses exist (even after 50 rejects)', () => {
