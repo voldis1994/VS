@@ -584,16 +584,26 @@ export function reviewSessionLikeHuman(
     };
   }
 
-  if (e >= 0.25) {
+  // Never claim “pieeja strādā” when Soft still in the window — E pts ≠ Capital £ / depozīts.
+  if (softLosses.length >= 1 && e >= 0) {
     return {
-      diagnosis: `Logs E=${e.toFixed(2)} pozitīvs — pieeja strādā.`,
+      diagnosis: `Logs E=${e.toFixed(2)} šķietami plus, bet Soft×${softLosses.length} šajā logā — tā NAV dienas peļņa / depozīts.`,
+      lesson:
+        'Nesaku “pieeja strādā”. Soft joprojām ēd; Peak korekcijas vienas pašas nelabo Soft spam.',
+      intent: 'protect_sooner',
+    };
+  }
+
+  if (e >= 0.25 && softLosses.length === 0) {
+    return {
+      diagnosis: `Logs E=${e.toFixed(2)} pts pozitīvs (bez Soft šajā logā) — logs ok, nevis konta £.`,
       lesson: 'Nelielas Peak korekcijas ok; Soft netieku. Filtrus neaiztieku.',
       intent: 'let_winners_run',
     };
   }
 
   return {
-    diagnosis: `Logs E=${e.toFixed(2)} — jaukti rezultāti.`,
+    diagnosis: `Logs E=${e.toFixed(2)} pts — jaukti rezultāti (ne Capital £).`,
     lesson: 'Turpinu Soft/Peak/Target kursu; mācos no nākamā loga.',
     intent: 'hold_course',
   };
