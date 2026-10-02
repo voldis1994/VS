@@ -31,6 +31,19 @@ import { brainDecision, brainLog, brainSection } from './consoleUi.js';
 
 export type CycleResult = BrainCycleRecord;
 
+/**
+ * Soft pause closes/min are live-desk memory only — strategy replay + EntryWait
+ * never see them. Accepting E-flat pause bounce (11↔12) was infinite SI thrash.
+ */
+export function isPauseOnlyGenomeThrash(deltaKeys: string[]): boolean {
+  const ignorable = new Set(['explore_step', 'version']);
+  const meaningful = deltaKeys.filter((k) => !ignorable.has(k));
+  if (!meaningful.length) return false;
+  return meaningful.every(
+    (k) => k === 'soft_same_side_pause_closes' || k === 'soft_same_side_pause_min'
+  );
+}
+
 export async function runBrainCycle(opts?: {
   trades?: AnalyzedTrade[] | null;
   once?: boolean;
@@ -226,11 +239,14 @@ export async function runBrainCycle(opts?: {
   const eFlatOk =
     report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
     report.candidate.trades >= Math.max(0, report.baseline.trades - 3);
+  // Pause knobs are invisible to replay/EntryWait — bouncing 11↔12 forever was "Safe Soft ACCEPT"
+  const pauseOnlyThrash = isPauseOnlyGenomeThrash(deltaKeys);
   const defensiveMemory =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
-    deltaKeys.every((k) => memoryKeys.has(k));
+    deltaKeys.every((k) => memoryKeys.has(k)) &&
+    !pauseOnlyThrash;
   // Soft spam still top → do not ACCEPT Peak Keep thrash as "safe evolve"
   const softFocusTop =
     analysis.top_pattern?.id === 'soft_sell_spam' ||
@@ -250,11 +266,13 @@ export async function runBrainCycle(opts?: {
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => k === 'peak_keep' || k === 'explore_step' || k === 'version');
   // Genome explore / Soft pct / Keep nudge with tests OK and E not worse — keep learning
+  // BUT never E-flat ACCEPT pause-only thrash (pause does not move replay E / SoftShare)
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
+    !pauseOnlyThrash &&
     !(softFocusTop && keepOnlyDelta && !softKnobDelta) &&
     (hypo.pattern_id === 'explore' ||
       softKnobDelta ||
@@ -279,6 +297,11 @@ export async function runBrainCycle(opts?: {
   }
   if (softFocusTop && keepOnlyDelta && !softKnobDelta && !report.improved) {
     brainLog('Soft spam top — Keep-only explore blocked from E-flat ACCEPT');
+  }
+  if (pauseOnlyThrash && !report.improved) {
+    brainLog(
+      'Soft pause-only thrash blocked — pause knobs do not move replay E; need real Soft fix'
+    );
   }
 
   if (!accept) {

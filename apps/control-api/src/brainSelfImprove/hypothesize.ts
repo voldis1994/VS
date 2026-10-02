@@ -499,25 +499,30 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
       ...(softFocus ? [] : codePatchesExplore(nextStep + 2)),
     ],
   };
-  const softPauseExplore: Variant = {
-    title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
-    rationale: softFocus
-      ? 'Soft spam still top — bounce Soft pause before Peak Keep.'
-      : 'Bounce Soft same-side pause knobs + flipFilter lock.',
-    task: `pause_closes=${pause} pause_min=${pauseMin}`,
-    genome_delta: {
-      soft_same_side_pause_closes: pause,
-      soft_same_side_pause_min: pauseMin,
-      explore_step: nextStep + 3,
-      last_lesson: `Explore pause ${pause}/${pauseMin}`,
-    },
-    patches: [
-      genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
-      genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
-      genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
-      ...codePatchesSoftSpam(rejectedN % 2),
-    ],
-  };
+  // At ceiling pause already maxed — bouncing 12↔11 is thrash, not Soft fix
+  const pauseAtCeiling =
+    g.soft_same_side_pause_closes >= 10 && g.soft_same_side_pause_min >= 5;
+  const softPauseExplore: Variant | null = pauseAtCeiling
+    ? null
+    : {
+        title: `Explore Soft pause→${pause}/${pauseMin} (step #${nextStep + 3})`,
+        rationale: softFocus
+          ? 'Soft spam still top — bounce Soft pause before Peak Keep.'
+          : 'Bounce Soft same-side pause knobs + flipFilter lock.',
+        task: `pause_closes=${pause} pause_min=${pauseMin}`,
+        genome_delta: {
+          soft_same_side_pause_closes: pause,
+          soft_same_side_pause_min: pauseMin,
+          explore_step: nextStep + 3,
+          last_lesson: `Explore pause ${pause}/${pauseMin}`,
+        },
+        patches: [
+          genomePatch('soft_same_side_pause_closes', pause, `explore pause ${pause}`),
+          genomePatch('soft_same_side_pause_min', pauseMin, `explore pause_min ${pauseMin}`),
+          genomePatch('explore_step', nextStep + 3, `explore_step ${nextStep + 3}`),
+          ...codePatchesSoftSpam(rejectedN % 2),
+        ],
+      };
   const softPctExplore: Variant = {
     title: `Explore Soft pct→${softPctFocus}bp (step #${nextStep + 7})`,
     rationale: softFocus
@@ -601,7 +606,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
       structureExplore,
       regimeExplore,
       keepExplore,
-    ];
+    ].filter((v): v is Variant => v != null);
   }
   return [
     keepExplore,
@@ -612,7 +617,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
     shieldExplore,
     structureExplore,
     regimeExplore,
-  ];
+  ].filter((v): v is Variant => v != null);
 }
 
 /** Absolute last resort — always returns a unique untried hypothesis. */
