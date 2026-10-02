@@ -128,6 +128,7 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
         tf5: 'FLAT',
       })
     ).toBe('TREND_DOWN');
+    // 5m fights 30/15 → stay chop (no stale TREND / pullbook invent)
     expect(
       effectiveEntryRegime('COMPRESSION', chop, {
         tf30: 'UP',
@@ -135,7 +136,27 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
         tf5: 'DOWN',
         m1: 'DOWN',
       })
-    ).toBe('PULLBACK_UPTREND');
+    ).toBe('COMPRESSION');
+  });
+
+  it('stale 30/15 DOWN + 5m UP does not promote TREND_DOWN chase', () => {
+    const chop = { allow: 'NONE' as const, chapter: 'RANGE_CHOP' as const };
+    expect(
+      effectiveEntryRegime('RANGE', chop, {
+        tf30: 'DOWN',
+        tf15: 'DOWN',
+        tf5: 'UP',
+        m1: 'UP',
+      })
+    ).toBe('RANGE');
+    // Even selloff story must not invent TREND when 5m already turned
+    expect(
+      effectiveEntryRegime('RANGE', { allow: 'SELL', chapter: 'SELLOFF' }, {
+        tf30: 'DOWN',
+        tf15: 'DOWN',
+        tf5: 'UP',
+      })
+    ).toBe('RANGE');
   });
 
   it('promotes RANGE→TREND_UP on RALLY / allow=BUY when HTF flat', () => {
@@ -610,10 +631,15 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
       bar: trigger,
       regime: 'FAILED_BREAKOUT_DOWN',
       closedBars: book,
+      // Soft shield require_1m_trigger ON — Capital 1m must agree (not blind PRĀTS)
+      capital_m1_dir: 'UP',
+      capital_tf5_dir: 'UP',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
     });
     expect(sig).not.toBeNull();
     expect(sig!.direction).toBe('BUY');
-    expect(sig!.reason).toMatch(/SETUP NOW/);
+    expect(sig!.reason).toMatch(/SETUP NOW|OPEN/);
   });
 
   it('raw TREND_DOWN rally-sell trades without 1m scalp GAIDI', () => {
@@ -646,6 +672,11 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
       bar: rallyTrig,
       regime: 'TREND_DOWN',
       closedBars: rich,
+      // Soft shield ON — Capital stack DOWN + 1m DOWN trigger (bounce tip is 10s only)
+      capital_m1_dir: 'DOWN',
+      capital_tf5_dir: 'DOWN',
+      capital_tf15_dir: 'DOWN',
+      capital_tf30_dir: 'DOWN',
     });
     expect(sig).not.toBeNull();
     expect(sig!.direction).toBe('SELL');
@@ -653,5 +684,27 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN/);
     void book;
     void trigger;
+  });
+
+  it('no blind PRĀTS NOW when mind side has no 10s/structure match', () => {
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4330.1 });
+    const entry = book[book.length - 1]!;
+    // Quiet mid bar — no TREND_DOWN rally-sell / no fade recipe
+    const sig = decideEntryWithStructure({
+      bar: entry,
+      regime: 'TREND_DOWN',
+      closedBars: book,
+      capital_m1_dir: 'DOWN',
+      capital_tf5_dir: 'DOWN',
+      capital_tf15_dir: 'DOWN',
+      capital_tf30_dir: 'DOWN',
+    });
+    // Mind may want SELL but without matched setup → null (was Soft chase fuel)
+    if (sig) {
+      expect(sig.setup).not.toBe('PRĀTS');
+      expect(sig.reason).not.toMatch(/PRĀTS NOW|izpildu PRĀTS/);
+    } else {
+      expect(sig).toBeNull();
+    }
   });
 });

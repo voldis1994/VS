@@ -700,7 +700,7 @@ function asTfDir(d: 'UP' | 'DOWN' | 'FLAT' | null | undefined): TfDir {
   return d === 'UP' || d === 'DOWN' ? d : 'FLAT';
 }
 
-/** Closed HTF dirs + live 1m tip when it agrees (no full-minute wait). */
+/** Closed HTF dirs + 1m trigger (tip only when closed with HTF/flat — no chase). */
 function capitalDirsForEntry(s: Internal): {
   m1: 'UP' | 'DOWN' | 'FLAT' | null;
   tf5: 'UP' | 'DOWN' | 'FLAT' | null;
@@ -719,9 +719,9 @@ function capitalDirsForEntry(s: Internal): {
     tf5,
     tf15,
     tf30,
-    // Live tip already agrees with HTF while closed 1m still lagging
+    // Tip early only when closed is flat (closed against HTF → m1=closed → not live)
     m1_live: Boolean(
-      (htf === 'UP' || htf === 'DOWN') && m1 === htf && closedM1 !== htf
+      (htf === 'UP' || htf === 'DOWN') && m1 === htf && closedM1 === 'FLAT'
     ),
   };
 }
@@ -1736,9 +1736,12 @@ async function exitTrade(
     }
     s.last_close_was_loss = wasLoss;
   }
+  // Soft-pause memory only on HardInv Soft losses — not every loss / Peak miss
+  const wasSoftHardInv =
+    s.last_close_was_loss && /HardInvalidation|HardInv/i.test(String(reason || ''));
   const softMem = noteLiveSoftClose(
     s.open_side === 'BUY' || s.open_side === 'SELL' ? s.open_side : null,
-    s.last_close_was_loss
+    wasSoftHardInv
   );
   const lockLabel = s.last_close_was_loss
     ? `last Soft ${s.last_closed_side || '—'} · mind may re-enter`
@@ -2286,6 +2289,7 @@ function decideOpenManageExit(
 
   const closed1m = lastClosedCapitalMinute(s.last_minute_candles);
   const prev1m = prevClosedCapitalMinute(s.last_minute_candles);
+  const caps = capitalDirsForEntry(s);
   const softGate = softExitMarketGate({
     openSide: s.open_side,
     regime: s.regime,
@@ -2294,6 +2298,10 @@ function decideOpenManageExit(
       ? { open: closed1m.open, close: closed1m.close }
       : null,
     prevClosed1m: prev1m ? { open: prev1m.open, close: prev1m.close } : null,
+    capital_m1_dir: caps.m1,
+    capital_tf5_dir: caps.tf5,
+    capital_tf15_dir: caps.tf15,
+    capital_tf30_dir: caps.tf30,
   });
 
   // PROFIT: hold on Capital 1m continue; reverse / fade-mid → PeakProtect arms
@@ -2684,7 +2692,8 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
         s.last_closed_side = closedSide;
         s.last_close_was_loss = true;
         s.closed_at_ms = Date.now();
-        const softMem = noteLiveSoftClose(closedSide, true);
+        // External flat ≠ Soft HardInv — do not pollute Soft-pause streak
+        const softMem = noteLiveSoftClose(closedSide, false);
         const pauseTag =
           softMem.soft_pause_side && softMem.soft_pause_left > 0
             ? ` · BRAIN pauzē ${softMem.soft_pause_side} ×${softMem.soft_pause_left}`
@@ -3116,7 +3125,8 @@ async function robotCycleLocked(s: Internal) {
           const closedSide = s.open_side;
           s.last_closed_side = closedSide;
           s.last_close_was_loss = true; // external close — unknown UPL, same-dir lock
-          const softMem = noteLiveSoftClose(closedSide, true);
+          // External flat ≠ Soft HardInv — do not pollute Soft-pause streak
+          const softMem = noteLiveSoftClose(closedSide, false);
           const pauseTag =
             softMem.soft_pause_side && softMem.soft_pause_left > 0
               ? ` · BRAIN pauzē ${softMem.soft_pause_side} ×${softMem.soft_pause_left}`

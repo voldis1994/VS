@@ -28,6 +28,13 @@ export type SoftExitGateResult = {
   minute_policy: 'continue' | 'reverse' | 'wait' | 'unknown';
 };
 
+export type SoftExitCapitalDirs = {
+  capital_m1_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+};
+
 export type SoftExitGateInput = {
   openSide: ExitSide;
   /** Live regime for next-entry peek (not frozen entry_regime) */
@@ -36,7 +43,8 @@ export type SoftExitGateInput = {
   /** Last fully closed Capital 1m OHLC */
   closed1m?: CandleOHLC | null;
   prevClosed1m?: CandleOHLC | null;
-};
+  /** Same Capital dirs as entry mind — manage peek must share one market read */
+} & SoftExitCapitalDirs;
 
 /**
  * Peek what entry would arm on the last full closed 10s bar — never opens an order.
@@ -44,7 +52,7 @@ export type SoftExitGateInput = {
 export function peekNextEntrySide(input: {
   regime?: string | null;
   closedBars?: TenSecBar[] | null;
-}): { side: ExitSide; setup: string; reason: string } | null {
+} & SoftExitCapitalDirs): { side: ExitSide; setup: string; reason: string } | null {
   const bars = input.closedBars;
   if (!bars?.length) return null;
   const bar = bars[bars.length - 1];
@@ -53,6 +61,10 @@ export function peekNextEntrySide(input: {
     bar,
     regime: input.regime,
     closedBars: bars,
+    capital_m1_dir: input.capital_m1_dir,
+    capital_tf5_dir: input.capital_tf5_dir,
+    capital_tf15_dir: input.capital_tf15_dir,
+    capital_tf30_dir: input.capital_tf30_dir,
   });
   if (!sig) return null;
   return { side: sig.direction, setup: sig.setup, reason: sig.reason };
@@ -88,6 +100,10 @@ export function softExitMarketGate(input: SoftExitGateInput): SoftExitGateResult
   const next = peekNextEntrySide({
     regime: input.regime,
     closedBars: input.closedBars,
+    capital_m1_dir: input.capital_m1_dir,
+    capital_tf5_dir: input.capital_tf5_dir,
+    capital_tf15_dir: input.capital_tf15_dir,
+    capital_tf30_dir: input.capital_tf30_dir,
   });
   const next_entry_side = next?.side ?? null;
   const next_entry_setup = next?.setup ?? null;

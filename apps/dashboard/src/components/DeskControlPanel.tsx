@@ -377,7 +377,7 @@ export function DeskControlPanel({ variant = 'board', onStarted }: Props) {
                 {' · '}cycles {auto.cycles_run}
               </div>
               <div className="hint-line mono" style={{ marginTop: 4 }}>
-                Session E={Number(auto.session_expectancy_pts ?? 0).toFixed(2)} · sum{' '}
+                E pts={Number(auto.session_expectancy_pts ?? 0).toFixed(2)} · sum pts{' '}
                 {Number(auto.session_sum_pts ?? 0).toFixed(2)} · W/L {auto.session_wins ?? 0}/
                 {auto.session_losses ?? 0}
               </div>
