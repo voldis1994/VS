@@ -9,7 +9,6 @@ import {
   createCandidateSession,
   ensureGenomeFile,
   promoteAcceptedVersion,
-  restoreCodeSourcesFromSnapshot,
   restoreSnapshot,
 } from './candidate.js';
 import { evaluateCandidate, measureBaseline } from './evaluate.js';
@@ -21,7 +20,12 @@ import {
   wasAlreadyTried,
   type BrainCycleRecord,
 } from './experience.js';
-import { getBrainGenome, reloadBrainGenome, setBrainGenome } from './brainGenome.js';
+import {
+  getBrainGenome,
+  reloadBrainGenome,
+  setBrainGenome,
+  TRADING_INTEL_GENOME_KEYS,
+} from './brainGenome.js';
 import { requestBrainCodeReload } from './brainReload.js';
 import { brainDecision, brainLog, brainSection } from './consoleUi.js';
 
@@ -209,13 +213,14 @@ export async function runBrainCycle(opts?: {
     'mind_bank_on_turn',
     'last_lesson',
   ]);
-  const evolveKeys = new Set([
+  const evolveKeys = new Set<string>([
     ...memoryKeys,
     'peak_keep',
     'soft_plus_giveback',
     'peak_arm_soft_mult',
     'explore_step',
     'version',
+    ...TRADING_INTEL_GENOME_KEYS,
   ]);
   const deltaKeys = Object.keys(hypo.genome_delta || {}).filter((k) => k !== 'last_lesson');
   const eFlatOk =
@@ -233,7 +238,13 @@ export async function runBrainCycle(opts?: {
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
     (hypo.pattern_id === 'explore' ||
-      deltaKeys.some((k) => k === 'peak_keep' || k === 'soft_plus_giveback' || k === 'peak_arm_soft_mult'));
+      deltaKeys.some(
+        (k) =>
+          k === 'peak_keep' ||
+          k === 'soft_plus_giveback' ||
+          k === 'peak_arm_soft_mult' ||
+          TRADING_INTEL_GENOME_KEYS.includes(k as (typeof TRADING_INTEL_GENOME_KEYS)[number])
+      ));
 
   const accept =
     (report.improved && report.tests_ok) || defensiveMemory || safeGenomeEvolve;
@@ -269,32 +280,15 @@ export async function runBrainCycle(opts?: {
   }
 
   brainSection('6) ACCEPT → JAUNĀ BRAIN VERSIJA');
-  // Safe/defensive genome ACCEPT must NOT keep ride-along .ts filter edits —
-  // those caused API reload / clients blink every Explore Keep cycle.
-  // Explore "safe genome" must NOT keep ride-along .ts (desk reload blink).
-  // Soft/bank/scratch patterns keep intentional filter code even on defensive ACCEPT.
-  const genomeOnlyAccept =
-    (defensiveMemory || safeGenomeEvolve) &&
-    !report.improved &&
-    hypo.pattern_id === 'explore';
-  let keptCodeFiles: string[] = [];
-  const codePatchRels = [
+  // Keep ACCEPTed .ts patches — operator wants brain to rewrite trading code.
+  // Soft reload still waits until all robots are FLAT (brainReload).
+  const keptCodeFiles = [
     ...new Set(
       hypo.patches
         .map((p) => p.path.replace(/\\/g, '/'))
         .filter((p) => p.endsWith('.ts') && !p.includes('genome.json'))
     ),
   ];
-  if (genomeOnlyAccept) {
-    const rolled = restoreCodeSourcesFromSnapshot(session, codePatchRels);
-    if (rolled.length) {
-      brainLog(
-        `Explore genome-only ACCEPT — rolled back .ts ride-along (${rolled.length}): ${rolled.map((p) => p.split('/').pop()).join(', ')}`
-      );
-    }
-  } else {
-    keptCodeFiles = codePatchRels;
-  }
   const versionDir = promoteAcceptedVersion(cycleId, session);
   brainLog(`Version saved: ${versionDir}`);
   if (keptCodeFiles.length) {
@@ -304,7 +298,7 @@ export async function runBrainCycle(opts?: {
       files: [...new Set(keptCodeFiles)],
     });
     brainLog(
-      `Code patches on disk — API soft-reload when all robots FLAT (${keptCodeFiles.length} file(s))`
+      `Code patches KEPT — API soft-reload when all robots FLAT (${keptCodeFiles.length} file(s))`
     );
   }
   const acc: CycleResult = {
