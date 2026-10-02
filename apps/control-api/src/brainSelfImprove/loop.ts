@@ -44,6 +44,13 @@ export function isPauseOnlyGenomeThrash(deltaKeys: string[]): boolean {
   );
 }
 
+/** Soft pct alone also does not move EntryWait — E-flat ACCEPT to 0.1bp was Soft suicide. */
+export function isSoftPctOnlyGenomeThrash(deltaKeys: string[]): boolean {
+  const ignorable = new Set(['explore_step', 'version']);
+  const meaningful = deltaKeys.filter((k) => !ignorable.has(k));
+  return meaningful.length > 0 && meaningful.every((k) => k === 'hardinv_pct_bp');
+}
+
 export async function runBrainCycle(opts?: {
   trades?: AnalyzedTrade[] | null;
   once?: boolean;
@@ -239,14 +246,17 @@ export async function runBrainCycle(opts?: {
   const eFlatOk =
     report.candidate.expectancy_pts >= report.baseline.expectancy_pts - 0.01 &&
     report.candidate.trades >= Math.max(0, report.baseline.trades - 3);
-  // Pause knobs are invisible to replay/EntryWait — bouncing 11↔12 forever was "Safe Soft ACCEPT"
+  // Pause / Soft-pct-only knobs are invisible to EntryWait — E-flat ACCEPT = thrash
   const pauseOnlyThrash = isPauseOnlyGenomeThrash(deltaKeys);
+  const softPctOnlyThrash = isSoftPctOnlyGenomeThrash(deltaKeys);
+  const titlePauseThrash = /Explore Soft pause/i.test(String(hypo.title || ''));
+  const genomeThrash = pauseOnlyThrash || softPctOnlyThrash || titlePauseThrash;
   const defensiveMemory =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => memoryKeys.has(k)) &&
-    !pauseOnlyThrash;
+    !genomeThrash;
   // Soft spam still top → do not ACCEPT Peak Keep thrash as "safe evolve"
   const softFocusTop =
     analysis.top_pattern?.id === 'soft_sell_spam' ||
@@ -256,23 +266,20 @@ export async function runBrainCycle(opts?: {
     analysis.soft_buy_losses >= 2;
   const softKnobDelta = deltaKeys.some(
     (k) =>
-      k === 'soft_same_side_pause_closes' ||
-      k === 'soft_same_side_pause_min' ||
-      k === 'hardinv_pct_bp' ||
       k === 'require_1m_trigger' ||
       k === 'wait_on_1m_fight'
   );
   const keepOnlyDelta =
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => k === 'peak_keep' || k === 'explore_step' || k === 'version');
-  // Genome explore / Soft pct / Keep nudge with tests OK and E not worse — keep learning
-  // BUT never E-flat ACCEPT pause-only thrash (pause does not move replay E / SoftShare)
+  // Genome explore with tests OK and E not worse — keep learning
+  // NEVER E-flat ACCEPT pause / Soft-pct-only / "Explore Soft pause" titles
   const safeGenomeEvolve =
     report.tests_ok &&
     eFlatOk &&
     deltaKeys.length > 0 &&
     deltaKeys.every((k) => evolveKeys.has(k)) &&
-    !pauseOnlyThrash &&
+    !genomeThrash &&
     !(softFocusTop && keepOnlyDelta && !softKnobDelta) &&
     (hypo.pattern_id === 'explore' ||
       softKnobDelta ||
@@ -298,9 +305,11 @@ export async function runBrainCycle(opts?: {
   if (softFocusTop && keepOnlyDelta && !softKnobDelta && !report.improved) {
     brainLog('Soft spam top — Keep-only explore blocked from E-flat ACCEPT');
   }
-  if (pauseOnlyThrash && !report.improved) {
+  if (genomeThrash && !report.improved) {
     brainLog(
-      'Soft pause-only thrash blocked — pause knobs do not move replay E; need real Soft fix'
+      pauseOnlyThrash || titlePauseThrash
+        ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
+        : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
     );
   }
 
