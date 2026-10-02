@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   dirFromCandles,
+  formingTipDir,
   htfBiasFromDirs,
   m1DirForEntry,
   readMultiTfStack,
@@ -124,12 +125,11 @@ describe('multiTfRead', () => {
     expect(trekBiasFromCandles(candles, 4)).toBe('DOWN');
   });
 
-  it('m1DirForEntry uses live tip when HTF already clear (no full-minute wait)', () => {
+  it('m1DirForEntry uses live tip only when closed 1m is with HTF or flat', () => {
     const candles = [
-      { open: 100, high: 101, low: 99, close: 99.5 }, // closed DOWN
-      { open: 99.5, high: 102, low: 99.4, close: 101.8 }, // forming UP tip
+      { open: 100, high: 101, low: 99, close: 100.5 }, // closed UP
+      { open: 100.5, high: 102, low: 100.4, close: 101.8 }, // forming UP tip
     ];
-    expect(dirFromCandles(candles)).toBe('DOWN');
     expect(m1DirForEntry(candles, 'UP')).toBe('UP');
     expect(htfBiasFromDirs('UP', 'UP', 'FLAT')).toBe('UP');
   });
@@ -147,5 +147,25 @@ describe('multiTfRead', () => {
       tf1: m1DirForEntry(candles, 'UP'),
     });
     expect(sideFromMultiTf(stack)).toBe('WAIT');
+  });
+
+  it('m1DirForEntry does not tip-chase when closed 1m already turned against HTF', () => {
+    // Stale HTF DOWN + market already UP on closed 1m + tip DOWN flicker = Soft chase
+    const candles = [
+      { open: 100, high: 102, low: 99, close: 101.5 }, // closed UP — turn
+      { open: 101.5, high: 101.6, low: 100.8, close: 101.0 }, // tip DOWN flicker
+    ];
+    expect(dirFromCandles(candles)).toBe('UP');
+    expect(formingTipDir(candles)).toBe('DOWN');
+    expect(m1DirForEntry(candles, 'DOWN')).toBe('UP');
+    const stack = readMultiTfStack({
+      tf30: 'DOWN',
+      tf15: 'DOWN',
+      tf5: 'DOWN',
+      tf1: m1DirForEntry(candles, 'DOWN'),
+    });
+    expect(stack.aligned).toBe(false);
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
+    expect(sideFromMultiTf(stack)).not.toBe('SELL');
   });
 });

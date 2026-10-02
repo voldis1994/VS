@@ -68,12 +68,12 @@ export function htfBiasFromDirs(tf30: TfDir, tf15: TfDir, tf5: TfDir): TfDir {
 }
 
 /**
- * 1m trigger for entry — do not wait a full minute when HTF is already clear
- * and the live forming tip agrees.
+ * 1m trigger for entry.
  *
- * - HTF UP/DOWN + tip same way → use tip NOW (enter with the move)
- * - HTF clear + tip fights → return tip so wait_on_1m_fight → WAIT (Soft shield)
- * - else → last closed 1m (legacy)
+ * - Tip fights HTF → return tip (wait_on_1m_fight → WAIT) Soft shield
+ * - Tip agrees HTF only if closed 1m is NOT already against HTF
+ *   (otherwise tip flicker + stale 30/15 = chase dead trend → Soft spam)
+ * - Closed 1m already turned against HTF → return closed → WAIT (read the turn)
  */
 export function m1DirForEntry(
   candles: TfCandle[] | null | undefined,
@@ -82,8 +82,12 @@ export function m1DirForEntry(
   const closed = dirFromCandles(candles);
   const tip = formingTipDir(candles);
   if (htfBias === 'UP' || htfBias === 'DOWN') {
-    if (tip === htfBias) return tip;
-    if (tip === 'UP' || tip === 'DOWN') return tip;
+    // Soft shield: tip against bias → expose fight
+    if ((tip === 'UP' || tip === 'DOWN') && tip !== htfBias) return tip;
+    // No chase: closed 1m already reversed against HTF — trust the turn, not tip flicker
+    if ((closed === 'UP' || closed === 'DOWN') && closed !== htfBias) return closed;
+    // Early only when closed is with HTF or flat
+    if (tip === htfBias && (closed === htfBias || closed === 'FLAT')) return tip;
   }
   return closed;
 }
