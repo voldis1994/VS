@@ -41,7 +41,8 @@ const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
 
 /**
  * Capital HTF bias from 30→15→5 (m1 only for pullback tip).
- * Majority of directional HTFs wins — one opposing TF must not freeze as MIXED.
+ * Majority of directional HTFs wins — but 5m fight → MIXED (no stale chase).
+ * Lone 1m never invents HTF bias (that was Soft spam before HTF fetch).
  */
 export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
   if (!htf) return 'FLAT';
@@ -49,24 +50,29 @@ export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' |
   for (const d of [htf.tf30, htf.tf15, htf.tf5]) {
     if (d === 'UP' || d === 'DOWN') stack.push(d);
   }
-  if (!stack.length) {
-    if (htf.m1 === 'UP' || htf.m1 === 'DOWN') return htf.m1;
-    return 'FLAT';
-  }
+  if (!stack.length) return 'FLAT';
   const up = stack.filter((d) => d === 'UP').length;
   const down = stack.filter((d) => d === 'DOWN').length;
-  if (up > down) return 'UP';
-  if (down > up) return 'DOWN';
+  if (up > down) {
+    // 5m already turned against 30/15 majority → market is turning, not TREND_UP
+    if (htf.tf5 === 'DOWN') return 'MIXED';
+    return 'UP';
+  }
+  if (down > up) {
+    if (htf.tf5 === 'UP') return 'MIXED';
+    return 'DOWN';
+  }
   return 'MIXED';
 }
 
 /**
- * Entry playbook regime (#649 restore).
+ * Entry playbook regime — one contract with multi-TF stack:
  *
  * - Real TREND / PULLBACK / BREAKOUT / … → unchanged.
  * - RANGE / COMPRESSION / TRANSITION → fade ONLY when Capital HTF flat/mixed
- *   AND story is chop. If 30/15/5 show direction, promote to TREND/PULLBACK
- *   so quiet 10s RANGE cannot force wrong fade BUY/SELL.
+ *   AND story is chop.
+ * - Promote chop→TREND only when HTF bias is clear AND 5m does not fight.
+ *   Stale 30/15 + turned 5m → stay chop (read the turn, do not chase).
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
@@ -80,6 +86,7 @@ export function effectiveEntryRegime(
   const ch = String(story?.chapter || '').toUpperCase();
   const allow = String(story?.allow || '').toUpperCase();
   const m1 = htf?.m1;
+  const tf5 = htf?.tf5;
 
   if (bias === 'UP') {
     if (ch === 'DIP_IN_RALLY' || m1 === 'DOWN') return 'PULLBACK_UPTREND';
@@ -90,6 +97,11 @@ export function effectiveEntryRegime(
     if (ch === 'BOUNCE_IN_SELL' || m1 === 'UP') return 'PULLBACK_DOWNTREND';
     if (ch === 'BREAK_DOWN') return 'BREAKOUT_DOWN';
     return 'TREND_DOWN';
+  }
+
+  // 5m fights 30/15 majority → MIXED: stay chop. Do not invent TREND from stale story.
+  if (bias === 'MIXED' && (tf5 === 'UP' || tf5 === 'DOWN')) {
+    return r;
   }
 
   if (ch === 'DIP_IN_RALLY') return 'PULLBACK_UPTREND';
@@ -682,11 +694,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
       : started && started.direction === side
         ? started
         : null;
-  const candidate: RegimeEntry = matched ?? {
-    direction: side,
-    setup: 'PRĀTS',
-    reason: `${gateRegime} · mind ${side} · nav 10s trigger — izpildu PRĀTS`,
-  };
+  // No blind PRĀTS NOW — mind side without 10s/structure match was Soft chase fuel
+  if (!matched) return null;
+  const candidate: RegimeEntry = matched;
 
   const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
@@ -699,11 +709,7 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   });
 
   if (!entryStructureEnabled()) {
-    return withMind(
-      matched
-        ? `${gate.tag} · OPEN · ${story.summary_lv}`
-        : `${gate.tag} · PRĀTS NOW · ${story.summary_lv}`
-    );
+    return withMind(`${gate.tag} · OPEN · ${story.summary_lv}`);
   }
 
   if (matched === raw && raw) {

@@ -276,7 +276,7 @@ export function OverviewPage() {
               {selectedClientId ? ` · #${selectedClientId}` : ''}
             </div>
             <p className="hint-line" style={{ margin: '4px 0 0' }}>
-              Online politika no closes · Soft = drošība · ik 5 closes Peak/Target mācība
+              Sesijas punkti (pts) — nav Capital £ / depozīts · Soft = drošība · ik 5 closes Peak/Target
             </p>
           </div>
           <div className="actions" style={{ margin: 0 }}>
@@ -315,14 +315,14 @@ export function OverviewPage() {
                 <div className="value">{learner?.updates ?? 0}</div>
               </div>
               <div className="metric-box">
-                <div className="label">Session E</div>
+                <div className="label">E pts</div>
                 <div className={`value ${ePts >= 0 ? 'pos' : 'neg'}`}>
                   {ePts >= 0 ? '+' : ''}
                   {ePts.toFixed(2)}
                 </div>
               </div>
               <div className="metric-box">
-                <div className="label">Sum</div>
+                <div className="label">Sum pts</div>
                 <div className={`value ${sumPts >= 0 ? 'pos' : 'neg'}`}>
                   {sumPts >= 0 ? '+' : ''}
                   {sumPts.toFixed(2)}

@@ -440,8 +440,6 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
   const arm = bounceNum(g.peak_arm_soft_mult, step, 0.5, 1.2, dir === 1 ? -1 : 1);
   const pause = bounceInt(g.soft_same_side_pause_closes, 1, 1, 12, dir);
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
-  const flipWait = !g.wait_on_1m_fight;
-  const flipTrig = !g.require_1m_trigger;
   const move = bounceBp(g.regime_move, 0.1, 0.4, 2.0, dir);
   const trek = bounceBp(g.mtf_trek_flat_frac, 0.1, 1.5, 12.0, dir);
   const softPct = bounceBp(g.hardinv_pct_bp, 0.1, 0.1, 50, dir);
@@ -537,19 +535,20 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
       ...codePatchesSoftSpam(rejectedN % 2),
     ],
   };
-  const flipExplore: Variant = {
-    title: `Explore flip 1m gates (step #${nextStep + 4})`,
-    rationale: 'Toggle wait_on_1m_fight / require_1m_trigger to escape local maximum.',
-    task: `wait=${flipWait} trigger=${flipTrig}`,
+  // Soft shield gates stay ON forever — flipping them OFF re-armed Soft chase
+  const shieldExplore: Variant = {
+    title: `Explore reinforce 1m Soft shields (step #${nextStep + 4})`,
+    rationale: 'Never disable wait_on_1m_fight / require_1m_trigger — Soft spam shield.',
+    task: 'wait_on_1m_fight=true require_1m_trigger=true',
     genome_delta: {
-      wait_on_1m_fight: flipWait,
-      require_1m_trigger: flipTrig,
+      wait_on_1m_fight: true,
+      require_1m_trigger: true,
       explore_step: nextStep + 4,
-      last_lesson: `Explore flip wait=${flipWait} trig=${flipTrig}`,
+      last_lesson: 'Explore reinforce Soft 1m shields ON',
     },
     patches: [
-      genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
-      genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
+      genomePatch('wait_on_1m_fight', true, 'Soft shield wait_on_1m_fight ON'),
+      genomePatch('require_1m_trigger', true, 'Soft shield require_1m_trigger ON'),
       genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
       ...codePatchesSoftSpam(rejectedN % 2),
     ],
@@ -596,7 +595,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
     return [
       softPauseExplore,
       softPctExplore,
-      flipExplore,
+      shieldExplore,
       givebackExplore,
       armExplore,
       structureExplore,
@@ -610,7 +609,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
     armExplore,
     softPauseExplore,
     softPctExplore,
-    flipExplore,
+    shieldExplore,
     structureExplore,
     regimeExplore,
   ];

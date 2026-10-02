@@ -142,6 +142,40 @@ describe('traderMind', () => {
     );
   });
 
+  it('never says pieeja strādā when Soft losses exist even if E pts look green', () => {
+    const lesson = reviewSessionLikeHuman([
+      { pnl_pts: 3.5, exit_reason: 'PeakProtection', mfe: 4, mae: 0.2 },
+      { pnl_pts: 2.8, exit_reason: 'Target', mfe: 3, mae: 0.1 },
+      { pnl_pts: -2.2, exit_reason: 'HardInvalidation', mfe: 0.3, mae: 2.2 },
+      { pnl_pts: 1.5, exit_reason: 'PeakProtection', mfe: 2, mae: 0.2 },
+      { pnl_pts: 1.2, exit_reason: 'MindBank', mfe: 1.5, mae: 0.1 },
+    ]);
+    expect(lesson.diagnosis).not.toMatch(/pieeja strādā/i);
+    expect(lesson.diagnosis).toMatch(/Soft|NAV dienas peļņa/i);
+    expect(lesson.intent).toBe('protect_sooner');
+  });
+
+  it('HTF tape present but not aligned — promoted TREND does not invent side', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'RANGE_CHOP',
+      allow: 'NONE',
+      story_conf: 0.5,
+      story_summary: 'chop',
+      red_1m: 8,
+      green_1m: 8,
+      zone_pos: 0.5,
+      bar_body_sign: 0,
+      m1_dir: 'UP', // fights stale DOWN bias
+      bias: 'FLAT',
+      tf5_dir: 'UP',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'DOWN',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.choice).not.toBe('SELL');
+  });
+
   it('ENTRY mind chooses SELL on selloff — not blind BUY fade', () => {
     const t = thinkEntryLikeTrader({
       regime: 'RANGE',

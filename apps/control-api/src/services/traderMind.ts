@@ -372,16 +372,23 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       if (regimeShort || sellStory) confidence = Math.min(0.92, confidence + 0.06);
     }
   } else {
-    // ——— 2) Flat / mixed stack — use story / regime / pressure (still a choice) ———
-    if (regimeLong && chapter !== 'BOUNCE_IN_SELL') {
+    // ——— 2) Flat / mixed stack — stack leads when HTF tape exists ———
+    const hasHtfTape = tf30 !== 'FLAT' || tf15 !== 'FLAT' || tf5 !== 'FLAT';
+    if ((regimeLong || regimeShort) && hasHtfTape) {
+      // Promoted/stale TREND label + non-aligned stack = dead-HTF chase fuel
+      choice = 'WAIT';
+      thesis = `Steks jauktā (${stack.summary}) — regime ${regime} bez aligned multi-TF nav darba puse.`;
+      why = 'Steks vada: bez 30/15/5/1m sakritības neeju pēc label (miruša HTF chase).';
+      confidence = 0.4;
+    } else if (regimeLong && chapter !== 'BOUNCE_IN_SELL') {
       choice = 'BUY';
       thesis = `Steks jauktā (${stack.summary}), bet regime ${regime} — turu garo pusi kā darba hipotēzi.`;
-      why = 'Bez skaidra multi-TF sekoju live regime; gaidu BUY setup.';
+      why = 'Bez HTF lentas sekoju live regime; gaidu BUY setup.';
       confidence = 0.62;
     } else if (regimeShort && chapter !== 'DIP_IN_RALLY') {
       choice = 'SELL';
       thesis = `Steks jauktā (${stack.summary}), bet regime ${regime} — turu īso pusi kā darba hipotēzi.`;
-      why = 'Bez skaidra multi-TF sekoju live regime; gaidu SELL setup.';
+      why = 'Bez HTF lentas sekoju live regime; gaidu SELL setup.';
       confidence = 0.62;
     } else if (chapter === 'BOUNCE_IN_SELL' || (allow === 'SELL' && chapter === 'SELLOFF')) {
       choice = 'SELL';
@@ -403,24 +410,6 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
       thesis = `Stāsts atļauj BUY (${chapter}) · pressure G${g}/R${r} · ${stack.summary}.`;
       why = 'Izvēlos garo pusi no stāsta, kamēr multi-TF nav pretī.';
       confidence = conf;
-    } else if (
-      input.last_close_was_loss &&
-      input.last_closed_side === 'BUY' &&
-      (sellStory || r > g)
-    ) {
-      choice = 'SELL';
-      thesis = 'Pēc Soft BUY zaudējuma un lejup spiediena — otra puse, ne same-dir spam.';
-      why = 'Mācos no pēdējā close + live pressure.';
-      confidence = 0.7;
-    } else if (
-      input.last_close_was_loss &&
-      input.last_closed_side === 'SELL' &&
-      (buyStory || g > r)
-    ) {
-      choice = 'BUY';
-      thesis = 'Pēc Soft SELL zaudējuma un augšup spiediena — otra puse.';
-      why = 'Mācos no pēdējā close + live pressure.';
-      confidence = 0.7;
     } else if (chapter === 'RANGE_CHOP' || allow === 'NONE' || conf < 0.45) {
       choice = 'WAIT';
       thesis = `Chop / vājš stāsts (${chapter}, conf=${conf.toFixed(2)}) · ${stack.summary} — nav ko uzspiest.`;
@@ -584,16 +573,26 @@ export function reviewSessionLikeHuman(
     };
   }
 
-  if (e >= 0.25) {
+  // Never claim “pieeja strādā” when Soft still in the window — E pts ≠ Capital £ / depozīts.
+  if (softLosses.length >= 1 && e >= 0) {
     return {
-      diagnosis: `Logs E=${e.toFixed(2)} pozitīvs — pieeja strādā.`,
+      diagnosis: `Logs E=${e.toFixed(2)} šķietami plus, bet Soft×${softLosses.length} šajā logā — tā NAV dienas peļņa / depozīts.`,
+      lesson:
+        'Nesaku “pieeja strādā”. Soft joprojām ēd; Peak korekcijas vienas pašas nelabo Soft spam.',
+      intent: 'protect_sooner',
+    };
+  }
+
+  if (e >= 0.25 && softLosses.length === 0) {
+    return {
+      diagnosis: `Logs E=${e.toFixed(2)} pts pozitīvs (bez Soft šajā logā) — logs ok, nevis konta £.`,
       lesson: 'Nelielas Peak korekcijas ok; Soft netieku. Filtrus neaiztieku.',
       intent: 'let_winners_run',
     };
   }
 
   return {
-    diagnosis: `Logs E=${e.toFixed(2)} — jaukti rezultāti.`,
+    diagnosis: `Logs E=${e.toFixed(2)} pts — jaukti rezultāti (ne Capital £).`,
     lesson: 'Turpinu Soft/Peak/Target kursu; mācos no nākamā loga.',
     intent: 'hold_course',
   };
