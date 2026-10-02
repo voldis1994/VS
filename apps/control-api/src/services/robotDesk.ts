@@ -72,6 +72,7 @@ import {
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
+import { htfBiasFromDirs, m1DirForEntry, type TfDir } from './multiTfRead.js';
 import {
   exitReasonWasLoss,
   flipFilterReason,
@@ -438,10 +439,15 @@ function refreshEntryWatch(
     cooldown_left_s: opts?.cooldown_left_s,
     status_override: opts?.status_override,
     last_reason: opts?.last_reason,
-    capital_m1_dir: capitalCandleDir(s.last_minute_candles),
-    capital_tf5_dir: capitalCandleDir(s.last_tf5_candles),
-    capital_tf15_dir: capitalCandleDir(s.last_tf15_candles),
-    capital_tf30_dir: capitalCandleDir(s.last_tf30_candles),
+    ...(() => {
+      const caps = capitalDirsForEntry(s);
+      return {
+        capital_m1_dir: caps.m1,
+        capital_tf5_dir: caps.tf5,
+        capital_tf15_dir: caps.tf15,
+        capital_tf30_dir: caps.tf30,
+      };
+    })(),
   });
 }
 
@@ -529,8 +535,8 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     action = w.zone_ready
       ? 'SEEDING'
       : `SEEDING · ${w.zone_bars}/${w.zone_need} · vēl ${w.zone_left}`;
-  else if (w?.status === 'FORMING') action = 'WATCH · forming 10s';
-  else if (w?.status === 'WAITING_TRIGGER') action = 'WATCH · trigger';
+  else if (w?.status === 'FORMING') action = 'WATCH · 10s formējas';
+  else if (w?.status === 'WAITING_TRIGGER') action = 'WATCH · gaida pusi / tip';
   else if (w?.status === 'REGIME_OFF') action = 'REGIME OFF';
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
@@ -687,6 +693,36 @@ function capitalCandleDir(
   if (c.close > c.open) return 'UP';
   if (c.close < c.open) return 'DOWN';
   return 'FLAT';
+}
+
+function asTfDir(d: 'UP' | 'DOWN' | 'FLAT' | null | undefined): TfDir {
+  return d === 'UP' || d === 'DOWN' ? d : 'FLAT';
+}
+
+/** Closed HTF dirs + live 1m tip when it agrees (no full-minute wait). */
+function capitalDirsForEntry(s: Internal): {
+  m1: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf5: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf15: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf30: 'UP' | 'DOWN' | 'FLAT' | null;
+  m1_live: boolean;
+} {
+  const tf5 = capitalCandleDir(s.last_tf5_candles);
+  const tf15 = capitalCandleDir(s.last_tf15_candles);
+  const tf30 = capitalCandleDir(s.last_tf30_candles);
+  const htf = htfBiasFromDirs(asTfDir(tf30), asTfDir(tf15), asTfDir(tf5));
+  const closedM1 = capitalCandleDir(s.last_minute_candles);
+  const m1 = m1DirForEntry(s.last_minute_candles, htf);
+  return {
+    m1,
+    tf5,
+    tf15,
+    tf30,
+    // Live tip already agrees with HTF while closed 1m still lagging
+    m1_live: Boolean(
+      (htf === 'UP' || htf === 'DOWN') && m1 === htf && closedM1 !== htf
+    ),
+  };
 }
 
 /**
@@ -3301,10 +3337,15 @@ async function robotCycleLocked(s: Internal) {
           (latch && closedBarKey(latch) === closedBarKey(entryBar)))
     );
 
-    // Mind executes NOW — do not wait for FORMING 10s close when PRĀTS has a side.
+    // Mind executes NOW — prefer live forming 10s body (not flat synthetic mid).
     const midPx = quote.mid;
+    const formingLive =
+      s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
+        ? s.ohlcState.forming
+        : null;
     const mindBar: TenSecBar | null =
       entryBar ??
+      formingLive ??
       (midPx != null && Number.isFinite(midPx)
         ? {
             open_time_ms: Math.floor(Date.now() / 10_000) * 10_000,
@@ -3342,10 +3383,7 @@ async function robotCycleLocked(s: Internal) {
         } catch {
           /* keep previous */
         }
-        const capitalMd = capitalCandleDir(s.last_minute_candles);
-        const capitalTf5 = capitalCandleDir(s.last_tf5_candles);
-        const capitalTf15 = capitalCandleDir(s.last_tf15_candles);
-        const capitalTf30 = capitalCandleDir(s.last_tf30_candles);
+        const caps = capitalDirsForEntry(s);
         const sig = decideEntryWithStructure({
           bar: mindBar,
           regime: s.regime,
@@ -3353,10 +3391,10 @@ async function robotCycleLocked(s: Internal) {
           last_closed_side: s.last_closed_side,
           last_close_was_loss: s.last_close_was_loss,
           client_id: s.client_id,
-          capital_m1_dir: capitalMd,
-          capital_tf5_dir: capitalTf5,
-          capital_tf15_dir: capitalTf15,
-          capital_tf30_dir: capitalTf30,
+          capital_m1_dir: caps.m1,
+          capital_tf5_dir: caps.tf5,
+          capital_tf15_dir: caps.tf15,
+          capital_tf30_dir: caps.tf30,
         });
         if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;
@@ -3458,22 +3496,31 @@ async function robotCycleLocked(s: Internal) {
               ask: quote.ask,
               mid: quote.mid,
               detail: `ARMED ${sig.direction} ${sig.setup} · PRĀTS NOW · ${
-                onCloseTick ? '10s close' : 'forming/live'
+                onCloseTick
+                  ? '10s close'
+                  : caps.m1_live
+                    ? '1m live tip'
+                    : formingLive
+                      ? '10s forming'
+                      : 'live'
               }`,
             });
           }
         } else {
           s.entry_close_latch = null;
+          // Mind WAIT is not "waiting for 10s close" — keep WAITING_TRIGGER (not FORMING)
           refreshEntryWatch(s, {
-            status_override: onCloseTick ? 'WAITING_TRIGGER' : 'FORMING',
-            last_reason: `${s.regime} · PRĀTS WAIT · gaida skaidru pusi`,
+            status_override: 'WAITING_TRIGGER',
+            last_reason: `${s.regime} · PRĀTS WAIT · gaida skaidru pusi / 1m tip`,
           });
           pushTick(s, {
             phase: 'DECIDE',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `${ohlcLine} · PRĀTS WAIT · ${s.entry_watch?.looking_for || ''}`,
+            detail: `${ohlcLine} · PRĀTS WAIT · ${s.entry_watch?.looking_for || ''}${
+              caps.m1_live ? ' · 1m tip ready' : ''
+            }`,
           });
         }
       }

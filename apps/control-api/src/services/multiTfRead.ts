@@ -50,6 +50,44 @@ export function dirFromCandles(candles: TfCandle[] | null | undefined): TfDir {
   return candleDir(lastClosedTfCandle(candles));
 }
 
+/** Live forming tip (last candle in the Capital array). */
+export function formingTipDir(candles: TfCandle[] | null | undefined): TfDir {
+  if (!candles?.length) return 'FLAT';
+  return candleDir(candles[candles.length - 1]!);
+}
+
+/** Majority bias from closed 30 / 15 / 5 — FLAT when empty or tied. */
+export function htfBiasFromDirs(tf30: TfDir, tf15: TfDir, tf5: TfDir): TfDir {
+  const stack = [tf30, tf15, tf5].filter((d): d is 'UP' | 'DOWN' => d === 'UP' || d === 'DOWN');
+  if (!stack.length) return 'FLAT';
+  const up = stack.filter((d) => d === 'UP').length;
+  const down = stack.filter((d) => d === 'DOWN').length;
+  if (up > down) return 'UP';
+  if (down > up) return 'DOWN';
+  return 'FLAT';
+}
+
+/**
+ * 1m trigger for entry — do not wait a full minute when HTF is already clear
+ * and the live forming tip agrees.
+ *
+ * - HTF UP/DOWN + tip same way → use tip NOW (enter with the move)
+ * - HTF clear + tip fights → return tip so wait_on_1m_fight → WAIT (Soft shield)
+ * - else → last closed 1m (legacy)
+ */
+export function m1DirForEntry(
+  candles: TfCandle[] | null | undefined,
+  htfBias: TfDir
+): TfDir {
+  const closed = dirFromCandles(candles);
+  const tip = formingTipDir(candles);
+  if (htfBias === 'UP' || htfBias === 'DOWN') {
+    if (tip === htfBias) return tip;
+    if (tip === 'UP' || tip === 'DOWN') return tip;
+  }
+  return closed;
+}
+
 /**
  * Trek bias over last N closed candles (color majority + net path).
  */
