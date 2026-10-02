@@ -24,7 +24,10 @@ import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
-import { checkBrainCodeReload } from './services/robotDesk.js';
+import {
+  checkBrainCodeReload,
+  resumeRobotsAfterBrainReload,
+} from './services/robotDesk.js';
 import { clearStaleBrainReloadOnBoot } from './brainSelfImprove/brainReload.js';
 import { authMiddleware, isAdminTokenConfigured } from './middleware/auth.js';
 import { isEncryptionKeyConfigured } from './security/encryption.js';
@@ -199,6 +202,10 @@ async function main() {
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
   clearStaleBrainReloadOnBoot();
+  // Live-loop exit 75 wiped in-memory sessions — bring robots back
+  void resumeRobotsAfterBrainReload().catch((err) => {
+    console.error('[robot] resume after BRAIN reload failed:', err);
+  });
 
   setInterval(() => {
     telemetry.broadcast({

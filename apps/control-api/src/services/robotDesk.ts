@@ -100,7 +100,12 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { withEpicEntryLock } from './epicEntryLock.js';
-import { maybeExitForBrainCodeReload } from '../brainSelfImprove/brainReload.js';
+import {
+  hasBrainReloadRequest,
+  isControlApiLiveLoop,
+  maybeExitForBrainCodeReload,
+} from '../brainSelfImprove/brainReload.js';
+import { consumeRobotResume, saveRobotResume } from './robotResume.js';
 
 export type RobotTick = {
   at: string;
@@ -1233,12 +1238,67 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
+/** Snapshot running robots so live-loop exit 75 can auto-resume them. */
+function persistRunningRobotsForBrainReload(): void {
+  if (!hasBrainReloadRequest() || !isControlApiLiveLoop()) return;
+  const robots = [...sessions.values()]
+    .filter((x) => x.running)
+    .map((x) => ({
+      account_id: x.account_id,
+      epic: x.epic,
+      lot_size: x.lot_size,
+      display_name: x.display_name,
+      trading_enabled: x.trading_enabled,
+      entry_enabled: x.entry_enabled,
+    }));
+  if (robots.length) {
+    saveRobotResume(robots, 'BRAIN code reload — resume after exit 75');
+    console.log(
+      `[robot] saved ${robots.length} robot(s) for resume after BRAIN reload: ${robots
+        .map((r) => r.epic)
+        .join(', ')}`
+    );
+  }
+}
+
 /** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
 export function checkBrainCodeReload(): void {
   const anyOpen = [...sessions.values()].some(
     (x) => x.running && Boolean(x.open_side || x.deal_id)
   );
+  if (!anyOpen) persistRunningRobotsForBrainReload();
   maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+}
+
+/**
+ * After live-loop BRAIN reload, restart robots that were running (in-memory sessions die on exit 75).
+ * One-shot: consumes data/brain-self-improve/robot-resume.json.
+ */
+export async function resumeRobotsAfterBrainReload(): Promise<number> {
+  const robots = consumeRobotResume();
+  if (!robots.length) return 0;
+  console.log(`[robot] resuming ${robots.length} after BRAIN code reload…`);
+  let ok = 0;
+  for (const r of robots) {
+    try {
+      await startRobotSession({
+        account_id: r.account_id,
+        epic: r.epic,
+        display_name: r.display_name,
+        lot_size: r.lot_size,
+        trading_enabled: r.trading_enabled,
+        entry_enabled: r.entry_enabled,
+      });
+      ok += 1;
+      console.log(`[robot] resumed ${r.epic} (account ${r.account_id})`);
+    } catch (e) {
+      console.error(
+        `[robot] resume FAILED ${r.epic}:`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+  return ok;
 }
 
 /** Stop only entry brains — never kill a robot sitting on an open trade (HardInv must live). */
@@ -2639,6 +2699,7 @@ async function robotCycle(s: Internal) {
     const anyOpen = [...sessions.values()].some(
       (x) => x.running && Boolean(x.open_side || x.deal_id)
     );
+    if (!anyOpen) persistRunningRobotsForBrainReload();
     maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
   }
 }
@@ -2856,7 +2917,7 @@ async function robotCycleLocked(s: Internal) {
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · MINUTE ${mins.detail || 'empty'} · still flat`,
+                detail: `10s enrich FAIL · Capital SECOND=${secs.detail || 'empty'} · MINUTE=${mins.detail || 'empty'} · still flat`,
               });
             }
           } else {
@@ -2865,7 +2926,7 @@ async function robotCycleLocked(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `10s enrich FAIL · SECOND ${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
+              detail: `10s enrich FAIL · Capital SECOND=${secs.detail || 'empty'} · no MINUTE fallback · still flat O=H=L=C`,
             });
           }
         }
