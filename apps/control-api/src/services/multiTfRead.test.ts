@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   dirFromCandles,
+  htfBiasFromDirs,
+  m1DirForEntry,
   readMultiTfStack,
   sideFromMultiTf,
   trekBiasFromCandles,
@@ -120,5 +122,30 @@ describe('multiTfRead', () => {
       { open: 97.5, high: 98.5, low: 97, close: 98 }, // forming tip dropped
     ];
     expect(trekBiasFromCandles(candles, 4)).toBe('DOWN');
+  });
+
+  it('m1DirForEntry uses live tip when HTF already clear (no full-minute wait)', () => {
+    const candles = [
+      { open: 100, high: 101, low: 99, close: 99.5 }, // closed DOWN
+      { open: 99.5, high: 102, low: 99.4, close: 101.8 }, // forming UP tip
+    ];
+    expect(dirFromCandles(candles)).toBe('DOWN');
+    expect(m1DirForEntry(candles, 'UP')).toBe('UP');
+    expect(htfBiasFromDirs('UP', 'UP', 'FLAT')).toBe('UP');
+  });
+
+  it('m1DirForEntry tip against HTF stays tip so stack WAIT (Soft shield)', () => {
+    const candles = [
+      { open: 100, high: 101, low: 99, close: 100.5 }, // closed UP
+      { open: 100.5, high: 100.6, low: 99, close: 99.2 }, // forming DOWN tip
+    ];
+    expect(m1DirForEntry(candles, 'UP')).toBe('DOWN');
+    const stack = readMultiTfStack({
+      tf30: 'UP',
+      tf15: 'UP',
+      tf5: 'UP',
+      tf1: m1DirForEntry(candles, 'UP'),
+    });
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
   });
 });

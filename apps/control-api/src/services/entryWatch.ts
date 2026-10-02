@@ -418,7 +418,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     else if (status === 'FLIP_FILTER' && lastClosedSide) {
       const blockedSig = flipBlocked && rawSig ? rawSig.direction : lastClosedSide;
       last_reason = flipFilterReason(blockedSig, lastClosedSide, lockLeft, wasLoss);
-    } else if (status === 'FORMING') last_reason = 'Gaida 10s bāra aizvēršanos';
+    } else if (status === 'FORMING') last_reason = '10s formējas · PRĀTS var ieiet live';
     else if (status === 'REGIME_OFF')
       last_reason = `${regime} OFF Control kalibrācijā — ieslēdz TRADE REGIMES`;
     else if (status === 'WAITING_TRIGGER') last_reason = `${regime} · ${vs}`;
