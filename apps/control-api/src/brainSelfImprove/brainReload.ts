@@ -69,21 +69,16 @@ export function hasBrainReloadRequest(): boolean {
 }
 
 /**
- * Stale flag after crash / old `npm run dev` must not kill API on boot.
- * Live-loop keeps the flag so FLAT restart can happen; bare API clears it.
+ * Fresh process always loads `.ts` from disk — reload-needed is ONLY for
+ * mid-process ACCEPT (old code still in memory). Keeping the flag across boot
+ * caused exit 75 before any robot started → Failed to fetch on the board.
  */
 export function clearStaleBrainReloadOnBoot(): void {
   if (!hasBrainReloadRequest()) return;
-  if (isControlApiLiveLoop()) {
-    console.log(
-      '[brain] reload-needed present — will soft-restart after trade close or when no robots running (live-loop)'
-    );
-    return;
-  }
   clearBrainReloadRequest();
-  console.warn(
-    '[brain] cleared stale reload-needed.json (not in live-loop). ' +
-      'Use VS.bat / control-api-live-loop so BRAIN .ts reloads do not kill the desk.'
+  console.log(
+    '[brain] cleared reload-needed on boot — fresh process already has disk .ts ' +
+      '(no exit 75 before robots start)'
   );
 }
 
