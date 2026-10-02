@@ -88,21 +88,26 @@ export function clearStaleBrainReloadOnBoot(): void {
 }
 
 /**
- * If reload requested and no open trades, exit so live-loop can restart with new code.
+ * If reload requested and desk is idle, exit so live-loop can restart with new code.
  * No-op (keeps flag) when not running under CONTROL_API_LIVE_LOOP=1.
+ *
+ * CRITICAL: block while ANY robot is running (SEEDING / ARMED / ENTRY), not only
+ * open trades — exit 75 mid-watch wiped sessions → Failed to fetch / LIVE LOG stale.
  */
 export function maybeExitForBrainCodeReload(opts: {
   anyOpenTrade: boolean;
+  /** True if any robot session is running (even FLAT / ARMED). */
+  anyRobotRunning?: boolean;
 }): void {
   if (!hasBrainReloadRequest()) return;
-  if (opts.anyOpenTrade) return;
+  if (opts.anyOpenTrade || opts.anyRobotRunning) return;
   if (!isControlApiLiveLoop()) {
     // Never process.exit here — that left EMPTY BOARD + Failed to fetch forever
     return;
   }
   clearBrainReloadRequest();
   console.log(
-    `[brain] code reload — all FLAT · exit ${BRAIN_RELOAD_EXIT_CODE} (live-loop restart)`
+    `[brain] code reload — no robots running · exit ${BRAIN_RELOAD_EXIT_CODE} (live-loop restart)`
   );
   setTimeout(() => process.exit(BRAIN_RELOAD_EXIT_CODE), 150);
 }

@@ -1238,36 +1238,17 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Snapshot running robots so live-loop exit 75 can auto-resume them. */
-function persistRunningRobotsForBrainReload(): void {
-  if (!hasBrainReloadRequest() || !isControlApiLiveLoop()) return;
-  const robots = [...sessions.values()]
-    .filter((x) => x.running)
-    .map((x) => ({
-      account_id: x.account_id,
-      epic: x.epic,
-      lot_size: x.lot_size,
-      display_name: x.display_name,
-      trading_enabled: x.trading_enabled,
-      entry_enabled: x.entry_enabled,
-    }));
-  if (robots.length) {
-    saveRobotResume(robots, 'BRAIN code reload — resume after exit 75');
-    console.log(
-      `[robot] saved ${robots.length} robot(s) for resume after BRAIN reload: ${robots
-        .map((r) => r.epic)
-        .join(', ')}`
-    );
-  }
-}
-
-/** Soft-reload after BRAIN .ts ACCEPT — safe when no open deals (incl. zero robots). */
+/** Soft-reload after BRAIN .ts ACCEPT — only when zero robots running. */
 export function checkBrainCodeReload(): void {
   const anyOpen = [...sessions.values()].some(
     (x) => x.running && Boolean(x.open_side || x.deal_id)
   );
-  if (!anyOpen) persistRunningRobotsForBrainReload();
-  maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+  const anyRunning = [...sessions.values()].some((x) => x.running);
+  // Never kill API during SEEDING/ARMED/ENTRY — that caused Failed to fetch
+  maybeExitForBrainCodeReload({
+    anyOpenTrade: anyOpen,
+    anyRobotRunning: anyRunning,
+  });
 }
 
 /**
@@ -2695,12 +2676,15 @@ async function robotCycle(s: Internal) {
   } finally {
     s.cycle_busy = false;
     s.cycle_busy_since = 0;
-    // ACCEPTed BRAIN .ts → soft restart only when every robot is FLAT
+    // ACCEPTed BRAIN .ts → soft restart only when NO robot is running
     const anyOpen = [...sessions.values()].some(
       (x) => x.running && Boolean(x.open_side || x.deal_id)
     );
-    if (!anyOpen) persistRunningRobotsForBrainReload();
-    maybeExitForBrainCodeReload({ anyOpenTrade: anyOpen });
+    const anyRunning = [...sessions.values()].some((x) => x.running);
+    maybeExitForBrainCodeReload({
+      anyOpenTrade: anyOpen,
+      anyRobotRunning: anyRunning,
+    });
   }
 }
 

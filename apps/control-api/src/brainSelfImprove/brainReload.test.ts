@@ -51,11 +51,21 @@ describe('brainReload — soft restart when FLAT', () => {
     exitSpy.restore();
   });
 
+  it('does not exit while robot is running FLAT/ARMED (SEEDING desk)', () => {
+    process.env[LIVE_LOOP_ENV] = '1';
+    requestBrainCodeReload({ cycle_id: 'armed', reason: 'unit' });
+    const exitSpy = viExit();
+    maybeExitForBrainCodeReload({ anyOpenTrade: false, anyRobotRunning: true });
+    expect(exitSpy.called).toBe(false);
+    expect(hasBrainReloadRequest()).toBe(true);
+    exitSpy.restore();
+  });
+
   it('does NOT exit without live-loop — keeps API alive (Failed to fetch fix)', () => {
     delete process.env[LIVE_LOOP_ENV];
     requestBrainCodeReload({ cycle_id: 'bare', reason: 'unit' });
     const exitSpy = viExit();
-    maybeExitForBrainCodeReload({ anyOpenTrade: false });
+    maybeExitForBrainCodeReload({ anyOpenTrade: false, anyRobotRunning: false });
     expect(exitSpy.called).toBe(false);
     expect(hasBrainReloadRequest()).toBe(true);
     exitSpy.restore();
@@ -67,11 +77,11 @@ describe('brainReload — soft restart when FLAT', () => {
     expect(hasBrainReloadRequest()).toBe(false);
   });
 
-  it('schedules exit 75 when FLAT under live-loop', async () => {
+  it('schedules exit 75 only when no robots running under live-loop', async () => {
     process.env[LIVE_LOOP_ENV] = '1';
-    requestBrainCodeReload({ cycle_id: 'flat', reason: 'unit' });
+    requestBrainCodeReload({ cycle_id: 'idle', reason: 'unit' });
     const exitSpy = viExit();
-    maybeExitForBrainCodeReload({ anyOpenTrade: false });
+    maybeExitForBrainCodeReload({ anyOpenTrade: false, anyRobotRunning: false });
     expect(hasBrainReloadRequest()).toBe(false);
     await new Promise((r) => setTimeout(r, 200));
     expect(exitSpy.code).toBe(BRAIN_RELOAD_EXIT_CODE);
