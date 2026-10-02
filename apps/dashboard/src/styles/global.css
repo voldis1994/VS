@@ -601,6 +601,15 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   font-family: var(--font-mono);
   font-size: 12px;
 }
+.warn-state {
+  color: #e6b84d;
+  padding: 10px;
+  background: rgba(230, 184, 77, 0.08);
+  border: 1px solid rgba(230, 184, 77, 0.4);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 
 @keyframes blink {
   0%, 100% { opacity: 1; }
@@ -2351,6 +2360,37 @@ button.regime-chip { cursor: pointer; }
   gap: 8px;
   align-items: stretch;
 }
+.desk-control-board .desk-control-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.autotune-info-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+.autotune-info-row {
+  border-left: 2px solid var(--cyan, #3ecfcf);
+  padding-left: 8px;
+}
+.autotune-what {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text, #e8eef5);
+}
+.autotune-why {
+  font-size: 11px;
+  opacity: 0.85;
+  margin-top: 2px;
+}
+.autotune-hist-row {
+  padding: 4px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border, #334) 60%, transparent);
+}
+.autotune-hist-row:first-child {
+  border-top: none;
+}
 .desk-control-board {
   flex: 0 0 auto;
 }
@@ -2392,8 +2432,16 @@ button.regime-chip { cursor: pointer; }
   padding: 4px 8px;
   font-size: 11px;
 }
+@media (max-width: 1400px) {
+  .desk-control-board .desk-control-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 @media (max-width: 1200px) {
   .desk-control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .desk-control-board .desk-control-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
