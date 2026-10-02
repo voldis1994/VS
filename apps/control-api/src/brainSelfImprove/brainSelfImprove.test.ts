@@ -12,6 +12,7 @@ import { buildHypothesis } from './hypothesize.js';
 import {
   _resetBrainGenomeForTests,
   getBrainGenome,
+  HARDINV_PCT_BP_MIN,
   sanitizeGenome,
   setBrainGenome,
 } from './brainGenome.js';
@@ -23,6 +24,7 @@ import {
   type BrainExperience,
 } from './experience.js';
 import {
+  isExploreStepOnlyThrash,
   isKeepThrashWhileSoftSpam,
   isPauseOnlyGenomeThrash,
   isSoftPctOnlyGenomeThrash,
@@ -311,6 +313,13 @@ describe('brainSelfImprove genome', () => {
     const g = sanitizeGenome({ peak_keep: 1.5, soft_plus_giveback: 0.1 });
     expect(g.peak_keep).toBeLessThanOrEqual(0.88);
     expect(g.soft_plus_giveback).toBeGreaterThanOrEqual(0.55);
+  });
+
+  it('never allows Soft hardinv_pct_bp dust below floor (was 0.1bp suicide)', () => {
+    const g = sanitizeGenome({ hardinv_pct_bp: 0.1 });
+    expect(g.hardinv_pct_bp).toBeGreaterThanOrEqual(HARDINV_PCT_BP_MIN);
+    expect(isExploreStepOnlyThrash(['explore_step', 'version'])).toBe(true);
+    expect(isExploreStepOnlyThrash(['hardinv_pct_bp', 'explore_step'])).toBe(false);
   });
 });
 

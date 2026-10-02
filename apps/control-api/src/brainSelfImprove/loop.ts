@@ -51,6 +51,14 @@ export function isSoftPctOnlyGenomeThrash(deltaKeys: string[]): boolean {
   return meaningful.length > 0 && meaningful.every((k) => k === 'hardinv_pct_bp');
 }
 
+/** explore_step-only bump while Soft spam top — infinite empty ACCEPT. */
+export function isExploreStepOnlyThrash(deltaKeys: string[]): boolean {
+  return (
+    deltaKeys.length > 0 &&
+    deltaKeys.every((k) => k === 'explore_step' || k === 'version')
+  );
+}
+
 /** Soft spam top + Peak Keep / scratch = wrong lever (was ACCEPT via require_1m sneak). */
 export function isKeepThrashWhileSoftSpam(
   softFocusTop: boolean,
@@ -265,7 +273,9 @@ export async function runBrainCycle(opts?: {
   const pauseOnlyThrash = isPauseOnlyGenomeThrash(deltaKeys);
   const softPctOnlyThrash = isSoftPctOnlyGenomeThrash(deltaKeys);
   const titlePauseThrash = /Explore Soft pause/i.test(String(hypo.title || ''));
-  const genomeThrash = pauseOnlyThrash || softPctOnlyThrash || titlePauseThrash;
+  const exploreStepOnly = isExploreStepOnlyThrash(deltaKeys);
+  const genomeThrash =
+    pauseOnlyThrash || softPctOnlyThrash || titlePauseThrash || exploreStepOnly;
   const defensiveMemory =
     report.tests_ok &&
     eFlatOk &&
@@ -324,9 +334,11 @@ export async function runBrainCycle(opts?: {
   }
   if (genomeThrash && !report.improved) {
     brainLog(
-      pauseOnlyThrash || titlePauseThrash
-        ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
-        : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
+      exploreStepOnly
+        ? 'explore_step-only thrash blocked — no real Soft lever; REJECT'
+        : pauseOnlyThrash || titlePauseThrash
+          ? 'Soft pause thrash blocked — pause knobs do not move replay E; REJECT'
+          : 'Soft pct-only thrash blocked — hardinv alone does not move EntryWait; REJECT'
     );
   }
 
