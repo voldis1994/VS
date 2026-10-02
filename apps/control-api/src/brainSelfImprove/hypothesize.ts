@@ -12,7 +12,10 @@ import type { BrainPatch } from './guards.js';
 import type { AnalysisResult } from './analyze.js';
 import {
   codePatchesBankGreen,
+  codePatchesExitManage,
+  codePatchesExplore,
   codePatchesMicroScratch,
+  codePatchesRegimeBands,
   codePatchesSoftSpam,
 } from './codePatches.js';
 
@@ -366,6 +369,12 @@ function bounceInt(cur: number, step: number, lo: number, hi: number, dir: 1 | -
   return Math.min(hi, Math.max(lo, next));
 }
 
+/** Bounce regime/trek/pct bp knobs — step ≥ 0.1, one decimal (no 0.00008 dust). */
+function bounceBp(cur: number, step: number, lo: number, hi: number, dir: 1 | -1): number {
+  const s = Math.max(0.1, step);
+  return bounceNum(cur, s, Math.max(0.1, lo), hi, dir);
+}
+
 /**
  * Explore when pattern variants exhausted.
  * Always bumps explore_step so signature is unique and tryVariant never no-ops.
@@ -381,6 +390,17 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
   const pauseMin = bounceInt(g.soft_same_side_pause_min, 1, 1, 6, dir);
   const flipWait = !g.wait_on_1m_fight;
   const flipTrig = !g.require_1m_trigger;
+  const move = bounceBp(g.regime_move, 0.1, 0.4, 2.0, dir);
+  const trek = bounceBp(g.mtf_trek_flat_frac, 0.1, 1.5, 12.0, dir);
+  const softPct = bounceBp(g.hardinv_pct_bp, 0.1, 0.1, 50, dir);
+  const storyPath = bounceBp(g.story_min_path_bp, 0.1, 0.1, 20, dir);
+  // Live classify reads genome persist (not factory PERSIST_* constants alone)
+  const persistEnter = bounceNum(g.regime_persist_enter, 0.05, 0.3, 0.7, dir);
+  let persistStay = bounceNum(g.regime_persist_stay, 0.05, 0.15, 0.5, dir === 1 ? -1 : 1);
+  if (persistStay >= persistEnter) {
+    persistStay = Number((persistEnter - 0.1).toFixed(2));
+  }
+  if (persistStay < 0.15) persistStay = 0.15;
 
   return [
     {
@@ -395,7 +415,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
       patches: [
         genomePatch('peak_keep', keep, `explore Keep ${keep}`),
         genomePatch('explore_step', nextStep, `explore_step ${nextStep}`),
-        // Genome-only — no flipFilter write (avoids desk reload blink)
+        ...codePatchesExplore(nextStep),
+        ...codePatchesBankGreen(),
       ],
     },
     {
@@ -412,7 +433,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('soft_plus_giveback', gb, `explore giveback ${gb}`),
         genomePatch('explore_step', nextStep + 1, `explore_step ${nextStep + 1}`),
         genomePatch('mind_bank_on_turn', true, 'mind bank on'),
-        // Genome-only — Mind .ts rides via soft_loss / green_not_banked patterns
+        ...codePatchesBankGreen(),
+        ...codePatchesExplore(nextStep + 1),
       ],
     },
     {
@@ -427,6 +449,7 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
       patches: [
         genomePatch('peak_arm_soft_mult', arm, `explore arm ${arm}`),
         genomePatch('explore_step', nextStep + 2, `explore_step ${nextStep + 2}`),
+        ...codePatchesExitManage(nextStep + 2),
       ],
     },
     {
@@ -460,7 +483,8 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('wait_on_1m_fight', flipWait, `flip wait→${flipWait}`),
         genomePatch('require_1m_trigger', flipTrig, `flip trigger→${flipTrig}`),
         genomePatch('explore_step', nextStep + 4, `explore_step ${nextStep + 4}`),
-        // Genome-only gates — no flipFilter lock tick
+        // SoftSpam only — not + Explore (both touch SAME_DIR_LOCK_AFTER_LOSS_MS)
+        ...codePatchesSoftSpam(rejectedN % 2),
       ],
     },
     {
@@ -476,6 +500,45 @@ function exploreVariants(g: BrainGenome, rejectedN: number): Variant[] {
         genomePatch('explore_step', nextStep + 5, `explore_step ${nextStep + 5}`),
         genomePatch('require_1m_trigger', true, '1m trigger'),
         ...codePatchesMicroScratch(rejectedN % 2),
+      ],
+    },
+    {
+      title: `Explore regime MOVE→${move}bp trek→${trek}bp (step #${nextStep + 6})`,
+      rationale:
+        'Bounce regime ladder + trek flat in bp + live persist genome (factory constants ride-along).',
+      task: `regime_move ${g.regime_move}→${move} · persist ${persistEnter}/${persistStay}`,
+      genome_delta: {
+        regime_move: move,
+        mtf_trek_flat_frac: trek,
+        hardinv_pct_bp: softPct,
+        story_min_path_bp: storyPath,
+        regime_persist_enter: persistEnter,
+        regime_persist_stay: persistStay,
+        explore_step: nextStep + 6,
+        last_lesson: `Explore regime bp move=${move} persist=${persistEnter}/${persistStay}`,
+      },
+      patches: [
+        genomePatch('regime_move', move, `explore regime_move ${move}bp`),
+        genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
+        genomePatch('hardinv_pct_bp', softPct, `explore soft pct ${softPct}bp`),
+        genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
+        genomePatch('regime_persist_enter', persistEnter, `persist_enter→${persistEnter}`),
+        genomePatch('regime_persist_stay', persistStay, `persist_stay→${persistStay}`),
+        genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
+        ...codePatchesRegimeBands(rejectedN % 2),
+      ],
+    },
+    {
+      title: `Explore exit Soft/TimeDecay (step #${nextStep + 7})`,
+      rationale: 'Nudge exitManage Soft grace + TimeDecay — real trading rewrite path.',
+      task: `exitManage HARDINV_GRACE / TIMEDECAY`,
+      genome_delta: {
+        explore_step: nextStep + 7,
+        last_lesson: `Explore exit timing #${nextStep + 7}`,
+      },
+      patches: [
+        genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
+        ...codePatchesExitManage(nextStep + 7),
       ],
     },
   ];
@@ -504,7 +567,9 @@ function forceExploreHypothesis(
       genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
       genomePatch('peak_keep', keep, `force Keep ${keep}`),
       genomePatch('soft_plus_giveback', gb, `force giveback ${gb}`),
-      // Genome-only force explore — never rewrite flipFilter on unstick
+      ...codePatchesExplore(nextStep),
+      ...codePatchesExitManage(nextStep),
+      ...codePatchesMicroScratch(nextStep % 2),
     ]);
     const signature = hypothesisSignature({
       pattern_id: 'explore',

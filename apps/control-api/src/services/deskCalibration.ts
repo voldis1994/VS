@@ -1,8 +1,23 @@
 /** Desk calibration — HardInv / Peak / Target + which regimes may enter. */
 import fs from 'node:fs';
 import path from 'node:path';
+import { getBrainGenome, regimeBpToFrac } from '../brainSelfImprove/brainGenome.js';
 import { REGIME_NAMES, type RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
+
+/** Min pct knob = 0.1 bp (no 0.00008 dust). */
+function minPctKnob(): number {
+  return regimeBpToFrac(0.1);
+}
+
+function pctKnobsFromGenome() {
+  const g = getBrainGenome();
+  return {
+    hardinv_pct: regimeBpToFrac(g.hardinv_pct_bp),
+    peak_mfe_pct: regimeBpToFrac(g.peak_mfe_pct_bp),
+    target_pct: regimeBpToFrac(g.target_pct_bp),
+  };
+}
 
 export type DeskCalibration = {
   /** Soft HardInv absolute CAP (price points) — not a floor */
@@ -52,6 +67,7 @@ export function tradableDefaultRegimes(): RegimeName[] {
 }
 
 export function defaultDeskCalibration(): DeskCalibration {
+  const pct = pctKnobsFromGenome();
   return {
     // Positive R:R — Soft HardInv CAP ~2.2; Peak only after real ≥3pt leg; Target ≥4–5
     // (old scalp profile banked +0.5 Peak vs −4 Soft HardInv → 80% wins, net minus)
@@ -61,9 +77,9 @@ export function defaultDeskCalibration(): DeskCalibration {
     peak_min_giveback_abs: 0.85,
     target_abs: 5.0,
     safety_tp_rr: 1.5,
-    hardinv_pct: 0.0008,
-    target_pct: 0.0025,
-    peak_mfe_pct: 0.0009,
+    hardinv_pct: pct.hardinv_pct,
+    target_pct: pct.target_pct,
+    peak_mfe_pct: pct.peak_mfe_pct,
     entry_filter_level: 0,
     enabled_regimes: [...TRADABLE_DEFAULT],
     updated_at: new Date().toISOString(),
@@ -106,6 +122,8 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     ),
   ] as RegimeName[];
 
+  // Pct SoT = Brain genome bp (AutoCal / operators do not own independent pct)
+  const pct = pctKnobsFromGenome();
   return {
     hardinv_abs: clamp(Number(p.hardinv_abs ?? base.hardinv_abs), 0.2, 50),
     peak_mfe_abs: clamp(Number(p.peak_mfe_abs ?? base.peak_mfe_abs), 0.2, 50),
@@ -117,9 +135,9 @@ function sanitize(partial: Partial<DeskCalibration> | null | undefined): DeskCal
     ),
     target_abs: clamp(Number(p.target_abs ?? base.target_abs), 0.5, 100),
     safety_tp_rr: clamp(Number(p.safety_tp_rr ?? base.safety_tp_rr), 1.5, 4.0),
-    hardinv_pct: clamp(Number(p.hardinv_pct ?? base.hardinv_pct), 0.0001, 0.02),
-    target_pct: clamp(Number(p.target_pct ?? base.target_pct), 0.0002, 0.05),
-    peak_mfe_pct: clamp(Number(p.peak_mfe_pct ?? base.peak_mfe_pct), 0.00005, 0.02),
+    hardinv_pct: clamp(pct.hardinv_pct, minPctKnob(), 0.02),
+    target_pct: clamp(pct.target_pct, minPctKnob(), 0.05),
+    peak_mfe_pct: clamp(pct.peak_mfe_pct, minPctKnob(), 0.02),
     entry_filter_level: Math.round(
       clamp(Number(p.entry_filter_level ?? base.entry_filter_level), 0, 3)
     ),

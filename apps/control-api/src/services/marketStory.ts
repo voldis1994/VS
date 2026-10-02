@@ -5,9 +5,10 @@
  * path (up/down/chop), swing structure (HH/HL vs LH/LL), where price sits in the zone,
  * and whether the last minutes are a bounce inside a selloff (knife) or a real turn.
  */
+import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { ZONE_BARS, MIN_BARS_FOR_ZONE } from './regimes.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
-import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
+import { getActiveRegimeBands } from './regimeBands.js';
 
 export type StoryChapter =
   | 'SEEDING'
@@ -47,12 +48,22 @@ export type MarketStory = {
   last_1m: MinuteBar | null;
 };
 
-/** Min |net| over ~30m to treat path as tradeable (Gold ~0.07% ≈ 3pt @ 4300). */
+/** Min |net| over ~30m — factory default (genome story_min_path_bp = 7 ≡ 0.0007). */
 export const STORY_MIN_PATH_PCT = 0.0007;
 /** Prefer not to chase only the last ~12% of the zone (was 25% — starved move starts) */
 const CHASE_EDGE = 0.12;
 /** Soft confidence floor — early legs often sit ~0.45–0.55 */
 const STORY_CONF_MIN = 0.4;
+
+function storyMinPathFrac(): number {
+  const bp = Math.max(0.1, getBrainGenome().story_min_path_bp || 7);
+  return bp * 1e-4;
+}
+
+function entryMoveBands() {
+  const { ENTRY_DIP, ENTRY_RALLY } = getActiveRegimeBands();
+  return { ENTRY_DIP, ENTRY_RALLY };
+}
 
 function aggregateTenSecToMinutes(bars: TenSecBar[]): MinuteBar[] {
   if (!bars.length) return [];
@@ -202,7 +213,7 @@ export function readMarketStory(
   const windowLo = Math.min(...mins.map((m) => m.low));
   const trek = windowHi - windowLo; // range covered on 1m — survives V-bounces where net≈0
   const midPx = Math.abs(last.close) || 1;
-  const minPath = Math.max(3, midPx * STORY_MIN_PATH_PCT);
+  const minPath = Math.max(3, midPx * storyMinPathFrac());
   const midZone = (windowHi + windowLo) / 2;
 
   const recentSell = recentNet < 0 && redR >= 3;
@@ -446,6 +457,7 @@ export function scalpStoryConfirms(
   const m1 = story.last_1m;
   const d1 = oneMDir(m1);
   const pos = story.zone_pos;
+  const { ENTRY_DIP, ENTRY_RALLY } = entryMoveBands();
   const trigBuy = trigger != null && bodyPct(trigger) >= ENTRY_RALLY;
   const trigSell = trigger != null && bodyPct(trigger) <= ENTRY_DIP;
 
