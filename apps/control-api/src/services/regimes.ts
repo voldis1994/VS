@@ -163,6 +163,17 @@ function isStrongSwitch(from: RegimeName, to: RegimeName): boolean {
   if (to === 'REVERSAL_CANDIDATE') return true;
   if (to === 'FAILED_BREAKOUT_UP' || to === 'FAILED_BREAKOUT_DOWN') return true;
   if (to === 'BREAKOUT_UP' || to === 'BREAKOUT_DOWN') return true;
+  // Chop → trend/pullback must flip at the right moment (Gold grind / selloff).
+  // Waiting CONFIRM_BARS left live=RANGE while classify already saw TREND.
+  if (
+    (from === 'RANGE' || from === 'COMPRESSION') &&
+    (to === 'TREND_UP' ||
+      to === 'TREND_DOWN' ||
+      to === 'PULLBACK_UPTREND' ||
+      to === 'PULLBACK_DOWNTREND')
+  ) {
+    return true;
+  }
   const a = regimeFamily(from);
   const b = regimeFamily(to);
   // Opposite trend family
@@ -201,7 +212,18 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     PERSIST_STAY,
     PERSIST_PULLBACK,
     MOM_BARS,
+    PERSIST_WINDOW,
+    RANGE_CHOP_PERSIST_MAX,
+    RANGE_CHOP_TREK_SHARE_MAX,
+    RANGE_CHOP_TREK_EFF_MAX,
   } = getActiveRegimeBands();
+
+  // Zone-trek gates — factory from #642/#659 (restored after #676 wiped classify)
+  const TREK_FULL_ENTER_MULT = 4;
+  const TREK_SHARE_MIN = 0.35;
+  const TREK_EFF_MIN = 0.4;
+  const TREK_RECENT_ENTER_MULT = 2;
+  const TREK_RECENT_SHARE_MIN = 0.25;
 
   const zone = bars.slice(-ZONE_BARS);
   const mom = bars.slice(-MOM_BARS);
@@ -216,7 +238,7 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
   const lastVel = bodyPct(last);
   const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
+  const persistWindow = velocities.slice(-PERSIST_WINDOW);
   const persistence = mean(
     persistWindow.map((v) => (v > MOVE ? 1 : v < -MOVE ? -1 : 0))
   );
@@ -317,11 +339,89 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
 
-  // Compression only in the tight absolute band near mid — dead zone above → RANGE
-  if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
-  if (inRange) return 'RANGE';
+  // Zone trek — multi-minute directional grind (Gold HH/HL rally).
+  // Quiet 10s tips stay inside the rolling hi/lo box → old catch-all always
+  // fell through to RANGE even when the zone itself walked up/down (#642).
+  // V-recovery: also score recent leg (late vs mid) so dump→rally ≠ RANGE fade.
+  // Late-window chop: path ≫ net after dump → proven RANGE, not fake TREND_UP (#665).
+  const third = Math.max(1, Math.floor(zonePrior.length / 3));
+  const earlyMean = mean(zonePrior.slice(0, third).map((b) => b.close));
+  const midMean = mean(zonePrior.slice(third, third * 2).map((b) => b.close));
+  const lateMean = mean(zonePrior.slice(-third).map((b) => b.close));
+  const zoneTrekPts = lateMean - earlyMean;
+  const recentLegPts = lateMean - midMean;
+  const zoneTrekRef = Math.max(Math.abs(earlyMean), Math.abs(zoneMid), 1e-9);
+  const zoneTrek = zoneTrekPts / zoneTrekRef;
+  const recentLeg = recentLegPts / zoneTrekRef;
+  let zonePath = 0;
+  for (let i = 1; i < zonePrior.length; i++) {
+    zonePath += Math.abs(zonePrior[i]!.close - zonePrior[i - 1]!.close);
+  }
+  const trekEfficiency = zonePath > 1e-9 ? Math.abs(zoneTrekPts) / zonePath : 0;
+  const trekShare = Math.abs(zoneTrekPts) / zoneWidth;
+  const recentShare = Math.abs(recentLegPts) / zoneWidth;
+  const fullTrekOk =
+    Math.abs(zoneTrek) >= TREND_ENTER * TREK_FULL_ENTER_MULT &&
+    trekShare >= TREK_SHARE_MIN &&
+    trekEfficiency >= TREK_EFF_MIN;
+  const recentLegOk =
+    Math.abs(recentLeg) >= TREND_ENTER * TREK_RECENT_ENTER_MULT &&
+    recentShare >= TREK_RECENT_SHARE_MIN;
+  let latePath = 0;
+  const lateSlice = zonePrior.slice(-third);
+  for (let i = 1; i < lateSlice.length; i++) {
+    latePath += Math.abs(lateSlice[i]!.close - lateSlice[i - 1]!.close);
+  }
+  const lateNet =
+    lateSlice.length >= 2
+      ? lateSlice[lateSlice.length - 1]!.close - lateSlice[0]!.close
+      : 0;
+  const lateEff = latePath > 1e-9 ? Math.abs(lateNet) / latePath : 0;
+  const lateChop = latePath > 1e-9 && lateEff < TREK_EFF_MIN;
+  const recentLegIsDirectional = recentLegOk && !lateChop;
+  const trekDirPts = recentLegIsDirectional
+    ? recentLegPts
+    : fullTrekOk
+      ? zoneTrekPts
+      : 0;
 
-  // Sticky prior instead of dead TRANSITION
+  const absPersist = Math.abs(persistence);
+  const chopPersist = absPersist <= RANGE_CHOP_PERSIST_MAX;
+  const chopTrek =
+    trekShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    recentShare <= RANGE_CHOP_TREK_SHARE_MAX &&
+    trekEfficiency <= RANGE_CHOP_TREK_EFF_MAX;
+  const quietTip = !expanding && Math.abs(lastVel) < TREND_ENTER;
+  const quietMid = nearZoneMid && quietTip;
+
+  // Compression before late-chop RANGE — ultra-tight squeeze must not fall to RANGE
+  if (compressed && inRange && nearZoneMid) return 'COMPRESSION';
+
+  // Proven late-window chop beats soft recent-leg TREND (and sticky TREND prior)
+  if (inRange && chopPersist && lateChop && quietTip) return 'RANGE';
+
+  if (inRange && (fullTrekOk || recentLegIsDirectional) && trekDirPts !== 0) {
+    if (trekDirPts > 0) {
+      // Soft tip against the trek → pullback in uptrend (1m↓ while HTF↑)
+      if (lastVel <= -PULLBACK || (lastVel < -MOVE && last.close < zoneMid)) {
+        return 'PULLBACK_UPTREND';
+      }
+      return 'TREND_UP';
+    }
+    if (trekDirPts < 0) {
+      if (lastVel >= PULLBACK || (lastVel > MOVE && last.close > zoneMid)) {
+        return 'PULLBACK_DOWNTREND';
+      }
+      return 'TREND_DOWN';
+    }
+  }
+
+  // Positive RANGE — proven chop inside the box. NOT "inRange ⇒ RANGE" (#659).
+  // Violent spike/dump that still sits in a wide 30m hi/lo must NOT become fade.
+  if (inRange && chopPersist && (chopTrek || quietMid)) return 'RANGE';
+  if (inRange && quietMid && chopTrek && previous === 'UNKNOWN') return 'RANGE';
+
+  // Sticky prior instead of inventing RANGE / dead TRANSITION
   if (previous !== 'UNKNOWN' && previous !== 'TRANSITION') return previous;
   return 'UNKNOWN';
 }
