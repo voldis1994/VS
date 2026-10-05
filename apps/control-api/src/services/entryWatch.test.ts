@@ -230,4 +230,26 @@ describe('entryWatch', () => {
     expect(w.looking_for).not.toMatch(/^STĀSTS · selloff/);
     expect(w.direction).not.toBe('SELL');
   });
+
+  it('MANAGE open SELL never advertises pirms BUY entry thesis', () => {
+    const b = bar(4165, 4166, 4164, 4165.5);
+    const w = buildEntryWatch({
+      running: true,
+      open_side: 'SELL',
+      entry_enabled: true,
+      regime: 'RANGE',
+      last_closed: b,
+      forming_c: 4165.9,
+      just_closed: false,
+      closed_bar_count: 120,
+      capital_m1_dir: 'DOWN',
+      capital_tf5_dir: 'DOWN',
+      capital_tf15_dir: 'UP',
+      capital_tf30_dir: 'UP',
+    });
+    expect(w.status).toBe('MANAGE');
+    expect(w.looking_for).toMatch(/MANAGE SELL/);
+    expect(w.looking_for).not.toMatch(/pirms BUY/);
+    expect(w.direction).toBe('SELL');
+  });
 });

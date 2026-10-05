@@ -1009,6 +1009,18 @@ export function parseCapitalCreatedAt(raw: unknown): string | null {
 }
 
 /** All open Capital.com positions (REST). */
+/** Parse Capital position direction — never default unknown → BUY (was invert Soft/Peak). */
+export function parseCapitalPositionDirection(
+  raw: unknown
+): 'BUY' | 'SELL' | null {
+  const d = String(raw || '')
+    .trim()
+    .toUpperCase();
+  if (d === 'BUY' || d === 'LONG') return 'BUY';
+  if (d === 'SELL' || d === 'SHORT') return 'SELL';
+  return null;
+}
+
 export async function listCapitalOpenPositions(
   session: CapitalSession
 ): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
@@ -1030,8 +1042,9 @@ export async function listCapitalOpenPositions(
     const dealId = String(pos.dealId || pos.deal_id || '').trim();
     const epic = String(market.epic || pos.epic || '').trim();
     if (!dealId || !epic) continue;
-    const dirRaw = String(pos.direction || '').toUpperCase();
-    const direction: 'BUY' | 'SELL' = dirRaw === 'SELL' ? 'SELL' : 'BUY';
+    const dirRaw = pos.direction ?? pos.dir ?? pos.side;
+    const direction = parseCapitalPositionDirection(dirRaw);
+    if (!direction) continue; // never invent BUY for unknown/SHORT-missed sides
     positions.push({
       deal_id: dealId,
       deal_reference: strOrNull(pos.dealReference),
