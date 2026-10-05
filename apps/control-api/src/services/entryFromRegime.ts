@@ -5,11 +5,9 @@ import { ENTRY_DIP, ENTRY_RALLY } from './regimeBands.js';
 import {
   bodyPct,
   isMoving10s,
-  isSpike10s,
   rangePct,
   type TenSecBar,
 } from './tenSecondOhlc.js';
-import { entrySpikeBlockEnabled } from './tradeOpenPolicy.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -39,9 +37,8 @@ function describe(bar: TenSecBar): string {
 
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
- * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
- * Open-at-start: COMPRESSION / TRANSITION also trade (fade); auto-cal demotes losers later.
- * Anti-chase still preferred on TREND (pullback only).
+ * With-candle only: green→BUY / red→SELL — never knife green→SELL / red→BUY.
+ * COMPRESSION / TRANSITION / RANGE = WAIT (no open fade Soft spam).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -52,25 +49,21 @@ export function decideEntryFrom10sRegime(
 
   if (r === 'UNKNOWN') return null;
 
-  // COMPRESSION / TRANSITION — open book (was wait-only). Fade moving 10s like RANGE.
-  if (r === 'COMPRESSION' || r === 'TRANSITION') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} open fade dip · ${candle}` };
-    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} open fade rally · ${candle}` };
+  // COMPRESSION / TRANSITION / RANGE — WAIT, never open-fade knife
+  // (green→SELL / red→BUY was Soft spam; live "HFT takes the opposite").
+  if (r === 'COMPRESSION' || r === 'TRANSITION' || r === 'RANGE') {
     return null;
   }
 
-  // TREND: pullback only — do NOT buy green / sell red continuation (chase).
+  // TREND: follow the live candle only (continuation). No dip-buy / rally-sell —
+  // those are red→BUY / green→SELL, the same Soft knife the desk must not take.
   if (r === 'TREND_UP') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
-    return null;
+    if (!movingOrNull(bar) || !rally(bar)) return null;
+    return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow up · ${candle}` };
   }
   if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar)) return null;
-    if (rally(bar))
-      return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
-    return null;
+    if (!movingOrNull(bar) || !dip(bar)) return null;
+    return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow down · ${candle}` };
   }
 
   if (r === 'PULLBACK_UPTREND') {
@@ -111,15 +104,6 @@ export function decideEntryFrom10sRegime(
     if (!movingOrNull(bar)) return null;
     if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
     if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
-    return null;
-  }
-
-  // RANGE — same anti-chase: SPIKE WAIT; micro fade only
-  if (r === 'RANGE') {
-    if (entrySpikeBlockEnabled() && isSpike10s(bar)) return null;
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
-    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
     return null;
   }
 
