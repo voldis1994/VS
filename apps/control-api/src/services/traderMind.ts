@@ -423,17 +423,37 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     }
   }
 
-  // Hard veto: never knife a clear aligned higher-TF impulse on a lone flicker
-  if (choice === 'SELL' && stack.bias === 'UP' && (stack.tf30 === 'UP' || stack.tf15 === 'UP')) {
+  // Hard veto: never knife HTF impulse on a pullback.
+  // Live Gold 09:46: SELL @4160 into rally pullback (30m still UP) → Soft −£9.69.
+  // Pullback ≠ sell range until 30m itself has turned (or is FLAT) and lower TFs dump.
+  if (choice === 'SELL' && stack.tf30 === 'UP') {
     choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF UP; ne shortoju.`;
-    why = 'Multi-TF veto: SELL pret 30/15m UP nav cilvēka darbs.';
+    thesis = `${stack.summary} — 30m vēl UP; pullback ≠ SELL range.`;
+    why = 'Multi-TF veto: ne shortoju, kamēr Capital 30m UP.';
+    confidence = 0.35;
+  } else if (
+    choice === 'SELL' &&
+    stack.tf15 === 'UP' &&
+    !(stack.tf5 === 'DOWN' && m1 === 'DOWN')
+  ) {
+    choice = 'WAIT';
+    thesis = `${stack.summary} — 15m vēl UP; gaidu dump confirm.`;
+    why = 'Multi-TF veto: 15m UP + nav 5m/1m DOWN — ne shortoju.';
     confidence = 0.35;
   }
-  if (choice === 'BUY' && stack.bias === 'DOWN' && (stack.tf30 === 'DOWN' || stack.tf15 === 'DOWN')) {
+  if (choice === 'BUY' && stack.tf30 === 'DOWN') {
     choice = 'WAIT';
-    thesis = `${stack.summary} — augšējie TF DOWN; ne longoju.`;
-    why = 'Multi-TF veto: BUY pret 30/15m DOWN nav cilvēka darbs.';
+    thesis = `${stack.summary} — 30m vēl DOWN; bounce ≠ BUY range.`;
+    why = 'Multi-TF veto: ne longoju, kamēr Capital 30m DOWN.';
+    confidence = 0.35;
+  } else if (
+    choice === 'BUY' &&
+    stack.tf15 === 'DOWN' &&
+    !(stack.tf5 === 'UP' && m1 === 'UP')
+  ) {
+    choice = 'WAIT';
+    thesis = `${stack.summary} — 15m vēl DOWN; gaidu rally confirm.`;
+    why = 'Multi-TF veto: 15m DOWN + nav 5m/1m UP — ne longoju.';
     confidence = 0.35;
   }
 

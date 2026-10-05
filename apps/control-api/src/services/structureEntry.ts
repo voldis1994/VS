@@ -705,6 +705,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   if (!matched) return null;
   const candidate: RegimeEntry = matched;
 
+  // RANGE/COMPRESSION fade against HTF impulse = Soft fuel (live −£9.69 SELL pullback)
+  if (candidate.setup === 'FADE' && candidate.direction === 'SELL' && tf30 === 'UP') {
+    return null;
+  }
+  if (candidate.setup === 'FADE' && candidate.direction === 'BUY' && tf30 === 'DOWN') {
+    return null;
+  }
+
   const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;
 
