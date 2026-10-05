@@ -77,10 +77,9 @@ export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' |
  * Entry playbook regime — one contract with multi-TF stack:
  *
  * - Real TREND / PULLBACK / BREAKOUT / … → unchanged.
- * - RANGE / COMPRESSION / TRANSITION → fade ONLY when Capital HTF flat/mixed
- *   AND story is chop.
- * - Promote chop→TREND only when HTF bias is clear AND 5m does not fight.
- *   Stale 30/15 + turned 5m → stay chop (read the turn, do not chase).
+ * - RANGE / COMPRESSION / TRANSITION stay chop unless Capital HTF promotes
+ *   (no open fade). Promote chop→TREND only when HTF bias is clear AND 5m
+ *   does not fight. Stale 30/15 + turned 5m → stay chop.
  */
 export function effectiveEntryRegime(
   regime: RegimeName | string | null | undefined,
@@ -385,8 +384,8 @@ export function structureStartEntry(
     case 'EXPANSION':
     case 'BREAKOUT_UP':
     case 'FAILED_BREAKOUT_DOWN':
-    case 'RANGE':
     case 'REVERSAL_CANDIDATE':
+      // No RANGE/COMPRESSION/TRANSITION start — chop is WAIT (no fade Soft).
       if (zone.pos <= START_LO && rally(bar)) {
         return {
           direction: 'BUY',
@@ -405,7 +404,6 @@ export function structureStartEntry(
     case 'EXPANSION':
     case 'BREAKOUT_DOWN':
     case 'FAILED_BREAKOUT_UP':
-    case 'RANGE':
     case 'REVERSAL_CANDIDATE':
       if (zone.pos >= START_HI && dip(bar)) {
         return {
@@ -709,7 +707,18 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   if (!matched) return null;
   const candidate: RegimeEntry = matched;
 
-  // RANGE/COMPRESSION fade against HTF impulse = Soft fuel (live −£9.69 SELL pullback)
+  // Hard: never trade against the live 10s candle (green→SELL / red→BUY Soft spam).
+  const barBody = bodyPct(input.bar);
+  if (barBody > 1e-8 && candidate.direction === 'SELL') return null;
+  if (barBody < -1e-8 && candidate.direction === 'BUY') return null;
+
+  // Chop never opens FADE (recipe layer already null; belt-and-suspenders).
+  if (
+    candidate.setup === 'FADE' &&
+    CHOP_LABELS.has(gateRegime)
+  ) {
+    return null;
+  }
   if (candidate.setup === 'FADE' && candidate.direction === 'SELL' && tf30 === 'UP') {
     return null;
   }

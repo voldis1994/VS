@@ -251,11 +251,16 @@ describe('executable gates (not impossible AND-stacks)', () => {
     _setTradeOpenAtStartForTests(null);
   });
 
-  it('TREND_UP dip mid-zone: structure OK, full scalp needs 30m story+1m confirm', () => {
-    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331.5 });
+  it('TREND_UP red mid-zone: no dip-buy knife; green continuation only', () => {
+    const dipBook = zoneBook({ lo: 4320, hi: 4340, lastClose: 4330, lastOpen: 4331.5 });
+    const dipEntry = dipBook[dipBook.length - 1]!;
+    expect(decideEntryFrom10sRegime(dipEntry, 'TREND_UP')).toBeNull();
+
+    const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4331.5, lastOpen: 4330 });
     const entry = book[book.length - 1]!;
     const raw = decideEntryFrom10sRegime(entry, 'TREND_UP');
     expect(raw?.direction).toBe('BUY');
+    expect(raw?.setup).toBe('CONTINUATION');
     const gate = structureGate(
       raw!,
       'TREND_UP',
@@ -265,7 +270,6 @@ describe('executable gates (not impossible AND-stacks)', () => {
       'FLAT'
     );
     expect(gate.ok).toBe(true);
-    // Quiet mid-zone book often = chop → correctly no arm without 1m story
     const gated = decideEntryWithStructure({
       bar: entry,
       regime: 'TREND_UP',
@@ -273,7 +277,7 @@ describe('executable gates (not impossible AND-stacks)', () => {
     });
     if (gated) {
       expect(gated.direction).toBe('BUY');
-      expect(gated.reason).toMatch(/1m CONFIRM|STĀSTS/);
+      expect(gated.reason).toMatch(/1m CONFIRM|STĀSTS|CONTINUATION|follow up/);
     }
   });
 
@@ -673,9 +677,9 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     expect(sig!.reason).toMatch(/SETUP NOW|OPEN/);
   });
 
-  it('raw TREND_DOWN rally-sell trades without 1m scalp GAIDI', () => {
+  it('raw TREND_DOWN follows red candle — never green→SELL rally knife', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4332, lastOpen: 4330 });
-    // Build enough 1m red history so story is not empty, but scalp would still wait
+    // Build enough 1m red history so story is not empty
     const m0 = Math.floor(Date.now() / 60_000) * 60_000 - 12 * 60_000;
     const rich: TenSecBar[] = [];
     for (let i = 0; i < MIN_BARS_FOR_ZONE; i++) {
@@ -695,15 +699,28 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
         rich.push(bar(o - k * 0.05, o - k * 0.05 - 0.04, start + k * 10_000));
       }
     }
-    const trigger = bar(4329, 4327.5, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
-    // Wait — TREND_DOWN needs rally-sell not dip. Use green bounce rally:
+    // Green bounce → must NOT SELL (with-candle rule)
     const rallyTrig = bar(4328, 4329.2, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
-    rich.push(rallyTrig);
+    const rallyBook = [...rich, rallyTrig];
+    expect(
+      decideEntryWithStructure({
+        bar: rallyTrig,
+        regime: 'TREND_DOWN',
+        closedBars: rallyBook,
+        capital_m1_dir: 'DOWN',
+        capital_tf5_dir: 'DOWN',
+        capital_tf15_dir: 'DOWN',
+        capital_tf30_dir: 'DOWN',
+      })
+    ).toBeNull();
+
+    // Red continuation → SELL with the candle
+    const dipTrig = bar(4329, 4327.5, m0 + MIN_BARS_FOR_ZONE * 10_000 + 8 * 60_000);
+    rich.push(dipTrig);
     const sig = decideEntryWithStructure({
-      bar: rallyTrig,
+      bar: dipTrig,
       regime: 'TREND_DOWN',
       closedBars: rich,
-      // Soft shield ON — Capital stack DOWN + 1m DOWN trigger (bounce tip is 10s only)
       capital_m1_dir: 'DOWN',
       capital_tf5_dir: 'DOWN',
       capital_tf15_dir: 'DOWN',
@@ -711,10 +728,9 @@ describe('14-regime audit — no net/trek / mid-fake / wait-only bugs', () => {
     });
     expect(sig).not.toBeNull();
     expect(sig!.direction).toBe('SELL');
-    expect(sig!.setup).toBe('PULLBACK');
-    expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN/);
+    expect(sig!.setup).toBe('CONTINUATION');
+    expect(sig!.reason).toMatch(/PRĀTS ENTRY SELL|SETUP NOW|OPEN|follow down/);
     void book;
-    void trigger;
   });
 
   it('no blind PRĀTS NOW when mind side has no 10s/structure match', () => {
