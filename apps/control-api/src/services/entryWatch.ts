@@ -448,16 +448,30 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     capital_tf15_dir: input.capital_tf15_dir,
     capital_tf30_dir: input.capital_tf30_dir,
   });
-  // Lead with Capital multi-TF stack — not the old story-only "meklē SELL"
+  // Stack vs 10s-story fight — never advertise BUY wait + tikai SELL together
+  const stackStoryConflict =
+    (tfLine.bias === 'UP' && (story.allow === 'SELL' || story.chapter === 'SELLOFF')) ||
+    (tfLine.bias === 'DOWN' && (story.allow === 'BUY' || story.chapter === 'RALLY'));
   const mindSide =
+    input.open_side ??
     sig?.direction ??
-    (tfLine.mind !== 'WAIT' ? tfLine.mind : null) ??
+    (stackStoryConflict ? null : tfLine.mind !== 'WAIT' ? tfLine.mind : null) ??
     (flipBlocked ? null : recipe.direction);
-  const mindTag =
-    tfLine.mind === 'WAIT'
-      ? `PRĀTS WAIT · ${tfLine.summary}`
-      : `PRĀTS ${tfLine.mind} · ${tfLine.summary}`;
-  const lookBase = `${mindTag} · ${tfLine.thesis} · ${story.summary_lv} · ${recipe.looking_for}${flipNote}`;
+  const mindTag = input.open_side
+    ? `MANAGE ${input.open_side}`
+    : stackStoryConflict
+      ? `PRĀTS WAIT · CONFLICT`
+      : tfLine.mind === 'WAIT'
+        ? `PRĀTS WAIT · ${tfLine.summary}`
+        : `PRĀTS ${tfLine.mind} · ${tfLine.summary}`;
+  const conflictThesis = stackStoryConflict
+    ? `Steiks ${tfLine.summary} pret stāstu ${story.allow} — gaidu, neeju pret pusēm.`
+    : tfLine.thesis;
+  const lookBase = input.open_side
+    ? `${mindTag} · Soft/Peak · ${tfLine.summary} · ${story.summary_lv}${flipNote}`
+    : `${mindTag} · ${conflictThesis} · ${story.summary_lv} · ${
+        stackStoryConflict ? 'gaidu saskaņu' : recipe.looking_for
+      }${flipNote}`;
 
   return {
     regime,
@@ -469,7 +483,7 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
     market_story: `${tfLine.summary} · ${story.summary_lv}`,
     story_chapter: story.chapter,
     story_allow: story.allow,
-    story_detail: `${tfLine.thesis} · ${story.detail}`,
+    story_detail: `${conflictThesis} · ${story.detail}`,
     direction: mindSide,
     setup: sig?.setup ?? recipe.setup,
     armed: Boolean(sig) && status === 'ARMED',

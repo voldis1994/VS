@@ -1549,7 +1549,18 @@ function syncFromBrokerOpen(
   broker: CapitalOpenPosition,
   quoteMid: number | null
 ): void {
-  if (s.entry_price == null) s.entry_price = broker.open_level ?? quoteMid;
+  const prevSide = s.open_side;
+  if (prevSide && prevSide !== broker.direction) {
+    // Wrong side = inverted Soft/Peak/MFE — hard reset excursion to broker truth
+    s.mfe = 0;
+    s.mae = 0;
+    s.peak_retention = null;
+    s.unrealized = broker.upl ?? null;
+    s.entry_price = broker.open_level ?? quoteMid ?? s.entry_price;
+  } else if (s.entry_price == null) {
+    s.entry_price = broker.open_level ?? quoteMid;
+  }
+  s.open_side = broker.direction;
   s.entry_at = preferBrokerEntryAt(s.entry_at, broker.created_at);
 }
 
@@ -2692,11 +2703,20 @@ async function robotManageShortLeaseCycle(s: Internal, leaseInput: CapitalLeaseI
   if (listedOk) {
     if (brokerOpen) {
       noteBrokerOpenPresent(s);
-      s.open_side = brokerOpen.direction;
-      s.deal_id = brokerOpen.deal_id;
+      const wasSide = s.open_side;
       syncFromBrokerOpen(s, brokerOpen, quote.mid);
+      s.deal_id = brokerOpen.deal_id;
       s.mode = 'MANAGE';
       if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+      if (wasSide && wasSide !== brokerOpen.direction) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SIDE SYNC · desk was ${wasSide} · Capital ${brokerOpen.direction} — Soft/Peak reset`,
+        });
+      }
     } else if (s.open_side) {
       // Need N empty lists in a row — one Capital/API blip must not drop MANAGE
       if (confirmBrokerFlatWhileLocalOpen(s, quote, 'manage')) {
@@ -3126,11 +3146,20 @@ async function robotCycleLocked(s: Internal) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
         noteBrokerOpenPresent(s);
-        s.open_side = brokerOpen.direction;
-        s.deal_id = brokerOpen.deal_id;
+        const wasSide = s.open_side;
         syncFromBrokerOpen(s, brokerOpen, quote.mid);
+        s.deal_id = brokerOpen.deal_id;
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        if (wasSide && wasSide !== brokerOpen.direction) {
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `SIDE SYNC · desk was ${wasSide} · Capital ${brokerOpen.direction} — Soft/Peak reset`,
+          });
+        }
       } else if (s.open_side) {
         // Local open but broker flat → confirm before treating as closed (API blip ≠ exit)
         if (confirmBrokerFlatWhileLocalOpen(s, quote, 'entry')) {

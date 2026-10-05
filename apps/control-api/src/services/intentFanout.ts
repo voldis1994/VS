@@ -78,7 +78,13 @@ export async function executePipelineIntent(
   intent: PipelineIntentInput
 ): Promise<FanoutResult> {
   const epic = String(intent.epic || '').trim();
-  const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
+  const direction =
+    intent.direction === 'SELL'
+      ? 'SELL'
+      : intent.direction === 'BUY'
+        ? 'BUY'
+        : null;
+  if (!direction) throw new Error('intent.direction must be BUY or SELL');
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
   const regime = intent.regime ? String(intent.regime) : null;
   if (!epic) throw new Error('epic required');
@@ -172,8 +178,12 @@ export function resolveFanoutIdempotencyKey(intent: PipelineIntentInput): string
   const raw = intent.idempotency_key && String(intent.idempotency_key).trim();
   if (raw) return raw.slice(0, 190);
   const epic = String(intent.epic || '').trim().toUpperCase();
-  const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
-  const bucket = Math.floor(Date.now() / 10_000);
+  const direction =
+    intent.direction === 'SELL'
+      ? 'SELL'
+      : intent.direction === 'BUY'
+        ? 'BUY'
+        : 'BUY'; // idempotency key fallback only — execute path rejects unknown
   const ref =
     intent.reference_price != null && Number.isFinite(Number(intent.reference_price))
       ? Number(intent.reference_price).toFixed(2)

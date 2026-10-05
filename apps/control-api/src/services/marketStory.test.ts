@@ -76,7 +76,7 @@ describe('30m market story — 1m scalp grade', () => {
     expect(scalpStoryConfirms(story, 'BUY', 'RANGE').ok).toBe(false);
   });
 
-  it('TREND_UP / BREAKOUT_UP allow BUY even when 30m story still SELLOFF (no SELL-only starve)', () => {
+  it('TREND_UP allows BUY on SELLOFF only when Capital 5m also UP (no knife into mid fight)', () => {
     const story = {
       chapter: 'SELLOFF' as const,
       allow: 'SELL' as const,
@@ -91,9 +91,14 @@ describe('30m market story — 1m scalp grade', () => {
       last_1m: null,
     };
     expect(storyAllowsDirection(story, 'BUY', 'RANGE').ok).toBe(false);
-    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP').ok).toBe(true);
-    expect(storyAllowsDirection(story, 'BUY', 'BREAKOUT_UP').ok).toBe(true);
-    expect(storyAllowsDirection(story, 'BUY', 'PULLBACK_UPTREND').ok).toBe(true);
+    // Mid TF fighting / unknown → block (live: 30/15 UP + 5m DOWN + selloff)
+    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP', 'DOWN').ok).toBe(false);
+    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP', null).ok).toBe(false);
+    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP', 'FLAT').ok).toBe(false);
+    // Clear mid UP → allow override (overnight Funds case)
+    expect(storyAllowsDirection(story, 'BUY', 'TREND_UP', 'UP').ok).toBe(true);
+    expect(storyAllowsDirection(story, 'BUY', 'BREAKOUT_UP', 'UP').ok).toBe(true);
+    expect(storyAllowsDirection(story, 'BUY', 'PULLBACK_UPTREND', 'UP').ok).toBe(true);
     expect(storyAllowsDirection(story, 'SELL', 'TREND_DOWN').ok).toBe(true);
   });
 

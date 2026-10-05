@@ -725,7 +725,13 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
 
   if (story.chapter === 'SEEDING') return null;
 
-  const scalp = scalpStoryConfirms(story, candidate.direction, gateRegime, input.bar);
+  const scalp = scalpStoryConfirms(
+    story,
+    candidate.direction,
+    gateRegime,
+    input.bar,
+    tf5
+  );
   if (!scalp.ok) return null;
   return withMind(`${gate.tag} · ${story.summary_lv} · ${scalp.tag}`);
 }

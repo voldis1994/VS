@@ -331,7 +331,9 @@ export function readMarketStory(
 export function storyAllowsDirection(
   story: MarketStory,
   direction: 'BUY' | 'SELL',
-  regime?: string | null
+  regime?: string | null,
+  /** Capital 5m (or mid) — SELLOFF→BUY override only when mid TF agrees UP */
+  capitalMidTf?: 'UP' | 'DOWN' | 'FLAT' | null
 ): { ok: true } | { ok: false; reason: string } {
   const r = String(regime || '').toUpperCase();
   // Structured exceptions — always OK
@@ -341,9 +343,8 @@ export function storyAllowsDirection(
   if (direction === 'SELL' && (r === 'FAILED_BREAKOUT_UP' || r === 'REVERSAL_CANDIDATE')) {
     return { ok: true };
   }
-  // Live 10s regime is fresher than 30m story — do not SELL-only starve when
-  // classifier already flipped bullish (Funds overnight: story SELLOFF blocked every BUY).
-  // Still never knife-buy a BOUNCE_IN_SELL chapter.
+  // Live 10s regime can flip bullish while 1m story still says SELLOFF.
+  // ONLY override when Capital mid TF also UP — else knife-buy into selloff (live Gold).
   if (
     direction === 'BUY' &&
     (r === 'TREND_UP' || r === 'BREAKOUT_UP' || r === 'PULLBACK_UPTREND')
@@ -352,6 +353,17 @@ export function storyAllowsDirection(
       return {
         ok: false,
         reason: `${story.summary_lv} · bloķē BUY bounce selloffā`,
+      };
+    }
+    if (
+      (story.allow === 'SELL' ||
+        story.chapter === 'SELLOFF' ||
+        story.chapter === 'EXHAUST_LO') &&
+      capitalMidTf !== 'UP'
+    ) {
+      return {
+        ok: false,
+        reason: `${story.summary_lv} · 5m nav UP — nepirkt pret selloff (steiks/stāsts CONFLICT)`,
       };
     }
     return { ok: true };
@@ -364,6 +376,17 @@ export function storyAllowsDirection(
       return {
         ok: false,
         reason: `${story.summary_lv} · bloķē SELL dip rallijā`,
+      };
+    }
+    if (
+      (story.allow === 'BUY' ||
+        story.chapter === 'RALLY' ||
+        story.chapter === 'EXHAUST_HI') &&
+      capitalMidTf !== 'DOWN'
+    ) {
+      return {
+        ok: false,
+        reason: `${story.summary_lv} · 5m nav DOWN — nepārdot pret rally (steiks/stāsts CONFLICT)`,
       };
     }
     return { ok: true };
@@ -434,9 +457,10 @@ export function scalpStoryConfirms(
   story: MarketStory,
   direction: 'BUY' | 'SELL',
   regime?: string | null,
-  trigger?: TenSecBar | null
+  trigger?: TenSecBar | null,
+  capitalMidTf?: 'UP' | 'DOWN' | 'FLAT' | null
 ): { ok: true; tag: string } | { ok: false; reason: string } {
-  const sideOk = storyAllowsDirection(story, direction, regime);
+  const sideOk = storyAllowsDirection(story, direction, regime, capitalMidTf);
   if (!sideOk.ok) return sideOk;
 
   if (story.chapter === 'SEEDING') {

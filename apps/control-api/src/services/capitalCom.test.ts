@@ -2,9 +2,22 @@ import { describe, expect, it } from 'vitest';
 import {
   capitalComBaseUrl,
   encryptCapitalPassword,
+  parseCapitalPositionDirection,
   testCapitalComSession,
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
+
+describe('parseCapitalPositionDirection', () => {
+  it('accepts BUY/SELL/LONG/SHORT only — never invents BUY', () => {
+    expect(parseCapitalPositionDirection('SELL')).toBe('SELL');
+    expect(parseCapitalPositionDirection('SHORT')).toBe('SELL');
+    expect(parseCapitalPositionDirection('BUY')).toBe('BUY');
+    expect(parseCapitalPositionDirection('LONG')).toBe('BUY');
+    expect(parseCapitalPositionDirection('')).toBeNull();
+    expect(parseCapitalPositionDirection(null)).toBeNull();
+    expect(parseCapitalPositionDirection('UNKNOWN')).toBeNull();
+  });
+});
 
 describe('capitalComBaseUrl', () => {
   it('uses live host for live', () => {
