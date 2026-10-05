@@ -71,7 +71,8 @@ import {
   getAutoCalibrateStatus,
   noteClosedTradeForAutoCalibrate,
 } from './autoCalibrate.js';
-import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
+import { decideEntryWithStructure, effectiveEntryRegime, zoneGeometry } from './structureEntry.js';
+import { readMarketStory } from './marketStory.js';
 import {
   htfBiasFromDirs,
   liveChartCandleDir,
@@ -605,6 +606,30 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   // Single path: zone + dwell/confirm stabilize via account-scoped book
   const snap = observeClosedBars(s.epic, feed, s.display_name, s.account_id);
   s.regime = snap.current;
+  // Capital HTF owns desk weather — 10s proven-chop must not stick RANGE forever
+  // while Capital 15/30m trend (live: "HFT always RANGE" while Gold trends).
+  promoteDeskRegimeFromCapital(s);
+}
+
+/**
+ * Promote raw 10s RANGE/COMPRESSION → TREND/PULLBACK when Capital HTF is clear.
+ * UI REGIME + entry_regime freeze use this — same contract as decideEntryWithStructure.
+ */
+function promoteDeskRegimeFromCapital(s: Internal): void {
+  const caps = capitalDirsForEntry(s);
+  const hasCapital =
+    caps.tf30 != null || caps.tf15 != null || caps.tf5 != null || caps.m1 != null;
+  if (!hasCapital) return;
+  const story = readMarketStory(
+    s.closedBars.length ? s.closedBars : s.ohlcState.last_closed ? [s.ohlcState.last_closed] : [],
+    s.ohlcState.last_closed
+  );
+  s.regime = effectiveEntryRegime(s.regime, story, {
+    tf30: caps.tf30,
+    tf15: caps.tf15,
+    tf5: caps.tf5,
+    m1: caps.m1,
+  });
 }
 
 /**
@@ -793,6 +818,8 @@ async function refreshCapitalMultiTf(
       if (tf5.ok && tf5.candles.length) s.last_tf5_candles = tf5.candles;
       if (tf15.ok && tf15.candles.length) s.last_tf15_candles = tf15.candles;
       if (tf30.ok && tf30.candles.length) s.last_tf30_candles = tf30.candles;
+      // Fresh Capital HTF may clear false RANGE without a new 10s close
+      promoteDeskRegimeFromCapital(s);
     } catch {
       /* keep previous higher TF */
     }

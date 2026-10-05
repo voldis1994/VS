@@ -206,6 +206,24 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     ).toBe('RANGE');
   });
 
+  it('Capital 30+15 UP promotes sticky 10s RANGE → TREND_UP (desk weather)', () => {
+    // Live: classify stuck RANGE while Capital multi-hour UP
+    expect(
+      effectiveEntryRegime(
+        'RANGE',
+        { allow: 'NONE', chapter: 'RANGE_CHOP' },
+        { tf30: 'UP', tf15: 'UP', tf5: 'UP', m1: 'UP' }
+      )
+    ).toBe('TREND_UP');
+    expect(
+      effectiveEntryRegime(
+        'COMPRESSION',
+        { allow: 'BOTH', chapter: 'MIXED' },
+        { tf30: 'DOWN', tf15: 'DOWN', tf5: 'DOWN', m1: 'DOWN' }
+      )
+    ).toBe('TREND_DOWN');
+  });
+
   it('structureGate uses promoted regime — upper-half BUY not killed by RANGE half-fade', () => {
     const book = zoneBook({ lo: 4320, hi: 4340, lastClose: 4336, lastOpen: 4337 });
     const entry = book[book.length - 1]!;
