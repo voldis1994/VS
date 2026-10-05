@@ -93,6 +93,20 @@ export function m1DirForEntry(
 }
 
 /**
+ * Live HTF candle color — rightmost bar including forming tip.
+ * Matches Capital.com chart paint (15m/30m). Closed-only lagged one bar.
+ */
+export function liveChartCandleDir(
+  candles: TfCandle[] | null | undefined
+): TfDir | null {
+  if (!candles?.length) return null;
+  const c = candles[candles.length - 1]!;
+  if (c.close > c.open) return 'UP';
+  if (c.close < c.open) return 'DOWN';
+  return 'FLAT';
+}
+
+/**
  * Trek bias over last N closed candles (color majority + net path).
  */
 export function trekBiasFromCandles(

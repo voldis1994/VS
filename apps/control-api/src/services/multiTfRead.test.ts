@@ -3,6 +3,7 @@ import {
   dirFromCandles,
   formingTipDir,
   htfBiasFromDirs,
+  liveChartCandleDir,
   m1DirForEntry,
   readMultiTfStack,
   sideFromMultiTf,
@@ -161,6 +162,17 @@ describe('multiTfRead', () => {
     ];
     expect(dirFromCandles(candles)).toBe('UP'); // lone last closed
     expect(trekBiasFromCandles(candles, 4)).toBe('DOWN'); // trek reads the dump
+  });
+
+  it('liveChartCandleDir matches Capital blue tip — not trek dump lag', () => {
+    // Live bug: Capital 15m forming green, trek of prior dump said DOWN
+    const candles = [
+      { open: 4140, high: 4142, low: 4125, close: 4128 }, // red
+      { open: 4128, high: 4130, low: 4120, close: 4122 }, // red
+      { open: 4122, high: 4168, low: 4121, close: 4165 }, // live blue tip
+    ];
+    expect(trekBiasFromCandles(candles, 3)).toBe('DOWN');
+    expect(liveChartCandleDir(candles)).toBe('UP');
   });
 
   it('m1DirForEntry uses live tip only when closed 1m is with HTF or flat', () => {

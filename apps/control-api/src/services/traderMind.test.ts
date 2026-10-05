@@ -274,6 +274,47 @@ describe('traderMind', () => {
     expect(t.spoken).toMatch(/30m↑/);
   });
 
+  it('ENTRY WAITs SELL on 5m pullback while 30m still UP (live −£9.69 Soft)', () => {
+    // Gold 09:46: rally to 4170, pullback to 4160, SELL → bounce Soft
+    const t = thinkEntryLikeTrader({
+      regime: 'RANGE',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.8,
+      red_1m: 12,
+      green_1m: 8,
+      zone_pos: 0.45,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'UP',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'UP',
+      tf30_dir: 'UP',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.thesis).toMatch(/pullback|SELL range|UP/i);
+  });
+
+  it('ENTRY WAITs when 30m UP fights 15m DOWN even with lower TF dump', () => {
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_DOWN',
+      chapter: 'SELLOFF',
+      allow: 'SELL',
+      story_conf: 0.85,
+      red_1m: 18,
+      green_1m: 4,
+      zone_pos: 0.35,
+      bar_body_sign: -1,
+      m1_dir: 'DOWN',
+      bias: 'DOWN',
+      tf5_dir: 'DOWN',
+      tf15_dir: 'DOWN',
+      tf30_dir: 'UP',
+    });
+    // 30↑ vs 15↓ = higher fight → WAIT (not knife SELL on half-turned stack)
+    expect(t.choice).toBe('WAIT');
+  });
+
   it('ENTRY mind SELLs when full stack is DOWN', () => {
     const t = thinkEntryLikeTrader({
       regime: 'TREND_DOWN',

@@ -602,8 +602,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const pickTf = (
     capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
     book: 'UP' | 'DOWN' | 'FLAT'
-  ): 'UP' | 'DOWN' | 'FLAT' =>
-    capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  ): 'UP' | 'DOWN' | 'FLAT' => {
+    if (capital === 'UP' || capital === 'DOWN' || capital === 'FLAT') return capital;
+    // Capital empty → FLAT (do not invent HTF from 10s book vs Capital chart)
+    if (capital === null) return 'FLAT';
+    return book;
+  };
   // Capital HTF only for promote — never promote off 10s-book buckets alone
   const hasCapitalHtf =
     input.capital_tf5_dir != null ||
@@ -704,6 +708,14 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   // No blind PRĀTS NOW — mind side without 10s/structure match was Soft chase fuel
   if (!matched) return null;
   const candidate: RegimeEntry = matched;
+
+  // RANGE/COMPRESSION fade against HTF impulse = Soft fuel (live −£9.69 SELL pullback)
+  if (candidate.setup === 'FADE' && candidate.direction === 'SELL' && tf30 === 'UP') {
+    return null;
+  }
+  if (candidate.setup === 'FADE' && candidate.direction === 'BUY' && tf30 === 'DOWN') {
+    return null;
+  }
 
   const gate = structureGate(candidate, gateRegime, input.bar, zone, m1, bias);
   if (!gate.ok) return null;

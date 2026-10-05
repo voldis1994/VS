@@ -323,7 +323,10 @@ function pickTfDir(
   capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
   book: 'UP' | 'DOWN' | 'FLAT'
 ): TfDir {
-  return capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  if (capital === 'UP' || capital === 'DOWN' || capital === 'FLAT') return capital;
+  // null = Capital fetch empty — never invent DOWN/UP from 10s book (lies vs Capital chart)
+  if (capital === null) return 'FLAT';
+  return book;
 }
 
 /** Multi-TF stack line for Entry Watch / LIVE LOG. */

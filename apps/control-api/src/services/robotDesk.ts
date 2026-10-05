@@ -74,6 +74,7 @@ import {
 import { decideEntryWithStructure, zoneGeometry } from './structureEntry.js';
 import {
   htfBiasFromDirs,
+  liveChartCandleDir,
   m1DirForEntry,
   trekBiasFromCandles,
   type TfDir,
@@ -702,8 +703,9 @@ function capitalCandleDir(
 }
 
 /**
- * HTF direction for entry mind — trek over last closed candles, not one print.
- * One green 5m bounce in a dump was reading 5m↑ and blocking all SELLs.
+ * HTF direction for entry mind.
+ * - 5m: trek (one bounce in a dump must not flip to UP and block SELLs)
+ * - 15m/30m: live Capital chart candle (forming tip OK — matches human screen)
  */
 function capitalTfTrekDir(
   candles: CapitalPriceCandle[],
@@ -727,10 +729,10 @@ function capitalDirsForEntry(s: Internal): {
   tf30: 'UP' | 'DOWN' | 'FLAT' | null;
   m1_live: boolean;
 } {
-  // 5m/15m: trek (dump ≠ one bounce UP). 30m: slower — trek 3 still OK.
+  // 5m: trek. 15m/30m: Capital chart color (not trek — trek lied vs blue 15m).
   const tf5 = capitalTfTrekDir(s.last_tf5_candles, 4);
-  const tf15 = capitalTfTrekDir(s.last_tf15_candles, 3);
-  const tf30 = capitalTfTrekDir(s.last_tf30_candles, 3);
+  const tf15 = liveChartCandleDir(s.last_tf15_candles);
+  const tf30 = liveChartCandleDir(s.last_tf30_candles);
   const htf = htfBiasFromDirs(asTfDir(tf30), asTfDir(tf15), asTfDir(tf5));
   const closedM1 = capitalCandleDir(s.last_minute_candles);
   const m1 = m1DirForEntry(s.last_minute_candles, htf);
@@ -739,7 +741,6 @@ function capitalDirsForEntry(s: Internal): {
     tf5,
     tf15,
     tf30,
-    // Tip early only when closed is flat (closed against HTF → m1=closed → not live)
     m1_live: Boolean(
       (htf === 'UP' || htf === 'DOWN') && m1 === htf && closedM1 === 'FLAT'
     ),
@@ -760,7 +761,7 @@ async function refreshCapitalMultiTf(
     Boolean(opts?.force1m) || now - s.last_manage_minute_fetch_ms >= 2_000;
   const needHigher =
     Boolean(opts?.forceHigher) ||
-    now - s.last_multi_tf_fetch_ms >= 20_000 ||
+    now - s.last_multi_tf_fetch_ms >= 10_000 ||
     !s.last_tf5_candles.length ||
     !s.last_tf15_candles.length ||
     !s.last_tf30_candles.length;
