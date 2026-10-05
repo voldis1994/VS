@@ -602,8 +602,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const pickTf = (
     capital: 'UP' | 'DOWN' | 'FLAT' | null | undefined,
     book: 'UP' | 'DOWN' | 'FLAT'
-  ): 'UP' | 'DOWN' | 'FLAT' =>
-    capital === 'UP' || capital === 'DOWN' || capital === 'FLAT' ? capital : book;
+  ): 'UP' | 'DOWN' | 'FLAT' => {
+    if (capital === 'UP' || capital === 'DOWN' || capital === 'FLAT') return capital;
+    // Capital empty → FLAT (do not invent HTF from 10s book vs Capital chart)
+    if (capital === null) return 'FLAT';
+    return book;
+  };
   // Capital HTF only for promote — never promote off 10s-book buckets alone
   const hasCapitalHtf =
     input.capital_tf5_dir != null ||
