@@ -258,7 +258,7 @@ export function RobotDeskPage() {
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
   const [showDeploy, setShowDeploy] = useState(false);
-  const [showControl, setShowControl] = useState(true);
+  const [showControl, setShowControl] = useState(false);
   const [showFeeds, setShowFeeds] = useState(false);
 
   const accountId = params.get('account_id');
@@ -625,7 +625,7 @@ export function RobotDeskPage() {
 
         <div className="robot-units-bar">
           <div className="section-title" style={{ margin: 0 }}>
-            ROBOT UNITS · {sessions.length} ({runningCount} online)
+            UNITS · {sessions.length} ({runningCount} online)
           </div>
           <div className="actions" style={{ margin: 0 }}>
             <button
@@ -633,7 +633,7 @@ export function RobotDeskPage() {
               className="btn"
               onClick={() => setShowControl((v) => !v)}
             >
-              {showControl ? 'Hide CONTROL' : 'CONTROL'}
+              {showControl ? 'Hide SETUP' : 'SETUP'}
             </button>
             <button type="button" className="btn" onClick={() => setShowFeeds((v) => !v)}>
               {showFeeds ? 'Hide feeds' : 'Feeds'}

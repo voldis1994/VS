@@ -188,153 +188,186 @@ export function Layout({ children }: { children: ReactNode }) {
     [status, clients, accounts, selectedClientId, selectedAccountId, load],
   );
 
+  const isHome = location.pathname === '/';
+
   return (
     <DeskContext.Provider value={deskValue}>
-      <div className={`desk-shell${railCollapsed ? ' rail-collapsed' : ''}${isFs ? ' is-fs' : ''}`}>
-        <header className="desk-header">
-          <div className="header-chrome">
-            <button
-              type="button"
-              className="btn"
-              title="Collapse / expand left rail"
-              onClick={() => setRailCollapsed((v) => !v)}
-            >
-              {railCollapsed ? '☰' : '◀'}
-            </button>
-          </div>
-          <div className="desk-brand">
-            <Logo size={52} wordmark />
-            <div className="desk-brand-sub">{pageTitle}</div>
-          </div>
-
-          <div className="desk-status-row">
-            <span className={`status-pill ${liveOk ? '' : 'bad'}`}>
-              SYSTEM {liveOk ? 'LIVE' : 'DEGRADED'}
-            </span>
-            <span className={`status-pill ${brokersLive > 0 ? '' : 'warn'}`}>
-              CAPITAL {brokersLive > 0 ? 'LIVE' : 'IDLE'}
-            </span>
-            <span className={`status-pill ${openTrades > 0 ? '' : 'warn'}`}>
-              POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
-            </span>
-            <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
-              MODE {(status?.mode ?? 'LIVE').toUpperCase()}
-            </span>
-          </div>
-
-          <div className="desk-stats">
-            <div className="desk-stat">
-              <div className="desk-stat-label">ACCOUNTS</div>
-              <div className="desk-stat-value">{accounts.length}</div>
-            </div>
-            <div className="desk-stat">
-              <div className="desk-stat-label">CLIENTS</div>
-              <div className="desk-stat-value">{Math.max(clients.length, clientCount(status))}</div>
-            </div>
-            <div className="desk-stat">
-              <div className="desk-stat-label">OPEN</div>
-              <div className="desk-stat-value">{openTrades}</div>
-            </div>
-            <div className="desk-stat">
-              <div className="desk-stat-label">FILLS</div>
-              <div className="desk-stat-value up">{fills}</div>
-            </div>
-            <div className="desk-stat">
-              <div className="desk-stat-label">SERVER</div>
-              <div className="desk-stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-                {status?.server_time
-                  ? new Date(status.server_time).toLocaleTimeString()
-                  : '--:--:--'}
-              </div>
-            </div>
-          </div>
-
-          <div className="header-chrome">
-            <button type="button" className="btn btn-primary" onClick={() => void toggleFullscreen()}>
-              {isFs ? 'EXIT FS' : 'FULL SCREEN'}
-            </button>
-          </div>
-        </header>
-
-        <div className="desk-body">
-          <aside className="desk-rail">
-            <div className="rail-section">
-              <div className="rail-title rail-title-row">
-                <span>ACCOUNTS ({clients.length})</span>
-                <NavLink to="/clients" className="rail-add">
-                  + ADD
-                </NavLink>
-              </div>
-              {clients.length === 0 && (
-                <div className="rail-empty">No clients yet — open Clients or Brokers.</div>
-              )}
-              {clients.map((c) => {
-                const accs = accounts.filter((a) => a.client_id === c.id);
-                const marketsN = accs.reduce((s, a) => s + (a.capital_market_count || 0), 0);
-                const active = selectedClientId === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`account-chip ${active ? 'active' : ''}`}
-                    onClick={() => setSelectedClientId(c.id)}
-                  >
-                    <div className="account-chip-name">
-                      {c.name}
-                      <span className={`dot ${c.enabled ? 'on' : 'off'}`} />
-                    </div>
-                    <div className="account-chip-meta account-chip-meta-row">
-                      <span>{c.enabled ? 'ACTIVE' : 'OFF'} · {accs.length} acct</span>
-                      <span>{marketsN.toLocaleString()} mkts</span>
-                    </div>
-                  </button>
-                );
-              })}
-              <div className="rail-actions">
-                <NavLink to="/brokers" className="btn btn-primary rail-btn">
-                  OPEN BROKERS
-                </NavLink>
-                <NavLink to="/trading" className="btn rail-btn">
-                  ACCOUNT MGMT
-                </NavLink>
-              </div>
-            </div>
-
-            <div className="rail-nav">
-              <div className="rail-title" style={{ padding: '0 2px 8px' }}>
-                CONTROL NAV
-              </div>
-              {NAV.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </div>
-
-            <div className="rail-section">
-              <div className="rail-title">MARKETS</div>
-              <div className="metric-value" style={{ fontSize: 14 }}>
-                {markets.toLocaleString()}
-              </div>
-            </div>
-          </aside>
-
-          <main className="desk-main">{children}</main>
+      {isHome ? (
+        <div className="home-shell">
+          <nav className="home-shell-nav">
+            <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
+              HOME
+            </NavLink>
+            <NavLink to="/robot">BOARD</NavLink>
+            <NavLink to="/trades">TRADES</NavLink>
+            <NavLink to="/settings">SETUP</NavLink>
+            <NavLink to="/system">SYSTEM</NavLink>
+          </nav>
+          <main className="home-shell-main">{children}</main>
+          <footer className="home-shell-foot mono">
+            Clients <strong>{Math.max(clients.length, clientCount(status))}</strong>
+            {' · '}Brokers <strong>{brokersLive > 0 ? 'OK' : '—'}</strong>
+            {' · '}Feeds <strong>{liveOk ? 'quiet' : '—'}</strong>
+          </footer>
         </div>
+      ) : (
+        <div className={`desk-shell${railCollapsed ? ' rail-collapsed' : ''}${isFs ? ' is-fs' : ''}`}>
+          <header className="desk-header">
+            <div className="header-chrome">
+              <button
+                type="button"
+                className="btn"
+                title="Collapse / expand left rail"
+                onClick={() => setRailCollapsed((v) => !v)}
+              >
+                {railCollapsed ? '☰' : '◀'}
+              </button>
+            </div>
+            <div className="desk-brand">
+              <Logo size={52} wordmark />
+              <div className="desk-brand-sub">{pageTitle}</div>
+            </div>
 
-        <footer className="footer-strip desk-footer">
-          <span>VS SYSTEM · ONLINE</span>
-          <span>REAL-TIME COMBAT DESK</span>
-          <span className="footer-logo-wrap">
-            <Logo size={18} />
-          </span>
-        </footer>
-      </div>
+            <div className="desk-status-row">
+              <span className={`status-pill ${liveOk ? '' : 'bad'}`}>
+                SYSTEM {liveOk ? 'LIVE' : 'DEGRADED'}
+              </span>
+              <span className={`status-pill ${brokersLive > 0 ? '' : 'warn'}`}>
+                CAPITAL {brokersLive > 0 ? 'LIVE' : 'IDLE'}
+              </span>
+              <span className={`status-pill ${openTrades > 0 ? '' : 'warn'}`}>
+                POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
+              </span>
+              <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
+                MODE {(status?.mode ?? 'LIVE').toUpperCase()}
+              </span>
+            </div>
+
+            <div className="desk-stats">
+              <div className="desk-stat">
+                <div className="desk-stat-label">ACCOUNTS</div>
+                <div className="desk-stat-value">{accounts.length}</div>
+              </div>
+              <div className="desk-stat">
+                <div className="desk-stat-label">CLIENTS</div>
+                <div className="desk-stat-value">
+                  {Math.max(clients.length, clientCount(status))}
+                </div>
+              </div>
+              <div className="desk-stat">
+                <div className="desk-stat-label">OPEN</div>
+                <div className="desk-stat-value">{openTrades}</div>
+              </div>
+              <div className="desk-stat">
+                <div className="desk-stat-label">FILLS</div>
+                <div className="desk-stat-value up">{fills}</div>
+              </div>
+              <div className="desk-stat">
+                <div className="desk-stat-label">SERVER</div>
+                <div
+                  className="desk-stat-value"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}
+                >
+                  {status?.server_time
+                    ? new Date(status.server_time).toLocaleTimeString()
+                    : '--:--:--'}
+                </div>
+              </div>
+            </div>
+
+            <div className="header-chrome">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void toggleFullscreen()}
+              >
+                {isFs ? 'EXIT FS' : 'FULL SCREEN'}
+              </button>
+            </div>
+          </header>
+
+          <div className="desk-body">
+            <aside className="desk-rail">
+              <div className="rail-section">
+                <div className="rail-title rail-title-row">
+                  <span>ACCOUNTS ({clients.length})</span>
+                  <NavLink to="/clients" className="rail-add">
+                    + ADD
+                  </NavLink>
+                </div>
+                {clients.length === 0 && (
+                  <div className="rail-empty">No clients yet — open Clients or Brokers.</div>
+                )}
+                {clients.map((c) => {
+                  const accs = accounts.filter((a) => a.client_id === c.id);
+                  const marketsN = accs.reduce((s, a) => s + (a.capital_market_count || 0), 0);
+                  const active = selectedClientId === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`account-chip ${active ? 'active' : ''}`}
+                      onClick={() => setSelectedClientId(c.id)}
+                    >
+                      <div className="account-chip-name">
+                        {c.name}
+                        <span className={`dot ${c.enabled ? 'on' : 'off'}`} />
+                      </div>
+                      <div className="account-chip-meta account-chip-meta-row">
+                        <span>
+                          {c.enabled ? 'ACTIVE' : 'OFF'} · {accs.length} acct
+                        </span>
+                        <span>{marketsN.toLocaleString()} mkts</span>
+                      </div>
+                    </button>
+                  );
+                })}
+                <div className="rail-actions">
+                  <NavLink to="/brokers" className="btn btn-primary rail-btn">
+                    OPEN BROKERS
+                  </NavLink>
+                  <NavLink to="/trading" className="btn rail-btn">
+                    ACCOUNT MGMT
+                  </NavLink>
+                </div>
+              </div>
+
+              <div className="rail-nav">
+                <div className="rail-title" style={{ padding: '0 2px 8px' }}>
+                  CONTROL NAV
+                </div>
+                {NAV.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                  >
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+
+              <div className="rail-section">
+                <div className="rail-title">MARKETS</div>
+                <div className="metric-value" style={{ fontSize: 14 }}>
+                  {markets.toLocaleString()}
+                </div>
+              </div>
+            </aside>
+
+            <main className="desk-main">{children}</main>
+          </div>
+
+          <footer className="footer-strip desk-footer">
+            <span>VS SYSTEM · ONLINE</span>
+            <span>DESK</span>
+            <span className="footer-logo-wrap">
+              <Logo size={18} />
+            </span>
+          </footer>
+        </div>
+      )}
     </DeskContext.Provider>
   );
 }
