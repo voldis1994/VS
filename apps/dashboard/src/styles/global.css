@@ -1234,6 +1234,12 @@ a.btn { text-decoration: none; }
   line-height: 1;
   color: var(--text-primary);
 }
+.vb-hero-price.empty {
+  font-size: clamp(24px, 3.5vw, 36px);
+  letter-spacing: 0.28em;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
 .vb-hero-meta {
   font-size: 11px;
   color: var(--text-secondary);
@@ -1569,6 +1575,12 @@ a.btn { text-decoration: none; }
   letter-spacing: -0.03em;
   line-height: 0.95;
   color: var(--text-primary);
+}
+.vu-mid.empty {
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: 0.28em;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 .vu-bidask {
   display: flex;

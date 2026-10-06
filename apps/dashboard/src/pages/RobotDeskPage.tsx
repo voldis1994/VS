@@ -541,8 +541,16 @@ export function RobotDeskPage() {
                     : 'WAITING'}
               </span>
             </div>
-            <div className="vb-hero-price">
-              {focused ? fmt(focused.last_mid, 2) : sessions[0] ? fmt(sessions[0].last_mid, 2) : '—'}
+            <div
+              className={`vb-hero-price ${
+                (focused?.last_mid ?? sessions[0]?.last_mid) == null ? 'empty' : ''
+              }`}
+            >
+              {focused?.last_mid != null
+                ? fmt(focused.last_mid, 2)
+                : sessions[0]?.last_mid != null
+                  ? fmt(sessions[0].last_mid, 2)
+                  : '· · ·'}
             </div>
             <div className="vb-hero-meta mono">
               Soft / Peak — knobs on LIVE · feeds {feedOk}/{feedCount || '—'} · {chainLabel}

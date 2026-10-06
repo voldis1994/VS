@@ -468,7 +468,9 @@ export function RobotUnitPage() {
               {session ? postureMain(session) : busy ? 'STARTING' : 'LOADING'}
             </div>
             <div className="vu-regime">{session ? postureSub(session) : '—'}</div>
-            <div className="vu-mid">{session ? fmt(session.last_mid, 2) : '—'}</div>
+            <div className={`vu-mid ${session?.last_mid == null ? 'empty' : ''}`}>
+              {session?.last_mid != null ? fmt(session.last_mid, 2) : '· · ·'}
+            </div>
             <div className="vu-bidask mono">
               <span>BID / ASK</span>
               <strong>
