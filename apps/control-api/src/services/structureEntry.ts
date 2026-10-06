@@ -633,7 +633,10 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
   const zone = zoneGeometry(input.closedBars, input.bar);
   const m1 = lastClosed1mFromTenSec(input.closedBars);
   const bias = minuteTrendBias(input.closedBars);
-  const story = readMarketStory(input.closedBars, input.bar);
+  const story = readMarketStory(input.closedBars, input.bar, {
+    tf30: input.capital_tf30_dir,
+    tf15: input.capital_tf15_dir,
+  });
 
   // Prefer Capital candles (what the human sees) over 10s-book aggregates
   const bookMd = minuteDir(m1);

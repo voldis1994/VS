@@ -454,7 +454,11 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
 
   const story: MarketStory = readMarketStory(
     input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],
-    bar
+    bar,
+    {
+      tf30: input.capital_tf30_dir,
+      tf15: input.capital_tf15_dir,
+    }
   );
   const tfLine = multiTfWatchLine({
     closed_bars: input.closed_bars?.length ? input.closed_bars : bar ? [bar] : [],

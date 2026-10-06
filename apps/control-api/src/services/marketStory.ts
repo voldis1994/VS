@@ -1,9 +1,9 @@
 /**
- * Human-readable 30m market story from the same 10s book the robot already has.
+ * Human-readable market story from the 10s→1m book the robot already has.
  *
- * Not another % threshold — reconstructs what a trader sees on a 1m chart over ~30m:
- * path (up/down/chop), swing structure (HH/HL vs LH/LL), where price sits in the zone,
- * and whether the last minutes are a bounce inside a selloff (knife) or a real turn.
+ * Reconstructs path over ~30m of 1m bars (trek / swings / zone). When Capital
+ * chart dirs (30m/15m) are passed, they veto false “30m rally/selloff” labels
+ * that disagree with the live Capital candle the human sees.
  */
 import { getBrainGenome } from '../brainSelfImprove/brainGenome.js';
 import { ZONE_BARS, MIN_BARS_FOR_ZONE } from './regimes.js';
@@ -46,6 +46,12 @@ export type MarketStory = {
   swing: 'LL_LH' | 'HH_HL' | 'MIXED' | 'UNKNOWN';
   /** Last closed 1m (for scalp confirm) */
   last_1m: MinuteBar | null;
+};
+
+/** Live Capital chart dirs — optional; when set, story must not fight the screen. */
+export type StoryCapitalDirs = {
+  tf30?: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf15?: 'UP' | 'DOWN' | 'FLAT' | null;
 };
 
 /** Min |net| over ~30m — factory default (genome story_min_path_bp = 7 ≡ 0.0007). */
@@ -167,7 +173,8 @@ function countColors(mins: MinuteBar[]): { red: number; green: number } {
 
 export function readMarketStory(
   closedBars: TenSecBar[],
-  entry?: TenSecBar | null
+  entry?: TenSecBar | null,
+  capital?: StoryCapitalDirs | null
 ): MarketStory {
   const empty = (chapter: StoryChapter, summary_lv: string): MarketStory => ({
     chapter,
@@ -268,7 +275,7 @@ export function readMarketStory(
     summary_lv =
       chapter === 'EXHAUST_LO'
         ? 'STĀSTS · selloff pie zonas grīdas · meklē SELL · BUY tikai failed-break / reversal'
-        : `STĀSTS · 30m selloff · trek ${trek.toFixed(1)}pt · tikai SELL · nepirkt`;
+        : `STĀSTS · 1m-logs selloff · trek ${trek.toFixed(1)}pt · tikai SELL · nepirkt`;
     confidence = 0.75;
   } else if (buyStruct) {
     chapter = pos >= 0.8 ? 'EXHAUST_HI' : 'RALLY';
@@ -276,7 +283,7 @@ export function readMarketStory(
     summary_lv =
       chapter === 'EXHAUST_HI'
         ? 'STĀSTS · rally pie zonas griestiem · meklē BUY · SELL tikai failed-break / reversal'
-        : `STĀSTS · 30m rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
+        : `STĀSTS · 1m-logs rally · trek ${trek.toFixed(1)}pt · tikai BUY · nepārdot`;
     confidence = 0.75;
   } else if (recentSell && trek >= minPath) {
     chapter = 'SELLOFF';
@@ -291,14 +298,31 @@ export function readMarketStory(
   } else if (trek < minPath) {
     chapter = 'RANGE_CHOP';
     allow = 'NONE';
-    summary_lv = `STĀSTS · 30m trek < ${minPath.toFixed(1)}pt · 1m scalp GAIDI (šaurs)`;
+    summary_lv = `STĀSTS · 1m-logs trek < ${minPath.toFixed(1)}pt · GAIDI (šaurs)`;
     confidence = 0.35;
   } else {
     chapter = 'RANGE_CHOP';
     allow = 'NONE';
-    summary_lv = 'STĀSTS · 30m chop · 1m scalp GAIDI (nav skaidras puses)';
+    summary_lv = 'STĀSTS · 1m-logs chop · GAIDI (nav skaidras puses)';
     confidence = 0.4;
   }
+
+  // Capital chart is source of truth for “30m/15m” claims — veto 1m-trek lies
+  const aligned = alignStoryWithCapitalChart({
+    chapter,
+    allow,
+    summary_lv,
+    confidence,
+    capital,
+    sellStruct,
+    buyStruct,
+    trek,
+    pos,
+  });
+  chapter = aligned.chapter;
+  allow = aligned.allow;
+  summary_lv = aligned.summary_lv;
+  confidence = aligned.confidence;
 
   const detail = [
     `net=${net.toFixed(2)}pt`,
@@ -308,6 +332,8 @@ export function readMarketStory(
     `swing=${swing}`,
     zone ? `pos=${pos.toFixed(2)} ${zone.band}` : 'pos=—',
     `hi=${hi.toFixed(2)} lo=${lo.toFixed(2)}`,
+    capital?.tf30 ? `cap30=${capital.tf30}` : 'cap30=—',
+    capital?.tf15 ? `cap15=${capital.tf15}` : 'cap15=—',
     last1m
       ? `last1m ${last1m.close >= last1m.open ? 'GREEN' : 'RED'} ${last1m.open.toFixed(2)}→${last1m.close.toFixed(2)}`
       : 'last1m=—',
@@ -326,6 +352,81 @@ export function readMarketStory(
     swing,
     last_1m: last1m,
   };
+}
+
+/**
+ * When Capital 30m/15m contradict 1m-trek “rally/selloff”, prefer the chart
+ * (or GAIDI) so UI never shows Steks 30m↓ + STĀSTS 30m rally BUY together.
+ */
+export function alignStoryWithCapitalChart(input: {
+  chapter: StoryChapter;
+  allow: StorySide;
+  summary_lv: string;
+  confidence: number;
+  capital?: StoryCapitalDirs | null;
+  sellStruct: boolean;
+  buyStruct: boolean;
+  trek: number;
+  pos: number;
+}): {
+  chapter: StoryChapter;
+  allow: StorySide;
+  summary_lv: string;
+  confidence: number;
+} {
+  let { chapter, allow, summary_lv, confidence } = input;
+  const c30 = input.capital?.tf30 ?? null;
+  const c15 = input.capital?.tf15 ?? null;
+  if (c30 == null && c15 == null) return { chapter, allow, summary_lv, confidence };
+
+  const chartDown = c30 === 'DOWN' || (c30 !== 'UP' && c15 === 'DOWN');
+  const chartUp = c30 === 'UP' || (c30 !== 'DOWN' && c15 === 'UP');
+  const trekTag = Number.isFinite(input.trek) ? input.trek.toFixed(1) : '?';
+
+  const buyish =
+    allow === 'BUY' ||
+    chapter === 'RALLY' ||
+    chapter === 'DIP_IN_RALLY' ||
+    chapter === 'EXHAUST_HI' ||
+    chapter === 'BREAK_UP';
+  const sellish =
+    allow === 'SELL' ||
+    chapter === 'SELLOFF' ||
+    chapter === 'BOUNCE_IN_SELL' ||
+    chapter === 'EXHAUST_LO' ||
+    chapter === 'BREAK_DOWN';
+
+  if (chartDown && buyish) {
+    if (input.sellStruct) {
+      chapter = input.pos <= 0.2 ? 'EXHAUST_LO' : 'SELLOFF';
+      allow = 'SELL';
+      summary_lv = `STĀSTS · Capital 30m↓ · selloff · trek ${trekTag}pt · tikai SELL · nepirkt`;
+      confidence = Math.max(confidence, 0.72);
+    } else {
+      chapter = 'RANGE_CHOP';
+      allow = 'NONE';
+      summary_lv = `STĀSTS · Capital 30m↓ · 1m-logs≠rally · GAIDI (nav BUY)`;
+      confidence = 0.4;
+    }
+  } else if (chartUp && sellish) {
+    if (input.buyStruct) {
+      chapter = input.pos >= 0.8 ? 'EXHAUST_HI' : 'RALLY';
+      allow = 'BUY';
+      summary_lv = `STĀSTS · Capital 30m↑ · rally · trek ${trekTag}pt · tikai BUY · nepārdot`;
+      confidence = Math.max(confidence, 0.72);
+    } else {
+      chapter = 'RANGE_CHOP';
+      allow = 'NONE';
+      summary_lv = `STĀSTS · Capital 30m↑ · 1m-logs≠selloff · GAIDI (nav SELL)`;
+      confidence = 0.4;
+    }
+  } else if (chartDown && (chapter === 'SELLOFF' || allow === 'SELL')) {
+    summary_lv = `STĀSTS · Capital 30m↓ · selloff · trek ${trekTag}pt · tikai SELL · nepirkt`;
+  } else if (chartUp && (chapter === 'RALLY' || allow === 'BUY')) {
+    summary_lv = `STĀSTS · Capital 30m↑ · rally · trek ${trekTag}pt · tikai BUY · nepārdot`;
+  }
+
+  return { chapter, allow, summary_lv, confidence };
 }
 
 export function storyAllowsDirection(
