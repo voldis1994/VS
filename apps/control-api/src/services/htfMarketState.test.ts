@@ -13,6 +13,7 @@ import {
   htfHistoryAdequate,
   measureThesisOutcome,
   postThesisCandles,
+  HTF_CAPITAL_FETCH_CAP,
   HTF_HISTORY_MIN,
   HTF_HISTORY_TARGET,
 } from './htfMarketState.js';
@@ -316,9 +317,13 @@ describe('htf v2 — acceptance / history / score / outcomes', () => {
 
   it('history targets/minima and fetch max include forming tip', () => {
     expect(HTF_HISTORY_TARGET['4H']).toBeGreaterThanOrEqual(60);
-    expect(HTF_HISTORY_TARGET['1H']).toBeGreaterThanOrEqual(100);
+    expect(HTF_HISTORY_TARGET['1H']).toBe(120);
     expect(HTF_HISTORY_MIN['5m']).toBeGreaterThanOrEqual(40);
     expect(htfFetchMax('4H')).toBe(HTF_HISTORY_TARGET['4H'] + 1);
+    // 1H: target 120 closed + forming tip → fetch 121, within Capital cap 150
+    expect(htfFetchMax('1H')).toBe(121);
+    expect(htfFetchMax('1H')).toBeLessThanOrEqual(HTF_CAPITAL_FETCH_CAP);
+    expect(HTF_CAPITAL_FETCH_CAP).toBe(150);
     expect(htfHistoryAdequate('30m', HTF_HISTORY_MIN['30m'] + 1)).toBe(true);
     expect(htfHistoryAdequate('30m', 10)).toBe(false);
   });
@@ -337,6 +342,7 @@ describe('htf v2 — acceptance / history / score / outcomes', () => {
     };
     state.bias = 'UP';
     state.thesis.state = 'CONFIRMED';
+    state.thesis.confirming_at = 3000;
     state.thesis.confirmed_at = 5000;
     state.thesis.events_hit = ['confirm:c_new_hh'];
     const out = measureThesisOutcome({
@@ -348,10 +354,81 @@ describe('htf v2 — acceptance / history / score / outcomes', () => {
       exit_phase: 'IMPULSE',
     });
     expect(out.thesis_direction_correct).toBe(true);
+    expect(out.trade_execution_positive).toBe(true);
     expect(out.time_to_confirmation_ms).toBe(4000);
+    expect(out.time_to_confirming_ms).toBe(2000);
     expect(out.invalidated).toBe(false);
   });
+
+  it('thesis CONFIRMED + negative trade PnL → thesis_direction_correct true', () => {
+    const state = buildHtfMarketState({
+      tf30: bullishSeries(),
+      now_ms: 1000,
+    });
+    state.thesis.state = 'CONFIRMED';
+    state.thesis.confirmed_at = 4000;
+    const out = measureThesisOutcome({
+      entry: state,
+      direction: 'BUY',
+      pnl_pts: -5,
+    });
+    expect(out.thesis_direction_correct).toBe(true);
+    expect(out.trade_execution_positive).toBe(false);
+    expect(out.trade_pnl_pts).toBe(-5);
+  });
+
+  it('thesis INVALIDATED + positive trade PnL → thesis_direction_correct false', () => {
+    const state = buildHtfMarketState({
+      tf30: bullishSeries(),
+      now_ms: 1000,
+    });
+    state.thesis.state = 'INVALIDATED';
+    state.thesis.invalidated_at = 4000;
+    const out = measureThesisOutcome({
+      entry: state,
+      direction: 'BUY',
+      pnl_pts: 8,
+    });
+    expect(out.thesis_direction_correct).toBe(false);
+    expect(out.trade_execution_positive).toBe(true);
+    expect(out.trade_pnl_pts).toBe(8);
+  });
 });
+
+/** Dual soft confirm levels for PENDING → CONFIRMING → CONFIRMED path tests. */
+function dualCrossSetup(baseT = 1_700_000_000_000) {
+  const series = bullishSeries(baseT);
+  const closed = closedCandlesOnly(series);
+  const lastT = closed[closed.length - 1]!.open_time_ms!;
+  // Freeze at last closed bar time so post-thesis candles are strictly later
+  const frozen = buildHtfMarketState({
+    tf30: series,
+    now_ms: lastT,
+  });
+  const lastClose = frozen.facts.frames[0]!.last_close;
+  const levelA = lastClose + 1;
+  const levelB = lastClose + 3;
+  frozen.thesis.confirmation_conditions = [
+    {
+      id: 'c_soft_a',
+      kind: 'CROSS_ABOVE',
+      level: levelA,
+      tf: '30m',
+      description: `cross A ${levelA}`,
+      satisfied_at_creation: false,
+    },
+    {
+      id: 'c_soft_b',
+      kind: 'CROSS_ABOVE',
+      level: levelB,
+      tf: '30m',
+      description: `cross B ${levelB}`,
+      satisfied_at_creation: false,
+    },
+  ];
+  frozen.thesis.invalidation_conditions = [];
+  return { frozen, levelA, levelB, closed, lastT };
+}
 
 describe('htf v2 — evaluateThesisEvents unit', () => {
   it('ignore invalidation that was already true at creation until re-cross', () => {
@@ -366,5 +443,125 @@ describe('htf v2 — evaluateThesisEvents unit', () => {
     const same = evaluateThesisEvents(thesis, facts, 2);
     // Same candles → no new cross → not invalidated solely from baseline
     expect(same.state).not.toBe('INVALIDATED');
+  });
+
+  it('one confirmation event across refresh cycles cannot reach CONFIRMED', () => {
+    const { frozen, levelA, closed, lastT } = dualCrossSetup();
+    const bookAfterA = {
+      tf30: [
+        ...closed,
+        c(levelA - 0.5, levelA + 0.2, levelA - 0.6, levelA - 0.1, lastT + 3_600_000),
+        c(levelA - 0.1, levelA + 0.8, levelA - 0.2, levelA + 0.5, lastT + 7_200_000),
+        c(levelA + 0.5, levelA + 0.6, levelA + 0.4, levelA + 0.55, lastT + 10_800_000),
+      ],
+      now_ms: lastT + 7_200_000,
+    };
+    const t1 = advanceFrozenThesis(frozen, bookAfterA);
+    expect(t1.thesis.state).toBe('CONFIRMING');
+    expect(t1.thesis.confirmed_at).toBeNull();
+    expect(t1.thesis.events_hit).toContain('confirm:c_soft_a');
+    expect(t1.thesis.events_hit).not.toContain('confirm:c_soft_b');
+
+    // Same event still true on many refreshes — must not promote
+    let cur = t1;
+    for (let i = 0; i < 5; i++) {
+      cur = advanceFrozenThesis(cur, {
+        ...bookAfterA,
+        now_ms: lastT + 7_200_000 + (i + 1) * 1000,
+      });
+      expect(cur.thesis.state).toBe('CONFIRMING');
+      expect(cur.thesis.confirmed_at).toBeNull();
+      expect(cur.thesis.events_hit.filter((e) => e === 'confirm:c_soft_a')).toHaveLength(
+        1
+      );
+    }
+  });
+
+  it('PENDING → CONFIRMING → CONFIRMED requires two distinct events', () => {
+    const { frozen, levelA, levelB, closed, lastT } = dualCrossSetup();
+    const bookAfterA = {
+      tf30: [
+        ...closed,
+        c(levelA - 0.5, levelA + 0.2, levelA - 0.6, levelA - 0.1, lastT + 3_600_000),
+        c(levelA - 0.1, levelA + 0.8, levelA - 0.2, levelA + 0.5, lastT + 7_200_000),
+        c(levelA + 0.5, levelA + 0.6, levelA + 0.4, levelA + 0.55, lastT + 10_800_000),
+      ],
+      now_ms: lastT + 7_200_000,
+    };
+    const confirming = advanceFrozenThesis(frozen, bookAfterA);
+    expect(confirming.thesis.state).toBe('CONFIRMING');
+    expect(confirming.thesis.confirming_at).toBe(lastT + 7_200_000);
+    expect(confirming.thesis.confirmed_at).toBeNull();
+
+    const bookAfterB = {
+      tf30: [
+        ...closed,
+        c(levelA - 0.5, levelA + 0.2, levelA - 0.6, levelA - 0.1, lastT + 3_600_000),
+        c(levelA - 0.1, levelA + 0.8, levelA - 0.2, levelA + 0.5, lastT + 7_200_000),
+        c(levelA + 0.5, levelB + 0.2, levelA + 0.4, levelB + 0.1, lastT + 10_800_000),
+        c(levelB + 0.1, levelB + 0.3, levelB, levelB + 0.2, lastT + 14_400_000),
+      ],
+      now_ms: lastT + 14_400_000,
+    };
+    const confirmed = advanceFrozenThesis(confirming, bookAfterB);
+    expect(confirmed.thesis.state).toBe('CONFIRMED');
+    expect(confirmed.thesis.events_hit).toEqual(
+      expect.arrayContaining(['confirm:c_soft_a', 'confirm:c_soft_b'])
+    );
+    expect(confirmed.thesis.confirmed_at).toBe(lastT + 14_400_000);
+    expect(confirmed.thesis.confirming_at).toBe(confirming.thesis.confirming_at);
+  });
+
+  it('confirming_at set on CONFIRMING; confirmed_at only on CONFIRMED', () => {
+    const { frozen, levelA, levelB, closed, lastT } = dualCrossSetup();
+    const tConfirming = lastT + 7_200_000;
+    const tConfirmed = lastT + 14_400_000;
+    const confirming = advanceFrozenThesis(frozen, {
+      tf30: [
+        ...closed,
+        c(levelA - 0.5, levelA + 0.2, levelA - 0.6, levelA - 0.1, lastT + 3_600_000),
+        c(levelA - 0.1, levelA + 0.8, levelA - 0.2, levelA + 0.5, tConfirming),
+        c(levelA + 0.5, levelA + 0.6, levelA + 0.4, levelA + 0.55, lastT + 10_800_000),
+      ],
+      now_ms: tConfirming,
+    });
+    expect(confirming.thesis.state).toBe('CONFIRMING');
+    expect(confirming.thesis.confirming_at).toBe(tConfirming);
+    expect(confirming.thesis.confirmed_at).toBeNull();
+
+    const outcomeConfirming = measureThesisOutcome({
+      entry: confirming,
+      pnl_pts: null,
+    });
+    expect(outcomeConfirming.time_to_confirming_ms).toBe(
+      tConfirming - frozen.thesis.created_at
+    );
+    // thesis_time_to_confirm_ms must wait for real CONFIRMED
+    expect(outcomeConfirming.time_to_confirmation_ms).toBeNull();
+
+    const confirmed = advanceFrozenThesis(confirming, {
+      tf30: [
+        ...closed,
+        c(levelA - 0.5, levelA + 0.2, levelA - 0.6, levelA - 0.1, lastT + 3_600_000),
+        c(levelA - 0.1, levelA + 0.8, levelA - 0.2, levelA + 0.5, tConfirming),
+        c(levelA + 0.5, levelB + 0.2, levelA + 0.4, levelB + 0.1, lastT + 10_800_000),
+        c(levelB + 0.1, levelB + 0.3, levelB, levelB + 0.2, tConfirmed),
+      ],
+      now_ms: tConfirmed,
+    });
+    expect(confirmed.thesis.state).toBe('CONFIRMED');
+    expect(confirmed.thesis.confirmed_at).toBe(tConfirmed);
+    expect(confirmed.thesis.confirming_at).toBe(tConfirming);
+
+    const outcomeConfirmed = measureThesisOutcome({
+      entry: confirmed,
+      pnl_pts: 1,
+    });
+    expect(outcomeConfirmed.time_to_confirmation_ms).toBe(
+      tConfirmed - frozen.thesis.created_at
+    );
+    expect(outcomeConfirmed.time_to_confirming_ms).toBe(
+      tConfirming - frozen.thesis.created_at
+    );
   });
 });

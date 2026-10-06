@@ -1401,7 +1401,7 @@ export async function fetchCapitalPrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  // HTF engine needs deep history (≈100 closed + forming tip). Cap at 120.
+  // HTF: closed target + forming tip (1H target 120 → fetch 121). Cap 150.
   const cap =
     resolution === 'SECOND'
       ? 50
@@ -1412,7 +1412,7 @@ export async function fetchCapitalPrices(
             resolution === 'MINUTE_30' ||
             resolution === 'HOUR' ||
             resolution === 'HOUR_4'
-          ? 120
+          ? 150
           : 30;
   const q = new URLSearchParams({
     resolution,
