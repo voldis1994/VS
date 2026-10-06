@@ -470,7 +470,7 @@ export function RobotDeskPage() {
           <div className="robot-arena-brand">
             <Logo size={72} wordmark />
             <div>
-              <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
+              <div className="robot-arena-kicker">BOARD</div>
               <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
                 {chainLabel} · {tradeTypes.join(' · ')}
@@ -512,7 +512,7 @@ export function RobotDeskPage() {
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
-            <div className="section-title">DEPLOY CLIENT ROBOT</div>
+            <div className="section-title">START FOR CLIENT</div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"

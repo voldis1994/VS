@@ -21,7 +21,7 @@ export function Logo({
       {wordmark && (
         <span className="vs-wordmark" aria-hidden={false}>
           <span className="vs-wordmark-main">VS SYSTEM</span>
-          <span className="vs-wordmark-sub">TACTICAL DESK</span>
+          <span className="vs-wordmark-sub">DESK</span>
         </span>
       )}
     </span>
