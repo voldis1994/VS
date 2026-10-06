@@ -9,7 +9,8 @@ import {
   AUTO_CAL_MIN_HARDINV_ABS,
 } from './autoCalibrate.js';
 import { defaultDeskCalibration, setDeskCalibration } from './deskCalibration.js';
-import { classifyRegime, type TenSecBar } from './regimes.js';
+import { classifyRegime } from './regimes.js';
+import type { TenSecBar } from './tenSecondOhlc.js';
 import { reviewSessionLikeHuman } from './traderMind.js';
 
 function trade(partial: {
