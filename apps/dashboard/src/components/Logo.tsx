@@ -2,10 +2,13 @@ export function Logo({
   size = 48,
   className,
   wordmark = false,
+  sub = 'DESK',
 }: {
   size?: number;
   className?: string;
   wordmark?: boolean;
+  /** Wordmark subtitle under VS SYSTEM */
+  sub?: string;
 }) {
   return (
     <span className={className ? `vs-logo-wrap ${className}` : 'vs-logo-wrap'}>
@@ -20,8 +23,10 @@ export function Logo({
       />
       {wordmark && (
         <span className="vs-wordmark" aria-hidden={false}>
-          <span className="vs-wordmark-main">VS SYSTEM</span>
-          <span className="vs-wordmark-sub">DESK</span>
+          <span className="vs-wordmark-main">
+            <em className="vs-wordmark-vs">VS</em> SYSTEM
+          </span>
+          {sub.trim() ? <span className="vs-wordmark-sub">{sub}</span> : null}
         </span>
       )}
     </span>

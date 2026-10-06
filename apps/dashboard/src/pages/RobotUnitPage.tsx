@@ -59,6 +59,15 @@ type EntryWatch = {
   last_reason: string;
 };
 
+type HtfCompact = {
+  bias?: string | null;
+  phase?: string | null;
+  path_status?: string | null;
+  primary_side?: string | null;
+  structure?: string | null;
+  expected_path?: string | null;
+};
+
 type RobotSession = {
   id: string;
   account_id: number;
@@ -89,6 +98,8 @@ type RobotSession = {
   feed_legs?: FeedLeg[];
   decision_chain?: { feeds: string; ohlc: string; regime: string; setup: string | null; action: string };
   entry_watch?: EntryWatch | null;
+  htf_state?: HtfCompact | null;
+  htf_path_status?: string | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -127,13 +138,44 @@ function pctFmt(v: number | null | undefined): string {
   return `${sign}${p.toFixed(3)}%`;
 }
 
-function postureLabel(s: RobotSession): string {
+function postureMain(s: RobotSession): string {
   if (!s.running && !s.open_side) return 'STOPPED';
-  if (s.open_side) return `${s.open_side} OPEN`;
+  if (s.open_side) return `IN TRADE · ${s.open_side}`;
   const w = s.entry_watch;
-  if (w?.armed) return `ARMED ${w.direction || ''} · ${w.regime}`;
-  if (w?.status) return `${w.status} · ${w.regime}`;
-  return `WAIT · ${(s.regime || 'UNKNOWN').toUpperCase()}`;
+  if (w?.armed) return `ARMED · ${w.direction || '—'}`;
+  if (w?.status === 'WAITING_TRIGGER') return 'WAITING';
+  if (w?.status === 'FORMING') return 'WAITING';
+  if (w?.status === 'REGIME_OFF') return 'REGIME OFF';
+  if (w?.status === 'COOLDOWN') return 'COOLDOWN';
+  if (w?.status) return w.status.replace(/_/g, ' ');
+  return 'WAITING';
+}
+
+function postureSub(s: RobotSession): string {
+  const r = (s.entry_watch?.regime || s.regime || 'UNKNOWN').replace(/_/g, ' ');
+  return r.toUpperCase();
+}
+
+/** Pull stack dirs from looking_for / market_story when present. */
+function extractStack(w: EntryWatch | null | undefined): string {
+  const raw = `${w?.looking_for || ''} ${w?.market_story || ''} ${w?.story_detail || ''}`;
+  const m = raw.match(/30m[↑↓→]\s*15m[↑↓→]\s*5m[↑↓→]\s*1m[↑↓→]/);
+  if (m) return m[0];
+  return w?.story_chapter || w?.market_story?.split(' · ')[0] || '—';
+}
+
+function extractHtfLine(s: RobotSession): string {
+  const h = s.htf_state;
+  if (h?.bias || h?.phase) {
+    const bias = h.bias || '—';
+    const phase = h.phase || '—';
+    const side = h.primary_side || '—';
+    return `bias ${bias} · phase ${phase} · ${side}`;
+  }
+  const story = s.entry_watch?.market_story || s.entry_watch?.story_detail || '';
+  const m = story.match(/4H[↑↓→].*?1H[↑↓→][^·]*/);
+  if (m) return m[0].trim();
+  return story ? story.slice(0, 72) : '—';
 }
 
 /** Fullscreen page — one client robot only, fit viewport. */
@@ -151,6 +193,8 @@ export function RobotUnitPage() {
   const [calMsg, setCalMsg] = useState<string | null>(null);
   const [lotEdit, setLotEdit] = useState('');
   const [settingsTab, setSettingsTab] = useState<'exit' | 'regimes' | 'lot'>('exit');
+  const [showSetup, setShowSetup] = useState(false);
+  const [showLog, setShowLog] = useState(false);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -338,241 +382,236 @@ export function RobotUnitPage() {
   };
 
   const w = session?.entry_watch;
-  const chain = session?.decision_chain;
   const mindMatch = (w?.looking_for || w?.last_reason || '').match(/PRĀTS\s+(BUY|SELL|WAIT)/i);
   const mindSide = mindMatch?.[1]?.toUpperCase() || null;
   const setupSide = w?.direction || null;
-  const setupLabel = w?.armed
-    ? `ARMED ${setupSide || ''} ${w.setup || ''}`.trim()
-    : w?.looking_for
-      ? w.looking_for.slice(0, 80)
-      : '—';
+  const setupDetail = w?.armed
+    ? `${w.setup || 'SETUP'}`.trim()
+    : w?.setup || (w?.status ? w.status.replace(/_/g, ' ') : '—');
   const knobs = cal || auto?.knobs_now;
-  const happenSoft = knobs
-    ? `Soft ${Number(knobs.hardinv_abs).toFixed(2)} · Peak ${Number(knobs.peak_mfe_abs).toFixed(2)} · Target ${Number(knobs.target_abs).toFixed(2)}`
-    : 'Soft / Peak / Target —';
-  const happenCal =
+  const softN = knobs ? Number(knobs.hardinv_abs).toFixed(2) : '—';
+  const peakN = knobs ? Number(knobs.peak_mfe_abs).toFixed(2) : '—';
+  const targetN = knobs ? Number(knobs.target_abs).toFixed(2) : '—';
+  const pathStatus =
+    session?.htf_path_status ||
+    session?.htf_state?.path_status ||
+    (session?.open_side ? '—' : 'PENDING');
+  const autoCalLine =
     auto != null
-      ? `AutoCal ${auto.closes_in_session} closes · next in ${auto.closes_until_next} · E pts ${Number(auto.session_expectancy_pts ?? 0).toFixed(2)}`
-      : 'AutoCal —';
+      ? `${auto.closes_in_session}/${Math.max(auto.closes_in_session + auto.closes_until_next, 5)} · E pts ${Number(auto.session_expectancy_pts ?? 0).toFixed(2)}`
+      : '—';
+  const clock = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const liveOk = Boolean(session?.running);
+  const postureKind = session?.open_side ? 'open' : session?.running ? 'watch' : 'flat';
+  const tapeLine = w
+    ? `CLOSED 10s O ${fmt(w.bar.o, 2)} / H ${fmt(w.bar.h, 2)} / L ${fmt(w.bar.l, 2)} / C ${fmt(w.bar.c, 2)} · ${
+        w.bar.market
+      }${w.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}`
+    : session
+      ? 'Tape seeding…'
+      : '—';
+
+  const healthBanner = (() => {
+    if (!session?.running) return null;
+    const busyAge = session.cycle_busy ? session.cycle_busy_age_ms || 0 : 0;
+    if (session.cycle_busy && busyAge >= 40_000) {
+      return (
+        <div className="error-state">
+          CYCLE STUCK {Math.round(busyAge / 1000)}s — Capital/feed hang
+        </div>
+      );
+    }
+    if (session.cycle_busy && busyAge >= 15_000) {
+      return (
+        <div className="warn-state">
+          Capital aizņemts {Math.round(busyAge / 1000)}s — rinda (nav hang)
+        </div>
+      );
+    }
+    if (session.cycle_busy) return null;
+    const activityIso = session.last_activity_at || session.last_tick_at || session.last_quote_at;
+    if (!activityIso) return null;
+    const age = Date.now() - new Date(activityIso).getTime();
+    if (age <= 45_000) return null;
+    return (
+      <div className="warn-state">
+        LIVE stale — pēdējā aktivitāte {Math.round(age / 1000)}s atpakaļ
+      </div>
+    );
+  })();
 
   return (
     <div className="robot-fs-shell robot-unit-shell">
-      <div className="robot-unit">
-        <header className="robot-unit-head">
-          <div className="robot-unit-brand">
-            <Logo size={44} wordmark />
-            <div>
-              <div className="robot-arena-kicker">LIVE DESK</div>
-              <h1 className="robot-unit-title">
-                {(session?.client_name || session?.account_name || '…').toUpperCase()}
-                {session ? ` · ${session.display_name}` : ''}
-              </h1>
-              <p className="robot-unit-sub mono">
-                {session
-                  ? `${session.epic} · lot ${session.lot_size} · ${session.environment.toUpperCase()}`
-                  : busy
-                    ? 'Starting…'
-                    : 'Loading…'}
-              </p>
+      <div className="vu">
+        <header className="vu-head">
+          <div className="vu-brand">
+            <Logo size={40} wordmark sub="LIVE UNIT" />
+            <div className="vu-brand-meta mono">
+              {(session?.client_name || session?.account_name || '…').toUpperCase()}
+              {session ? ` · ${session.display_name}` : ''}
+              {session ? ` · lot ${session.lot_size}` : ''}
             </div>
           </div>
-          <div className="robot-unit-actions">
-            <button className="btn btn-go" type="button" disabled={busy || session?.running} onClick={() => void start()}>
-              START
-            </button>
-            <button className="btn btn-stop" type="button" disabled={busy || !session?.running} onClick={() => void stop()}>
-              STOP
-            </button>
-            <Link className="btn" to="/robot">
-              BOARD
-            </Link>
+          <div className="vu-live-pill">
+            <span className={`vu-dot ${liveOk ? 'on' : 'off'}`} />
+            <span>{liveOk ? 'LIVE' : 'OFF'}</span>
+            <span className="mono">{clock} UTC</span>
           </div>
         </header>
 
         {error && <div className="error-state">{error}</div>}
-        {(() => {
-          if (!session?.running) return null;
-          const busyAge = session.cycle_busy ? session.cycle_busy_age_ms || 0 : 0;
-          // Multi-account Capital lock often holds 15–40s — that is a queue, not a hang.
-          if (session.cycle_busy && busyAge >= 40_000) {
-            return (
-              <div className="error-state">
-                CYCLE STUCK {Math.round(busyAge / 1000)}s — Capital/feed hang · gaida UNSTUCK
-              </div>
-            );
-          }
-          if (session.cycle_busy && busyAge >= 15_000) {
-            return (
-              <div className="warn-state">
-                Capital aizņemts {Math.round(busyAge / 1000)}s — rinda / lēns API (citi konti OK) · nav hang
-              </div>
-            );
-          }
-          // While cycle_busy, LIVE LOG pauses by design — do not double-alarm.
-          if (session.cycle_busy) return null;
-          const activityIso = session.last_activity_at || session.last_tick_at || session.last_quote_at;
-          if (!activityIso) return null;
-          const age = Date.now() - new Date(activityIso).getTime();
-          if (age <= 45_000) return null;
-          return (
-            <div className="warn-state">
-              LIVE LOG stale — pēdējā aktivitāte {Math.round(age / 1000)}s atpakaļ
+        {healthBanner}
+
+        <div className="vu-stage">
+          <section className="vu-price">
+            <div className={`vu-posture ${postureKind}`}>
+              {session ? postureMain(session) : busy ? 'STARTING' : 'LOADING'}
             </div>
-          );
-        })()}
-
-        <div className="robot-unit-grid">
-          <section className="robot-unit-panel robot-unit-status">
-            <div className="robot-arena-kicker">STATUS</div>
-            {session ? (
-              <>
-                <div className={`robot-unit-posture ${session.open_side ? 'open' : session.running ? 'watch' : 'flat'}`}>
-                  {postureLabel(session)}
-                </div>
-                <div className="robot-unit-mid">{fmt(session.last_mid, 2)}</div>
-                <div className="robot-unit-honesty">
-                  <div className="robot-unit-honesty-row">
-                    <span>PRĀTS</span>
-                    <strong>{mindSide || '—'}</strong>
-                  </div>
-                  <div className="robot-unit-honesty-row">
-                    <span>SETUP</span>
-                    <strong>{setupSide || (w?.status ? w.status : '—')}</strong>
-                  </div>
-                </div>
-                <div className="robot-unit-metrics">
-                  <div>
-                    <span>SELL / BID</span>
-                    <strong>{fmt(session.last_bid)}</strong>
-                  </div>
-                  <div>
-                    <span>BUY / ASK</span>
-                    <strong>{fmt(session.last_ask)}</strong>
-                  </div>
-                  <div>
-                    <span>UPL</span>
-                    <strong className={(session.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
-                      {fmt(session.unrealized)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>MFE / MAE</span>
-                    <strong>
-                      {fmt(session.mfe)} / {fmt(session.mae)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>REGIME</span>
-                    <strong>{(session.regime || 'UNKNOWN').toUpperCase()}</strong>
-                  </div>
-                  <div>
-                    <span>SIDE / ENTRY</span>
-                    <strong>
-                      {session.open_side || 'FLAT'} · {fmt(session.entry_price)}
-                    </strong>
-                  </div>
-                </div>
-                {chain && (
-                  <div className="robot-unit-chain mono">
-                    {chain.feeds} → {chain.ohlc} → {chain.regime}
-                    {chain.setup ? ` · ${chain.setup}` : ''} → {chain.action}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="muted">{busy ? 'Starting…' : 'Waiting for session…'}</div>
+            <div className="vu-regime">{session ? postureSub(session) : '—'}</div>
+            <div className="vu-mid">{session ? fmt(session.last_mid, 2) : '—'}</div>
+            <div className="vu-bidask mono">
+              <span>BID / ASK</span>
+              <strong>
+                {session ? `${fmt(session.last_bid, 2)} / ${fmt(session.last_ask, 2)}` : '— / —'}
+              </strong>
+            </div>
+            {session?.open_side && (
+              <div className="vu-trade-metrics mono">
+                <span>
+                  UPL{' '}
+                  <strong className={(session.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
+                    {fmt(session.unrealized, 2)}
+                  </strong>
+                </span>
+                <span>
+                  MFE <strong>{fmt(session.mfe, 2)}</strong>
+                </span>
+                <span>
+                  MAE <strong className="neg">{fmt(session.mae, 2)}</strong>
+                </span>
+              </div>
             )}
-          </section>
-
-          <section className={`robot-unit-panel robot-unit-watch ${w?.armed ? 'armed' : ''}`}>
-            <div className="robot-arena-kicker">WHAT&apos;S HAPPENING</div>
-            <div className="robot-unit-happen">
-              <div className="robot-unit-happen-row">
-                <span>Watch</span>
+            <div className="vu-mind">
+              <div className={`vu-mind-card ${mindSide === 'SELL' ? 'sell' : 'buy'}`}>
+                <span>PRĀTS</span>
+                <strong>{mindSide || '—'}</strong>
+              </div>
+              <div className={`vu-mind-card ${setupSide === 'SELL' ? 'sell' : setupSide === 'BUY' ? 'buy' : ''}`}>
+                <span>SETUP</span>
                 <strong>
-                  {w
-                    ? `${w.status}${w.regime_enabled ? '' : ' · REGIME OFF'}${w.armed ? ` · ${setupLabel}` : ''}`
-                    : session
-                      ? 'Watch seeding…'
-                      : '—'}
-                </strong>
-              </div>
-              <div className="robot-unit-happen-row">
-                <span>Looking for</span>
-                <strong>{w?.looking_for || '—'}</strong>
-              </div>
-              <div className="robot-unit-happen-row">
-                <span>Story</span>
-                <strong>
-                  {w?.market_story || w?.story_chapter || '—'}
-                  {w?.story_allow ? ` · allow ${w.story_allow}` : ''}
-                </strong>
-              </div>
-              <div className="robot-unit-happen-row">
-                <span>Knobs</span>
-                <strong>{happenSoft}</strong>
-              </div>
-              <div className="robot-unit-happen-row">
-                <span>Learning</span>
-                <strong>{happenCal}</strong>
-              </div>
-              <div className="robot-unit-happen-row">
-                <span>10s tape</span>
-                <strong>
-                  {w
-                    ? `O ${fmt(w.bar.o, 2)} H ${fmt(w.bar.h, 2)} L ${fmt(w.bar.l, 2)} C ${fmt(w.bar.c, 2)}${
-                        w.bar.forming_c != null ? ` · LIVE ${fmt(w.bar.forming_c, 2)}` : ''
-                      }${w.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}`
-                    : '—'}
+                  {setupSide || '—'}
+                  {setupDetail && setupDetail !== '—' ? (
+                    <em>{String(setupDetail).slice(0, 28)}</em>
+                  ) : null}
                 </strong>
               </div>
             </div>
-            {w?.last_reason && <div className="muted">{w.last_reason}</div>}
-            {session && (
-              <>
-                <div className="mono" style={{ marginTop: 4 }}>
-                  FEEDS · {session.feed_contributing ?? 0}/{session.feed_sender_count ?? 0}{' '}
-                  {session.feed_agreement || ''} · {session.feed_source || '—'}
-                </div>
-                {(session.feed_legs?.length ?? 0) > 0 && (
-                  <div className="robot-unit-legs">
-                    {session.feed_legs!.map((leg) => (
-                      <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'} {leg.latency_ms}ms
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {session.error && <div className="error-state" style={{ marginTop: 8 }}>{session.error}</div>}
-              </>
-            )}
           </section>
 
-          <section className="robot-unit-panel robot-unit-settings">
-            <div className="robot-arena-kicker">SETTINGS</div>
-            <div className="robot-unit-settings-tabs">
-              <button
-                type="button"
-                className={`btn ${settingsTab === 'exit' ? 'btn-primary' : ''}`}
-                onClick={() => setSettingsTab('exit')}
-              >
-                EXIT
-              </button>
-              <button
-                type="button"
-                className={`btn ${settingsTab === 'regimes' ? 'btn-primary' : ''}`}
-                onClick={() => setSettingsTab('regimes')}
-              >
-                REGIMES
-              </button>
-              <button
-                type="button"
-                className={`btn ${settingsTab === 'lot' ? 'btn-primary' : ''}`}
-                onClick={() => setSettingsTab('lot')}
-              >
-                LOT
-              </button>
+          <section className={`vu-happen ${w?.armed ? 'armed' : ''}`}>
+            <div className="vu-happen-kicker">WHAT&apos;S HAPPENING</div>
+            <div className="vu-happen-row">
+              <span>HTF</span>
+              <strong>{session ? extractHtfLine(session) : '—'}</strong>
+            </div>
+            <div className="vu-happen-row">
+              <span>STACK</span>
+              <strong>
+                {extractStack(w)}
+                {w?.status ? ` · entry ${w.status.replace(/_/g, ' ')}` : ''}
+              </strong>
+            </div>
+            <div className="vu-happen-row">
+              <span>SOFT / PEAK / TARGET</span>
+              <strong>
+                Soft {softN} · Peak {peakN} · Target {targetN}
+              </strong>
+            </div>
+            <div className="vu-happen-row">
+              <span>PATH</span>
+              <strong className={String(pathStatus).includes('CONFIRM') ? 'amber' : ''}>
+                {String(pathStatus)}
+                {session?.htf_state?.expected_path
+                  ? ` · ${String(session.htf_state.expected_path).slice(0, 40)}`
+                  : ''}
+              </strong>
+            </div>
+            <div className="vu-happen-row">
+              <span>AUTOCAL</span>
+              <strong className="amber">{autoCalLine}</strong>
+            </div>
+            {w?.looking_for && (
+              <div className="vu-happen-note muted">{w.looking_for.slice(0, 140)}</div>
+            )}
+          </section>
+        </div>
+
+        <footer className="vu-foot">
+          <div className="vu-tape mono">{tapeLine}</div>
+          <div className="vu-actions">
+            <button
+              className="btn btn-go vu-btn"
+              type="button"
+              disabled={busy || session?.running}
+              onClick={() => void start()}
+            >
+              START
+            </button>
+            <button
+              className="btn btn-stop vu-btn"
+              type="button"
+              disabled={busy || !session?.running}
+              onClick={() => void stop()}
+            >
+              STOP
+            </button>
+            <Link className="btn vu-btn" to="/robot">
+              BOARD
+            </Link>
+            <button
+              className={`btn vu-btn ${showSetup ? 'btn-primary' : ''}`}
+              type="button"
+              onClick={() => setShowSetup((v) => !v)}
+            >
+              SETUP
+            </button>
+            <button
+              className={`btn vu-btn ${showLog ? 'btn-primary' : ''}`}
+              type="button"
+              onClick={() => setShowLog((v) => !v)}
+            >
+              LOG
+            </button>
+          </div>
+        </footer>
+
+        {showSetup && (
+          <section className="vu-drawer">
+            <div className="vu-drawer-head">
+              <div className="vu-happen-kicker">SETUP</div>
+              <div className="robot-unit-settings-tabs">
+                <button
+                  type="button"
+                  className={`btn ${settingsTab === 'exit' ? 'btn-primary' : ''}`}
+                  onClick={() => setSettingsTab('exit')}
+                >
+                  EXIT
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${settingsTab === 'regimes' ? 'btn-primary' : ''}`}
+                  onClick={() => setSettingsTab('regimes')}
+                >
+                  REGIMES
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${settingsTab === 'lot' ? 'btn-primary' : ''}`}
+                  onClick={() => setSettingsTab('lot')}
+                >
+                  LOT
+                </button>
+              </div>
             </div>
 
             {settingsTab === 'exit' && (
@@ -684,7 +723,8 @@ export function RobotUnitPage() {
                             ? 'up'
                             : regimeName.includes('DOWN') || regimeName === 'COMPRESSION'
                               ? 'down'
-                              : regimeName.includes('BREAKOUT') || regimeName === 'REVERSAL_CANDIDATE'
+                              : regimeName.includes('BREAKOUT') ||
+                                  regimeName === 'REVERSAL_CANDIDATE'
                                 ? 'scalp'
                                 : 'flat'
                         }`}
@@ -727,7 +767,7 @@ export function RobotUnitPage() {
                   disabled={busy}
                 />
                 <p className="hint-line" style={{ margin: '4px 0 0' }}>
-                  Apply restartē robotu ar jauno lot (šim klientam).
+                  Apply restartē unit ar jauno lot.
                 </p>
                 <div className="actions" style={{ marginTop: 6 }}>
                   <button
@@ -741,17 +781,21 @@ export function RobotUnitPage() {
                 </div>
               </div>
             )}
-
             {calMsg && <div className="hint-line">{calMsg}</div>}
           </section>
+        )}
 
-          <section className="robot-unit-panel robot-unit-feed">
-            <div className="robot-arena-kicker">LIVE LOG</div>
+        {showLog && (
+          <section className="vu-drawer vu-log">
+            <div className="vu-happen-kicker">LIVE LOG</div>
             <div className="robot-unit-ticks">
               {session ? (
                 <>
-                  {session.ticks.slice(0, 50).map((t, i) => (
-                    <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
+                  {session.ticks.slice(0, 40).map((t, i) => (
+                    <div
+                      key={`${t.at}-${i}`}
+                      className={`robot-feed-line phase-${t.phase.toLowerCase()}`}
+                    >
                       <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
                       <span className="badge phase">{t.phase}</span>
                       <span className="detail">{t.detail}</span>
@@ -764,7 +808,7 @@ export function RobotUnitPage() {
               )}
             </div>
           </section>
-        </div>
+        )}
       </div>
     </div>
   );
