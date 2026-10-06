@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
-import { Logo } from '../components/Logo';
 import { DeskControlPanel } from '../components/DeskControlPanel';
 
 type RobotTick = {
@@ -260,6 +259,7 @@ export function RobotDeskPage() {
   const [showDeploy, setShowDeploy] = useState(false);
   const [showControl, setShowControl] = useState(false);
   const [showFeeds, setShowFeeds] = useState(false);
+  const [softPeak, setSoftPeak] = useState({ soft: '—', peak: '—', mark: '28%' });
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -317,6 +317,32 @@ export function RobotDeskPage() {
       })
       .catch(() => setLaunchAccounts([]));
   }, [launchAccountId]);
+
+  useEffect(() => {
+    const loadKnobs = () => {
+      void apiFetch<{
+        calibration?: { hardinv_abs?: number; peak_mfe_abs?: number };
+        auto?: { knobs_now?: { hardinv_abs?: number; peak_mfe_abs?: number } };
+      }>('/api/desk/calibration')
+        .then((res) => {
+          const k = res.calibration || res.auto?.knobs_now;
+          if (!k) return;
+          const soft = Number(k.hardinv_abs);
+          const peak = Number(k.peak_mfe_abs);
+          if (!Number.isFinite(soft) || !Number.isFinite(peak)) return;
+          const mark = `${Math.min(85, Math.max(12, (soft / Math.max(peak, 0.01)) * 55))}%`;
+          setSoftPeak({
+            soft: soft.toFixed(2),
+            peak: peak.toFixed(2),
+            mark,
+          });
+        })
+        .catch(() => undefined);
+    };
+    loadKnobs();
+    const id = setInterval(loadKnobs, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!launchAccountId) return;
@@ -469,58 +495,61 @@ export function RobotDeskPage() {
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs robot-board vb">
         <div className="vb-head">
-          <div className="vb-brand">
-            <Logo size={48} wordmark sub="GOLD DESK" />
+          <div className="vb-brand-text">
+            <div className="vb-brand-main">VS SYSTEM</div>
+            <div className="vb-brand-sub">GOLD DESK</div>
           </div>
-          <nav className="vb-nav">
-            <Link className="vb-nav-link active" to="/robot">
-              BOARD
-            </Link>
-            <Link
-              className="vb-nav-link"
-              to={focused ? `/robot/unit/${encodeURIComponent(focused.id)}` : '/robot'}
-            >
-              LIVE
-            </Link>
-            <Link className="vb-nav-link" to="/trades">
-              TRADES
-            </Link>
-            <Link className="vb-nav-link" to="/settings">
-              SETUP
-            </Link>
-            <Link className="vb-nav-link" to="/system">
-              SYSTEM
-            </Link>
-          </nav>
-          <div className="vb-actions">
-            <button
-              className="btn btn-go"
-              type="button"
-              disabled={busy || Boolean(focusedRunning)}
-              onClick={() => {
-                if (focused) void startOne(focused);
-                else setShowDeploy(true);
-              }}
-            >
-              START
-            </button>
-            <button
-              className="btn btn-stop"
-              type="button"
-              disabled={busy || !focusedRunning}
-              onClick={() => {
-                if (focused) void stopOne(focused);
-              }}
-            >
-              STOP
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => setShowDeploy((v) => !v)}
-            >
-              {showDeploy ? 'CLOSE' : 'DEPLOY'}
-            </button>
+          <div className="vb-head-right">
+            <nav className="vb-nav">
+              <Link className="vb-nav-link active" to="/robot">
+                BOARD
+              </Link>
+              <Link
+                className="vb-nav-link"
+                to={focused ? `/robot/unit/${encodeURIComponent(focused.id)}` : '/robot'}
+              >
+                LIVE
+              </Link>
+              <Link className="vb-nav-link" to="/trades">
+                TRADES
+              </Link>
+              <Link className="vb-nav-link" to="/settings">
+                SETUP
+              </Link>
+              <Link className="vb-nav-link" to="/system">
+                SYSTEM
+              </Link>
+            </nav>
+            <div className="vb-actions">
+              <button
+                className="vlc-btn vlc-start vb-act"
+                type="button"
+                disabled={busy || Boolean(focusedRunning)}
+                onClick={() => {
+                  if (focused) void startOne(focused);
+                  else setShowDeploy(true);
+                }}
+              >
+                ▶ START
+              </button>
+              <button
+                className="vlc-btn vlc-stop vb-act"
+                type="button"
+                disabled={busy || !focusedRunning}
+                onClick={() => {
+                  if (focused) void stopOne(focused);
+                }}
+              >
+                ■ STOP
+              </button>
+              <button
+                className="vlc-btn vlc-board vb-act"
+                type="button"
+                onClick={() => setShowDeploy((v) => !v)}
+              >
+                ≡ {showDeploy ? 'CLOSE' : 'BOARD'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -550,17 +579,21 @@ export function RobotDeskPage() {
                 ? fmt(focused.last_mid, 2)
                 : sessions[0]?.last_mid != null
                   ? fmt(sessions[0].last_mid, 2)
-                  : '· · ·'}
+                  : '····'}
             </div>
-            <div className="vb-hero-meta mono">
-              Soft / Peak — knobs on LIVE · feeds {feedOk}/{feedCount || '—'} · {chainLabel}
+            <div className="vb-hero-knobs mono">
+              Soft <em>{softPeak.soft}</em>
+              {' · '}Peak <em>{softPeak.peak}</em>
+            </div>
+            <div className="vb-marker" aria-hidden>
+              <span style={{ left: softPeak.mark }} />
             </div>
           </section>
           <aside className="vb-hero-side">
             <div className="vb-side-block">
               <span>SESSION</span>
               <strong>
-                {runningCount}/{Math.max(sessions.length, 5)}
+                {runningCount}/{Math.max(sessions.length || 5, 5)}
               </strong>
             </div>
             <div className="vb-side-block">
@@ -570,7 +603,7 @@ export function RobotDeskPage() {
             <p className="vb-side-note muted">
               {sessions.length === 0
                 ? 'No active board running'
-                : `${runningCount} online · ${regimes.length} regimes · ${tradeTypes.slice(0, 3).join(' · ')}`}
+                : `${runningCount} online · feeds ${feedOk}/${feedCount || '—'}`}
             </p>
           </aside>
         </div>

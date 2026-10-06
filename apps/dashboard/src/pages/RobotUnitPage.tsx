@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
-import { Logo } from '../components/Logo';
 import {
   ALL_DESK_REGIMES,
   DeskCalibration,
@@ -440,21 +439,25 @@ export function RobotUnitPage() {
     );
   })();
 
+  const postureText = session
+    ? postureMain(session).split('·')[0].trim()
+    : busy
+      ? 'STARTING'
+      : 'LOADING';
+  const htfBias = session?.htf_state?.bias || session?.htf_state?.phase || null;
+  const pratsValue = mindSide || null;
+  const setupValue = setupSide
+    ? `${setupSide}${setupDetail && setupDetail !== '—' ? ` ${String(setupDetail).slice(0, 16)}` : ''}`
+    : null;
+
   return (
     <div className="robot-fs-shell robot-unit-shell">
-      <div className="vu">
-        <header className="vu-head">
-          <div className="vu-brand">
-            <Logo size={40} wordmark sub="LIVE UNIT" />
-            <div className="vu-brand-meta mono">
-              {(session?.client_name || session?.account_name || '…').toUpperCase()}
-              {session ? ` · ${session.display_name}` : ''}
-              {session ? ` · lot ${session.lot_size}` : ''}
-            </div>
-          </div>
-          <div className="vu-live-pill">
-            <span className={`vu-dot ${liveOk ? 'on' : 'off'}`} />
-            <span>{liveOk ? 'LIVE' : 'OFF'}</span>
+      <div className="vlc">
+        <header className="vlc-head">
+          <div className="vlc-brand">VS SYSTEM</div>
+          <div className="vlc-live">
+            <span className={liveOk ? 'on' : ''}>{liveOk ? 'LIVE' : 'OFF'}</span>
+            <span className={`vlc-dot ${liveOk ? 'on' : ''}`} />
             <span className="mono">{clock} UTC</span>
           </div>
         </header>
@@ -462,101 +465,79 @@ export function RobotUnitPage() {
         {error && <div className="error-state">{error}</div>}
         {healthBanner}
 
-        <div className="vu-stage">
-          <section className="vu-price">
-            <div className={`vu-posture ${postureKind}`}>
-              {session ? postureMain(session) : busy ? 'STARTING' : 'LOADING'}
-            </div>
-            <div className="vu-regime">{session ? postureSub(session) : '—'}</div>
-            <div className={`vu-mid ${session?.last_mid == null ? 'empty' : ''}`}>
-              {session?.last_mid != null ? fmt(session.last_mid, 2) : '· · ·'}
-            </div>
-            <div className="vu-bidask mono">
-              <span>BID / ASK</span>
-              <strong>
-                {session ? `${fmt(session.last_bid, 2)} / ${fmt(session.last_ask, 2)}` : '— / —'}
-              </strong>
-            </div>
-            {session?.open_side && (
-              <div className="vu-trade-metrics mono">
-                <span>
-                  UPL{' '}
-                  <strong className={(session.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
-                    {fmt(session.unrealized, 2)}
-                  </strong>
-                </span>
-                <span>
-                  MFE <strong>{fmt(session.mfe, 2)}</strong>
-                </span>
-                <span>
-                  MAE <strong className="neg">{fmt(session.mae, 2)}</strong>
-                </span>
-              </div>
-            )}
-            <div className="vu-mind">
-              <div className={`vu-mind-card ${mindSide === 'SELL' ? 'sell' : mindSide ? 'buy' : ''}`}>
-                <span>PRĀTS</span>
-                <strong className={mindSide ? '' : 'empty'}>{mindSide || '· · ·'}</strong>
-              </div>
-              <div
-                className={`vu-mind-card ${
-                  setupSide === 'SELL' ? 'sell' : setupSide === 'BUY' ? 'buy' : ''
-                }`}
-              >
-                <span>SETUP</span>
-                <strong className={setupSide ? '' : 'empty'}>
-                  {setupSide || '· · ·'}
-                  {setupSide && setupDetail && setupDetail !== '—' ? (
-                    <em>{String(setupDetail).slice(0, 28)}</em>
-                  ) : null}
-                </strong>
-              </div>
-            </div>
-          </section>
+        <div className="vlc-body">
+          <div className={`vlc-status ${postureKind}`}>{postureText}</div>
+          <div className={`vlc-price ${session?.last_mid == null ? 'empty' : ''}`}>
+            {session?.last_mid != null ? fmt(session.last_mid, 2) : '····'}
+          </div>
+          <div className="vlc-price-label">
+            {session?.open_side
+              ? `UPL ${fmt(session.unrealized, 2)} · MFE ${fmt(session.mfe, 2)} · MAE ${fmt(session.mae, 2)}`
+              : session
+                ? `MARKET VALUE · BID ${fmt(session.last_bid, 2)} / ASK ${fmt(session.last_ask, 2)}`
+                : 'MARKET VALUE'}
+          </div>
 
-          <section className={`vu-happen ${w?.armed ? 'armed' : ''}`}>
-            <div className="vu-happen-kicker">WHAT&apos;S HAPPENING</div>
-            <div className="vu-happen-row">
-              <span>HTF</span>
-              <strong>{session ? extractHtfLine(session) : '—'}</strong>
+          <div className="vlc-rule" />
+
+          <div className="vlc-section-label">
+            <em className="g">PRĀTS</em> vs <em className="a">SETUP</em>
+          </div>
+          <div className="vlc-pair">
+            <div className="vlc-card g">
+              <div className="vlc-card-h g">PRĀTS</div>
+              <div className={`vlc-card-v ${pratsValue ? '' : 'empty'}`}>
+                {pratsValue || '——'}
+              </div>
+              <div className="vlc-card-s">
+                {pratsValue && session ? postureSub(session) : 'NO DATA'}
+              </div>
             </div>
-            <div className="vu-happen-row">
-              <span>STACK</span>
-              <strong>
-                {extractStack(w)}
-                {w?.status ? ` · entry ${w.status.replace(/_/g, ' ')}` : ''}
-              </strong>
+            <div className="vlc-card a">
+              <div className="vlc-card-h a">SETUP</div>
+              <div className={`vlc-card-v ${setupValue ? '' : 'empty'}`}>
+                {setupValue || '——'}
+              </div>
+              <div className="vlc-card-s">
+                {setupValue ? String(pathStatus) : 'NO DATA'}
+              </div>
             </div>
-            <div className="vu-happen-row">
-              <span>SOFT / PEAK / TARGET</span>
-              <strong>
-                Soft {softN} · Peak {peakN} · Target {targetN}
-              </strong>
+          </div>
+
+          <div className="vlc-section-label muted">HTF / SOFT / PEAK</div>
+          <div className="vlc-triple">
+            <div className="vlc-col">
+              <div className="vlc-card-h g">HTF</div>
+              <div className={`vlc-card-v ${htfBias ? '' : 'empty'}`}>
+                {htfBias || '——'}
+              </div>
+              <div className="vlc-card-s">
+                {session ? extractHtfLine(session).slice(0, 28) : 'NO DATA'}
+              </div>
             </div>
-            <div className="vu-happen-row">
-              <span>PATH</span>
-              <strong className={String(pathStatus).includes('CONFIRM') ? 'amber' : ''}>
-                {String(pathStatus)}
-                {session?.htf_state?.expected_path
-                  ? ` · ${String(session.htf_state.expected_path).slice(0, 40)}`
-                  : ''}
-              </strong>
+            <div className="vlc-col">
+              <div className="vlc-card-h a">SOFT</div>
+              <div className={`vlc-card-v ${softN !== '—' ? '' : 'empty'}`}>{softN}</div>
+              <div className="vlc-card-s">Peak {peakN}</div>
             </div>
-            <div className="vu-happen-row">
-              <span>AUTOCAL</span>
-              <strong className="amber">{autoCalLine}</strong>
+            <div className="vlc-col">
+              <div className="vlc-card-h a">PEAK</div>
+              <div className={`vlc-card-v ${peakN !== '—' ? '' : 'empty'}`}>{peakN}</div>
+              <div className="vlc-card-s">Target {targetN}</div>
             </div>
-            {w?.looking_for && (
-              <div className="vu-happen-note muted">{w.looking_for.slice(0, 140)}</div>
-            )}
-          </section>
+          </div>
+
+          <div className="vlc-meta mono">
+            {extractStack(w)}
+            {auto != null ? ` · AutoCal ${autoCalLine}` : ''}
+            {tapeLine ? ` · ${tapeLine.slice(0, 48)}` : ''}
+          </div>
         </div>
 
-        <footer className="vu-foot">
-          <div className="vu-tape mono">{tapeLine}</div>
-          <div className="vu-actions">
+        <footer className="vlc-foot">
+          <div className="vlc-actions">
             <button
-              className="btn btn-go vu-btn"
+              className="vlc-btn vlc-start"
               type="button"
               disabled={busy || session?.running}
               onClick={() => void start()}
@@ -564,30 +545,28 @@ export function RobotUnitPage() {
               START
             </button>
             <button
-              className="btn btn-stop vu-btn"
+              className="vlc-btn vlc-stop"
               type="button"
               disabled={busy || !session?.running}
               onClick={() => void stop()}
             >
               STOP
             </button>
-            <Link className="btn vu-btn" to="/robot">
+            <Link className="vlc-btn vlc-board" to="/robot">
               BOARD
             </Link>
-            <button
-              className={`btn vu-btn ${showSetup ? 'btn-primary' : ''}`}
-              type="button"
-              onClick={() => setShowSetup((v) => !v)}
-            >
-              SETUP
+          </div>
+          <div className="vlc-foot-links">
+            <button type="button" className="vlc-link" onClick={() => setShowSetup((v) => !v)}>
+              {showSetup ? 'Hide setup' : 'Setup'}
             </button>
-            <button
-              className={`btn vu-btn ${showLog ? 'btn-primary' : ''}`}
-              type="button"
-              onClick={() => setShowLog((v) => !v)}
-            >
-              LOG
+            <button type="button" className="vlc-link" onClick={() => setShowLog((v) => !v)}>
+              {showLog ? 'Hide log' : 'Log'}
             </button>
+            <span className="mono muted">
+              {(session?.client_name || session?.account_name || '').toUpperCase()}
+              {session ? ` · ${session.display_name}` : ''}
+            </span>
           </div>
         </footer>
 
