@@ -33,6 +33,9 @@ export const AUTO_CAL_MAX_SAFETY_TP_RR = 2.0;
 export const AUTO_CAL_MAX_TARGET_ABS = 7.0;
 export const AUTO_CAL_MAX_PEAK_MFE_ABS = 4.5;
 export const AUTO_CAL_MAX_PEAK_RETENTION = 0.75;
+/** Soft HardInv CAP floor/ceiling when Soft-heavy losses force a tighten. */
+export const AUTO_CAL_MIN_HARDINV_ABS = 1.5;
+export const AUTO_CAL_MAX_HARDINV_ABS = 3.0;
 /** After this many consecutive "raise winners" cycles with still-bad E → pull back. */
 export const AUTO_CAL_RAISE_STREAK_BEFORE_PULLBACK = 2;
 
@@ -660,8 +663,30 @@ export function proposeAutoCalibration(
   const doRaise = needBiggerWinners || needBiggerWinnersLegacy;
 
   if (needPullBack) {
-    // Targets unreachable — ease back toward Soft so winners can bank before Soft chops.
-    // Pullback must NEVER raise Peak/Target/TP. If Soft floor would force an increase, keep old.
+    // Soft-heavy R:R invert (Soft losses dominate) — tighten Soft CAP so Soft
+    // chops cost less. Peak/Target ease alone was a no-op at factory because
+    // floors Soft+1.5 / Soft+3 sat above factory Peak 3 / Target 5.
+    const softDominates =
+      softLosses >= 2 &&
+      expectancy < 0.05 &&
+      avgLossAbs >= 1.0 &&
+      (wins.length === 0 || avgWin < avgLossAbs * 0.75);
+    if (softDominates) {
+      const softBefore = next.hardinv_abs;
+      next.hardinv_abs = Math.max(AUTO_CAL_MIN_HARDINV_ABS, softBefore - 0.25);
+      if (next.hardinv_abs > AUTO_CAL_MAX_HARDINV_ABS) {
+        next.hardinv_abs = AUTO_CAL_MAX_HARDINV_ABS;
+      }
+      if (next.hardinv_abs !== softBefore) {
+        changes.push(
+          `hardinv_abs ${softBefore.toFixed(1)}→${next.hardinv_abs.toFixed(1)} Soft tighten`
+        );
+      }
+    }
+
+    // Targets unreachable — ease Peak/Target toward Soft so winners bank earlier.
+    // Pullback must NEVER raise Peak/Target/TP. Floors allow movement from factory:
+    // Peak ≥ Soft+0.5, Target ≥ Soft+1.5 (was Soft+1.5 / Soft+3 → factory hold forever).
     const rrBefore = next.safety_tp_rr || 1.5;
     next.safety_tp_rr = Math.max(1.5, rrBefore - 0.25);
     if (next.safety_tp_rr !== rrBefore) {
@@ -671,19 +696,31 @@ export function proposeAutoCalibration(
     const retBefore = next.peak_retention;
     const tgtBefore = next.target_abs;
     const easedPeak = next.peak_mfe_abs - 0.5;
-    const peakFloor = next.hardinv_abs + 1.5;
+    const peakFloor = next.hardinv_abs + 0.5;
     next.peak_mfe_abs = easedPeak >= peakFloor ? easedPeak : peakBefore;
-    next.peak_retention = Math.max(0.72, next.peak_retention - 0.04);
+    if (softDominates) {
+      // Soft eats winners — bank more of Peak MFE (protect sooner), do not loosen Keep
+      next.peak_retention = Math.min(
+        AUTO_CAL_MAX_PEAK_RETENTION,
+        Math.max(retBefore, 0.78)
+      );
+    } else {
+      next.peak_retention = Math.max(0.72, next.peak_retention - 0.04);
+    }
     next.peak_min_giveback_abs = Math.max(0.85, next.peak_min_giveback_abs - 0.15);
     const easedTgt = next.target_abs - 1.25;
-    const tgtFloor = next.hardinv_abs + 3;
+    const tgtFloor = next.hardinv_abs + 1.5;
     next.target_abs = easedTgt >= tgtFloor ? easedTgt : tgtBefore;
     next.target_pct = Math.max(0.0025, next.target_pct / 1.12);
     if (next.peak_mfe_abs !== peakBefore) {
       changes.push(`peak_mfe_abs ${peakBefore.toFixed(1)}→${next.peak_mfe_abs.toFixed(1)} ease`);
     }
     if (next.peak_retention !== retBefore) {
-      changes.push(`peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ease`);
+      changes.push(
+        `peak_retention ${retBefore.toFixed(2)}→${next.peak_retention.toFixed(2)} ${
+          softDominates ? 'protect-sooner' : 'ease'
+        }`
+      );
     }
     if (next.target_abs !== tgtBefore) {
       changes.push(`target_abs ${tgtBefore.toFixed(1)}→${next.target_abs.toFixed(1)} ease`);
@@ -723,7 +760,8 @@ export function proposeAutoCalibration(
     }
   }
 
-  // Soft HardInv / broker SL: intentionally NOT auto-tuned — SL stays as opened.
+  // Soft HardInv: Soft-heavy pullback may tighten CAP (see needPullBack).
+  // Broker SAFETY SL at open still uses live cal — Soft abs is a CAP, not a floor.
 
   // Already healthy — tiny retention polish only
   if (
