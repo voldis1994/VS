@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
-import { fetchExpectancyReport } from '../services/tradeLedger.js';
+import { fetchExpectancyReport, parseExpectancyWindow } from '../services/tradeLedger.js';
+import { computeConditionalEv, type HtfTaggedTrade } from '../services/htfConditionalEv.js';
 import { replayStrategy, syntheticTrendBars } from '../services/strategyReplay.js';
 
 export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
@@ -12,6 +13,55 @@ export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
       epic?: string;
     };
     return fetchExpectancyReport(query);
+  });
+
+  /**
+   * Conditional EV by HTF structure × phase × setup × side.
+   * Measurement only — does not gate entries.
+   */
+  app.get('/api/trades/conditional-ev', async (request) => {
+    const query = request.query as {
+      window?: string;
+      client_id?: string;
+      account_id?: string;
+      epic?: string;
+      min_trades?: string;
+    };
+    const { window, since } = parseExpectancyWindow(query.window);
+    let sql = `
+      SELECT t.pnl_pts, t.pnl, t.regime, t.setup_type, t.exit_reason, t.epic,
+             t.mfe, t.mae, t.hold_ms, t.direction,
+             t.htf_structure, t.htf_phase, t.htf_bias, t.htf_path_status, t.htf_state
+      FROM trades t
+      JOIN broker_accounts ba ON ba.id = t.broker_account_id
+      JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+      WHERE t.closed_at IS NOT NULL`;
+    const params: unknown[] = [];
+    let idx = 1;
+    if (since) {
+      sql += ` AND t.closed_at >= $${idx++}`;
+      params.push(since.toISOString());
+    }
+    if (query.client_id) {
+      sql += ` AND bc.client_id = $${idx++}`;
+      params.push(query.client_id);
+    }
+    if (query.account_id) {
+      sql += ` AND t.broker_account_id = $${idx++}`;
+      params.push(query.account_id);
+    }
+    if (query.epic) {
+      sql += ` AND t.epic = $${idx++}`;
+      params.push(query.epic);
+    }
+    sql += ` ORDER BY t.closed_at DESC LIMIT 5000`;
+    const { rows } = await pool.query(sql, params);
+    const minTrades = Math.max(1, parseInt(query.min_trades || '5', 10) || 5);
+    return computeConditionalEv(rows as HtfTaggedTrade[], {
+      window,
+      since: since ? since.toISOString() : null,
+      min_trades: minTrades,
+    });
   });
 
   /** Offline TS-brain smoke replay (synthetic bars) — measurement only, no orders. */

@@ -317,6 +317,12 @@ export type BuildWatchInput = {
   capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf4h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf1h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_engine_bias?: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_summary?: string | null;
+  htf_phase?: string | null;
+  htf_primary_side?: 'BUY' | 'SELL' | 'WAIT' | null;
 };
 
 function pickTfDir(
@@ -390,6 +396,12 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
           capital_tf5_dir: input.capital_tf5_dir,
           capital_tf15_dir: input.capital_tf15_dir,
           capital_tf30_dir: input.capital_tf30_dir,
+          capital_tf4h_dir: input.capital_tf4h_dir,
+          capital_tf1h_dir: input.capital_tf1h_dir,
+          htf_engine_bias: input.htf_engine_bias,
+          htf_summary: input.htf_summary,
+          htf_phase: input.htf_phase,
+          htf_primary_side: input.htf_primary_side,
         })
       : null;
   const flipBlocked = Boolean(

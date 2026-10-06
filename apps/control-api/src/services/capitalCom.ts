@@ -1384,13 +1384,15 @@ export type CapitalPriceCandle = {
   snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND / MINUTE / MINUTE_5 / MINUTE_15 / MINUTE_30. */
+/** Capital OHLC — SECOND / MINUTE / … / HOUR / HOUR_4 (HTF Market State). */
 export type CapitalPriceResolution =
   | 'SECOND'
   | 'MINUTE'
   | 'MINUTE_5'
   | 'MINUTE_15'
-  | 'MINUTE_30';
+  | 'MINUTE_30'
+  | 'HOUR'
+  | 'HOUR_4';
 
 export async function fetchCapitalPrices(
   session: CapitalSession,
@@ -1406,7 +1408,9 @@ export async function fetchCapitalPrices(
         ? 60
         : resolution === 'MINUTE_5'
           ? 40
-          : 30;
+          : resolution === 'HOUR' || resolution === 'HOUR_4'
+            ? 40
+            : 30;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),

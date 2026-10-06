@@ -225,6 +225,13 @@ export type EntryMindInput = {
   tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** HTF Market State Engine — 4H / 1H + hierarchical bias (feeds mind; never opens) */
+  tf4h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf1h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_engine_bias?: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_summary?: string | null;
+  htf_phase?: string | null;
+  htf_primary_side?: 'BUY' | 'SELL' | 'WAIT' | null;
 };
 
 /**
@@ -252,6 +259,11 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   const tf5 = (input.tf5_dir || 'FLAT').toUpperCase() as TfDir;
   const tf15 = (input.tf15_dir || 'FLAT').toUpperCase() as TfDir;
   const tf30 = (input.tf30_dir || 'FLAT').toUpperCase() as TfDir;
+  const tf4h = (input.tf4h_dir || 'FLAT').toUpperCase() as TfDir;
+  const tf1h = (input.tf1h_dir || 'FLAT').toUpperCase() as TfDir;
+  const htfBias = (input.htf_engine_bias || 'FLAT').toUpperCase() as TfDir;
+  const htfPrimary = String(input.htf_primary_side || '').toUpperCase();
+  const htfPhase = String(input.htf_phase || '').toUpperCase();
   const storyLine = input.story_summary || `STĀSTS · ${chapter}`;
 
   // Trigger tape: Capital 1m preferred; trek bias fills when 1m is FLAT
@@ -260,7 +272,14 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
   const stack = readMultiTfStack({ tf30, tf15, tf5, tf1 });
   const stackSide = sideFromMultiTf(stack);
 
-  const situation = `Flat · ${stack.summary} · 1m ${m1}${strong ? ' (spēcīga)' : ''} · bias ${bias} · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
+  const htfLine =
+    tf4h !== 'FLAT' || tf1h !== 'FLAT' || htfBias !== 'FLAT'
+      ? ` · HTF 4H${tf4h === 'UP' ? '↑' : tf4h === 'DOWN' ? '↓' : '→'} 1H${tf1h === 'UP' ? '↑' : tf1h === 'DOWN' ? '↓' : '→'} bias ${htfBias}${htfPhase ? ` ${htfPhase}` : ''}`
+      : input.htf_summary
+        ? ` · ${String(input.htf_summary).slice(0, 60)}`
+        : '';
+
+  const situation = `Flat · ${stack.summary}${htfLine} · 1m ${m1}${strong ? ' (spēcīga)' : ''} · bias ${bias} · regime ${regime} · ${storyLine} · allow ${allow} · G${g}/R${r} · zona ${
     pos != null && Number.isFinite(pos) ? pos.toFixed(2) : '—'
   } · 10s ${body > 0 ? 'zaļš' : body < 0 ? 'sarkans' : 'kluss'}${
     input.last_closed_side
@@ -455,6 +474,51 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     thesis = `${stack.summary} — 15m vēl DOWN; gaidu rally confirm.`;
     why = 'Multi-TF veto: 15m DOWN + nav 5m/1m UP — ne longoju.';
     confidence = 0.35;
+  }
+
+  // HTF Market State Engine hierarchy veto (4H → 1H) — feed mind, never open alone.
+  // Do not knife a clear 4H impulse; 1H fight alone → WAIT (pullback timing).
+  const engineSide =
+    htfBias === 'UP' ? 'BUY' : htfBias === 'DOWN' ? 'SELL' : null;
+  if (choice === 'SELL' && (tf4h === 'UP' || htfBias === 'UP')) {
+    choice = 'WAIT';
+    thesis = `HTF 4H/engine UP · ${stack.summary} — ne shortoju pret HTF impulsu.`;
+    why = 'HTF hierarchy veto: 4H→1H leads; 1m/10s only time entry.';
+    confidence = 0.32;
+  } else if (choice === 'BUY' && (tf4h === 'DOWN' || htfBias === 'DOWN')) {
+    choice = 'WAIT';
+    thesis = `HTF 4H/engine DOWN · ${stack.summary} — ne longoju pret HTF impulsu.`;
+    why = 'HTF hierarchy veto: 4H→1H leads; 1m/10s only time entry.';
+    confidence = 0.32;
+  } else if (
+    choice === 'SELL' &&
+    tf1h === 'UP' &&
+    tf4h !== 'DOWN' &&
+    !(stack.tf5 === 'DOWN' && m1 === 'DOWN')
+  ) {
+    choice = 'WAIT';
+    thesis = `HTF 1H UP · ${stack.summary} — gaidu dump confirm zemāk.`;
+    why = 'HTF 1H veto: pullback timing, ne fade.';
+    confidence = 0.34;
+  } else if (
+    choice === 'BUY' &&
+    tf1h === 'DOWN' &&
+    tf4h !== 'UP' &&
+    !(stack.tf5 === 'UP' && m1 === 'UP')
+  ) {
+    choice = 'WAIT';
+    thesis = `HTF 1H DOWN · ${stack.summary} — gaidu rally confirm zemāk.`;
+    why = 'HTF 1H veto: bounce timing, ne fade.';
+    confidence = 0.34;
+  } else if (
+    engineSide &&
+    choice === engineSide &&
+    (htfPrimary === engineSide || !htfPrimary || htfPrimary === 'WAIT')
+  ) {
+    confidence = Math.min(0.94, confidence + 0.05);
+    if (htfPhase === 'PULLBACK') {
+      thesis = `${thesis} · HTF ${htfPhase.toLowerCase()} saskaņā ar ${engineSide}.`;
+    }
   }
 
   // Never fire PRĀTS into a fighting 1m (SELL on green 1m / BUY on red 1m → Soft)
