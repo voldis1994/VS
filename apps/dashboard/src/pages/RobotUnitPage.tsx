@@ -494,15 +494,19 @@ export function RobotUnitPage() {
               </div>
             )}
             <div className="vu-mind">
-              <div className={`vu-mind-card ${mindSide === 'SELL' ? 'sell' : 'buy'}`}>
+              <div className={`vu-mind-card ${mindSide === 'SELL' ? 'sell' : mindSide ? 'buy' : ''}`}>
                 <span>PRĀTS</span>
-                <strong>{mindSide || '—'}</strong>
+                <strong className={mindSide ? '' : 'empty'}>{mindSide || '· · ·'}</strong>
               </div>
-              <div className={`vu-mind-card ${setupSide === 'SELL' ? 'sell' : setupSide === 'BUY' ? 'buy' : ''}`}>
+              <div
+                className={`vu-mind-card ${
+                  setupSide === 'SELL' ? 'sell' : setupSide === 'BUY' ? 'buy' : ''
+                }`}
+              >
                 <span>SETUP</span>
-                <strong>
-                  {setupSide || '—'}
-                  {setupDetail && setupDetail !== '—' ? (
+                <strong className={setupSide ? '' : 'empty'}>
+                  {setupSide || '· · ·'}
+                  {setupSide && setupDetail && setupDetail !== '—' ? (
                     <em>{String(setupDetail).slice(0, 28)}</em>
                   ) : null}
                 </strong>
