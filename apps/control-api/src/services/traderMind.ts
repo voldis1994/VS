@@ -651,9 +651,10 @@ export function reviewSessionLikeHuman(
   if (e < 0 && softLosses.length >= 2) {
     return {
       diagnosis: `Logs E=${e.toFixed(2)}. Soft zaudējumi lielāki par to, ko Peak/Target atnes — R:R apgriezts.`,
-      lesson:
-        'Vai nu Peak/Target jābūt sasniedzamākiem (ease), vai jālauj uzvarētājiem skriet — bet ne filtri.',
-      intent: leftOnTable ? 'ease_peak_target' : 'ease_peak_target',
+      lesson: leftOnTable
+        ? 'Atviegloju Peak/Target, lai peļņa tiktu ielikta kontā pirms Soft; Soft CAP varu pievilkt, ja Soft joprojām apēd.'
+        : 'Soft CAP pievelku (mazāki Soft mīnusi) un Peak Keep ciešāk — Soft netiek atstāts factory uz mūžu.',
+      intent: 'ease_peak_target',
     };
   }
 
