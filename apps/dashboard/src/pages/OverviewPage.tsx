@@ -217,48 +217,46 @@ export function OverviewPage() {
   const sumPts = auto?.session_sum_pts ?? 0;
 
   return (
-    <div className="main-dash command-dash">
-      <header className="cmd-hero">
-        <div className="cmd-hero-left">
-          <Logo size={56} wordmark />
-          <div>
-            <div className="orbit-kicker">VS SYSTEM</div>
-            <h1 className="page-title">COMMAND</h1>
-          </div>
+    <div className="main-dash command-dash home-dash">
+      <header className="home-hero">
+        <Logo size={56} wordmark sub=" " />
+        <p className="home-hero-sub">Capital desk · Gold live</p>
+        <div className="home-hero-actions">
+          <Link className="btn btn-home-primary" to="/robot">
+            OPEN BOARD
+          </Link>
+          <Link className="btn btn-home-ghost" to="/trades">
+            TRADES
+          </Link>
         </div>
-        <div className="cmd-hero-actions">
-          <div className="regime-catalog cmd-modes">
-            {OPERATING_MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`regime-chip ${modeNow === m ? 'on up' : 'flat'}`}
-                disabled={busy}
-                onClick={() => void applyOperatingMode(m)}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="actions" style={{ margin: 0 }}>
+        <div className="home-hero-modes">
+          {OPERATING_MODES.map((m) => (
             <button
-              className="btn btn-go"
-              disabled={busy || runnerOn}
-              onClick={() => void startRunner()}
+              key={m}
+              type="button"
+              className={`regime-chip ${modeNow === m ? 'on up' : 'flat'}`}
+              disabled={busy}
+              onClick={() => void applyOperatingMode(m)}
             >
-              START
+              {m}
             </button>
-            <button
-              className="btn btn-stop"
-              disabled={busy || !runnerOn}
-              onClick={() => void stopRunner()}
-            >
-              STOP
-            </button>
-            <Link className="btn btn-go" to="/robot">
-              ROBOT BOARD
-            </Link>
-          </div>
+          ))}
+          <button
+            className="btn btn-go"
+            type="button"
+            disabled={busy || runnerOn}
+            onClick={() => void startRunner()}
+          >
+            START
+          </button>
+          <button
+            className="btn btn-stop"
+            type="button"
+            disabled={busy || !runnerOn}
+            onClick={() => void stopRunner()}
+          >
+            STOP
+          </button>
         </div>
       </header>
 

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
-import { Logo } from '../components/Logo';
 import { DeskControlPanel } from '../components/DeskControlPanel';
 
 type RobotTick = {
@@ -258,8 +257,9 @@ export function RobotDeskPage() {
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
   const [showDeploy, setShowDeploy] = useState(false);
-  const [showControl, setShowControl] = useState(true);
+  const [showControl, setShowControl] = useState(false);
   const [showFeeds, setShowFeeds] = useState(false);
+  const [softPeak, setSoftPeak] = useState({ soft: '—', peak: '—', mark: '28%' });
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -317,6 +317,32 @@ export function RobotDeskPage() {
       })
       .catch(() => setLaunchAccounts([]));
   }, [launchAccountId]);
+
+  useEffect(() => {
+    const loadKnobs = () => {
+      void apiFetch<{
+        calibration?: { hardinv_abs?: number; peak_mfe_abs?: number };
+        auto?: { knobs_now?: { hardinv_abs?: number; peak_mfe_abs?: number } };
+      }>('/api/desk/calibration')
+        .then((res) => {
+          const k = res.calibration || res.auto?.knobs_now;
+          if (!k) return;
+          const soft = Number(k.hardinv_abs);
+          const peak = Number(k.peak_mfe_abs);
+          if (!Number.isFinite(soft) || !Number.isFinite(peak)) return;
+          const mark = `${Math.min(85, Math.max(12, (soft / Math.max(peak, 0.01)) * 55))}%`;
+          setSoftPeak({
+            soft: soft.toFixed(2),
+            peak: peak.toFixed(2),
+            mark,
+          });
+        })
+        .catch(() => undefined);
+    };
+    loadKnobs();
+    const id = setInterval(loadKnobs, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!launchAccountId) return;
@@ -463,52 +489,127 @@ export function RobotDeskPage() {
     }
   };
 
+  const focusedRunning = focused?.running;
+
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
-      <div className="robot-desk robot-desk-fs robot-board">
-        <div className="robot-board-top">
-          <div className="robot-arena-brand">
-            <Logo size={72} wordmark />
-            <div>
-              <div className="robot-arena-kicker">BOARD</div>
-              <h1 className="robot-arena-title">ROBOT COMMAND</h1>
-              <p className="robot-arena-sub">
-                {chainLabel} · {tradeTypes.join(' · ')}
-              </p>
-            </div>
+      <div className="robot-desk robot-desk-fs robot-board vb">
+        <div className="vb-head">
+          <div className="vb-brand-text">
+            <div className="vb-brand-main">VS SYSTEM</div>
+            <div className="vb-brand-sub">GOLD DESK</div>
           </div>
-          <div className="robot-board-stats">
-            <div className="robot-mode-banner entry">
-              <div className="label">UNITS</div>
-              <div className="value">{sessions.length}</div>
+          <div className="vb-head-right">
+            <nav className="vb-nav">
+              <Link className="vb-nav-link active" to="/robot">
+                BOARD
+              </Link>
+              <Link
+                className="vb-nav-link"
+                to={focused ? `/robot/unit/${encodeURIComponent(focused.id)}` : '/robot'}
+              >
+                LIVE
+              </Link>
+              <Link className="vb-nav-link" to="/trades">
+                TRADES
+              </Link>
+              <Link className="vb-nav-link" to="/settings">
+                SETUP
+              </Link>
+              <Link className="vb-nav-link" to="/system">
+                SYSTEM
+              </Link>
+            </nav>
+            <div className="vb-actions">
+              <button
+                className="vlc-btn vlc-start vb-act"
+                type="button"
+                disabled={busy || Boolean(focusedRunning)}
+                onClick={() => {
+                  if (focused) void startOne(focused);
+                  else setShowDeploy(true);
+                }}
+              >
+                ▶ START
+              </button>
+              <button
+                className="vlc-btn vlc-stop vb-act"
+                type="button"
+                disabled={busy || !focusedRunning}
+                onClick={() => {
+                  if (focused) void stopOne(focused);
+                }}
+              >
+                ■ STOP
+              </button>
+              <button
+                className="vlc-btn vlc-board vb-act"
+                type="button"
+                onClick={() => setShowDeploy((v) => !v)}
+              >
+                ≡ {showDeploy ? 'CLOSE' : 'BOARD'}
+              </button>
             </div>
-            <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
-              <div className="label">ONLINE</div>
-              <div className="value">{runningCount}</div>
-            </div>
-            <div className={`robot-mode-banner ${feedCount ? 'manage' : 'flat'}`}>
-              <div className="label">FEEDS</div>
-              <div className="value">
-                {feedOk}/{feedCount || '—'}
-              </div>
-            </div>
-            <div className="robot-mode-banner entry">
-              <div className="label">REGIMES</div>
-              <div className="value">{regimes.length}</div>
-            </div>
-          </div>
-          <div className="actions">
-            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
-              {showDeploy ? 'CLOSE DEPLOY' : '+ DEPLOY'}
-            </button>
-            <Link className="btn" to="/">
-              ← BASE
-            </Link>
           </div>
         </div>
 
+        <div className="vb-hero">
+          <section className="vb-hero-main">
+            <div className="vb-hero-status mono">
+              <span className="amber">{(focused?.display_name || 'GOLD').toUpperCase()}</span>
+              <span>·</span>
+              <span className={runningCount ? 'live' : ''}>
+                {runningCount ? 'LIVE' : 'IDLE'}
+              </span>
+              <span>·</span>
+              <span>
+                {focused
+                  ? posture(focused).label.split('·')[0].trim()
+                  : sessions.length
+                    ? `${sessions.length} UNITS`
+                    : 'WAITING'}
+              </span>
+            </div>
+            <div
+              className={`vb-hero-price ${
+                (focused?.last_mid ?? sessions[0]?.last_mid) == null ? 'empty' : ''
+              }`}
+            >
+              {focused?.last_mid != null
+                ? fmt(focused.last_mid, 2)
+                : sessions[0]?.last_mid != null
+                  ? fmt(sessions[0].last_mid, 2)
+                  : '····'}
+            </div>
+            <div className="vb-hero-knobs mono">
+              Soft <em>{softPeak.soft}</em>
+              {' · '}Peak <em>{softPeak.peak}</em>
+            </div>
+            <div className="vb-marker" aria-hidden>
+              <span style={{ left: softPeak.mark }} />
+            </div>
+          </section>
+          <aside className="vb-hero-side">
+            <div className="vb-side-block">
+              <span>SESSION</span>
+              <strong>
+                {runningCount}/{Math.max(sessions.length || 5, 5)}
+              </strong>
+            </div>
+            <div className="vb-side-block">
+              <span>closes</span>
+              <strong className="amber">E pts</strong>
+            </div>
+            <p className="vb-side-note muted">
+              {sessions.length === 0
+                ? 'No active board running'
+                : `${runningCount} online · feeds ${feedOk}/${feedCount || '—'}`}
+            </p>
+          </aside>
+        </div>
+
         {error && <div className="error-state">{error}</div>}
-        {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
+        {busy && <div className="mono" style={{ color: 'var(--accent)' }}>Syncing…</div>}
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
@@ -565,7 +666,7 @@ export function RobotDeskPage() {
 
         <div className="robot-units-bar">
           <div className="section-title" style={{ margin: 0 }}>
-            ROBOT UNITS · {sessions.length} ({runningCount} online)
+            UNITS · {sessions.length} ({runningCount} online)
           </div>
           <div className="actions" style={{ margin: 0 }}>
             <button
@@ -573,7 +674,7 @@ export function RobotDeskPage() {
               className="btn"
               onClick={() => setShowControl((v) => !v)}
             >
-              {showControl ? 'Hide CONTROL' : 'CONTROL'}
+              {showControl ? 'Hide SETUP' : 'SETUP'}
             </button>
             <button type="button" className="btn" onClick={() => setShowFeeds((v) => !v)}>
               {showFeeds ? 'Hide feeds' : 'Feeds'}
@@ -582,13 +683,13 @@ export function RobotDeskPage() {
         </div>
 
         {sessions.length === 0 && !busy && (
-          <div className="robot-empty">
+          <div className="robot-empty vb-empty">
             <div className="robot-arena-kicker">EMPTY BOARD</div>
             <p style={{ marginBottom: 12 }}>
-              Vēl nav robotu kartiņu. Spied CONTROL → TRADING ON, vai + DEPLOY.
+              Nav aktīvu unit. Spied START / DEPLOY, lai atvērtu LIVE.
             </p>
-            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
-              + DEPLOY FIRST UNIT
+            <button className="btn btn-go" type="button" onClick={() => setShowDeploy(true)}>
+              DEPLOY UNIT
             </button>
           </div>
         )}
@@ -647,57 +748,26 @@ export function RobotDeskPage() {
                   </div>
                 )}
                 <div className="robot-mini-row">
-                  <span>SELL</span>
-                  <strong>{fmt(s.last_bid)}</strong>
-                </div>
-                <div className="robot-mini-row">
-                  <span>BUY</span>
-                  <strong>{fmt(s.last_ask)}</strong>
-                </div>
-                <div className="robot-mini-row">
                   <span>MID</span>
-                  <strong>{fmt(s.last_mid)}</strong>
+                  <strong>{fmt(s.last_mid, 2)}</strong>
                 </div>
                 <div className="robot-mini-row">
-                  <span>10s</span>
+                  <span>BID / ASK</span>
                   <strong>
-                    {s.ohlc_10s?.last_c != null
-                      ? `${fmt(s.ohlc_10s.last_o, 2)}→${fmt(s.ohlc_10s.last_c, 2)} ${s.ohlc_10s.market}`
-                      : 'SEEDING'}
-                  </strong>
-                </div>
-                <div className="robot-mini-row">
-                  <span>FEEDS</span>
-                  <strong>
-                    {s.feed_contributing ?? 0}/{s.feed_sender_count ?? 0} {s.feed_source || '—'}
+                    {fmt(s.last_bid, 2)} / {fmt(s.last_ask, 2)}
                   </strong>
                 </div>
                 <div className="robot-mini-row">
                   <span>UPL</span>
-                  <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
-                </div>
-                <div className="robot-mini-row">
-                  <span>LOT / SL</span>
-                  <strong>
-                    {s.lot_size} / {fmt(s.safety_sl)}
+                  <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>
+                    {fmt(s.unrealized, 2)}
                   </strong>
                 </div>
                 <div className="robot-mini-mode">
                   {s.running
-                    ? s.decision_chain
-                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
-                      : `${s.mode} · ${s.regime || 'UNKNOWN'}`
+                    ? s.decision_chain?.action || s.mode
                     : 'STOPPED'}
                 </div>
-                {(s.feed_legs?.length ?? 0) > 0 && (
-                  <div className="robot-mini-legs mono">
-                    {s.feed_legs!.slice(0, 4).map((leg) => (
-                      <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'}
-                      </span>
-                    ))}
-                  </div>
-                )}
                 <div className="robot-mini-log mono">{lastLog(s)}</div>
                 <div className="robot-mini-actions">
                   <span className="mono">{s.environment.toUpperCase()}</span>
