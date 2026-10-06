@@ -1384,13 +1384,15 @@ export type CapitalPriceCandle = {
   snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND / MINUTE / MINUTE_5 / MINUTE_15 / MINUTE_30. */
+/** Capital OHLC — SECOND / MINUTE / … / HOUR / HOUR_4 (HTF Market State). */
 export type CapitalPriceResolution =
   | 'SECOND'
   | 'MINUTE'
   | 'MINUTE_5'
   | 'MINUTE_15'
-  | 'MINUTE_30';
+  | 'MINUTE_30'
+  | 'HOUR'
+  | 'HOUR_4';
 
 export async function fetchCapitalPrices(
   session: CapitalSession,
@@ -1399,13 +1401,18 @@ export async function fetchCapitalPrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
+  // HTF engine needs deep history (≈100 closed + forming tip). Cap at 120.
   const cap =
     resolution === 'SECOND'
       ? 50
       : resolution === 'MINUTE'
         ? 60
-        : resolution === 'MINUTE_5'
-          ? 40
+        : resolution === 'MINUTE_5' ||
+            resolution === 'MINUTE_15' ||
+            resolution === 'MINUTE_30' ||
+            resolution === 'HOUR' ||
+            resolution === 'HOUR_4'
+          ? 120
           : 30;
   const q = new URLSearchParams({
     resolution,

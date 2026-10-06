@@ -20,6 +20,7 @@ import { summarizeExitReason } from './tradeLedger.js';
 import type { RegimeName } from './regimes.js';
 import { resolveDeskClientId } from './deskClientScope.js';
 import type { MarketContextCompact } from './marketContext.js';
+import type { HTFMarketStateCompact } from './htfMarketState.js';
 import { reviewSessionLikeHuman } from './traderMind.js';
 
 export const AUTO_CALIBRATE_EVERY_N = 5;
@@ -89,6 +90,10 @@ export type SessionTrade = {
   entry_ctx?: MarketContextCompact | null;
   /** Market context at exit */
   exit_ctx?: MarketContextCompact | null;
+  /** HTF Market State compact frozen at entry */
+  entry_htf?: HTFMarketStateCompact | null;
+  /** Live path status at close */
+  htf_path_status?: string | null;
 };
 
 export type AutoCalCycleRecord = {

@@ -33,6 +33,18 @@ export type ClosedTradeRecord = {
   robot_id: string | null;
   opened_at: string | Date | null;
   position_id?: number | null;
+  /** HTF Market State compact frozen at entry */
+  htf_state?: Record<string, unknown> | null;
+  htf_bias?: string | null;
+  htf_structure?: string | null;
+  htf_phase?: string | null;
+  htf_path_status?: string | null;
+  htf_thesis?: Record<string, unknown> | null;
+  htf_score?: number | null;
+  thesis_direction_correct?: boolean | null;
+  thesis_time_to_confirm_ms?: number | null;
+  thesis_time_to_invalid_ms?: number | null;
+  thesis_events_hit?: string[] | null;
 };
 
 export type ExpectancyBucket = {
@@ -74,6 +86,14 @@ export type ExpectancyTradeRow = {
   mfe: number | null;
   mae: number | null;
   hold_ms: number | null;
+  direction?: string | null;
+  htf_structure?: string | null;
+  htf_phase?: string | null;
+  htf_bias?: string | null;
+  htf_path_status?: string | null;
+  htf_state?: Record<string, unknown> | null;
+  thesis_direction_correct?: boolean | null;
+  closed_at?: string | Date | number | null;
 };
 
 const EPS = 1e-9;
@@ -311,13 +331,18 @@ export async function recordClosedTrade(input: ClosedTradeRecord): Promise<numbe
        entry_price, exit_price, quantity, pnl, exit_reason, regime,
        opened_at, closed_at,
        epic, setup_type, mfe, mae, peak_retention, hold_ms,
-       pnl_pts, exit_mid, source, robot_id
+       pnl_pts, exit_mid, source, robot_id,
+       htf_state, htf_bias, htf_structure, htf_phase, htf_path_status,
+       htf_thesis, htf_score, thesis_direction_correct,
+       thesis_time_to_confirm_ms, thesis_time_to_invalid_ms, thesis_events_hit
      ) VALUES (
        $1,$2,$3,$4,
        $5,$6,$7,$8,$9,$10,
        $11,$12,
        $13,$14,$15,$16,$17,$18,
-       $19,$20,$21,$22
+       $19,$20,$21,$22,
+       $23,$24,$25,$26,$27,
+       $28,$29,$30,$31,$32,$33
      ) RETURNING id`,
     [
       positionId,
@@ -342,6 +367,17 @@ export async function recordClosedTrade(input: ClosedTradeRecord): Promise<numbe
       exitMid,
       input.source,
       input.robot_id,
+      input.htf_state ? JSON.stringify(input.htf_state) : null,
+      input.htf_bias ? String(input.htf_bias).slice(0, 16) : null,
+      input.htf_structure ? String(input.htf_structure).slice(0, 16) : null,
+      input.htf_phase ? String(input.htf_phase).slice(0, 24) : null,
+      input.htf_path_status ? String(input.htf_path_status).slice(0, 24) : null,
+      input.htf_thesis ? JSON.stringify(input.htf_thesis) : null,
+      input.htf_score ?? null,
+      input.thesis_direction_correct ?? null,
+      input.thesis_time_to_confirm_ms ?? null,
+      input.thesis_time_to_invalid_ms ?? null,
+      input.thesis_events_hit ? JSON.stringify(input.thesis_events_hit) : null,
     ]
   );
   return rows[0]?.id != null ? Number(rows[0].id) : null;
@@ -356,7 +392,9 @@ export async function fetchExpectancyReport(opts: {
   const { window, since } = parseExpectancyWindow(opts.window);
   let sql = `
     SELECT t.pnl_pts, t.pnl, t.regime, t.setup_type, t.exit_reason, t.epic,
-           t.mfe, t.mae, t.hold_ms
+           t.mfe, t.mae, t.hold_ms, t.direction, t.closed_at,
+           t.htf_structure, t.htf_phase, t.htf_bias, t.htf_path_status, t.htf_state,
+           t.thesis_direction_correct
     FROM trades t
     JOIN broker_accounts ba ON ba.id = t.broker_account_id
     JOIN broker_connections bc ON bc.id = ba.broker_connection_id

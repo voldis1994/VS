@@ -206,6 +206,42 @@ describe('effectiveEntryRegime — RANGE only when truly range; never blocks oth
     ).toBe('RANGE');
   });
 
+  it('HTF engine hierarchical bias leads over 30/15/5 majority', () => {
+    // Lower TFs mostly UP — majority would be UP; engine says DOWN → DOWN
+    expect(
+      capitalHtfBias({
+        tf30: 'UP',
+        tf15: 'UP',
+        tf5: 'UP',
+        htf_engine_bias: 'DOWN',
+        tf4h: 'DOWN',
+        tf1h: 'DOWN',
+      })
+    ).toBe('DOWN');
+    expect(
+      effectiveEntryRegime(
+        'RANGE',
+        { allow: 'NONE', chapter: 'RANGE_CHOP' },
+        {
+          tf30: 'UP',
+          tf15: 'UP',
+          tf5: 'UP',
+          htf_engine_bias: 'DOWN',
+          tf4h: 'DOWN',
+          tf1h: 'DOWN',
+        }
+      )
+    ).toBe('TREND_DOWN');
+    // 4H vs 1H fight → MIXED even with engine bias
+    expect(
+      capitalHtfBias({
+        htf_engine_bias: 'UP',
+        tf4h: 'UP',
+        tf1h: 'DOWN',
+      })
+    ).toBe('MIXED');
+  });
+
   it('Capital 30+15 UP promotes sticky 10s RANGE → TREND_UP (desk weather)', () => {
     // Live: classify stuck RANGE while Capital multi-hour UP
     expect(
