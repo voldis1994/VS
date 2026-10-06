@@ -328,7 +328,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
 
         <footer className="footer-strip desk-footer">
-          <span>VS SYSTEM // ONLINE</span>
+          <span>VS SYSTEM · ONLINE</span>
           <span>REAL-TIME COMBAT DESK</span>
           <span className="footer-logo-wrap">
             <Logo size={18} />

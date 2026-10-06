@@ -339,22 +339,38 @@ export function RobotUnitPage() {
 
   const w = session?.entry_watch;
   const chain = session?.decision_chain;
+  const mindMatch = (w?.looking_for || w?.last_reason || '').match(/PRĀTS\s+(BUY|SELL|WAIT)/i);
+  const mindSide = mindMatch?.[1]?.toUpperCase() || null;
+  const setupSide = w?.direction || null;
+  const setupLabel = w?.armed
+    ? `ARMED ${setupSide || ''} ${w.setup || ''}`.trim()
+    : w?.looking_for
+      ? w.looking_for.slice(0, 80)
+      : '—';
+  const knobs = cal || auto?.knobs_now;
+  const happenSoft = knobs
+    ? `Soft ${Number(knobs.hardinv_abs).toFixed(2)} · Peak ${Number(knobs.peak_mfe_abs).toFixed(2)} · Target ${Number(knobs.target_abs).toFixed(2)}`
+    : 'Soft / Peak / Target —';
+  const happenCal =
+    auto != null
+      ? `AutoCal ${auto.closes_in_session} closes · next in ${auto.closes_until_next} · E pts ${Number(auto.session_expectancy_pts ?? 0).toFixed(2)}`
+      : 'AutoCal —';
 
   return (
     <div className="robot-fs-shell robot-unit-shell">
       <div className="robot-unit">
         <header className="robot-unit-head">
           <div className="robot-unit-brand">
-            <Logo size={48} wordmark />
+            <Logo size={44} wordmark />
             <div>
-              <div className="robot-arena-kicker">VS SYSTEM // CLIENT ROBOT</div>
+              <div className="robot-arena-kicker">LIVE DESK</div>
               <h1 className="robot-unit-title">
                 {(session?.client_name || session?.account_name || '…').toUpperCase()}
                 {session ? ` · ${session.display_name}` : ''}
               </h1>
               <p className="robot-unit-sub mono">
                 {session
-                  ? `${session.epic} · lot ${session.lot_size} · ${session.environment.toUpperCase()} · ${session.id}`
+                  ? `${session.epic} · lot ${session.lot_size} · ${session.environment.toUpperCase()}`
                   : busy
                     ? 'Starting…'
                     : 'Loading…'}
@@ -414,6 +430,17 @@ export function RobotUnitPage() {
                 <div className={`robot-unit-posture ${session.open_side ? 'open' : session.running ? 'watch' : 'flat'}`}>
                   {postureLabel(session)}
                 </div>
+                <div className="robot-unit-mid">{fmt(session.last_mid, 2)}</div>
+                <div className="robot-unit-honesty">
+                  <div className="robot-unit-honesty-row">
+                    <span>PRĀTS</span>
+                    <strong>{mindSide || '—'}</strong>
+                  </div>
+                  <div className="robot-unit-honesty-row">
+                    <span>SETUP</span>
+                    <strong>{setupSide || (w?.status ? w.status : '—')}</strong>
+                  </div>
+                </div>
                 <div className="robot-unit-metrics">
                   <div>
                     <span>SELL / BID</span>
@@ -422,10 +449,6 @@ export function RobotUnitPage() {
                   <div>
                     <span>BUY / ASK</span>
                     <strong>{fmt(session.last_ask)}</strong>
-                  </div>
-                  <div>
-                    <span>MID</span>
-                    <strong>{fmt(session.last_mid)}</strong>
                   </div>
                   <div>
                     <span>UPL</span>
@@ -440,10 +463,6 @@ export function RobotUnitPage() {
                     </strong>
                   </div>
                   <div>
-                    <span>MODE</span>
-                    <strong>{session.running ? session.mode : 'STOPPED'}</strong>
-                  </div>
-                  <div>
                     <span>REGIME</span>
                     <strong>{(session.regime || 'UNKNOWN').toUpperCase()}</strong>
                   </div>
@@ -451,26 +470,6 @@ export function RobotUnitPage() {
                     <span>SIDE / ENTRY</span>
                     <strong>
                       {session.open_side || 'FLAT'} · {fmt(session.entry_price)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>SAFETY SL</span>
-                    <strong>{fmt(session.safety_sl)}</strong>
-                  </div>
-                  <div>
-                    <span>DEAL</span>
-                    <strong className="mono">{session.deal_id || '—'}</strong>
-                  </div>
-                  <div>
-                    <span>IN / OUT</span>
-                    <strong>
-                      {session.orders_placed} / {session.exits_done}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>READS</span>
-                    <strong>
-                      {session.reads_ok}/{session.reads_fail}
                     </strong>
                   </div>
                 </div>
@@ -487,62 +486,51 @@ export function RobotUnitPage() {
           </section>
 
           <section className={`robot-unit-panel robot-unit-watch ${w?.armed ? 'armed' : ''}`}>
-            <div className="robot-arena-kicker">ENTRY WATCH</div>
-            {w ? (
-              <>
-                <div className="robot-unit-watch-status">
-                  <strong>{w.status}</strong>
-                  {w.armed ? ` · ARMED ${w.direction || ''} ${w.setup || ''}` : ''}
-                  {w.regime_enabled ? ' · REGIME ON' : ' · REGIME OFF'}
-                </div>
-                <div className="robot-unit-watch-look">{w.looking_for}</div>
-                {(w.market_story || w.story_chapter) && (
-                  <div className="mono">
-                    {w.market_story || w.story_chapter}
-                    {w.story_allow ? ` · allow ${w.story_allow}` : ''}
-                    {w.story_detail ? ` · ${w.story_detail}` : ''}
-                  </div>
-                )}
-                {w.zone_progress && (
-                  <div className="mono">
-                    ZONA · {w.zone_bars ?? '—'}/{w.zone_need ?? 90}
-                    {w.zone_ready
-                      ? ` · gatavs · mērķis ${w.zone_full ?? 180}`
-                      : ` · vēl ${w.zone_left ?? '—'} sveces (≈${Math.max(
-                          1,
-                          Math.ceil(((w.zone_left ?? 0) * 10) / 60)
-                        )}m)`}
-                  </div>
-                )}
-                <div className="mono">
-                  CLOSED 10s · O {fmt(w.bar.o, 2)} H {fmt(w.bar.h, 2)} L {fmt(w.bar.l, 2)} C{' '}
-                  {fmt(w.bar.c, 2)}
-                  {w.bar.forming_c != null ? ` · LIVE ${fmt(w.bar.forming_c, 2)}` : ''}
-                </div>
-                <div className="mono">
-                  CLOSED BODY {pctFmt(w.bar.body_pct)} · RANGE {pctFmt(w.bar.range_pct)} ·{' '}
-                  {w.bar.market}
-                  {w.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}
-                </div>
-                {session?.ohlc_10s?.forming_body_pct != null && (
-                  <div className="mono muted">
-                    LIVE forming body {pctFmt(session.ohlc_10s.forming_body_pct)} · range{' '}
-                    {pctFmt(session.ohlc_10s.forming_range_pct)}
-                  </div>
-                )}
-                <div className="robot-unit-watch-vs">{w.bar_vs_trigger}</div>
-                <div className="muted">{w.last_reason}</div>
-              </>
-            ) : (
-              <div className="muted">{session ? 'Watch seeding…' : 'Waiting for session…'}</div>
-            )}
+            <div className="robot-arena-kicker">WHAT&apos;S HAPPENING</div>
+            <div className="robot-unit-happen">
+              <div className="robot-unit-happen-row">
+                <span>Watch</span>
+                <strong>
+                  {w
+                    ? `${w.status}${w.regime_enabled ? '' : ' · REGIME OFF'}${w.armed ? ` · ${setupLabel}` : ''}`
+                    : session
+                      ? 'Watch seeding…'
+                      : '—'}
+                </strong>
+              </div>
+              <div className="robot-unit-happen-row">
+                <span>Looking for</span>
+                <strong>{w?.looking_for || '—'}</strong>
+              </div>
+              <div className="robot-unit-happen-row">
+                <span>Story</span>
+                <strong>
+                  {w?.market_story || w?.story_chapter || '—'}
+                  {w?.story_allow ? ` · allow ${w.story_allow}` : ''}
+                </strong>
+              </div>
+              <div className="robot-unit-happen-row">
+                <span>Knobs</span>
+                <strong>{happenSoft}</strong>
+              </div>
+              <div className="robot-unit-happen-row">
+                <span>Learning</span>
+                <strong>{happenCal}</strong>
+              </div>
+              <div className="robot-unit-happen-row">
+                <span>10s tape</span>
+                <strong>
+                  {w
+                    ? `O ${fmt(w.bar.o, 2)} H ${fmt(w.bar.h, 2)} L ${fmt(w.bar.l, 2)} C ${fmt(w.bar.c, 2)}${
+                        w.bar.forming_c != null ? ` · LIVE ${fmt(w.bar.forming_c, 2)}` : ''
+                      }${w.bar.closed ? ' · JUST CLOSED' : ' · waiting close'}`
+                    : '—'}
+                </strong>
+              </div>
+            </div>
+            {w?.last_reason && <div className="muted">{w.last_reason}</div>}
             {session && (
               <>
-                <div className="robot-unit-ohlc mono" style={{ marginTop: 8 }}>
-                  10s CLOSED · O {fmt(session.ohlc_10s?.last_o, 2)} H {fmt(session.ohlc_10s?.last_h, 2)} L{' '}
-                  {fmt(session.ohlc_10s?.last_l, 2)} C {fmt(session.ohlc_10s?.last_c, 2)} ·{' '}
-                  {session.ohlc_10s?.market || 'SEEDING'} · body {pctFmt(session.ohlc_10s?.body_pct)}
-                </div>
                 <div className="mono" style={{ marginTop: 4 }}>
                   FEEDS · {session.feed_contributing ?? 0}/{session.feed_sender_count ?? 0}{' '}
                   {session.feed_agreement || ''} · {session.feed_source || '—'}
