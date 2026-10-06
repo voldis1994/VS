@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIN_BARS_FOR_ZONE } from './regimes.js';
 import {
+  alignStoryWithCapitalChart,
   readMarketStory,
   storyAllowsDirection,
   scalpStoryConfirms,
@@ -386,5 +387,46 @@ describe('30m market story — 1m scalp grade', () => {
 
     const rallyAtHi = { ...hi, chapter: 'RALLY' as const, summary_lv: 'STĀSTS · 30m rally' };
     expect(scalpStoryConfirms(rallyAtHi, 'BUY', 'TREND_UP', greenTrig).ok).toBe(false);
+  });
+
+  it('Capital 30m↓ vetoes fake 1m-trek RALLY BUY (Gold screen vs stāsts lie)', () => {
+    const aligned = alignStoryWithCapitalChart({
+      chapter: 'RALLY',
+      allow: 'BUY',
+      summary_lv: 'STĀSTS · 1m-logs rally · trek 11.7pt · tikai BUY · nepārdot',
+      confidence: 0.75,
+      capital: { tf30: 'DOWN', tf15: 'DOWN' },
+      sellStruct: false,
+      buyStruct: true,
+      trek: 11.7,
+      pos: 0.55,
+    });
+    expect(aligned.allow).not.toBe('BUY');
+    expect(aligned.chapter).toBe('RANGE_CHOP');
+    expect(aligned.summary_lv).toMatch(/Capital 30m↓/i);
+    expect(aligned.summary_lv).not.toMatch(/tikī BUY|tikai BUY/i);
+
+    // When 1m also has sell structure, flip to SELL with Capital
+    const sellAligned = alignStoryWithCapitalChart({
+      chapter: 'RALLY',
+      allow: 'BUY',
+      summary_lv: 'STĀSTS · 1m-logs rally',
+      confidence: 0.75,
+      capital: { tf30: 'DOWN', tf15: 'DOWN' },
+      sellStruct: true,
+      buyStruct: true,
+      trek: 11.7,
+      pos: 0.4,
+    });
+    expect(sellAligned.allow).toBe('SELL');
+    expect(['SELLOFF', 'EXHAUST_LO']).toContain(sellAligned.chapter);
+  });
+
+  it('readMarketStory with Capital 30m↓ never advertises BUY rally', () => {
+    const { book, last } = selloffBook({ endGreen1m: true });
+    // Bounce book can look buyish on 1m trek alone — Capital overrides
+    const story = readMarketStory(book, last, { tf30: 'DOWN', tf15: 'DOWN' });
+    expect(story.allow).not.toBe('BUY');
+    expect(story.summary_lv).not.toMatch(/30m rally|tikai BUY/i);
   });
 });

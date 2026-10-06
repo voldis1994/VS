@@ -663,7 +663,8 @@ function promoteDeskRegimeFromCapital(s: Internal): void {
   if (!hasCapital) return;
   const story = readMarketStory(
     s.closedBars.length ? s.closedBars : s.ohlcState.last_closed ? [s.ohlcState.last_closed] : [],
-    s.ohlcState.last_closed
+    s.ohlcState.last_closed,
+    { tf30: caps.tf30, tf15: caps.tf15 }
   );
   s.regime = effectiveEntryRegime(s.regime, story, {
     tf30: caps.tf30,
