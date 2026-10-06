@@ -95,6 +95,7 @@ export type HtfFactsBundle = {
 };
 
 /** Target / minimum closed-candle history (excluding forming tip). */
+/** Closed-candle targets (forming tip is extra — see htfFetchMax / Capital cap). */
 export const HTF_HISTORY_TARGET: Record<HtfTfFrame, number> = {
   '4H': 80,
   '1H': 120,

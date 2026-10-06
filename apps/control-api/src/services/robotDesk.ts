@@ -1064,6 +1064,7 @@ async function persistClosedTradeLedger(
         });
         return {
           thesis_direction_correct: outcome.thesis_direction_correct,
+          trade_execution_positive: outcome.trade_execution_positive,
           thesis_time_to_confirm_ms: outcome.time_to_confirmation_ms,
           thesis_time_to_invalid_ms: outcome.time_to_invalidation_ms,
           thesis_events_hit: outcome.expected_events_hit,
@@ -2297,6 +2298,7 @@ async function enterTradeLocked(
       thesis: {
         ...s.htf_live.thesis,
         state: 'PENDING',
+        confirming_at: null,
         confirmed_at: null,
         invalidated_at: null,
         events_hit: [],
@@ -4250,6 +4252,7 @@ export async function attachManageOnlyRobot(input: {
           thesis: {
             ...existing.htf_live.thesis,
             state: 'PENDING',
+            confirming_at: null,
             confirmed_at: null,
             invalidated_at: null,
             events_hit: [],
@@ -4309,6 +4312,7 @@ export async function attachManageOnlyRobot(input: {
           thesis: {
             ...internal.htf_live.thesis,
             state: 'PENDING',
+            confirming_at: null,
             confirmed_at: null,
             invalidated_at: null,
             events_hit: [],

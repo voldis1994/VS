@@ -116,12 +116,19 @@ export type MarketThesis = {
     last_index_by_tf: Partial<Record<HtfTfFrame, number>>;
     last_time_by_tf: Partial<Record<HtfTfFrame, number | null>>;
   };
-  /** Filled when state becomes CONFIRMING / CONFIRMED */
+  /** Set once when entering CONFIRMING (first distinct soft confirm). */
+  confirming_at: number | null;
+  /** Set only on real CONFIRMED (never on CONFIRMING). */
   confirmed_at: number | null;
   /** Filled when INVALIDATED */
   invalidated_at: number | null;
   events_hit: string[];
 };
+
+/** Strong confirmations may CONFIRM in one step; soft need a second distinct event. */
+export function isStrongConfirmation(kind: ThesisConditionKind): boolean {
+  return kind === 'ACCEPTANCE_UP' || kind === 'ACCEPTANCE_DOWN';
+}
 
 export type HTFMarketState = {
   at_ms: number;
@@ -160,19 +167,29 @@ export type HTFMarketStateCompact = {
   thesis_created_at: number | null;
   expected_events: string[];
   events_hit: string[];
+  confirming_at: number | null;
   confirmed_at: number | null;
   invalidated_at: number | null;
 };
 
 /** Outcome metrics measured at trade close against frozen thesis. */
 export type HtfThesisOutcome = {
+  /**
+   * Market-path correctness of the frozen thesis (CONFIRMED/INVALIDATED).
+   * Independent of trade PnL / execution quality.
+   */
   thesis_direction_correct: boolean | null;
+  /** Separate execution result — pnl_pts > 0 when known */
+  trade_execution_positive: boolean | null;
+  trade_pnl_pts: number | null;
   phase_at_entry: string | null;
   phase_at_exit: string | null;
   expected_events_hit: string[];
   expected_events_missed: string[];
   invalidated: boolean;
+  /** created_at → confirmed_at (CONFIRMED only; null while CONFIRMING) */
   time_to_confirmation_ms: number | null;
+  time_to_confirming_ms: number | null;
   time_to_invalidation_ms: number | null;
   path_status: HtfPathStatus | string;
 };
@@ -547,6 +564,7 @@ export function createMarketThesis(
     score: interp.score,
     created_at: createdAt,
     freeze: { price: freezePrice, last_index_by_tf, last_time_by_tf },
+    confirming_at: null,
     confirmed_at: null,
     invalidated_at: null,
     events_hit: [],
@@ -723,6 +741,10 @@ function conditionMet(
 /**
  * Advance frozen thesis state from live facts.
  * Never mutates primary/alt/conditions/score/created_at.
+ *
+ * CONFIRMING → CONFIRMED requires a *new distinct* confirmation event
+ * (or a strong ACCEPTANCE_*) — re-reading the same confirm id across
+ * refresh cycles must not promote the state.
  */
 export function evaluateThesisEvents(
   thesis: MarketThesis,
@@ -765,26 +787,51 @@ export function evaluateThesisEvents(
     }
   }
 
-  let confirmHits = 0;
+  // Only *new* confirm ids count this cycle (already-hit ids are ignored)
+  const newlyMet: ThesisCondition[] = [];
   for (const cond of thesis.confirmation_conditions) {
+    const key = `confirm:${cond.id}`;
+    if (events_hit.includes(key)) continue;
     if (conditionMet(cond, liveFacts, thesis)) {
-      confirmHits += 1;
-      if (!events_hit.includes(`confirm:${cond.id}`)) {
-        events_hit.push(`confirm:${cond.id}`);
-      }
+      newlyMet.push(cond);
+      events_hit.push(key);
     }
   }
 
-  if (confirmHits >= 1) {
-    const next: HtfPathStatus =
-      thesis.state === 'CONFIRMING' || confirmHits >= 2 ? 'CONFIRMED' : 'CONFIRMING';
+  if (!newlyMet.length) {
+    // Same confirmation still true on refresh — do not re-promote
+    return { ...thesis, events_hit };
+  }
+
+  const strong = newlyMet.some((c) => isStrongConfirmation(c.kind));
+
+  if (thesis.state === 'PENDING') {
+    if (strong || newlyMet.length >= 2) {
+      // Strong or two distinct events in one evaluation → CONFIRMED
+      return {
+        ...thesis,
+        state: 'CONFIRMED',
+        confirming_at: thesis.confirming_at,
+        confirmed_at: now,
+        events_hit,
+      };
+    }
     return {
       ...thesis,
-      state: next,
-      confirmed_at:
-        next === 'CONFIRMED' || next === 'CONFIRMING'
-          ? thesis.confirmed_at ?? now
-          : thesis.confirmed_at,
+      state: 'CONFIRMING',
+      confirming_at: thesis.confirming_at ?? now,
+      confirmed_at: null,
+      events_hit,
+    };
+  }
+
+  // CONFIRMING: need another distinct new event (already ensured by newlyMet)
+  if (thesis.state === 'CONFIRMING') {
+    return {
+      ...thesis,
+      state: 'CONFIRMED',
+      confirming_at: thesis.confirming_at ?? now,
+      confirmed_at: now,
       events_hit,
     };
   }
@@ -909,37 +956,56 @@ export function compactHtfMarketState(
     thesis_created_at: state.thesis.created_at,
     expected_events: state.thesis.expected_events,
     events_hit: state.thesis.events_hit,
+    confirming_at: state.thesis.confirming_at,
     confirmed_at: state.thesis.confirmed_at,
     invalidated_at: state.thesis.invalidated_at,
   };
 }
 
+/**
+ * Thesis market-path correctness from frozen thesis state — NOT trade PnL.
+ * CONFIRMED → true, INVALIDATED → false, otherwise inconclusive (null).
+ */
+export function thesisDirectionFromPath(
+  path: HtfPathStatus | string | null | undefined
+): boolean | null {
+  const p = String(path || '').toUpperCase();
+  if (p === 'CONFIRMED') return true;
+  if (p === 'INVALIDATED') return false;
+  return null;
+}
+
 export function measureThesisOutcome(input: {
   entry: HTFMarketState | HTFMarketStateCompact | null | undefined;
   exit_phase?: string | null;
-  direction: 'BUY' | 'SELL';
+  direction?: 'BUY' | 'SELL' | null;
   pnl_pts: number | null;
-  mfe: number;
-  mae: number;
+  mfe?: number;
+  mae?: number;
 }): HtfThesisOutcome {
   const entry = input.entry;
+  const tradePnl =
+    input.pnl_pts != null && Number.isFinite(input.pnl_pts) ? input.pnl_pts : null;
+  const trade_execution_positive =
+    tradePnl == null ? null : tradePnl > 0;
+
   if (!entry) {
     return {
       thesis_direction_correct: null,
+      trade_execution_positive,
+      trade_pnl_pts: tradePnl,
       phase_at_entry: null,
       phase_at_exit: input.exit_phase ?? null,
       expected_events_hit: [],
       expected_events_missed: [],
       invalidated: false,
       time_to_confirmation_ms: null,
+      time_to_confirming_ms: null,
       time_to_invalidation_ms: null,
       path_status: 'PENDING',
     };
   }
   const isFull = 'thesis' in entry;
-  const primarySide = isFull
-    ? entry.thesis.primary_thesis.side
-    : String((entry as HTFMarketStateCompact).primary_side);
   const phaseEntry = isFull
     ? entry.thesis.primary_thesis.phase
     : String((entry as HTFMarketStateCompact).phase);
@@ -955,6 +1021,9 @@ export function measureThesisOutcome(input: {
   const created = isFull
     ? entry.thesis.created_at
     : (entry as HTFMarketStateCompact).thesis_created_at;
+  const confirmingAt = isFull
+    ? entry.thesis.confirming_at
+    : (entry as HTFMarketStateCompact).confirming_at;
   const confirmedAt = isFull
     ? entry.thesis.confirmed_at
     : (entry as HTFMarketStateCompact).confirmed_at;
@@ -962,23 +1031,10 @@ export function measureThesisOutcome(input: {
     ? entry.thesis.invalidated_at
     : (entry as HTFMarketStateCompact).invalidated_at;
 
-  let thesis_direction_correct: boolean | null = null;
-  if (primarySide === 'BUY' || primarySide === 'SELL') {
-    // Direction correct if trade side matched thesis and realized positive path,
-    // or MFE in thesis direction exceeded MAE when sides match.
-    if (input.direction === primarySide) {
-      if (input.pnl_pts != null && Number.isFinite(input.pnl_pts)) {
-        thesis_direction_correct = input.pnl_pts > 0;
-      } else {
-        thesis_direction_correct = input.mfe > Math.abs(input.mae);
-      }
-    } else {
-      thesis_direction_correct = false;
-    }
-  }
-
   return {
-    thesis_direction_correct,
+    thesis_direction_correct: thesisDirectionFromPath(path),
+    trade_execution_positive,
+    trade_pnl_pts: tradePnl,
     phase_at_entry: phaseEntry,
     phase_at_exit: input.exit_phase ?? null,
     expected_events_hit: eventsHit.filter((e) => e.startsWith('confirm:')),
@@ -987,8 +1043,12 @@ export function measureThesisOutcome(input: {
     ),
     invalidated: path === 'INVALIDATED',
     time_to_confirmation_ms:
-      created != null && confirmedAt != null
+      created != null && confirmedAt != null && path === 'CONFIRMED'
         ? Math.max(0, confirmedAt - created)
+        : null,
+    time_to_confirming_ms:
+      created != null && confirmingAt != null
+        ? Math.max(0, confirmingAt - created)
         : null,
     time_to_invalidation_ms:
       created != null && invalidatedAt != null
@@ -1020,10 +1080,16 @@ export function htfFrameDir(
 }
 
 /** History depth helpers for Capital fetch sizing. */
+/**
+ * Raw Capital `max` including forming tip.
+ * Must be ≤ fetchCapitalPrices cap (150) — 1H target 120 → fetch 121.
+ */
 export function htfFetchMax(tf: HtfTfFrame): number {
-  // +1 for forming tip that will be dropped
   return HTF_HISTORY_TARGET[tf] + 1;
 }
+
+/** Capital prices API max for HTF resolutions (must cover htfFetchMax). */
+export const HTF_CAPITAL_FETCH_CAP = 150;
 
 export function htfHistoryAdequate(
   tf: HtfTfFrame,
