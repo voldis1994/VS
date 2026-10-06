@@ -34,18 +34,56 @@ export type EffectiveRegimeHtf = {
   tf15?: TfBiasDir | null;
   tf5?: TfBiasDir | null;
   m1?: TfBiasDir | null;
+  /** Optional HTF engine frames — hierarchy 4H→1H leads when present */
+  tf4h?: TfBiasDir | null;
+  tf1h?: TfBiasDir | null;
+  /**
+   * Hierarchical bias from HTFMarketStateEngine (not 30/15/5 majority).
+   * When set to UP/DOWN, promote uses this before stack majority.
+   */
+  htf_engine_bias?: TfBiasDir | null;
 };
 
 /** Chop labels that may wrongly starve TREND/BREAKOUT/PULLBACK playbooks. */
 const CHOP_LABELS = new Set<RegimeName>(['RANGE', 'COMPRESSION', 'TRANSITION']);
 
 /**
- * Capital HTF bias from 30→15→5 (m1 only for pullback tip).
- * Majority of directional HTFs wins — but 5m fight → MIXED (no stale chase).
- * Lone 1m never invents HTF bias (that was Soft spam before HTF fetch).
+ * Capital HTF bias.
+ *
+ * Prefer HTF Market State Engine hierarchical bias (4H→1H→…) when present —
+ * never invent side from a lone 1m, and never flip 4H with a 30/15/5 majority.
+ * Fallback (no engine / no 4H·1H): legacy 30→15→5 with 30↔15 fight → MIXED.
  */
 export function capitalHtfBias(htf?: EffectiveRegimeHtf | null): 'UP' | 'DOWN' | 'FLAT' | 'MIXED' {
   if (!htf) return 'FLAT';
+
+  // Engine hierarchical bias wins when clear (not majority of lower TFs)
+  if (htf.htf_engine_bias === 'UP' || htf.htf_engine_bias === 'DOWN') {
+    // Immediate child fight on 1H vs 4H engine still MIXED for promote safety
+    if (
+      (htf.tf4h === 'UP' || htf.tf4h === 'DOWN') &&
+      (htf.tf1h === 'UP' || htf.tf1h === 'DOWN') &&
+      htf.tf4h !== htf.tf1h
+    ) {
+      return 'MIXED';
+    }
+    return htf.htf_engine_bias;
+  }
+
+  // Hierarchy without full engine object: 4H leads, then 1H, else legacy
+  if (htf.tf4h === 'UP' || htf.tf4h === 'DOWN') {
+    if (
+      (htf.tf1h === 'UP' || htf.tf1h === 'DOWN') &&
+      htf.tf1h !== htf.tf4h
+    ) {
+      return 'MIXED';
+    }
+    return htf.tf4h;
+  }
+  if (htf.tf1h === 'UP' || htf.tf1h === 'DOWN') {
+    return htf.tf1h;
+  }
+
   // 30m vs 15m fight → MIXED always (do not invent TREND from 5m majority)
   if (
     (htf.tf30 === 'UP' || htf.tf30 === 'DOWN') &&
@@ -160,6 +198,14 @@ export type StructureDecideInput = {
   capital_tf5_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   capital_tf15_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
   capital_tf30_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** Optional HTF engine frames / hierarchical bias */
+  capital_tf4h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  capital_tf1h_dir?: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_engine_bias?: 'UP' | 'DOWN' | 'FLAT' | null;
+  /** Compact HTF narrative for entry mind (never opens orders itself) */
+  htf_summary?: string | null;
+  htf_phase?: string | null;
+  htf_primary_side?: 'BUY' | 'SELL' | 'WAIT' | null;
 };
 
 export type StructuredEntry = RegimeEntry & {
@@ -611,6 +657,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     input.capital_tf5_dir != null ||
     input.capital_tf15_dir != null ||
     input.capital_tf30_dir != null ||
+    input.capital_tf4h_dir != null ||
+    input.capital_tf1h_dir != null ||
+    input.htf_engine_bias != null ||
     input.capital_m1_dir != null;
   const tf5 = pickTf(input.capital_tf5_dir, higherTfDir(input.closedBars, 5));
   const tf15 = pickTf(input.capital_tf15_dir, higherTfDir(input.closedBars, 15));
@@ -624,6 +673,9 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
           tf15: input.capital_tf15_dir ?? null,
           tf5: input.capital_tf5_dir ?? null,
           m1: input.capital_m1_dir ?? null,
+          tf4h: input.capital_tf4h_dir ?? null,
+          tf1h: input.capital_tf1h_dir ?? null,
+          htf_engine_bias: input.htf_engine_bias ?? null,
         }
       : null
   );
@@ -654,6 +706,12 @@ export function decideEntryWithStructure(input: StructureDecideInput): Structure
     tf5_dir: tf5,
     tf15_dir: tf15,
     tf30_dir: tf30,
+    tf4h_dir: input.capital_tf4h_dir ?? null,
+    tf1h_dir: input.capital_tf1h_dir ?? null,
+    htf_engine_bias: input.htf_engine_bias ?? null,
+    htf_summary: input.htf_summary ?? null,
+    htf_phase: input.htf_phase ?? null,
+    htf_primary_side: input.htf_primary_side ?? null,
   });
 
   const learned = entryLearnerChoose(

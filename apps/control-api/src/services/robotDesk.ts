@@ -80,6 +80,15 @@ import {
   trekBiasFromCandles,
   type TfDir,
 } from './multiTfRead.js';
+import {
+  buildHtfMarketState,
+  compactHtfMarketState,
+  htfFrameDir,
+  trackHtfPathLive,
+  type HTFMarketState,
+  type HTFMarketStateCompact,
+  type HtfPathStatus,
+} from './htfMarketState.js';
 import { noteLiveSoftClose } from '../brainSelfImprove/experience.js';
 import {
   exitReasonWasLoss,
@@ -205,6 +214,12 @@ export type RobotSession = {
   last_tick_at?: string | null;
   /** Newest of last_tick_at / last_quote_at — UI stale banner */
   last_activity_at?: string | null;
+  /** Live HTF Market State compact (engine never opens orders) */
+  htf_state?: HTFMarketStateCompact | null;
+  /** HTF expected-path status vs frozen entry (CONFIRMED / INVALIDATED / …) */
+  htf_path_status?: HtfPathStatus | null;
+  /** HTF compact frozen at fill */
+  entry_htf?: HTFMarketStateCompact | null;
 };
 
 type Internal = RobotSession & {
@@ -229,6 +244,13 @@ type Internal = RobotSession & {
   last_tf5_candles: CapitalPriceCandle[];
   last_tf15_candles: CapitalPriceCandle[];
   last_tf30_candles: CapitalPriceCandle[];
+  /** Capital HOUR / HOUR_4 for HTF Market State Engine */
+  last_tf1h_candles: CapitalPriceCandle[];
+  last_tf4h_candles: CapitalPriceCandle[];
+  /** Full live HTF state (frames + thesis + path) */
+  htf_live: HTFMarketState | null;
+  /** Full HTF state frozen at fill — path tracking + ledger */
+  entry_htf_full: HTFMarketState | null;
   last_manage_minute_fetch_ms: number;
   /** Throttle multi-TF Capital fetch (5/15/30 change slowly) */
   last_multi_tf_fetch_ms: number;
@@ -454,6 +476,12 @@ function refreshEntryWatch(
         capital_tf5_dir: caps.tf5,
         capital_tf15_dir: caps.tf15,
         capital_tf30_dir: caps.tf30,
+        capital_tf4h_dir: caps.tf4h,
+        capital_tf1h_dir: caps.tf1h,
+        htf_engine_bias: caps.htf_engine_bias,
+        htf_summary: caps.htf_summary,
+        htf_phase: caps.htf_phase,
+        htf_primary_side: caps.htf_primary_side,
       };
     })(),
   });
@@ -477,6 +505,10 @@ function publicSession(s: Internal): RobotSession {
     last_tf5_candles: _tf5,
     last_tf15_candles: _tf15,
     last_tf30_candles: _tf30,
+    last_tf1h_candles: _tf1h,
+    last_tf4h_candles: _tf4h,
+    htf_live: _htfLive,
+    entry_htf_full: _entryHtfFull,
     last_manage_minute_fetch_ms: _mmf,
     last_multi_tf_fetch_ms: _mtf,
     peak_protect_armed: _ppa,
@@ -618,7 +650,13 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
 function promoteDeskRegimeFromCapital(s: Internal): void {
   const caps = capitalDirsForEntry(s);
   const hasCapital =
-    caps.tf30 != null || caps.tf15 != null || caps.tf5 != null || caps.m1 != null;
+    caps.tf30 != null ||
+    caps.tf15 != null ||
+    caps.tf5 != null ||
+    caps.tf4h != null ||
+    caps.tf1h != null ||
+    caps.htf_engine_bias != null ||
+    caps.m1 != null;
   if (!hasCapital) return;
   const story = readMarketStory(
     s.closedBars.length ? s.closedBars : s.ohlcState.last_closed ? [s.ohlcState.last_closed] : [],
@@ -629,6 +667,9 @@ function promoteDeskRegimeFromCapital(s: Internal): void {
     tf15: caps.tf15,
     tf5: caps.tf5,
     m1: caps.m1,
+    tf4h: caps.tf4h,
+    tf1h: caps.tf1h,
+    htf_engine_bias: caps.htf_engine_bias,
   });
 }
 
@@ -752,13 +793,31 @@ function capitalDirsForEntry(s: Internal): {
   tf5: 'UP' | 'DOWN' | 'FLAT' | null;
   tf15: 'UP' | 'DOWN' | 'FLAT' | null;
   tf30: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf4h: 'UP' | 'DOWN' | 'FLAT' | null;
+  tf1h: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_engine_bias: 'UP' | 'DOWN' | 'FLAT' | null;
+  htf_summary: string | null;
+  htf_phase: string | null;
+  htf_primary_side: 'BUY' | 'SELL' | 'WAIT' | null;
   m1_live: boolean;
 } {
+  // Refresh live HTF engine from cached Capital books (closed candles only inside engine)
+  refreshHtfMarketState(s);
   // 5m: trek. 15m/30m: Capital chart color (not trek — trek lied vs blue 15m).
   const tf5 = capitalTfTrekDir(s.last_tf5_candles, 4);
   const tf15 = liveChartCandleDir(s.last_tf15_candles);
   const tf30 = liveChartCandleDir(s.last_tf30_candles);
-  const htf = htfBiasFromDirs(asTfDir(tf30), asTfDir(tf15), asTfDir(tf5));
+  const tf4h = htfFrameDir(s.htf_live, '4H');
+  const tf1h = htfFrameDir(s.htf_live, '1H');
+  const engineBias =
+    s.htf_live?.bias === 'UP' || s.htf_live?.bias === 'DOWN' || s.htf_live?.bias === 'FLAT'
+      ? s.htf_live.bias
+      : null;
+  // 1m trigger still keys off working HTF — prefer engine hierarchy over 30/15/5 majority
+  const htf =
+    engineBias === 'UP' || engineBias === 'DOWN'
+      ? engineBias
+      : htfBiasFromDirs(asTfDir(tf30), asTfDir(tf15), asTfDir(tf5));
   const closedM1 = capitalCandleDir(s.last_minute_candles);
   const m1 = m1DirForEntry(s.last_minute_candles, htf);
   return {
@@ -766,14 +825,69 @@ function capitalDirsForEntry(s: Internal): {
     tf5,
     tf15,
     tf30,
+    tf4h,
+    tf1h,
+    htf_engine_bias: engineBias,
+    htf_summary: s.htf_live?.summary ?? null,
+    htf_phase: s.htf_live?.primary_thesis.phase ?? null,
+    htf_primary_side: s.htf_live?.primary_thesis.side ?? null,
     m1_live: Boolean(
       (htf === 'UP' || htf === 'DOWN') && m1 === htf && closedM1 === 'FLAT'
     ),
   };
 }
 
+/** Build / refresh HTFMarketState from Capital books. Never opens orders. */
+function refreshHtfMarketState(s: Internal): void {
+  if (
+    !s.last_tf5_candles.length &&
+    !s.last_tf15_candles.length &&
+    !s.last_tf30_candles.length &&
+    !s.last_tf1h_candles.length &&
+    !s.last_tf4h_candles.length
+  ) {
+    return;
+  }
+  const state = buildHtfMarketState({
+    tf4h: s.last_tf4h_candles,
+    tf1h: s.last_tf1h_candles,
+    tf30: s.last_tf30_candles,
+    tf15: s.last_tf15_candles,
+    tf5: s.last_tf5_candles,
+    live_price: s.last_mid,
+    now_ms: Date.now(),
+  });
+  s.htf_live = state;
+  s.htf_state = compactHtfMarketState(state);
+  if (s.entry_htf_full && s.open_side) {
+    const prev = s.htf_path_status;
+    const pathStatus = trackHtfPathLive({
+      entry_htf: s.entry_htf_full,
+      live_price: s.last_mid,
+      live_htf: state,
+    });
+    s.htf_path_status = pathStatus;
+    s.entry_htf_full = { ...s.entry_htf_full, path_status: pathStatus };
+    s.entry_htf = compactHtfMarketState(s.entry_htf_full);
+    if (
+      pathStatus !== prev &&
+      (pathStatus === 'CONFIRMED' ||
+        pathStatus === 'INVALIDATED' ||
+        pathStatus === 'CONFIRMING')
+    ) {
+      pushTick(s, {
+        phase: 'MANAGE',
+        bid: s.last_bid,
+        ask: s.last_ask,
+        mid: s.last_mid,
+        detail: `HTF PATH ${pathStatus} · ${s.entry_htf_full.expected_path.description.slice(0, 80)} · ${s.entry_htf_full.invalidation.slice(0, 60)}`,
+      });
+    }
+  }
+}
+
 /**
- * Refresh Capital 1m + 5m + 15m + 30m for the entry mind.
+ * Refresh Capital 1m + 5m + 15m + 30m + 1H + 4H for the entry mind / HTF engine.
  * 1m every ~2s when managing; higher TF every ~20s (they move slowly).
  */
 async function refreshCapitalMultiTf(
@@ -789,7 +903,9 @@ async function refreshCapitalMultiTf(
     now - s.last_multi_tf_fetch_ms >= 10_000 ||
     !s.last_tf5_candles.length ||
     !s.last_tf15_candles.length ||
-    !s.last_tf30_candles.length;
+    !s.last_tf30_candles.length ||
+    !s.last_tf1h_candles.length ||
+    !s.last_tf4h_candles.length;
 
   if (!need1m && !needHigher) return;
 
@@ -810,14 +926,19 @@ async function refreshCapitalMultiTf(
   if (needHigher) {
     s.last_multi_tf_fetch_ms = now;
     try {
-      const [tf5, tf15, tf30] = await Promise.all([
+      const [tf5, tf15, tf30, tf1h, tf4h] = await Promise.all([
         fetchCapitalPrices(session, s.epic, 'MINUTE_5', 12),
         fetchCapitalPrices(session, s.epic, 'MINUTE_15', 8),
         fetchCapitalPrices(session, s.epic, 'MINUTE_30', 6),
+        fetchCapitalPrices(session, s.epic, 'HOUR', 24),
+        fetchCapitalPrices(session, s.epic, 'HOUR_4', 24),
       ]);
       if (tf5.ok && tf5.candles.length) s.last_tf5_candles = tf5.candles;
       if (tf15.ok && tf15.candles.length) s.last_tf15_candles = tf15.candles;
       if (tf30.ok && tf30.candles.length) s.last_tf30_candles = tf30.candles;
+      if (tf1h.ok && tf1h.candles.length) s.last_tf1h_candles = tf1h.candles;
+      if (tf4h.ok && tf4h.candles.length) s.last_tf4h_candles = tf4h.candles;
+      refreshHtfMarketState(s);
       // Fresh Capital HTF may clear false RANGE without a new 10s close
       promoteDeskRegimeFromCapital(s);
     } catch {
@@ -897,6 +1018,12 @@ async function persistClosedTradeLedger(
       source,
       robot_id: s.id,
       opened_at: s.entry_at,
+      htf_state: s.entry_htf,
+      htf_bias: s.entry_htf?.bias != null ? String(s.entry_htf.bias) : null,
+      htf_structure:
+        s.entry_htf?.structure != null ? String(s.entry_htf.structure) : null,
+      htf_phase: s.entry_htf?.phase != null ? String(s.entry_htf.phase) : null,
+      htf_path_status: s.htf_path_status || s.entry_htf?.path_status || null,
     });
   } catch {
     /* DB ledger best-effort — never block auto-cal */
@@ -974,6 +1101,8 @@ async function persistClosedTradeLedger(
         epic: s.epic,
         entry_ctx: compactMarketContext(s.entry_market),
         exit_ctx: exitCtx,
+        entry_htf: s.entry_htf,
+        htf_path_status: s.htf_path_status || s.entry_htf?.path_status || null,
       },
       s.client_id
     );
@@ -1055,6 +1184,9 @@ function clearTradeState(s: Internal) {
   s.last_learner_features = null;
   s.last_entry_features = null;
   s.entry_market = null;
+  s.entry_htf = null;
+  s.entry_htf_full = null;
+  s.htf_path_status = null;
 }
 
 /**
@@ -2112,6 +2244,17 @@ async function enterTradeLocked(
     ? { hi: z.hi, lo: z.lo, mid: z.mid, width: z.width }
     : null;
   s.entry_market = buildMarketContext(s.closedBars, s.regime, s.multiFeed);
+  // Freeze HTF Market State at fill — path tracking + ledger (engine never opens)
+  refreshHtfMarketState(s);
+  if (s.htf_live) {
+    s.entry_htf_full = { ...s.htf_live, path_status: 'PENDING' };
+    s.entry_htf = compactHtfMarketState(s.entry_htf_full);
+    s.htf_path_status = 'PENDING';
+  } else {
+    s.entry_htf_full = null;
+    s.entry_htf = null;
+    s.htf_path_status = null;
+  }
   s.structure_breach_since_ms = 0;
   s.hardinv_breach_since_ms = 0;
   s.peak_protect_armed = false;
@@ -3493,6 +3636,12 @@ async function robotCycleLocked(s: Internal) {
           capital_tf5_dir: caps.tf5,
           capital_tf15_dir: caps.tf15,
           capital_tf30_dir: caps.tf30,
+          capital_tf4h_dir: caps.tf4h,
+          capital_tf1h_dir: caps.tf1h,
+          htf_engine_bias: caps.htf_engine_bias,
+          htf_summary: caps.htf_summary,
+          htf_phase: caps.htf_phase,
+          htf_primary_side: caps.htf_primary_side,
         });
         if (sig) {
           if (sig.entry_features) s.last_entry_features = sig.entry_features;
@@ -3901,6 +4050,13 @@ export async function startRobotSession(input: {
     last_tf5_candles: [],
     last_tf15_candles: [],
     last_tf30_candles: [],
+    last_tf1h_candles: [],
+    last_tf4h_candles: [],
+    htf_live: null,
+    entry_htf_full: null,
+    htf_state: null,
+    htf_path_status: null,
+    entry_htf: null,
     last_manage_minute_fetch_ms: 0,
     last_multi_tf_fetch_ms: 0,
     peak_protect_armed: false,
@@ -4031,6 +4187,12 @@ export async function attachManageOnlyRobot(input: {
         existing.entry_regime,
         existing.multiFeed
       );
+      refreshHtfMarketState(existing);
+      if (existing.htf_live && !existing.entry_htf_full) {
+        existing.entry_htf_full = { ...existing.htf_live, path_status: 'PENDING' };
+        existing.entry_htf = compactHtfMarketState(existing.entry_htf_full);
+        existing.htf_path_status = 'PENDING';
+      }
     }
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
@@ -4073,6 +4235,12 @@ export async function attachManageOnlyRobot(input: {
         internal.entry_regime,
         internal.multiFeed
       );
+      refreshHtfMarketState(internal);
+      if (internal.htf_live) {
+        internal.entry_htf_full = { ...internal.htf_live, path_status: 'PENDING' };
+        internal.entry_htf = compactHtfMarketState(internal.entry_htf_full);
+        internal.htf_path_status = 'PENDING';
+      }
     }
     pushTick(internal, {
       phase: 'ORDER',
