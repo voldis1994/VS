@@ -1,53 +1,58 @@
 /**
- * HTF Market State Engine — hierarchical higher-timeframe read for VS.
+ * HTF Market State Engine v2
  *
- * Hierarchy (top-down, NOT majority vote):
- *   4H → 1H → 30m → 15m → 5m
- * 1m / 10s stay trigger/execution outside this engine.
+ * Capital HTF → FACTS → INTERPRETATION → Market Thesis → (TraderMind / learning)
  *
- * Pure functions only — never opens orders. Feeds TraderMind / entry pipeline.
- * Structure uses closed candles only (no forming-tip lookahead).
+ * Never opens/closes orders. Structure from closed candles only (no lookahead).
+ * Thesis is frozen at creation; only `state` advances via post-creation events.
  */
-import type { TfCandle, TfDir } from './multiTfRead.js';
-import { lastClosedTfCandle } from './multiTfRead.js';
+import type { TfDir } from './multiTfRead.js';
+import {
+  buildHtfFacts,
+  factsFrame,
+  type HtfCandleBook,
+  type HtfFactsBundle,
+  type HtfStructureLabel,
+  type HtfTfFacts,
+  type HtfTfFrame,
+  type HtfTimedCandle,
+  type HtfVolatility,
+  FRAME_ORDER,
+  HTF_HISTORY_MIN,
+  HTF_HISTORY_TARGET,
+} from './htfFacts.js';
+import {
+  interpretHtf,
+  type HtfInterpretation,
+  type HtfPhase,
+  type HtfTrendMaturity,
+  type HtfTfInterpretation,
+} from './htfInterpretation.js';
 
-export type HtfTfFrame = '4H' | '1H' | '30m' | '15m' | '5m';
-
-export type HtfStructureLabel = 'HH' | 'HL' | 'LH' | 'LL' | 'RANGE' | 'UNKNOWN';
-
-export type HtfTrendMaturity =
-  | 'EARLY'
-  | 'MID'
-  | 'LATE'
-  | 'EXHAUSTED'
-  | 'NONE';
-
-export type HtfPhase =
-  | 'IMPULSE'
-  | 'PULLBACK'
-  | 'TRANSITION'
-  | 'COMPRESSION'
-  | 'EXPANSION';
-
-export type HtfVolatility = 'LOW' | 'NORMAL' | 'HIGH' | 'EXTREME';
-
-export type HtfBreakoutState = 'NONE' | 'ACCEPTANCE' | 'REJECTION';
-
-export type HtfLiquidityEvent =
-  | 'NONE'
-  | 'SWEEP_HIGH'
-  | 'SWEEP_LOW'
-  | 'RECLAIM_HIGH'
-  | 'RECLAIM_LOW';
-
-export type HtfPriceLocation =
-  | 'ABOVE_STRUCTURE'
-  | 'BELOW_STRUCTURE'
-  | 'AT_SWING_HIGH'
-  | 'AT_SWING_LOW'
-  | 'MID_RANGE'
-  | 'PREMIUM'
-  | 'DISCOUNT';
+export type {
+  HtfCandleBook,
+  HtfFactsBundle,
+  HtfStructureLabel,
+  HtfTfFrame,
+  HtfTimedCandle,
+  HtfVolatility,
+  HtfTfFacts,
+} from './htfFacts.js';
+export {
+  closedCandlesOnly,
+  buildHtfFacts,
+  structureFromSwings,
+  HTF_HISTORY_MIN,
+  HTF_HISTORY_TARGET,
+  FRAME_ORDER,
+} from './htfFacts.js';
+export type {
+  HtfInterpretation,
+  HtfPhase,
+  HtfTrendMaturity,
+  HtfTfInterpretation,
+} from './htfInterpretation.js';
+export { interpretHtf, classifyOppositeMove } from './htfInterpretation.js';
 
 export type HtfPathStatus =
   | 'PENDING'
@@ -58,35 +63,33 @@ export type HtfPathStatus =
 
 export type HtfThesisSide = 'BUY' | 'SELL' | 'WAIT';
 
-export type HtfSwingPoint = {
-  price: number;
-  /** Closed-candle index in the analysis window (no forming tip). */
-  index: number;
-  kind: 'H' | 'L';
-};
+export type ThesisConditionKind =
+  | 'CLOSE_ABOVE'
+  | 'CLOSE_BELOW'
+  | 'CROSS_ABOVE'
+  | 'CROSS_BELOW'
+  | 'STRUCTURAL_HOLD'
+  | 'NEW_HH'
+  | 'NEW_HL'
+  | 'NEW_LL'
+  | 'NEW_LH'
+  | 'ACCEPTANCE_UP'
+  | 'ACCEPTANCE_DOWN';
 
-export type HtfTfState = {
+export type ThesisCondition = {
+  id: string;
+  kind: ThesisConditionKind;
+  level: number | null;
   tf: HtfTfFrame;
-  structure: HtfStructureLabel;
-  trend: TfDir;
-  maturity: HtfTrendMaturity;
-  phase: HtfPhase;
-  swing_high: number | null;
-  swing_low: number | null;
-  last_swing_high: HtfSwingPoint | null;
-  last_swing_low: HtfSwingPoint | null;
-  liquidity: HtfLiquidityEvent;
-  price_location: HtfPriceLocation;
-  breakout: HtfBreakoutState;
-  volatility: HtfVolatility;
-  /** Closed-body direction of the last closed candle */
-  dir: TfDir;
-  confidence: number;
-  /** Price location 0..1 inside swing high/low range */
-  structure_pos: number | null;
+  description: string;
+  /**
+   * True if level was already satisfied by freeze baseline close.
+   * Such conditions need a leave+re-cross (or are ignored until retest).
+   */
+  satisfied_at_creation: boolean;
 };
 
-export type HtfThesis = {
+export type HtfThesisLeg = {
   side: HtfThesisSide;
   summary: string;
   structure: HtfStructureLabel;
@@ -94,35 +97,47 @@ export type HtfThesis = {
   anchor_tf: HtfTfFrame;
 };
 
-export type HtfExpectedPath = {
-  description: string;
-  next_events: string[];
-  /** Levels that confirm the primary thesis path (price must reach in thesis direction) */
-  confirm_levels: number[];
-  /** Levels that invalidate the primary thesis */
-  invalidate_levels: number[];
+/**
+ * Verifiable Market Thesis — frozen after creation.
+ * Only `state` (+ timing fields) may change via advanceFrozenThesis.
+ */
+export type MarketThesis = {
+  primary_thesis: HtfThesisLeg;
+  alternative_thesis: HtfThesisLeg;
+  expected_events: string[];
+  confirmation_conditions: ThesisCondition[];
+  invalidation_conditions: ThesisCondition[];
+  state: HtfPathStatus;
+  /** Heuristic score 0..1 — NOT calibrated probability */
+  score: number;
+  created_at: number;
+  freeze: {
+    price: number;
+    last_index_by_tf: Partial<Record<HtfTfFrame, number>>;
+    last_time_by_tf: Partial<Record<HtfTfFrame, number | null>>;
+  };
+  /** Filled when state becomes CONFIRMING / CONFIRMED */
+  confirmed_at: number | null;
+  /** Filled when INVALIDATED */
+  invalidated_at: number | null;
+  events_hit: string[];
 };
 
 export type HTFMarketState = {
   at_ms: number;
-  /** Ordered 4H → 1H → 30m → 15m → 5m (missing frames omitted) */
-  frames: HtfTfState[];
-  primary_thesis: HtfThesis;
-  alternative_thesis: HtfThesis;
-  expected_path: HtfExpectedPath;
-  invalidation: string;
-  confidence: number;
-  /**
-   * Working bias from hierarchy (4H leads). FLAT when unclear/transition.
-   * Never a simple 30/15/5 majority vote.
-   */
+  facts: HtfFactsBundle;
+  interpretation: HtfInterpretation;
+  thesis: MarketThesis;
+  /** Convenience mirrors for desk / mind */
   bias: TfDir;
   path_status: HtfPathStatus;
   summary: string;
   summary_lv: string;
+  /** @deprecated use thesis.score — kept for compact compat during transition */
+  score: number;
 };
 
-/** Compact snapshot frozen on entry / closed trade for expectancy. */
+/** Compact snapshot frozen on entry / closed trade. */
 export type HTFMarketStateCompact = {
   bias: TfDir | string;
   structure: HtfStructureLabel | string;
@@ -132,786 +147,857 @@ export type HTFMarketStateCompact = {
   primary_side: HtfThesisSide | string;
   alt_side: HtfThesisSide | string;
   path_status: HtfPathStatus | string;
-  confidence: number;
+  /** Heuristic score — not probability */
+  score: number;
+  /** @deprecated alias of score */
+  confidence?: number;
   anchor_tf: HtfTfFrame | string;
-  liquidity: HtfLiquidityEvent | string;
-  breakout: HtfBreakoutState | string;
-  price_location: HtfPriceLocation | string;
+  liquidity: string;
+  breakout: string;
+  price_location: string;
   expected_path: string;
   invalidation: string;
+  thesis_created_at: number | null;
+  expected_events: string[];
+  events_hit: string[];
+  confirmed_at: number | null;
+  invalidated_at: number | null;
 };
 
-export type HtfCandleBook = {
-  tf4h?: TfCandle[] | null;
-  tf1h?: TfCandle[] | null;
-  tf30?: TfCandle[] | null;
-  tf15?: TfCandle[] | null;
-  tf5?: TfCandle[] | null;
-  /** Optional live mid for path evaluation (not used for structure pivots). */
-  live_price?: number | null;
-  now_ms?: number;
+/** Outcome metrics measured at trade close against frozen thesis. */
+export type HtfThesisOutcome = {
+  thesis_direction_correct: boolean | null;
+  phase_at_entry: string | null;
+  phase_at_exit: string | null;
+  expected_events_hit: string[];
+  expected_events_missed: string[];
+  invalidated: boolean;
+  time_to_confirmation_ms: number | null;
+  time_to_invalidation_ms: number | null;
+  path_status: HtfPathStatus | string;
 };
 
-const FRAME_ORDER: HtfTfFrame[] = ['4H', '1H', '30m', '15m', '5m'];
-
-function candleDir(c: TfCandle | null | undefined): TfDir {
-  if (!c || !Number.isFinite(c.open) || !Number.isFinite(c.close)) return 'FLAT';
-  if (c.close > c.open) return 'UP';
-  if (c.close < c.open) return 'DOWN';
-  return 'FLAT';
-}
-
-/** Closed candles only — drop forming tip when ≥2 present (no lookahead). */
-export function closedCandlesOnly(
-  candles: TfCandle[] | null | undefined
-): TfCandle[] {
-  if (!candles?.length) return [];
-  if (candles.length >= 2) return candles.slice(0, -1);
-  return candles.slice();
-}
-
-type Pivot = HtfSwingPoint;
-
-function pivots(candles: TfCandle[]): Pivot[] {
-  const out: Pivot[] = [];
-  for (let i = 1; i < candles.length - 1; i++) {
-    const a = candles[i - 1]!;
-    const b = candles[i]!;
-    const c = candles[i + 1]!;
-    if (b.high >= a.high && b.high >= c.high) {
-      out.push({ index: i, price: b.high, kind: 'H' });
-    }
-    if (b.low <= a.low && b.low <= c.low) {
-      out.push({ index: i, price: b.low, kind: 'L' });
-    }
-  }
-  return out;
-}
-
-export function structureFromSwings(
-  highs: Pivot[],
-  lows: Pivot[]
-): HtfStructureLabel {
-  if (highs.length < 2 || lows.length < 2) return 'UNKNOWN';
-  const h1 = highs[highs.length - 1]!.price;
-  const h0 = highs[highs.length - 2]!.price;
-  const l1 = lows[lows.length - 1]!.price;
-  const l0 = lows[lows.length - 2]!.price;
-  const hh = h1 > h0;
-  const lh = h1 < h0;
-  const hl = l1 > l0;
-  const ll = l1 < l0;
-  if (hh && hl) return 'HH'; // bullish structure portrait (HH+HL) — label as HH family
-  if (ll && lh) return 'LL'; // bearish (LL+LH)
-  if (hh && !hl && !ll) return 'HH';
-  if (hl && !hh && !lh) return 'HL';
-  if (ll && !lh && !hh) return 'LL';
-  if (lh && !ll && !hl) return 'LH';
-  // Mixed swings → range unless one side clearly dominates
-  if ((hh && ll) || (lh && hl)) return 'RANGE';
-  return 'RANGE';
-}
-
-/** Map structure+net path → trend without majority TF voting. */
-export function trendFromStructure(
+function leg(
+  side: HtfThesisSide,
+  summary: string,
   structure: HtfStructureLabel,
-  net: number,
-  mid: number
-): TfDir {
-  const thr = Math.max(Math.abs(mid) * 0.0004, 1e-9);
-  if (structure === 'HH' || structure === 'HL') {
-    if (net < -thr) return 'FLAT'; // structure bullish but path already failed
-    return 'UP';
-  }
-  if (structure === 'LL' || structure === 'LH') {
-    if (net > thr) return 'FLAT';
-    return 'DOWN';
-  }
-  if (structure === 'RANGE' || structure === 'UNKNOWN') {
-    if (net > thr * 2) return 'UP';
-    if (net < -thr * 2) return 'DOWN';
-    return 'FLAT';
-  }
-  return 'FLAT';
+  phase: HtfPhase,
+  anchor_tf: HtfTfFrame
+): HtfThesisLeg {
+  return { side, summary, structure, phase, anchor_tf };
 }
 
-function avgRange(candles: TfCandle[]): number {
-  if (!candles.length) return 0;
-  let sum = 0;
-  for (const c of candles) sum += Math.max(0, c.high - c.low);
-  return sum / candles.length;
-}
-
-export function volatilityFromCandles(candles: TfCandle[]): HtfVolatility {
-  if (candles.length < 4) return 'NORMAL';
-  const recent = candles.slice(-4);
-  const prior = candles.slice(-12, -4);
-  const rAvg = avgRange(recent);
-  const pAvg = avgRange(prior.length ? prior : candles.slice(0, -4));
-  if (pAvg <= 1e-12) return rAvg > 0 ? 'HIGH' : 'LOW';
-  const ratio = rAvg / pAvg;
-  if (ratio < 0.55) return 'LOW';
-  if (ratio < 1.25) return 'NORMAL';
-  if (ratio < 2.0) return 'HIGH';
-  return 'EXTREME';
-}
-
-export function phaseFromFrame(input: {
-  structure: HtfStructureLabel;
-  trend: TfDir;
-  volatility: HtfVolatility;
-  lastDir: TfDir;
-  structurePos: number | null;
-  breakout: HtfBreakoutState;
-}): HtfPhase {
-  const { structure, trend, volatility, lastDir, structurePos, breakout } = input;
-  if (volatility === 'LOW' && (structure === 'RANGE' || structure === 'UNKNOWN')) {
-    return 'COMPRESSION';
-  }
-  if (volatility === 'HIGH' || volatility === 'EXTREME') {
-    if (breakout === 'ACCEPTANCE' || trend === lastDir) return 'EXPANSION';
-  }
-  if (trend === 'UP' && lastDir === 'DOWN') return 'PULLBACK';
-  if (trend === 'DOWN' && lastDir === 'UP') return 'PULLBACK';
-  if (trend === 'FLAT' && structure === 'RANGE') {
-    return volatility === 'LOW' ? 'COMPRESSION' : 'TRANSITION';
-  }
-  if (breakout === 'REJECTION') return 'TRANSITION';
-  if (trend !== 'FLAT' && lastDir === trend) {
-    if (
-      structurePos != null &&
-      ((trend === 'UP' && structurePos >= 0.85) ||
-        (trend === 'DOWN' && structurePos <= 0.15))
-    ) {
-      return 'EXPANSION';
-    }
-    return 'IMPULSE';
-  }
-  if (trend !== 'FLAT') return 'IMPULSE';
-  return 'TRANSITION';
-}
-
-export function maturityFromFrame(input: {
-  trend: TfDir;
-  structure: HtfStructureLabel;
-  structurePos: number | null;
-  swingCount: number;
-  phase: HtfPhase;
-}): HtfTrendMaturity {
-  const { trend, structurePos, swingCount, phase } = input;
-  if (trend === 'FLAT') return 'NONE';
-  if (phase === 'TRANSITION' || phase === 'COMPRESSION') return 'NONE';
-  if (swingCount <= 2) return 'EARLY';
-  if (
-    structurePos != null &&
-    ((trend === 'UP' && structurePos >= 0.9) ||
-      (trend === 'DOWN' && structurePos <= 0.1))
-  ) {
-    return 'EXHAUSTED';
-  }
-  if (swingCount >= 5) return 'LATE';
-  if (swingCount >= 3) return 'MID';
-  return 'EARLY';
-}
-
-export function liquidityEvent(
-  candles: TfCandle[],
-  swingHigh: number | null,
-  swingLow: number | null
-): HtfLiquidityEvent {
-  if (candles.length < 2) return 'NONE';
-  const last = candles[candles.length - 1]!;
-  const prev = candles[candles.length - 2]!;
-  const eps = Math.max(Math.abs(last.close) * 1e-5, 1e-9);
-
-  if (swingHigh != null && Number.isFinite(swingHigh)) {
-    const swept =
-      last.high > swingHigh + eps && last.close < swingHigh - eps;
-    const reclaimed =
-      prev.high > swingHigh + eps &&
-      prev.close < swingHigh &&
-      last.close > swingHigh + eps;
-    if (reclaimed) return 'RECLAIM_HIGH';
-    if (swept) return 'SWEEP_HIGH';
-  }
-  if (swingLow != null && Number.isFinite(swingLow)) {
-    const swept =
-      last.low < swingLow - eps && last.close > swingLow + eps;
-    const reclaimed =
-      prev.low < swingLow - eps &&
-      prev.close > swingLow &&
-      last.close < swingLow - eps;
-    if (reclaimed) return 'RECLAIM_LOW';
-    if (swept) return 'SWEEP_LOW';
-  }
-  return 'NONE';
-}
-
-export function breakoutState(
-  candles: TfCandle[],
-  swingHigh: number | null,
-  swingLow: number | null
-): HtfBreakoutState {
-  if (candles.length < 2) return 'NONE';
-  const last = candles[candles.length - 1]!;
-  const eps = Math.max(Math.abs(last.close) * 1e-5, 1e-9);
-  if (swingHigh != null) {
-    if (last.close > swingHigh + eps) return 'ACCEPTANCE';
-    if (last.high > swingHigh + eps && last.close <= swingHigh) return 'REJECTION';
-  }
-  if (swingLow != null) {
-    if (last.close < swingLow - eps) return 'ACCEPTANCE';
-    if (last.low < swingLow - eps && last.close >= swingLow) return 'REJECTION';
-  }
-  return 'NONE';
-}
-
-export function priceLocationInStructure(
+function beyondClose(
   close: number,
-  swingHigh: number | null,
-  swingLow: number | null
-): { location: HtfPriceLocation; pos: number | null } {
-  if (
-    swingHigh == null ||
-    swingLow == null ||
-    !Number.isFinite(swingHigh) ||
-    !Number.isFinite(swingLow) ||
-    swingHigh <= swingLow
-  ) {
-    return { location: 'MID_RANGE', pos: null };
-  }
-  const width = swingHigh - swingLow;
-  const pos = Math.min(1, Math.max(0, (close - swingLow) / width));
-  const near = Math.max(width * 0.05, Math.abs(close) * 1e-5);
-  if (close > swingHigh + near) return { location: 'ABOVE_STRUCTURE', pos: 1 };
-  if (close < swingLow - near) return { location: 'BELOW_STRUCTURE', pos: 0 };
-  if (Math.abs(close - swingHigh) <= near) return { location: 'AT_SWING_HIGH', pos };
-  if (Math.abs(close - swingLow) <= near) return { location: 'AT_SWING_LOW', pos };
-  if (pos >= 0.65) return { location: 'PREMIUM', pos };
-  if (pos <= 0.35) return { location: 'DISCOUNT', pos };
-  return { location: 'MID_RANGE', pos };
+  kind: ThesisConditionKind,
+  level: number | null
+): boolean {
+  if (level == null || !Number.isFinite(level)) return false;
+  const eps = Math.max(Math.abs(close) * 1e-5, 1e-9);
+  if (kind === 'CLOSE_ABOVE' || kind === 'CROSS_ABOVE') return close > level + eps;
+  if (kind === 'CLOSE_BELOW' || kind === 'CROSS_BELOW') return close < level - eps;
+  return false;
 }
 
-function analyzeTf(
-  tf: HtfTfFrame,
-  raw: TfCandle[] | null | undefined
-): HtfTfState | null {
-  const candles = closedCandlesOnly(raw);
-  if (candles.length < 3) return null;
-
-  const p = pivots(candles);
-  const highs = p.filter((x) => x.kind === 'H');
-  const lows = p.filter((x) => x.kind === 'L');
-  const structure = structureFromSwings(highs.slice(-4), lows.slice(-4));
-  const first = candles[0]!;
-  const last = candles[candles.length - 1]!;
-  const net = last.close - first.open;
-  const mid = Math.abs(last.close) || 1;
-  const trend = trendFromStructure(structure, net, mid);
-  const lastSwingHigh = highs.length ? highs[highs.length - 1]! : null;
-  const lastSwingLow = lows.length ? lows[lows.length - 1]! : null;
-  // Use prior swing for sweep/breakout so the current extreme isn't self-referential
-  const refHigh =
-    highs.length >= 2 ? highs[highs.length - 2]!.price : lastSwingHigh?.price ?? null;
-  const refLow =
-    lows.length >= 2 ? lows[lows.length - 2]!.price : lastSwingLow?.price ?? null;
-  const { location, pos } = priceLocationInStructure(last.close, refHigh, refLow);
-  const vol = volatilityFromCandles(candles);
-  const lastDir = candleDir(last);
-  const brk = breakoutState(candles, refHigh, refLow);
-  const phase = phaseFromFrame({
-    structure,
-    trend,
-    volatility: vol,
-    lastDir,
-    structurePos: pos,
-    breakout: brk,
-  });
-  const maturity = maturityFromFrame({
-    trend,
-    structure,
-    structurePos: pos,
-    swingCount: highs.length + lows.length,
-    phase,
-  });
-  const liq = liquidityEvent(candles, refHigh, refLow);
-
-  let confidence = 0.45;
-  if (structure === 'HH' || structure === 'LL') confidence += 0.2;
-  else if (structure === 'HL' || structure === 'LH') confidence += 0.12;
-  if (phase === 'IMPULSE' || phase === 'EXPANSION') confidence += 0.1;
-  if (phase === 'COMPRESSION' || phase === 'TRANSITION') confidence -= 0.05;
-  if (maturity === 'EXHAUSTED') confidence -= 0.12;
-  if (maturity === 'EARLY') confidence += 0.05;
-  if (liq !== 'NONE') confidence += 0.05;
-  if (brk === 'ACCEPTANCE') confidence += 0.08;
-  if (brk === 'REJECTION') confidence -= 0.05;
-  confidence = Math.max(0.15, Math.min(0.95, confidence));
-
-  return {
-    tf,
-    structure,
-    trend,
-    maturity,
-    phase,
-    swing_high: refHigh,
-    swing_low: refLow,
-    last_swing_high: lastSwingHigh,
-    last_swing_low: lastSwingLow,
-    liquidity: liq,
-    price_location: location,
-    breakout: brk,
-    volatility: vol,
-    dir: lastDir,
-    confidence,
-    structure_pos: pos,
-  };
-}
-
-/**
- * Hierarchical bias — higher TF leads. Lower TF may mark pullback/transition
- * but must not flip the working side by majority count.
- */
-export function hierarchicalBias(frames: HtfTfState[]): {
-  bias: TfDir;
-  anchor: HtfTfState | null;
-  phase: HtfPhase;
-  confidence: number;
+function buildConditions(
+  bias: TfDir,
+  phase: HtfPhase,
+  anchor: HtfTfFacts | null,
+  freezePrice: number
+): {
+  expected_events: string[];
+  confirmation: ThesisCondition[];
+  invalidation: ThesisCondition[];
+  invalidation_text: string;
+  description: string;
 } {
-  if (!frames.length) {
-    return { bias: 'FLAT', anchor: null, phase: 'TRANSITION', confidence: 0 };
-  }
-  // Walk top-down for first clear trend
-  let anchor: HtfTfState | null = null;
-  for (const f of frames) {
-    if (f.trend === 'UP' || f.trend === 'DOWN') {
-      anchor = f;
-      break;
-    }
-  }
-  if (!anchor) {
-    const lowest = frames[frames.length - 1]!;
-    return {
-      bias: 'FLAT',
-      anchor: lowest,
-      phase: lowest.phase,
-      confidence: Math.min(...frames.map((f) => f.confidence)),
-    };
-  }
-
-  let bias: TfDir = anchor.trend;
-  let phase = anchor.phase;
-  let confidence = anchor.confidence;
-
-  // Lower frames refine phase; only invalidate bias on sustained opposite structure
-  for (const f of frames) {
-    if (f.tf === anchor.tf) continue;
-    const rank = FRAME_ORDER.indexOf(f.tf);
-    const anchorRank = FRAME_ORDER.indexOf(anchor.tf);
-    if (rank <= anchorRank) continue;
-
-    if (f.trend === bias) {
-      if (f.phase === 'PULLBACK') phase = 'PULLBACK';
-      else if (
-        (f.phase === 'IMPULSE' || f.phase === 'EXPANSION') &&
-        phase !== 'PULLBACK'
-      ) {
-        phase = f.phase;
-        confidence = Math.min(0.95, confidence + 0.04);
-      }
-      continue;
-    }
-    if (f.trend === 'FLAT') {
-      if (f.phase === 'COMPRESSION') phase = 'COMPRESSION';
-      else if (phase !== 'PULLBACK') phase = 'TRANSITION';
-      confidence = Math.max(0.2, confidence - 0.06);
-      continue;
-    }
-    // Opposite trend on lower TF — default to pullback inside higher bias
-    // (NOT a majority flip). Strong opposite structure on immediate child → FLAT.
-    if (
-      (f.structure === 'HH' || f.structure === 'LL') &&
-      f.confidence >= 0.7 &&
-      rank - anchorRank === 1 &&
-      f.phase !== 'PULLBACK'
-    ) {
-      bias = 'FLAT';
-      phase = 'TRANSITION';
-      confidence = Math.max(0.2, Math.min(confidence, f.confidence) - 0.1);
-      break;
-    }
-    phase = 'PULLBACK';
-    confidence = Math.max(0.25, confidence - 0.08);
-  }
-
-  return { bias, anchor, phase, confidence };
-}
-
-function thesisFromHierarchy(
-  bias: TfDir,
-  phase: HtfPhase,
-  anchor: HtfTfState | null,
-  frames: HtfTfState[],
-  kind: 'primary' | 'alt'
-): HtfThesis {
-  const a = anchor || frames[0]!;
-  const structure = a?.structure || 'UNKNOWN';
-  const anchorTf = a?.tf || '30m';
-
-  if (kind === 'primary') {
-    if (bias === 'UP') {
-      return {
-        side: 'BUY',
-        summary:
-          phase === 'PULLBACK'
-            ? `${anchorTf} bullish structure · pullback — expect HL hold then continuation`
-            : phase === 'COMPRESSION'
-              ? `${anchorTf} bullish bias inside compression — wait expansion acceptance UP`
-              : `${anchorTf} bullish (${structure}) · ${phase.toLowerCase()} — work as buyer`,
-        structure,
-        phase,
-        anchor_tf: anchorTf,
-      };
-    }
-    if (bias === 'DOWN') {
-      return {
-        side: 'SELL',
-        summary:
-          phase === 'PULLBACK'
-            ? `${anchorTf} bearish structure · pullback — expect LH hold then continuation`
-            : phase === 'COMPRESSION'
-              ? `${anchorTf} bearish bias inside compression — wait expansion acceptance DOWN`
-              : `${anchorTf} bearish (${structure}) · ${phase.toLowerCase()} — work as seller`,
-        structure,
-        phase,
-        anchor_tf: anchorTf,
-      };
-    }
-    return {
-      side: 'WAIT',
-      summary: `${anchorTf} unclear / transition (${structure}) — no HTF side`,
-      structure,
-      phase: phase || 'TRANSITION',
-      anchor_tf: anchorTf,
-    };
-  }
-
-  // Alternative thesis — fade / opposite / range mean-reversion
-  if (bias === 'UP') {
-    return {
-      side: 'SELL',
-      summary:
-        a?.maturity === 'EXHAUSTED'
-          ? `Alt: late ${anchorTf} rally exhaustion — fade only on rejection`
-          : `Alt: failed HL / sweep-high rejection flips to SELL`,
-      structure: structure === 'HH' || structure === 'HL' ? 'LH' : 'RANGE',
-      phase: 'TRANSITION',
-      anchor_tf: anchorTf,
-    };
-  }
-  if (bias === 'DOWN') {
-    return {
-      side: 'BUY',
-      summary:
-        a?.maturity === 'EXHAUSTED'
-          ? `Alt: late ${anchorTf} selloff exhaustion — fade only on rejection`
-          : `Alt: failed LH / sweep-low reclaim flips to BUY`,
-      structure: structure === 'LL' || structure === 'LH' ? 'HL' : 'RANGE',
-      phase: 'TRANSITION',
-      anchor_tf: anchorTf,
-    };
-  }
-  const lowest = frames[frames.length - 1];
-  if (lowest?.dir === 'UP') {
-    return {
-      side: 'BUY',
-      summary: `Alt: range break acceptance UP on ${lowest.tf}`,
-      structure: 'HH',
-      phase: 'EXPANSION',
-      anchor_tf: lowest.tf,
-    };
-  }
-  if (lowest?.dir === 'DOWN') {
-    return {
-      side: 'SELL',
-      summary: `Alt: range break acceptance DOWN on ${lowest.tf}`,
-      structure: 'LL',
-      phase: 'EXPANSION',
-      anchor_tf: lowest.tf,
-    };
-  }
-  return {
-    side: 'WAIT',
-    summary: 'Alt: stay flat until HTF structure clarifies',
-    structure: 'RANGE',
-    phase: 'COMPRESSION',
-    anchor_tf: anchorTf,
-  };
-}
-
-function buildExpectedPath(
-  bias: TfDir,
-  phase: HtfPhase,
-  anchor: HtfTfState | null,
-  frames: HtfTfState[]
-): { path: HtfExpectedPath; invalidation: string } {
-  const a = anchor || frames[0];
-  const sh = a?.swing_high ?? null;
-  const sl = a?.swing_low ?? null;
-  const confirm: number[] = [];
-  const invalidate: number[] = [];
-  const events: string[] = [];
+  const tf = anchor?.tf || '30m';
+  const sh = anchor?.structure_high ?? null;
+  const sl = anchor?.structure_low ?? null;
+  const confirmation: ThesisCondition[] = [];
+  const invalidation: ThesisCondition[] = [];
+  const expected_events: string[] = [];
   let description: string;
-  let invalidation: string;
+  let invalidation_text: string;
+
+  const sat = (kind: ThesisConditionKind, level: number | null) =>
+    beyondClose(freezePrice, kind, level);
 
   if (bias === 'UP') {
     if (phase === 'PULLBACK') {
-      description = 'Pullback toward HL/discount, then impulse continuation UP';
-      events.push('hold_hl', 'impulse_up', 'take_liquidity_above');
+      description = 'Correction toward HL/discount, then continuation impulse UP';
+      expected_events.push('hold_hl', 'impulse_up', 'new_hh_or_extension');
       if (sl != null) {
-        confirm.push(sl);
-        invalidate.push(sl);
+        confirmation.push({
+          id: 'c_hold_hl',
+          kind: 'STRUCTURAL_HOLD',
+          level: sl,
+          tf,
+          description: `Hold above HL ${sl.toFixed(2)} then impulse close`,
+          satisfied_at_creation: freezePrice > sl,
+        });
+        invalidation.push({
+          id: 'i_break_hl',
+          kind: 'CROSS_BELOW',
+          level: sl,
+          tf,
+          description: `Closed break below HL ${sl.toFixed(2)}`,
+          satisfied_at_creation: sat('CROSS_BELOW', sl),
+        });
       }
-      if (sh != null) confirm.push(sh);
-      invalidation = sl != null
-        ? `Close below swing low ${sl.toFixed(2)} invalidates bullish HTF path`
-        : 'Break of last HL / swing low invalidates bullish path';
-    } else if (phase === 'COMPRESSION') {
-      description = 'Compression then expansion — accept UP break of swing high';
-      events.push('compress', 'break_high_accept', 'expansion_up');
-      if (sh != null) confirm.push(sh);
-      if (sl != null) invalidate.push(sl);
-      invalidation = sl != null
-        ? `Accepted break below ${sl.toFixed(2)} flips path bearish`
-        : 'Accepted downside break invalidates bullish compression path';
+      if (sh != null) {
+        confirmation.push({
+          id: 'c_ext_high',
+          kind: 'CROSS_ABOVE',
+          level: sh,
+          tf,
+          description: `Cross above structure high ${sh.toFixed(2)} after thesis`,
+          satisfied_at_creation: sat('CROSS_ABOVE', sh),
+        });
+      }
+      confirmation.push({
+        id: 'c_accept_up',
+        kind: 'ACCEPTANCE_UP',
+        level: sh,
+        tf,
+        description: 'Two-close acceptance above structure high',
+        satisfied_at_creation: false,
+      });
+      invalidation_text =
+        sl != null
+          ? `Closed break below HL ${sl.toFixed(2)} invalidates bullish path`
+          : 'Closed break of bullish structure invalidates path';
+    } else if (phase === 'COMPRESSION' || phase === 'RANGE_BALANCE') {
+      description = 'Compression/balance — wait accepted UP break';
+      expected_events.push('compress', 'acceptance_up', 'expansion_up');
+      if (sh != null) {
+        confirmation.push({
+          id: 'c_accept_up',
+          kind: 'ACCEPTANCE_UP',
+          level: sh,
+          tf,
+          description: `Acceptance above ${sh.toFixed(2)}`,
+          satisfied_at_creation: false,
+        });
+      }
+      if (sl != null) {
+        invalidation.push({
+          id: 'i_accept_down',
+          kind: 'ACCEPTANCE_DOWN',
+          level: sl,
+          tf,
+          description: `Acceptance below ${sl.toFixed(2)}`,
+          satisfied_at_creation: false,
+        });
+      }
+      invalidation_text = 'Accepted downside break invalidates bullish compression path';
     } else {
-      description = 'Impulse/expansion UP — hold structure, seek higher liquidity';
-      events.push('hold_structure', 'extension_up');
-      if (sh != null) confirm.push(sh);
-      if (sl != null) invalidate.push(sl);
-      invalidation = sl != null
-        ? `Close below ${sl.toFixed(2)} invalidates UP impulse path`
-        : 'Loss of bullish structure invalidates path';
+      description = 'Bullish impulse/expansion — hold structure, seek extension';
+      expected_events.push('hold_structure', 'extension_up', 'new_hh');
+      if (sh != null) {
+        confirmation.push({
+          id: 'c_new_hh',
+          kind: 'NEW_HH',
+          level: sh,
+          tf,
+          description: `New HH / close above ${sh.toFixed(2)} after thesis`,
+          satisfied_at_creation: sat('CROSS_ABOVE', sh),
+        });
+      }
+      if (sl != null) {
+        invalidation.push({
+          id: 'i_break_hl',
+          kind: 'CROSS_BELOW',
+          level: sl,
+          tf,
+          description: `Closed break below ${sl.toFixed(2)}`,
+          satisfied_at_creation: sat('CROSS_BELOW', sl),
+        });
+      }
+      invalidation_text =
+        sl != null
+          ? `Closed break below ${sl.toFixed(2)} invalidates UP path`
+          : 'Loss of bullish structure invalidates path';
     }
   } else if (bias === 'DOWN') {
     if (phase === 'PULLBACK') {
-      description = 'Pullback toward LH/premium, then impulse continuation DOWN';
-      events.push('hold_lh', 'impulse_down', 'take_liquidity_below');
+      description = 'Correction toward LH/premium, then continuation impulse DOWN';
+      expected_events.push('hold_lh', 'impulse_down', 'new_ll_or_extension');
       if (sh != null) {
-        confirm.push(sh);
-        invalidate.push(sh);
+        confirmation.push({
+          id: 'c_hold_lh',
+          kind: 'STRUCTURAL_HOLD',
+          level: sh,
+          tf,
+          description: `Hold below LH ${sh.toFixed(2)} then impulse close`,
+          satisfied_at_creation: freezePrice < sh,
+        });
+        invalidation.push({
+          id: 'i_break_lh',
+          kind: 'CROSS_ABOVE',
+          level: sh,
+          tf,
+          description: `Closed break above LH ${sh.toFixed(2)}`,
+          satisfied_at_creation: sat('CROSS_ABOVE', sh),
+        });
       }
-      if (sl != null) confirm.push(sl);
-      invalidation = sh != null
-        ? `Close above swing high ${sh.toFixed(2)} invalidates bearish HTF path`
-        : 'Break of last LH / swing high invalidates bearish path';
-    } else if (phase === 'COMPRESSION') {
-      description = 'Compression then expansion — accept DOWN break of swing low';
-      events.push('compress', 'break_low_accept', 'expansion_down');
-      if (sl != null) confirm.push(sl);
-      if (sh != null) invalidate.push(sh);
-      invalidation = sh != null
-        ? `Accepted break above ${sh.toFixed(2)} flips path bullish`
-        : 'Accepted upside break invalidates bearish compression path';
+      if (sl != null) {
+        confirmation.push({
+          id: 'c_ext_low',
+          kind: 'CROSS_BELOW',
+          level: sl,
+          tf,
+          description: `Cross below structure low ${sl.toFixed(2)} after thesis`,
+          satisfied_at_creation: sat('CROSS_BELOW', sl),
+        });
+      }
+      confirmation.push({
+        id: 'c_accept_down',
+        kind: 'ACCEPTANCE_DOWN',
+        level: sl,
+        tf,
+        description: 'Two-close acceptance below structure low',
+        satisfied_at_creation: false,
+      });
+      invalidation_text =
+        sh != null
+          ? `Closed break above LH ${sh.toFixed(2)} invalidates bearish path`
+          : 'Closed break of bearish structure invalidates path';
+    } else if (phase === 'COMPRESSION' || phase === 'RANGE_BALANCE') {
+      description = 'Compression/balance — wait accepted DOWN break';
+      expected_events.push('compress', 'acceptance_down', 'expansion_down');
+      if (sl != null) {
+        confirmation.push({
+          id: 'c_accept_down',
+          kind: 'ACCEPTANCE_DOWN',
+          level: sl,
+          tf,
+          description: `Acceptance below ${sl.toFixed(2)}`,
+          satisfied_at_creation: false,
+        });
+      }
+      if (sh != null) {
+        invalidation.push({
+          id: 'i_accept_up',
+          kind: 'ACCEPTANCE_UP',
+          level: sh,
+          tf,
+          description: `Acceptance above ${sh.toFixed(2)}`,
+          satisfied_at_creation: false,
+        });
+      }
+      invalidation_text = 'Accepted upside break invalidates bearish compression path';
     } else {
-      description = 'Impulse/expansion DOWN — hold structure, seek lower liquidity';
-      events.push('hold_structure', 'extension_down');
-      if (sl != null) confirm.push(sl);
-      if (sh != null) invalidate.push(sh);
-      invalidation = sh != null
-        ? `Close above ${sh.toFixed(2)} invalidates DOWN impulse path`
-        : 'Loss of bearish structure invalidates path';
+      description = 'Bearish impulse/expansion — hold structure, seek extension';
+      expected_events.push('hold_structure', 'extension_down', 'new_ll');
+      if (sl != null) {
+        confirmation.push({
+          id: 'c_new_ll',
+          kind: 'NEW_LL',
+          level: sl,
+          tf,
+          description: `New LL / close below ${sl.toFixed(2)} after thesis`,
+          satisfied_at_creation: sat('CROSS_BELOW', sl),
+        });
+      }
+      if (sh != null) {
+        invalidation.push({
+          id: 'i_break_lh',
+          kind: 'CROSS_ABOVE',
+          level: sh,
+          tf,
+          description: `Closed break above ${sh.toFixed(2)}`,
+          satisfied_at_creation: sat('CROSS_ABOVE', sh),
+        });
+      }
+      invalidation_text =
+        sh != null
+          ? `Closed break above ${sh.toFixed(2)} invalidates DOWN path`
+          : 'Loss of bearish structure invalidates path';
     }
   } else {
-    description = 'No clear HTF path — wait for acceptance beyond range';
-    events.push('wait_break_accept');
-    if (sh != null) confirm.push(sh);
-    if (sl != null) confirm.push(sl);
-    invalidation = 'Path undefined until hierarchical bias forms';
+    description = 'No clear HTF path — wait for accepted range break';
+    expected_events.push('wait_break_accept');
+    if (sh != null) {
+      confirmation.push({
+        id: 'c_accept_up',
+        kind: 'ACCEPTANCE_UP',
+        level: sh,
+        tf,
+        description: `Acceptance above ${sh.toFixed(2)}`,
+        satisfied_at_creation: false,
+      });
+    }
+    if (sl != null) {
+      confirmation.push({
+        id: 'c_accept_down',
+        kind: 'ACCEPTANCE_DOWN',
+        level: sl,
+        tf,
+        description: `Acceptance below ${sl.toFixed(2)}`,
+        satisfied_at_creation: false,
+      });
+    }
+    invalidation_text = 'Path undefined until hierarchical bias forms';
   }
 
   return {
-    path: {
-      description,
-      next_events: events,
-      confirm_levels: confirm.filter((n) => Number.isFinite(n)),
-      invalidate_levels: invalidate.filter((n) => Number.isFinite(n)),
-    },
+    expected_events,
+    confirmation,
     invalidation,
+    invalidation_text,
+    description,
   };
 }
 
-function frameArrow(d: TfDir): string {
-  if (d === 'UP') return '↑';
-  if (d === 'DOWN') return '↓';
-  return '→';
+function createThesisLegs(
+  interp: HtfInterpretation
+): { primary: HtfThesisLeg; alternative: HtfThesisLeg } {
+  const anchor = interp.anchor_tf || '30m';
+  const structure = interp.structure;
+  const phase = interp.phase;
+  if (interp.bias === 'UP') {
+    return {
+      primary: leg(
+        'BUY',
+        phase === 'PULLBACK'
+          ? `${anchor} bullish · correction — expect HL hold then continuation`
+          : `${anchor} bullish (${structure}) · ${phase.toLowerCase()} — work as buyer`,
+        structure,
+        phase,
+        anchor
+      ),
+      alternative: leg(
+        'SELL',
+        interp.maturity === 'EXHAUSTED'
+          ? `Alt: exhausted ${anchor} rally — fade only on rejection+acceptance down`
+          : `Alt: failed HL / structural transition flips to SELL`,
+        structure === 'HH' || structure === 'HL' ? 'LH' : 'RANGE',
+        'TRANSITION',
+        anchor
+      ),
+    };
+  }
+  if (interp.bias === 'DOWN') {
+    return {
+      primary: leg(
+        'SELL',
+        phase === 'PULLBACK'
+          ? `${anchor} bearish · correction — expect LH hold then continuation`
+          : `${anchor} bearish (${structure}) · ${phase.toLowerCase()} — work as seller`,
+        structure,
+        phase,
+        anchor
+      ),
+      alternative: leg(
+        'BUY',
+        interp.maturity === 'EXHAUSTED'
+          ? `Alt: exhausted ${anchor} selloff — fade only on rejection+acceptance up`
+          : `Alt: failed LH / structural transition flips to BUY`,
+        structure === 'LL' || structure === 'LH' ? 'HL' : 'RANGE',
+        'TRANSITION',
+        anchor
+      ),
+    };
+  }
+  return {
+    primary: leg(
+      'WAIT',
+      `${anchor} unclear (${structure}) — no HTF side`,
+      structure,
+      phase,
+      anchor
+    ),
+    alternative: leg('WAIT', 'Alt: wait accepted break', 'RANGE', 'COMPRESSION', anchor),
+  };
 }
 
 /**
- * Build full HTFMarketState from Capital candle books.
- * Uses closed candles only for structure — no future bar peeking.
+ * Create a frozen Market Thesis. State always starts PENDING —
+ * never CONFIRMED because price already sits beyond a level.
  */
-export function buildHtfMarketState(book: HtfCandleBook): HTFMarketState {
-  const frames: HtfTfState[] = [];
-  const pairs: Array<[HtfTfFrame, TfCandle[] | null | undefined]> = [
-    ['4H', book.tf4h],
-    ['1H', book.tf1h],
-    ['30m', book.tf30],
-    ['15m', book.tf15],
-    ['5m', book.tf5],
-  ];
-  for (const [tf, candles] of pairs) {
-    const st = analyzeTf(tf, candles);
-    if (st) frames.push(st);
+export function createMarketThesis(
+  facts: HtfFactsBundle,
+  interp: HtfInterpretation,
+  createdAt: number
+): MarketThesis {
+  const anchorFacts = interp.anchor_tf
+    ? factsFrame(facts, interp.anchor_tf)
+    : facts.frames[0] || null;
+  const freezePrice =
+    anchorFacts?.last_close ??
+    facts.frames[facts.frames.length - 1]?.last_close ??
+    0;
+  const built = buildConditions(interp.bias, interp.phase, anchorFacts, freezePrice);
+  const legs = createThesisLegs(interp);
+  const last_index_by_tf: Partial<Record<HtfTfFrame, number>> = {};
+  const last_time_by_tf: Partial<Record<HtfTfFrame, number | null>> = {};
+  for (const f of facts.frames) {
+    last_index_by_tf[f.tf] = f.last_index;
+    last_time_by_tf[f.tf] = f.last_open_time_ms;
   }
-
-  const { bias, anchor, phase, confidence } = hierarchicalBias(frames);
-  const primary = thesisFromHierarchy(bias, phase, anchor, frames, 'primary');
-  const alternative = thesisFromHierarchy(bias, phase, anchor, frames, 'alt');
-  const { path, invalidation } = buildExpectedPath(bias, phase, anchor, frames);
-
-  // Optional live path peek (price only — does not rewrite structure)
-  let path_status: HtfPathStatus = 'PENDING';
-  if (
-    book.live_price != null &&
-    Number.isFinite(book.live_price) &&
-    (path.confirm_levels.length || path.invalidate_levels.length)
-  ) {
-    path_status = evaluateHtfPathStatus({
-      live_price: book.live_price,
-      bias,
-      expected_path: path,
-      prior_status: 'PENDING',
-    });
-  }
-
-  const stackLine = FRAME_ORDER.map((tf) => {
-    const f = frames.find((x) => x.tf === tf);
-    return f ? `${tf}${frameArrow(f.trend)}` : `${tf}?`;
-  }).join(' ');
-
-  const summary = `${stackLine} · bias ${bias} · ${phase} · ${primary.structure} · conf ${(confidence * 100).toFixed(0)}%`;
-  const summary_lv =
-    bias === 'UP'
-      ? `HTF hierarhija ${stackLine} — primārā tēze BUY (${phase.toLowerCase()}), alt ${alternative.side}.`
-      : bias === 'DOWN'
-        ? `HTF hierarhija ${stackLine} — primārā tēze SELL (${phase.toLowerCase()}), alt ${alternative.side}.`
-        : `HTF hierarhija ${stackLine} — nav skaidras puses, gaidu acceptance.`;
 
   return {
-    at_ms: book.now_ms ?? Date.now(),
-    frames,
-    primary_thesis: primary,
-    alternative_thesis: alternative,
-    expected_path: path,
-    invalidation,
-    confidence,
-    bias,
-    path_status,
+    primary_thesis: legs.primary,
+    alternative_thesis: legs.alternative,
+    expected_events: built.expected_events,
+    confirmation_conditions: built.confirmation,
+    invalidation_conditions: built.invalidation,
+    state: 'PENDING',
+    score: interp.score,
+    created_at: createdAt,
+    freeze: { price: freezePrice, last_index_by_tf, last_time_by_tf },
+    confirmed_at: null,
+    invalidated_at: null,
+    events_hit: [],
+  };
+}
+
+/** Candles that closed strictly after thesis freeze (by index or time). */
+export function postThesisCandles(
+  facts: HtfTfFacts,
+  thesis: MarketThesis
+): HtfTimedCandle[] {
+  const freezeIdx = thesis.freeze.last_index_by_tf[facts.tf];
+  const freezeTime = thesis.freeze.last_time_by_tf[facts.tf];
+  return facts.candles.filter((c, i) => {
+    if (freezeTime != null && c.open_time_ms != null && Number.isFinite(c.open_time_ms)) {
+      return c.open_time_ms > freezeTime;
+    }
+    if (freezeIdx != null && Number.isFinite(freezeIdx)) {
+      // After freeze the book may grow — compare absolute index in current book
+      // Prefer time; index fallback: any candle beyond freeze length snapshot
+      return i > freezeIdx;
+    }
+    // No freeze marker — treat none as post-thesis (fail closed)
+    return false;
+  });
+}
+
+function crossingEvent(
+  candles: HtfTimedCandle[],
+  kind: 'CROSS_ABOVE' | 'CROSS_BELOW',
+  level: number
+): boolean {
+  if (candles.length < 1) return false;
+  const eps = Math.max(Math.abs(level) * 1e-5, 1e-9);
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i]!;
+    const prevClose =
+      i === 0
+        ? null
+        : candles[i - 1]!.close;
+    if (kind === 'CROSS_ABOVE') {
+      const now = c.close > level + eps;
+      const was = prevClose == null ? false : prevClose <= level + eps;
+      // Need actual cross: previous not above, now above
+      if (now && (prevClose == null || was)) {
+        // If first post-thesis candle is already above, require it crossed from open
+        if (prevClose == null) {
+          if (c.open <= level + eps && c.close > level + eps) return true;
+        } else if (was && now) return true;
+      }
+    } else {
+      const now = c.close < level - eps;
+      const was = prevClose == null ? false : prevClose >= level - eps;
+      if (now && (prevClose == null || was)) {
+        if (prevClose == null) {
+          if (c.open >= level - eps && c.close < level - eps) return true;
+        } else if (was && now) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function acceptanceAfter(
+  facts: HtfTfFacts,
+  thesis: MarketThesis,
+  side: 'UP' | 'DOWN',
+  level: number | null
+): boolean {
+  if (level == null) return false;
+  const post = postThesisCandles(facts, thesis);
+  if (post.length < 2) return false;
+  const eps = Math.max(Math.abs(level) * 1e-5, 1e-9);
+  for (let i = 1; i < post.length; i++) {
+    const a = post[i]!;
+    const b = post[i - 1]!;
+    if (side === 'UP' && a.close > level + eps && b.close > level + eps) return true;
+    if (side === 'DOWN' && a.close < level - eps && b.close < level - eps) return true;
+  }
+  return false;
+}
+
+function conditionMet(
+  cond: ThesisCondition,
+  facts: HtfFactsBundle,
+  thesis: MarketThesis
+): boolean {
+  const tfFacts = factsFrame(facts, cond.tf) || facts.frames[0];
+  if (!tfFacts) return false;
+  const post = postThesisCandles(tfFacts, thesis);
+  if (!post.length && cond.kind !== 'STRUCTURAL_HOLD') return false;
+
+  switch (cond.kind) {
+    case 'CROSS_ABOVE':
+      if (cond.level == null) return false;
+      if (cond.satisfied_at_creation) {
+        // Need leave then re-cross
+        const left = post.some((c) => c.close <= cond.level!);
+        if (!left) return false;
+        return crossingEvent(post, 'CROSS_ABOVE', cond.level);
+      }
+      return crossingEvent(post, 'CROSS_ABOVE', cond.level);
+    case 'CROSS_BELOW':
+      if (cond.level == null) return false;
+      if (cond.satisfied_at_creation) {
+        const left = post.some((c) => c.close >= cond.level!);
+        if (!left) return false;
+        return crossingEvent(post, 'CROSS_BELOW', cond.level);
+      }
+      return crossingEvent(post, 'CROSS_BELOW', cond.level);
+    case 'CLOSE_ABOVE':
+    case 'CLOSE_BELOW':
+      // Legacy aliases → treat as cross events (never level-already-true)
+      return conditionMet(
+        {
+          ...cond,
+          kind: cond.kind === 'CLOSE_ABOVE' ? 'CROSS_ABOVE' : 'CROSS_BELOW',
+        },
+        facts,
+        thesis
+      );
+    case 'ACCEPTANCE_UP':
+      return acceptanceAfter(tfFacts, thesis, 'UP', cond.level);
+    case 'ACCEPTANCE_DOWN':
+      return acceptanceAfter(tfFacts, thesis, 'DOWN', cond.level);
+    case 'NEW_HH':
+    case 'NEW_HL':
+    case 'NEW_LL':
+    case 'NEW_LH': {
+      // New swing printed after freeze with matching structure step
+      const highs = tfFacts.swing_highs.filter((s) => {
+        const t = s.open_time_ms;
+        const ft = thesis.freeze.last_time_by_tf[tfFacts.tf];
+        if (t != null && ft != null) return t > ft;
+        return s.index > (thesis.freeze.last_index_by_tf[tfFacts.tf] ?? -1);
+      });
+      const lows = tfFacts.swing_lows.filter((s) => {
+        const t = s.open_time_ms;
+        const ft = thesis.freeze.last_time_by_tf[tfFacts.tf];
+        if (t != null && ft != null) return t > ft;
+        return s.index > (thesis.freeze.last_index_by_tf[tfFacts.tf] ?? -1);
+      });
+      if (cond.kind === 'NEW_HH' && highs.length && cond.level != null) {
+        return highs.some((h) => h.price > cond.level!);
+      }
+      if (cond.kind === 'NEW_LL' && lows.length && cond.level != null) {
+        return lows.some((l) => l.price < cond.level!);
+      }
+      if (cond.kind === 'NEW_HL' && lows.length >= 1) return true;
+      if (cond.kind === 'NEW_LH' && highs.length >= 1) return true;
+      // Also allow cross as proxy for extension
+      if (cond.kind === 'NEW_HH' && cond.level != null) {
+        return crossingEvent(post, 'CROSS_ABOVE', cond.level);
+      }
+      if (cond.kind === 'NEW_LL' && cond.level != null) {
+        return crossingEvent(post, 'CROSS_BELOW', cond.level);
+      }
+      return false;
+    }
+    case 'STRUCTURAL_HOLD': {
+      // Hold = no invalidating cross yet + at least one post candle closed on hold side
+      if (cond.level == null || post.length < 1) return false;
+      const eps = Math.max(Math.abs(cond.level) * 1e-5, 1e-9);
+      const broken = post.some((c) => c.close < cond.level! - eps);
+      if (broken) return false;
+      // Require a later impulse in hold direction (displacement)
+      return post.some((c) => c.close > c.open && Math.abs(c.close - c.open) > eps);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Advance frozen thesis state from live facts.
+ * Never mutates primary/alt/conditions/score/created_at.
+ */
+export function evaluateThesisEvents(
+  thesis: MarketThesis,
+  liveFacts: HtfFactsBundle,
+  nowMs?: number
+): MarketThesis {
+  if (
+    thesis.state === 'INVALIDATED' ||
+    thesis.state === 'CONFIRMED' ||
+    thesis.state === 'EXPIRED'
+  ) {
+    return thesis;
+  }
+  const now = nowMs ?? Date.now();
+  const events_hit = [...thesis.events_hit];
+
+  for (const cond of thesis.invalidation_conditions) {
+    if (cond.satisfied_at_creation) continue; // already broken at birth — ignore until re-cross
+    if (conditionMet(cond, liveFacts, thesis)) {
+      events_hit.push(`invalidated:${cond.id}`);
+      return {
+        ...thesis,
+        state: 'INVALIDATED',
+        invalidated_at: thesis.invalidated_at ?? now,
+        events_hit,
+      };
+    }
+  }
+  // Re-cross invalidation if was satisfied at creation
+  for (const cond of thesis.invalidation_conditions) {
+    if (!cond.satisfied_at_creation) continue;
+    if (conditionMet(cond, liveFacts, thesis)) {
+      events_hit.push(`invalidated:${cond.id}`);
+      return {
+        ...thesis,
+        state: 'INVALIDATED',
+        invalidated_at: thesis.invalidated_at ?? now,
+        events_hit,
+      };
+    }
+  }
+
+  let confirmHits = 0;
+  for (const cond of thesis.confirmation_conditions) {
+    if (conditionMet(cond, liveFacts, thesis)) {
+      confirmHits += 1;
+      if (!events_hit.includes(`confirm:${cond.id}`)) {
+        events_hit.push(`confirm:${cond.id}`);
+      }
+    }
+  }
+
+  if (confirmHits >= 1) {
+    const next: HtfPathStatus =
+      thesis.state === 'CONFIRMING' || confirmHits >= 2 ? 'CONFIRMED' : 'CONFIRMING';
+    return {
+      ...thesis,
+      state: next,
+      confirmed_at:
+        next === 'CONFIRMED' || next === 'CONFIRMING'
+          ? thesis.confirmed_at ?? now
+          : thesis.confirmed_at,
+      events_hit,
+    };
+  }
+
+  return { ...thesis, events_hit };
+}
+
+/**
+ * Build live HTF state. New thesis always PENDING (no confirm-from-spot).
+ */
+export function buildHtfMarketState(book: HtfCandleBook): HTFMarketState {
+  const now = book.now_ms ?? Date.now();
+  const facts = buildHtfFacts(book);
+  const interpretation = interpretHtf(facts);
+  const thesis = createMarketThesis(facts, interpretation, now);
+  const summary = interpretation.summary;
+  const summary_lv =
+    interpretation.bias === 'UP'
+      ? `HTF ${summary} — primārā tēze BUY (${interpretation.phase.toLowerCase()}).`
+      : interpretation.bias === 'DOWN'
+        ? `HTF ${summary} — primārā tēze SELL (${interpretation.phase.toLowerCase()}).`
+        : `HTF ${summary} — nav skaidras puses.`;
+
+  return {
+    at_ms: now,
+    facts,
+    interpretation,
+    thesis,
+    bias: interpretation.bias,
+    path_status: thesis.state,
     summary,
     summary_lv,
+    score: interpretation.score,
   };
+}
+
+/**
+ * Keep frozen thesis; refresh facts/interpretation for UI; advance thesis.state only.
+ */
+export function advanceFrozenThesis(
+  frozen: HTFMarketState,
+  book: HtfCandleBook
+): HTFMarketState {
+  const now = book.now_ms ?? Date.now();
+  const facts = buildHtfFacts(book);
+  const interpretation = interpretHtf(facts);
+  const thesis = evaluateThesisEvents(frozen.thesis, facts, now);
+  return {
+    ...frozen,
+    at_ms: now,
+    facts,
+    interpretation,
+    thesis,
+    // Frozen working bias/score for learning stay on thesis; live bias for UI mind
+    bias: frozen.thesis.primary_thesis.side === 'BUY'
+      ? 'UP'
+      : frozen.thesis.primary_thesis.side === 'SELL'
+        ? 'DOWN'
+        : frozen.bias,
+    path_status: thesis.state,
+    summary: frozen.summary,
+    summary_lv: frozen.summary_lv,
+    score: frozen.thesis.score,
+  };
+}
+
+/** @deprecated use advanceFrozenThesis */
+export function trackHtfPathLive(input: {
+  entry_htf: HTFMarketState;
+  live_price: number | null | undefined;
+  live_htf?: HTFMarketState | null;
+  live_book?: HtfCandleBook | null;
+}): HtfPathStatus {
+  if (input.live_book) {
+    return advanceFrozenThesis(input.entry_htf, input.live_book).path_status;
+  }
+  // Fallback: hierarchical flip only (no level-already-true confirm)
+  const entry = input.entry_htf;
+  if (
+    input.live_htf &&
+    entry.bias !== 'FLAT' &&
+    input.live_htf.bias !== 'FLAT' &&
+    input.live_htf.bias !== entry.bias &&
+    input.live_htf.score >= 0.55 &&
+    input.live_htf.interpretation.phase === 'TRANSITION'
+  ) {
+    return 'INVALIDATED';
+  }
+  return entry.path_status;
 }
 
 export function compactHtfMarketState(
   state: HTFMarketState | null | undefined
 ): HTFMarketStateCompact | null {
   if (!state) return null;
-  const anchor = state.primary_thesis.anchor_tf;
-  const frame =
-    state.frames.find((f) => f.tf === anchor) || state.frames[0] || null;
+  const anchor = state.thesis.primary_thesis.anchor_tf;
+  const frame = state.facts.frames.find((f) => f.tf === anchor) || state.facts.frames[0];
+  const inv =
+    state.thesis.invalidation_conditions.map((c) => c.description).join('; ') ||
+    'n/a';
   return {
     bias: state.bias,
-    structure: state.primary_thesis.structure,
-    phase: state.primary_thesis.phase,
-    maturity: frame?.maturity ?? 'NONE',
+    structure: state.thesis.primary_thesis.structure,
+    phase: state.thesis.primary_thesis.phase,
+    maturity: state.interpretation.maturity,
     volatility: frame?.volatility ?? 'NORMAL',
-    primary_side: state.primary_thesis.side,
-    alt_side: state.alternative_thesis.side,
-    path_status: state.path_status,
-    confidence: state.confidence,
+    primary_side: state.thesis.primary_thesis.side,
+    alt_side: state.thesis.alternative_thesis.side,
+    path_status: state.thesis.state,
+    score: state.thesis.score,
+    confidence: state.thesis.score,
     anchor_tf: anchor,
-    liquidity: frame?.liquidity ?? 'NONE',
-    breakout: frame?.breakout ?? 'NONE',
+    liquidity: frame?.liquidity
+      ? `${frame.liquidity.kind}:${frame.liquidity.reaction}`
+      : 'NONE',
+    breakout: frame?.breakout
+      ? `${frame.breakout.side}:${frame.breakout.status}`
+      : 'NONE',
     price_location: frame?.price_location ?? 'MID_RANGE',
-    expected_path: state.expected_path.description,
-    invalidation: state.invalidation,
+    expected_path: state.thesis.expected_events.join(','),
+    invalidation: inv,
+    thesis_created_at: state.thesis.created_at,
+    expected_events: state.thesis.expected_events,
+    events_hit: state.thesis.events_hit,
+    confirmed_at: state.thesis.confirmed_at,
+    invalidated_at: state.thesis.invalidated_at,
   };
 }
 
-/**
- * Live path tracker — compare current price to frozen expected path levels.
- * Call on manage ticks; never mutates structure (read-only vs frozen entry path).
- */
-export function evaluateHtfPathStatus(input: {
-  live_price: number;
-  bias: TfDir;
-  expected_path: HtfExpectedPath;
-  prior_status?: HtfPathStatus;
-}): HtfPathStatus {
-  const px = input.live_price;
-  if (!Number.isFinite(px)) return input.prior_status || 'PENDING';
-  const prior = input.prior_status || 'PENDING';
-  if (prior === 'INVALIDATED' || prior === 'CONFIRMED' || prior === 'EXPIRED') {
-    return prior;
+export function measureThesisOutcome(input: {
+  entry: HTFMarketState | HTFMarketStateCompact | null | undefined;
+  exit_phase?: string | null;
+  direction: 'BUY' | 'SELL';
+  pnl_pts: number | null;
+  mfe: number;
+  mae: number;
+}): HtfThesisOutcome {
+  const entry = input.entry;
+  if (!entry) {
+    return {
+      thesis_direction_correct: null,
+      phase_at_entry: null,
+      phase_at_exit: input.exit_phase ?? null,
+      expected_events_hit: [],
+      expected_events_missed: [],
+      invalidated: false,
+      time_to_confirmation_ms: null,
+      time_to_invalidation_ms: null,
+      path_status: 'PENDING',
+    };
   }
+  const isFull = 'thesis' in entry;
+  const primarySide = isFull
+    ? entry.thesis.primary_thesis.side
+    : String((entry as HTFMarketStateCompact).primary_side);
+  const phaseEntry = isFull
+    ? entry.thesis.primary_thesis.phase
+    : String((entry as HTFMarketStateCompact).phase);
+  const path = isFull
+    ? entry.thesis.state
+    : String((entry as HTFMarketStateCompact).path_status);
+  const eventsHit = isFull
+    ? entry.thesis.events_hit
+    : (entry as HTFMarketStateCompact).events_hit || [];
+  const expected = isFull
+    ? entry.thesis.expected_events
+    : (entry as HTFMarketStateCompact).expected_events || [];
+  const created = isFull
+    ? entry.thesis.created_at
+    : (entry as HTFMarketStateCompact).thesis_created_at;
+  const confirmedAt = isFull
+    ? entry.thesis.confirmed_at
+    : (entry as HTFMarketStateCompact).confirmed_at;
+  const invalidatedAt = isFull
+    ? entry.thesis.invalidated_at
+    : (entry as HTFMarketStateCompact).invalidated_at;
 
-  for (const lvl of input.expected_path.invalidate_levels) {
-    if (!Number.isFinite(lvl)) continue;
-    if (input.bias === 'UP' && px < lvl) return 'INVALIDATED';
-    if (input.bias === 'DOWN' && px > lvl) return 'INVALIDATED';
-    if (input.bias === 'FLAT') {
-      // flat path: both sides can invalidate once accepted beyond
-      continue;
+  let thesis_direction_correct: boolean | null = null;
+  if (primarySide === 'BUY' || primarySide === 'SELL') {
+    // Direction correct if trade side matched thesis and realized positive path,
+    // or MFE in thesis direction exceeded MAE when sides match.
+    if (input.direction === primarySide) {
+      if (input.pnl_pts != null && Number.isFinite(input.pnl_pts)) {
+        thesis_direction_correct = input.pnl_pts > 0;
+      } else {
+        thesis_direction_correct = input.mfe > Math.abs(input.mae);
+      }
+    } else {
+      thesis_direction_correct = false;
     }
   }
 
-  let hitConfirm = false;
-  for (const lvl of input.expected_path.confirm_levels) {
-    if (!Number.isFinite(lvl)) continue;
-    if (input.bias === 'UP' && px >= lvl) hitConfirm = true;
-    if (input.bias === 'DOWN' && px <= lvl) hitConfirm = true;
-  }
-  if (hitConfirm) {
-    // Prefer confirm beyond invalidate when both could fire — already checked invalidate
-    return prior === 'CONFIRMING' ? 'CONFIRMED' : 'CONFIRMING';
-  }
-  return prior === 'CONFIRMING' ? 'CONFIRMING' : 'PENDING';
+  return {
+    thesis_direction_correct,
+    phase_at_entry: phaseEntry,
+    phase_at_exit: input.exit_phase ?? null,
+    expected_events_hit: eventsHit.filter((e) => e.startsWith('confirm:')),
+    expected_events_missed: expected.filter(
+      (e) => !eventsHit.some((h) => h.includes(e) || h.endsWith(e))
+    ),
+    invalidated: path === 'INVALIDATED',
+    time_to_confirmation_ms:
+      created != null && confirmedAt != null
+        ? Math.max(0, confirmedAt - created)
+        : null,
+    time_to_invalidation_ms:
+      created != null && invalidatedAt != null
+        ? Math.max(0, invalidatedAt - created)
+        : null,
+    path_status: path,
+  };
 }
 
-/**
- * Update live HTF path status from a frozen entry snapshot + live price/state.
- * HTF does not open/close orders — observation only for mind / ledger.
- */
-export function trackHtfPathLive(input: {
-  entry_htf: HTFMarketState;
-  live_price: number | null | undefined;
-  live_htf?: HTFMarketState | null;
-}): HtfPathStatus {
-  const entry = input.entry_htf;
-  if (input.live_price == null || !Number.isFinite(input.live_price)) {
-    return entry.path_status;
-  }
-  let status = evaluateHtfPathStatus({
-    live_price: input.live_price,
-    bias: entry.bias,
-    expected_path: entry.expected_path,
-    prior_status: entry.path_status,
-  });
-  // Live hierarchical flip vs frozen bias → invalidate
-  if (
-    input.live_htf &&
-    entry.bias !== 'FLAT' &&
-    input.live_htf.bias !== 'FLAT' &&
-    input.live_htf.bias !== entry.bias &&
-    input.live_htf.confidence >= 0.55
-  ) {
-    status = 'INVALIDATED';
-  }
-  return status;
-}
-
-/** Bucket key for conditional EV: structure|phase|setup|side */
 export function htfExpectancyKey(input: {
   structure?: string | null;
   phase?: string | null;
@@ -925,16 +1011,32 @@ export function htfExpectancyKey(input: {
   return `${s}|${p}|${setup}|${side}`;
 }
 
-/** Dir helpers for EffectiveRegimeHtf / capital dirs — from engine bias hierarchy. */
 export function htfFrameDir(
   state: HTFMarketState | null | undefined,
   tf: HtfTfFrame
 ): TfDir | null {
-  const f = state?.frames.find((x) => x.tf === tf);
+  const f = state?.interpretation.frames.find((x) => x.tf === tf);
   return f ? f.trend : null;
 }
 
-/** Tip/closed candle compatibility — last closed body dir only. */
-export function closedBodyDir(candles: TfCandle[] | null | undefined): TfDir {
-  return candleDir(lastClosedTfCandle(candles));
+/** History depth helpers for Capital fetch sizing. */
+export function htfFetchMax(tf: HtfTfFrame): number {
+  // +1 for forming tip that will be dropped
+  return HTF_HISTORY_TARGET[tf] + 1;
+}
+
+export function htfHistoryAdequate(
+  tf: HtfTfFrame,
+  rawCount: number
+): boolean {
+  // raw includes forming tip
+  const closed = Math.max(0, rawCount >= 2 ? rawCount - 1 : rawCount);
+  return closed >= HTF_HISTORY_MIN[tf];
+}
+
+/** Compat: old evaluateHtfPathStatus removed from public confirm-by-level API */
+export function evaluateHtfPathStatus(): never {
+  throw new Error(
+    'evaluateHtfPathStatus removed — use evaluateThesisEvents / advanceFrozenThesis'
+  );
 }

@@ -30,8 +30,9 @@ export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
     const { window, since } = parseExpectancyWindow(query.window);
     let sql = `
       SELECT t.pnl_pts, t.pnl, t.regime, t.setup_type, t.exit_reason, t.epic,
-             t.mfe, t.mae, t.hold_ms, t.direction,
-             t.htf_structure, t.htf_phase, t.htf_bias, t.htf_path_status, t.htf_state
+             t.mfe, t.mae, t.hold_ms, t.direction, t.closed_at,
+             t.htf_structure, t.htf_phase, t.htf_bias, t.htf_path_status, t.htf_state,
+             t.thesis_direction_correct
       FROM trades t
       JOIN broker_accounts ba ON ba.id = t.broker_account_id
       JOIN broker_connections bc ON bc.id = ba.broker_connection_id
@@ -56,7 +57,8 @@ export async function registerTradeRoutes(app: FastifyInstance): Promise<void> {
     }
     sql += ` ORDER BY t.closed_at DESC LIMIT 5000`;
     const { rows } = await pool.query(sql, params);
-    const minTrades = Math.max(1, parseInt(query.min_trades || '5', 10) || 5);
+    // Default 20 / OOS 8 — N>=5 alone is never enough for has_edge
+    const minTrades = Math.max(1, parseInt(query.min_trades || '20', 10) || 20);
     return computeConditionalEv(rows as HtfTaggedTrade[], {
       window,
       since: since ? since.toISOString() : null,

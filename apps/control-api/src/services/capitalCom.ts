@@ -1401,16 +1401,19 @@ export async function fetchCapitalPrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
+  // HTF engine needs deep history (≈100 closed + forming tip). Cap at 120.
   const cap =
     resolution === 'SECOND'
       ? 50
       : resolution === 'MINUTE'
         ? 60
-        : resolution === 'MINUTE_5'
-          ? 40
-          : resolution === 'HOUR' || resolution === 'HOUR_4'
-            ? 40
-            : 30;
+        : resolution === 'MINUTE_5' ||
+            resolution === 'MINUTE_15' ||
+            resolution === 'MINUTE_30' ||
+            resolution === 'HOUR' ||
+            resolution === 'HOUR_4'
+          ? 120
+          : 30;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),
