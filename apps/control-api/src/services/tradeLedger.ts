@@ -42,6 +42,8 @@ export type ClosedTradeRecord = {
   htf_thesis?: Record<string, unknown> | null;
   htf_score?: number | null;
   thesis_direction_correct?: boolean | null;
+  /** Execution result separate from thesis market-path correctness */
+  trade_execution_positive?: boolean | null;
   thesis_time_to_confirm_ms?: number | null;
   thesis_time_to_invalid_ms?: number | null;
   thesis_events_hit?: string[] | null;
@@ -333,7 +335,7 @@ export async function recordClosedTrade(input: ClosedTradeRecord): Promise<numbe
        epic, setup_type, mfe, mae, peak_retention, hold_ms,
        pnl_pts, exit_mid, source, robot_id,
        htf_state, htf_bias, htf_structure, htf_phase, htf_path_status,
-       htf_thesis, htf_score, thesis_direction_correct,
+       htf_thesis, htf_score, thesis_direction_correct, trade_execution_positive,
        thesis_time_to_confirm_ms, thesis_time_to_invalid_ms, thesis_events_hit
      ) VALUES (
        $1,$2,$3,$4,
@@ -342,7 +344,7 @@ export async function recordClosedTrade(input: ClosedTradeRecord): Promise<numbe
        $13,$14,$15,$16,$17,$18,
        $19,$20,$21,$22,
        $23,$24,$25,$26,$27,
-       $28,$29,$30,$31,$32,$33
+       $28,$29,$30,$31,$32,$33,$34
      ) RETURNING id`,
     [
       positionId,
@@ -375,6 +377,7 @@ export async function recordClosedTrade(input: ClosedTradeRecord): Promise<numbe
       input.htf_thesis ? JSON.stringify(input.htf_thesis) : null,
       input.htf_score ?? null,
       input.thesis_direction_correct ?? null,
+      input.trade_execution_positive ?? null,
       input.thesis_time_to_confirm_ms ?? null,
       input.thesis_time_to_invalid_ms ?? null,
       input.thesis_events_hit ? JSON.stringify(input.thesis_events_hit) : null,
