@@ -191,15 +191,8 @@ export function updateSoftStreak(
   pauseCloses: number
 ): BrainExperience {
   if (!wasSoftLoss || !side) {
-    if (!wasSoftLoss && side) {
-      // Win or non-Soft on a side clears that streak
-      if (side === 'SELL') exp.soft_sell_streak = 0;
-      if (side === 'BUY') exp.soft_buy_streak = 0;
-      if (exp.soft_pause_side === side) {
-        exp.soft_pause_side = null;
-        exp.soft_pause_left = 0;
-      }
-    }
+    // Peak/scratch must NOT clear Soft pause/streak — that was Soft BUY spam:
+    // Soft→Soft→Peak +£0.45→Soft again. Pause only expires via pause_closes.
     return exp;
   }
   if (side === 'SELL') {
@@ -224,6 +217,9 @@ export function consumeSoftPauseOnEntryAttempt(exp: BrainExperience): BrainExper
   if (exp.soft_pause_left > 0) {
     exp.soft_pause_left -= 1;
     if (exp.soft_pause_left <= 0) {
+      // Pause expired — clear streak so next Soft must re-earn pause_min
+      if (exp.soft_pause_side === 'BUY') exp.soft_buy_streak = 0;
+      if (exp.soft_pause_side === 'SELL') exp.soft_sell_streak = 0;
       exp.soft_pause_side = null;
       exp.soft_pause_left = 0;
     }
@@ -252,8 +248,9 @@ export function noteLiveSoftClose(
   let exp = loadExperience();
   const before = exp.soft_pause_side;
   const beforeLeft = exp.soft_pause_left;
-  // Each close counts down pause_closes window
-  if (exp.soft_pause_left > 0) {
+  // Peak/scratch counts down pause_closes. Soft loss refreshes via updateSoftStreak —
+  // do not consume-then-clear the last slot on Soft.
+  if (exp.soft_pause_left > 0 && !wasSoftLoss) {
     exp = consumeSoftPauseOnEntryAttempt(exp);
   }
   exp = updateSoftStreak(

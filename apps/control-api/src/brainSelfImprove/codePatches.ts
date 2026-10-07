@@ -96,43 +96,17 @@ function readConst(relPath: string, constName: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const FLIP = 'apps/control-api/src/services/flipFilter.ts';
 const STRUCTURE = 'apps/control-api/src/services/structureEntry.ts';
 const MIND = 'apps/control-api/src/services/traderMind.ts';
 
-/** Soft spam / Soft loss — longer same-dir lock after Soft. */
-export function codePatchesSoftSpam(step = 0): BrainPatch[] {
-  const out: BrainPatch[] = [];
-  const curLoss = readConst(FLIP, 'SAME_DIR_LOCK_AFTER_LOSS_MS') ?? 90_000;
-  const nextLoss = Math.min(300_000, curLoss + 30_000 + step * 30_000);
-  const p1 = constNumPatch(
-    FLIP,
-    'SAME_DIR_LOCK_AFTER_LOSS_MS',
-    nextLoss,
-    `Soft same-dir lock ${curLoss}→${nextLoss}ms`
-  );
-  if (p1) out.push(p1);
-
-  const curWin = readConst(FLIP, 'SAME_DIR_LOCK_MS') ?? 90_000;
-  const nextWin = Math.min(180_000, curWin + 15_000 + step * 15_000);
-  const p2 = constNumPatch(
-    FLIP,
-    'SAME_DIR_LOCK_MS',
-    nextWin,
-    `Win same-dir lock ${curWin}→${nextWin}ms`
-  );
-  if (p2) out.push(p2);
-
-  // Mind: earlier CUT when giving back Soft-sized green
-  const p3 = snippetPatch(
-    MIND,
-    '} else if (mfe >= soft * 0.75 && upl > 0 && (againstUs || retention < 0.55)) {',
-    '} else if (mfe >= soft * 0.75 && upl > 0 && (againstUs || retention < 0.62)) {',
-    'Mind CUT earlier on Soft+ giveback (0.55→0.62)'
-  );
-  if (p3) out.push(p3);
-
-  return out;
+/**
+ * Soft spam = genome Soft-pause ONLY (soft_same_side_pause_*).
+ * Never rewrite flipFilter SAME_DIR_LOCK_* — L0 OPEN ignores those consts,
+ * and hardcode-on-top was the Soft spam "patch stack" bug.
+ * Kept as empty stub so old callers don't crash; prefer genome patches.
+ */
+export function codePatchesSoftSpam(_step = 0): BrainPatch[] {
+  return [];
 }
 
 /** Micro scratch — stricter structure extremes / start bands. */
@@ -184,21 +158,10 @@ export function codePatchesBankGreen(): BrainPatch[] {
   return out;
 }
 
-/** Explore: nudge multi-TF comment-free numeric if present — else flip lock tick. */
-export function codePatchesExplore(step: number): BrainPatch[] {
-  const out: BrainPatch[] = [];
-  const cur = readConst(FLIP, 'SAME_DIR_LOCK_AFTER_LOSS_MS') ?? 90_000;
-  // Bounce 60s..300s
-  const dir = step % 2 === 0 ? 1 : -1;
-  let next = cur + dir * 30_000;
-  if (next > 300_000) next = cur - 30_000;
-  if (next < 60_000) next = cur + 30_000;
-  const p = constNumPatch(
-    FLIP,
-    'SAME_DIR_LOCK_AFTER_LOSS_MS',
-    next,
-    `Explore Soft lock ${cur}→${next}ms`
-  );
-  if (p) out.push(p);
-  return out;
+/**
+ * Explore: no flipFilter SAME_DIR_LOCK rewrite (dead at L0 + hardcode-on-top).
+ * Soft / entry spam lives in genome Soft-pause; Peak Keep explores via genomePatch.
+ */
+export function codePatchesExplore(_step: number): BrainPatch[] {
+  return [];
 }

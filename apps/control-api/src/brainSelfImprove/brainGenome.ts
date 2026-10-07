@@ -113,7 +113,8 @@ const DEFAULT_GENOME: BrainGenome = {
   soft_plus_giveback: 0.75,
   require_1m_trigger: true,
   soft_same_side_pause_closes: 4,
-  soft_same_side_pause_min: 2,
+  /** First Soft arms pause — Soft spam governor is brain memory, not flipFilter hardcode */
+  soft_same_side_pause_min: 1,
   wait_on_1m_fight: true,
   mind_bank_on_turn: true,
   explore_step: 0,

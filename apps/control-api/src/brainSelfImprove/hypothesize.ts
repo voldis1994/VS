@@ -14,7 +14,6 @@ import {
   codePatchesBankGreen,
   codePatchesExplore,
   codePatchesMicroScratch,
-  codePatchesSoftSpam,
 } from './codePatches.js';
 
 function genomePatch(
@@ -80,17 +79,15 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
   const pauseMin = Math.min(6, g.soft_same_side_pause_min + 1);
   const keep = Math.min(0.85, g.peak_keep + 0.02);
   const arm = Math.max(0.5, Number((g.peak_arm_soft_mult - 0.05).toFixed(2)));
-  // Soft spam = entry spam. NEVER Soft pct tighten here — hardinv thrash (5.1→4bp)
-  // ACCEPTed via require_1m sneak while EntryWait stayed 100%.
+  // Soft spam = genome Soft-pause ONLY — never flipFilter hardcode patches.
   const pauseFirst: Variant = {
     title: 'Pause SELL spam after Soft chain + require 1m trigger',
     rationale: `Soft SELL×${softSell} in window — bias-only shorts hitting Soft.`,
-    task:
-      'Tighten genome + lengthen Soft same-dir lock in flipFilter; require 1m trigger.',
+    task: 'Tighten Soft-pause genome + require 1m trigger (no flipFilter rewrite).',
     genome_delta: {
       wait_on_1m_fight: true,
       require_1m_trigger: true,
-      soft_same_side_pause_min: Math.max(2, g.soft_same_side_pause_min),
+      soft_same_side_pause_min: Math.max(1, g.soft_same_side_pause_min),
       soft_same_side_pause_closes: pause1,
       last_lesson: 'Pause SELL Soft spam',
     },
@@ -98,13 +95,12 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('wait_on_1m_fight', true, 'force WAIT on 1m fight'),
       genomePatch('require_1m_trigger', true, 'require 1m trigger'),
       genomePatch('soft_same_side_pause_closes', pause1, 'longer Soft same-side pause'),
-      ...codePatchesSoftSpam(0),
     ],
   };
   const pauseHarder: Variant = {
-    title: 'Harder Soft same-side pause (SELL) + filter lock',
+    title: 'Harder Soft same-side pause (SELL)',
     rationale: `Prior pause insufficient — Soft SELL×${softSell}`,
-    task: 'Raise soft pause genome + bump flipFilter Soft lock further.',
+    task: 'Raise soft pause genome only (brain memory, not hardcode lock).',
     genome_delta: {
       soft_same_side_pause_closes: pause2,
       soft_same_side_pause_min: pauseMin,
@@ -115,7 +111,6 @@ function softSellVariants(g: BrainGenome, softSell: number): Variant[] {
       genomePatch('soft_same_side_pause_closes', pause2, 'pause +2 closes'),
       genomePatch('soft_same_side_pause_min', pauseMin, 'arm pause sooner'),
       genomePatch('require_1m_trigger', true, '1m trigger'),
-      ...codePatchesSoftSpam(1),
     ],
   };
   const measurable: Variant = {
@@ -149,23 +144,23 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
     {
       title: 'Pause BUY spam after Soft chain',
       rationale: `Soft BUY×${softBuy}`,
-      task: 'Same-side Soft pause + 1m trigger for longs.',
+      task: 'Same-side Soft pause genome + 1m trigger (no flipFilter).',
       genome_delta: {
-        soft_same_side_pause_min: 2,
+        soft_same_side_pause_min: 1,
         soft_same_side_pause_closes: pause1,
         require_1m_trigger: true,
         last_lesson: 'Pause BUY Soft spam',
       },
       patches: [
+        genomePatch('soft_same_side_pause_min', 1, 'arm BUY Soft pause on first Soft'),
         genomePatch('soft_same_side_pause_closes', pause1, 'BUY Soft pause longer'),
         genomePatch('require_1m_trigger', true, '1m trigger'),
-        ...codePatchesSoftSpam(0),
       ],
     },
     {
       title: 'Harder BUY Soft pause',
       rationale: `Soft BUY×${softBuy} continues`,
-      task: 'Raise pause closes further + flipFilter Soft lock.',
+      task: 'Raise Soft-pause closes — brain memory only.',
       genome_delta: {
         soft_same_side_pause_closes: pause2,
         require_1m_trigger: true,
@@ -175,7 +170,6 @@ function softBuyVariants(g: BrainGenome, softBuy: number): Variant[] {
       patches: [
         genomePatch('soft_same_side_pause_closes', pause2, 'BUY pause +2'),
         genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
-        ...codePatchesSoftSpam(1),
       ],
     },
   ];
@@ -273,14 +267,13 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
         require_1m_trigger: true,
         wait_on_1m_fight: true,
         soft_same_side_pause_closes: pause1,
-        soft_same_side_pause_min: Math.max(2, g.soft_same_side_pause_min),
+        soft_same_side_pause_min: Math.max(1, g.soft_same_side_pause_min),
         last_lesson: 'Soft HardInv pause',
       },
       patches: [
         genomePatch('require_1m_trigger', true, '1m trigger'),
         genomePatch('wait_on_1m_fight', true, 'WAIT on 1m fight'),
         genomePatch('soft_same_side_pause_closes', pause1, 'Soft pause longer'),
-        ...codePatchesSoftSpam(0),
       ],
     },
     {
@@ -304,7 +297,7 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
     {
       title: 'Harder Soft pause min after Soft chain',
       rationale: `Soft×${softL}`,
-      task: 'Raise soft_same_side_pause_min + flipFilter Soft lock.',
+      task: 'Raise soft_same_side_pause_min/closes — genome only.',
       genome_delta: {
         soft_same_side_pause_min: Math.min(6, g.soft_same_side_pause_min + 1),
         soft_same_side_pause_closes: Math.min(8, g.soft_same_side_pause_closes + 2),
@@ -321,7 +314,6 @@ function softLossVariants(g: BrainGenome, softL: number): Variant[] {
           Math.min(8, g.soft_same_side_pause_closes + 2),
           'pause lasts longer'
         ),
-        ...codePatchesSoftSpam(1),
       ],
     },
   ];
@@ -501,7 +493,6 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
           patches: [
             genomePatch('hardinv_pct_bp', softPctFocus, `explore Soft pct ${softPctFocus}bp`),
             genomePatch('explore_step', nextStep + 7, `explore_step ${nextStep + 7}`),
-            ...codePatchesSoftSpam(rejectedN % 2),
           ],
         };
   // Soft shield gates stay ON forever — flipping them OFF re-armed Soft chase.
@@ -569,7 +560,6 @@ function exploreVariants(g: BrainGenome, rejectedN: number, softFocus = false): 
           genomePatch('mtf_trek_flat_frac', trek, `explore trek ${trek}bp`),
           genomePatch('story_min_path_bp', storyPath, `explore story path ${storyPath}bp`),
           genomePatch('explore_step', nextStep + 6, `explore_step ${nextStep + 6}`),
-          ...codePatchesSoftSpam(rejectedN % 2),
         ]
       : [
           genomePatch('regime_move', move, `explore regime_move ${move}bp`),
@@ -639,7 +629,11 @@ function forceExploreHypothesis(
             genomePatch('explore_step', nextStep, `force explore_step ${nextStep}`),
             genomePatch('require_1m_trigger', true, '1m trigger'),
             genomePatch('wait_on_1m_fight', true, 'wait 1m fight'),
-            ...codePatchesSoftSpam(nextStep % 2),
+            genomePatch(
+              'soft_same_side_pause_closes',
+              Math.min(8, (g.soft_same_side_pause_closes || 4) + 1),
+              'force Soft pause longer'
+            ),
             ...codePatchesMicroScratch(nextStep % 2),
           ]
         : [
