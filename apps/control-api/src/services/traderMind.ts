@@ -535,24 +535,8 @@ export function thinkEntryLikeTrader(input: EntryMindInput): EntryThought {
     confidence = 0.4;
   }
 
-  // After Soft same-side loss — no immediate re-spam (L0 flip lock is OFF by design)
-  if (
-    choice !== 'WAIT' &&
-    input.last_close_was_loss &&
-    input.last_closed_side === choice
-  ) {
-    const confirmed =
-      (choice === 'SELL' && m1 === 'DOWN' && (strong || stack.aligned)) ||
-      (choice === 'BUY' && m1 === 'UP' && (strong || stack.aligned));
-    if (!confirmed) {
-      choice = 'WAIT';
-      thesis = `Pēc Soft ${input.last_closed_side} — negāžu to pašu pusi bez svaiga 1m apstiprinājuma.`;
-      why = 'Same-dir Soft spam → Soft SL ķēde. Gaidu triggeri vai otru pusi.';
-      confidence = 0.35;
-    }
-  }
-
-  // Autonomous brain memory — Soft loss streak pause (from BRAIN.bat self-improve)
+  // Soft same-side spam → brain Soft-pause memory ONLY (genome pause_min/closes).
+  // No hard flipFilter / no "1m bounce confirms" re-entry patch on top.
   const paused = getSoftPauseSide();
   if (paused && choice === paused) {
     choice = 'WAIT';

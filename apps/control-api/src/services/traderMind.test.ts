@@ -356,25 +356,70 @@ describe('traderMind', () => {
     expect(t.why).toMatch(/1m|bounce|Soft|trigger/i);
   });
 
-  it('ENTRY WAITs same-side after Soft SELL without fresh 1m DOWN', () => {
-    const t = thinkEntryLikeTrader({
-      regime: 'TREND_DOWN',
-      chapter: 'SELLOFF',
-      allow: 'SELL',
-      story_conf: 0.7,
-      red_1m: 14,
-      green_1m: 8,
-      zone_pos: 0.4,
-      bar_body_sign: 0,
-      last_closed_side: 'SELL',
-      last_close_was_loss: true,
-      m1_dir: 'FLAT',
-      bias: 'DOWN',
-      tf5_dir: 'DOWN',
-      tf15_dir: 'DOWN',
-      tf30_dir: 'DOWN',
-    });
-    expect(t.choice).toBe('WAIT');
-    expect(t.thesis).toMatch(/Soft|pašu pusi|spam/i);
+  it('ENTRY Soft spam WAIT comes from brain Soft-pause memory — not hard same-side patch', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { noteLiveSoftClose, saveExperience } = await import(
+      '../brainSelfImprove/experience.js'
+    );
+    const { setBrainGenome, getBrainGenome } = await import(
+      '../brainSelfImprove/brainGenome.js'
+    );
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mind-soft-'));
+    const prevExp = process.env.BRAIN_EXPERIENCE_PATH;
+    const prevGen = process.env.BRAIN_GENOME_PATH;
+    process.env.BRAIN_EXPERIENCE_PATH = path.join(tmp, 'experience.json');
+    process.env.BRAIN_GENOME_PATH = path.join(tmp, 'genome.json');
+    try {
+      _resetBrainGenomeForTests({
+        soft_same_side_pause_min: 1,
+        soft_same_side_pause_closes: 3,
+      });
+      setBrainGenome(getBrainGenome());
+      saveExperience({
+        version: 1,
+        updated_at: new Date().toISOString(),
+        cycles: [],
+        patterns: [],
+        rejected_signatures: [],
+        accepted_signatures: [],
+        soft_pause_side: null,
+        soft_pause_left: 0,
+        soft_sell_streak: 0,
+        soft_buy_streak: 0,
+        last_lesson: '',
+      });
+      noteLiveSoftClose('SELL', true);
+      const t = thinkEntryLikeTrader({
+        regime: 'TREND_DOWN',
+        chapter: 'SELLOFF',
+        allow: 'SELL',
+        story_conf: 0.7,
+        red_1m: 14,
+        green_1m: 8,
+        zone_pos: 0.4,
+        bar_body_sign: -1,
+        last_closed_side: 'SELL',
+        last_close_was_loss: true,
+        m1_dir: 'DOWN',
+        bias: 'DOWN',
+        tf5_dir: 'DOWN',
+        tf15_dir: 'DOWN',
+        tf30_dir: 'DOWN',
+      });
+      expect(t.choice).toBe('WAIT');
+      expect(t.thesis).toMatch(/Smadzenes pauzē SELL|Soft ķēde/i);
+    } finally {
+      if (prevExp === undefined) delete process.env.BRAIN_EXPERIENCE_PATH;
+      else process.env.BRAIN_EXPERIENCE_PATH = prevExp;
+      if (prevGen === undefined) delete process.env.BRAIN_GENOME_PATH;
+      else process.env.BRAIN_GENOME_PATH = prevGen;
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   });
 });

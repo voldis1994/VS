@@ -26,7 +26,7 @@ function emptyExp(): BrainExperience {
   };
 }
 
-describe('noteLiveSoftClose — live Soft pause memory', () => {
+describe('noteLiveSoftClose — live Soft pause memory (brain Soft spam governor)', () => {
   const prevExp = process.env.BRAIN_EXPERIENCE_PATH;
   const prevGen = process.env.BRAIN_GENOME_PATH;
   let tmp: string;
@@ -36,7 +36,7 @@ describe('noteLiveSoftClose — live Soft pause memory', () => {
     process.env.BRAIN_EXPERIENCE_PATH = path.join(tmp, 'experience.json');
     process.env.BRAIN_GENOME_PATH = path.join(tmp, 'genome.json');
     _resetBrainGenomeForTests({
-      soft_same_side_pause_min: 2,
+      soft_same_side_pause_min: 1,
       soft_same_side_pause_closes: 3,
     });
     setBrainGenome(getBrainGenome());
@@ -55,21 +55,29 @@ describe('noteLiveSoftClose — live Soft pause memory', () => {
     }
   });
 
-  it('arms Soft SELL pause after pause_min Soft losses (live desk path)', () => {
+  it('arms Soft BUY pause on first Soft loss (pause_min=1 — brain, not flipFilter)', () => {
     expect(getSoftPauseSide()).toBeNull();
-    noteLiveSoftClose('SELL', true);
-    expect(getSoftPauseSide()).toBeNull(); // need 2
-    const second = noteLiveSoftClose('SELL', true);
-    expect(second.soft_pause_side).toBe('SELL');
-    expect(second.soft_pause_left).toBeGreaterThan(0);
-    expect(getSoftPauseSide()).toBe('SELL');
+    const first = noteLiveSoftClose('BUY', true);
+    expect(first.soft_pause_side).toBe('BUY');
+    expect(first.soft_pause_left).toBeGreaterThan(0);
+    expect(getSoftPauseSide()).toBe('BUY');
   });
 
-  it('clears Soft pause on non-Soft win on that side', () => {
-    noteLiveSoftClose('BUY', true);
+  it('Peak/scratch win does NOT clear Soft pause (was Soft BUY spam re-arm)', () => {
     noteLiveSoftClose('BUY', true);
     expect(getSoftPauseSide()).toBe('BUY');
-    noteLiveSoftClose('BUY', false);
+    const left = noteLiveSoftClose('BUY', false); // Peak +£0.45
+    // Counts down one close, but Soft memory stays
+    expect(left.soft_pause_side).toBe('BUY');
+    expect(getSoftPauseSide()).toBe('BUY');
+  });
+
+  it('pause expires only after pause_closes non-Soft countdown', () => {
+    noteLiveSoftClose('SELL', true);
+    expect(getSoftPauseSide()).toBe('SELL');
+    noteLiveSoftClose('SELL', false);
+    noteLiveSoftClose('SELL', false);
+    noteLiveSoftClose('SELL', false);
     expect(getSoftPauseSide()).toBeNull();
   });
 });
