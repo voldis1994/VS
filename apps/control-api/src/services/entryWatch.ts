@@ -373,11 +373,12 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   const closedAtMs = input.closed_at_ms ?? null;
   const wasLoss = Boolean(input.last_close_was_loss);
   const lockMs = sameDirLockMs(wasLoss);
-  const lockEnabled = entryFlipLockEnabled();
+  // Soft loss lock is live at L0; win flip-lock still needs L≥1
+  const lockEnabled = entryFlipLockEnabled() || wasLoss;
   const lockLeft = lockEnabled
     ? sameDirLockLeftSec(closedAtMs, Date.now(), lockMs)
     : 0;
-  const needSide = lockEnabled
+  const needSide = entryFlipLockEnabled()
     ? requiredFlipSide(lastClosedSide, closedAtMs, Date.now(), { wasLoss })
     : null;
   const rawSig =
@@ -419,6 +420,8 @@ export function buildEntryWatch(input: BuildWatchInput): EntryWatch {
   else if (input.cooldown_left_s && input.cooldown_left_s > 0) status = 'COOLDOWN';
   else if (input.status_override === 'FLIP_FILTER' || flipBlocked) status = 'FLIP_FILTER';
   else if (needSide && lockLeft > 0) status = 'FLIP_FILTER';
+  // Soft same-dir lock at L0 — show FLIP_FILTER even when no rawSig yet
+  else if (wasLoss && lockLeft > 0 && lastClosedSide) status = 'FLIP_FILTER';
   else if (input.status_override) status = input.status_override;
   else if (!zone.zone_ready || !bar) status = 'SEEDING';
   else if (!input.just_closed) status = 'FORMING';

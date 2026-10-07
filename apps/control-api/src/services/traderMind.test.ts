@@ -377,4 +377,28 @@ describe('traderMind', () => {
     expect(t.choice).toBe('WAIT');
     expect(t.thesis).toMatch(/Soft|pašu pusi|spam/i);
   });
+
+  it('ENTRY WAITs Soft BUY even when 1m UP + stack aligned (no bounce bypass)', () => {
+    // Live pattern: Soft BUY → green 1m → BUY again → Soft. Confirmed bypass was fuel.
+    const t = thinkEntryLikeTrader({
+      regime: 'TREND_UP',
+      chapter: 'RALLY',
+      allow: 'BUY',
+      story_conf: 0.8,
+      red_1m: 6,
+      green_1m: 14,
+      zone_pos: 0.55,
+      bar_body_sign: 1,
+      last_closed_side: 'BUY',
+      last_close_was_loss: true,
+      m1_dir: 'UP',
+      m1_strong: true,
+      bias: 'UP',
+      tf5_dir: 'UP',
+      tf15_dir: 'UP',
+      tf30_dir: 'UP',
+    });
+    expect(t.choice).toBe('WAIT');
+    expect(t.why).toMatch(/Soft spam|bounce|ķēde/i);
+  });
 });

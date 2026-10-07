@@ -65,6 +65,25 @@ describe('flipFilter — same-dir lock (no force-flip after Soft)', () => {
     ).toBe(false);
   });
 
+  it('L0 OPEN still Soft-locks same BUY after Soft — no 3s spam reopen', () => {
+    _setTradeOpenAtStartForTests(true);
+    expect(
+      sameDirectionBlocked('BUY', 'BUY', t0, t0 + 60_000, { wasLoss: true })
+    ).toBe(true);
+    expect(
+      sameDirectionBlocked('BUY', 'BUY', t0, t0 + 60_000, { wasLoss: false })
+    ).toBe(false); // win flip-lock still OFF at L0
+    expect(
+      sameDirectionBlocked(
+        'BUY',
+        'BUY',
+        t0,
+        t0 + SAME_DIR_LOCK_AFTER_LOSS_MS + 1,
+        { wasLoss: true }
+      )
+    ).toBe(false);
+  });
+
   it('allows same direction again after win lock', () => {
     expect(sameDirLockActive(t0, t0 + SAME_DIR_LOCK_MS)).toBe(false);
     expect(

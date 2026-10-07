@@ -104,9 +104,9 @@ describe('entryWatch', () => {
     expect(w.last_reason).toMatch(/FLIP LOCK/);
   });
 
-  it('after Soft — L≥1 same-dir lock (no forced opposite); L0 shows no 12m fake wait', () => {
+  it('after Soft — same-dir lock ~15m even at L0 (no Soft BUY spam reopen)', () => {
     const b = bar(2000, 2000.8, 1999.9, 1999.7);
-    // L3 (suite default): short Soft same-dir lock still applies
+    // L3 (suite default): Soft same-dir lock, no forced flip
     const wStrict = buildEntryWatch({
       running: true,
       open_side: null,
@@ -121,11 +121,11 @@ describe('entryWatch', () => {
       last_close_was_loss: true,
     });
     expect(wStrict.need_side).toBeNull(); // no auto-flip after Soft
-    expect(wStrict.lock_left_s).toBeGreaterThan(0);
-    expect(wStrict.lock_left_s).toBeLessThanOrEqual(90);
+    expect(wStrict.lock_left_s).toBeGreaterThan(60);
+    expect(wStrict.lock_left_s).toBeLessThanOrEqual(15 * 60);
     expect(wStrict.looking_for).not.toMatch(/12m/);
 
-    // L0 OPEN (mind robot): no SAME-DIR lock text — PRĀTS may re-enter
+    // L0 OPEN: Soft same-dir lock still armed (win flip-lock stays OFF)
     _setTradeOpenAtStartForTests(true);
     const wOpen = buildEntryWatch({
       running: true,
@@ -140,10 +140,10 @@ describe('entryWatch', () => {
       closed_at_ms: Date.now() - 10_000,
       last_close_was_loss: true,
     });
-    expect(wOpen.lock_left_s).toBe(0);
+    expect(wOpen.lock_left_s).toBeGreaterThan(60);
     expect(wOpen.need_side).toBeNull();
-    expect(wOpen.looking_for).not.toMatch(/SAME-DIR LOCK after Soft/);
-    expect(wOpen.status).not.toBe('FLIP_FILTER');
+    expect(wOpen.status).toBe('FLIP_FILTER');
+    expect(wOpen.last_reason).toMatch(/SAME-DIR LOCK after Soft/);
     _setTradeOpenAtStartForTests(false);
   });
 

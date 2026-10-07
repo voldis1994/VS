@@ -202,10 +202,12 @@ export function readMultiTfStack(input: {
   const waitFight = getBrainGenome().wait_on_1m_fight;
   const triggerFight =
     waitFight && bias !== 'FLAT' && tf1 !== 'FLAT' && tf1 !== bias;
-  // 5m against bias = bounce/dip context. When 1m already agrees with bias,
-  // that IS the pullback entry (SELL bounce in dump / BUY dip in rally).
-  // Blocking on lone 5m color while 1m↓+30/15↓ sat out the whole Gold dump.
-  const midFightBlocks = midFight && tf1 !== bias;
+  // 5m against bias:
+  // - DOWN bias + 5m UP bounce + 1m DOWN → SELL pullback OK (sell the bounce).
+  // - UP bias + 5m DOWN dump → ALWAYS WAIT (green 1m bounce into dump = Soft BUY knife).
+  //   Was: 1m UP unlocked BUY pullback → Soft spam every ~15–20m on Gold.
+  const midFightBlocks =
+    midFight && (bias === 'UP' || tf1 !== bias);
   const only1m =
     tf1 !== 'FLAT' && tf5 === 'FLAT' && tf15 === 'FLAT' && tf30 === 'FLAT';
 
@@ -224,12 +226,10 @@ export function readMultiTfStack(input: {
     thesis_lv = `30m ${tf30} pret 15m ${tf15} — lielie TF nesakrīt, gaidu.`;
   } else if (bias === 'UP') {
     thesis_lv = midFightBlocks
-      ? `30/15m UP, bet 5m DOWN — gaidu 5m atgriešanos / 1m UP pirms BUY.`
-      : midFight && tf1 === bias
-        ? `30/15m UP · 5m dip · 1m jau UP — ņemu BUY pullback.`
-        : triggerFight
-          ? `Augšējie TF UP · 1m vēl DOWN (pullback) — gaidu 1m zaļu / HOLD pusi BUY.`
-          : `Steks UP (${summary}) — strādāju kā pircējs.`;
+      ? `30/15m UP, bet 5m DOWN — gaidu 5m atgriešanos (nepirku 1m bounce dumpā).`
+      : triggerFight
+        ? `Augšējie TF UP · 1m vēl DOWN (pullback) — gaidu 1m zaļu / HOLD pusi BUY.`
+        : `Steks UP (${summary}) — strādāju kā pircējs.`;
   } else if (bias === 'DOWN') {
     thesis_lv = midFightBlocks
       ? `30/15m DOWN, bet 5m UP — gaidu 5m atgriešanos / 1m DOWN pirms SELL.`

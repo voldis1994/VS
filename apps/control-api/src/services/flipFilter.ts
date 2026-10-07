@@ -3,6 +3,9 @@ import { entryFlipLockEnabled } from './tradeOpenPolicy.js';
  * After close: block same direction for a while.
  * After Soft/SL loss: longer same-dir block — but do NOT force opposite
  * (that caused BUY↔SELL Soft ping-pong on Funds).
+ *
+ * Soft loss lock applies even at L0 OPEN (flip lock OFF) — otherwise Soft BUY
+ * spam every ~15–20m with only a 3s post-close cooldown.
  */
 
 export type TradeSide = 'BUY' | 'SELL';
@@ -11,11 +14,10 @@ export type TradeSide = 'BUY' | 'SELL';
 export const SAME_DIR_LOCK_MS = 90_000;
 
 /**
- * After Soft/SL loss — legacy L≥1 only (was 12 minutes).
- * Mind robot is L0 OPEN: entryFlipLockEnabled() is false → no block.
- * Shortened so UI never advertises a fake 12m wait.
+ * After Soft/SL loss — block same side ~15m (desk Soft thrash cadence).
+ * Always armed on Soft loss, including L0 OPEN mind robot.
  */
-export const SAME_DIR_LOCK_AFTER_LOSS_MS = 90_000;
+export const SAME_DIR_LOCK_AFTER_LOSS_MS = 900_000;
 
 export function sameDirLockMs(wasLoss?: boolean | null): number {
   return wasLoss ? SAME_DIR_LOCK_AFTER_LOSS_MS : SAME_DIR_LOCK_MS;
@@ -46,7 +48,8 @@ export type SameDirBlockOpts = {
 
 /**
  * True when signal matches last closed side AND the lock is still active.
- * After a loss, same side stays blocked longer — opposite is NOT required.
+ * After a Soft loss, same side stays blocked longer — opposite is NOT required.
+ * Soft-loss lock works at L0; win flip-lock still needs entryFlipLockEnabled.
  */
 export function sameDirectionBlocked(
   signal: TradeSide | null | undefined,
@@ -55,7 +58,10 @@ export function sameDirectionBlocked(
   nowMs = Date.now(),
   opts?: SameDirBlockOpts | number
 ): boolean {
-  if (!entryFlipLockEnabled()) return false;
+  const wasLoss =
+    typeof opts === 'number' ? false : Boolean(opts?.wasLoss);
+  // L0 OPEN: skip win flip-lock only — Soft same-dir lock still applies
+  if (!entryFlipLockEnabled() && !wasLoss) return false;
   if (!signal || !lastClosedSide) return false;
   if (signal !== lastClosedSide) return false;
   const lock =

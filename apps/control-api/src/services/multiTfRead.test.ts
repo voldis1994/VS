@@ -93,6 +93,20 @@ describe('multiTfRead', () => {
     expect(stack.thesis_lv).toMatch(/SELL pullback|bounce/i);
   });
 
+  it('5m dump + green 1m bounce while 30/15 UP → WAIT (no Soft BUY knife)', () => {
+    // Live Soft BUY spam: HTF still UP, 5m dumping, 1m green bounce → was BUY pullback
+    const stack = readMultiTfStack({
+      tf30: 'UP',
+      tf15: 'UP',
+      tf5: 'DOWN',
+      tf1: 'UP',
+    });
+    expect(stack.bias).toBe('UP');
+    expect(stack.aligned).toBe(false);
+    expect(sideFromMultiTf(stack)).toBe('WAIT');
+    expect(stack.thesis_lv).toMatch(/5m DOWN|bounce dump/i);
+  });
+
   it('5m bounce + 1m not ready → still WAIT', () => {
     const stack = readMultiTfStack({
       tf30: 'DOWN',

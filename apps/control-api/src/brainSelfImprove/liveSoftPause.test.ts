@@ -65,11 +65,23 @@ describe('noteLiveSoftClose — live Soft pause memory', () => {
     expect(getSoftPauseSide()).toBe('SELL');
   });
 
-  it('clears Soft pause on non-Soft win on that side', () => {
+  it('Peak/scratch win does NOT clear Soft BUY pause (Soft spam re-arm fix)', () => {
     noteLiveSoftClose('BUY', true);
     noteLiveSoftClose('BUY', true);
     expect(getSoftPauseSide()).toBe('BUY');
+    // +£0.45 Peak must not wipe Soft memory — that re-armed Soft BUY spam
     noteLiveSoftClose('BUY', false);
+    expect(getSoftPauseSide()).toBe('BUY');
+  });
+
+  it('Soft pause expires after pause_closes countdown, then streak resets', () => {
+    noteLiveSoftClose('BUY', true);
+    noteLiveSoftClose('BUY', true);
+    expect(getSoftPauseSide()).toBe('BUY');
+    // pause_closes=3; each close consumes one (incl Soft/Peak)
+    noteLiveSoftClose('BUY', false); // left 3→2, Peak does not clear
+    noteLiveSoftClose('BUY', false); // 2→1
+    noteLiveSoftClose('BUY', false); // 1→0 clear
     expect(getSoftPauseSide()).toBeNull();
   });
 });
